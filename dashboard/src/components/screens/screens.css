@@ -377,16 +377,3 @@ td[data-col='dominant'] {
   font-size: var(--text-meta);
   line-height: 1.55;
 }
-
-/* Narrow panel: drop slow first, then p90, so screen names keep room. */
-@container screens (max-width: 560px) {
-  .screens-table [data-col='slowPercent'] {
-    display: none;
-  }
-}
-
-@container screens (max-width: 440px) {
-  .screens-table [data-col='typicalP90Ms'] {
-    display: none;
-  }
-}

@@ -13,6 +13,7 @@ import { JANK_FLAG_PERCENT } from '../../lib/stats.ts';
 import type { ScreensEmpty } from '../../lib/viewState.ts';
 import { SDK_GRADLE_SNIPPET, SDK_SETTINGS_NOTE } from '../topbar/SdkStatus.tsx';
 import './screens.css';
+import './screensNarrow.css';
 
 const NO_SCREEN_LABEL = 'no screen';
 
@@ -234,7 +235,8 @@ export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = fals
                       </button>
                     </th>
                   ))}
-                  <th scope="col" data-col="dominant">
+                  {/* Explicit roles: narrow panels position this column out of the table layout. */}
+                  <th scope="col" data-col="dominant" role="columnheader">
                     <span title="Stage with the largest share of frame time (frame-weighted mean ms)">
                       Dominant
                     </span>
@@ -315,7 +317,7 @@ export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = fals
                           )}
                         </td>
                       )}
-                      <td data-col="dominant">
+                      <td data-col="dominant" role="cell">
                         {row.dominant ? (
                           <span className="dominant" title={STAGE_LABELS[row.dominant.stage]}>
                             <span

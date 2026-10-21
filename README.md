@@ -15,11 +15,12 @@ next to the charts (0.3.0+); physical devices follow in a later release.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
-  <img alt="Lionscope dashboard profiling the sample app: screens lane, CPU, memory, rendering, frame time and frame breakdown charts on one time axis, with logcat on the right" src="docs/images/dashboard-light.png">
+  <img alt="Lionscope dashboard profiling the sample app: the emulator's screen in the Device column on the left, the screens lane, CPU, memory and rendering charts on one time axis with logcat below, and the Screens tab on the right" src="docs/images/dashboard-light.png">
 </picture>
 
-<sub>The bundled sample app on an emulator with its deliberate-jank list enabled: screen bands across all
-charts, SDK FrameMetrics in the Rendering, Frame time and Frame breakdown lanes, and the app's logcat.</sub>
+<sub>The bundled sample app on a headless emulator, operated from the Device column: screen bands across all
+charts, SDK FrameMetrics in the Rendering lane, logcat below the timeline, and the Screens tab ranking the
+janky list first.</sub>
 
 ## What the dashboard shows
 
@@ -50,16 +51,17 @@ With the SDK installed in the app's debug build, the dashboard also shows:
 While SDK frames flow, `gfxinfo` polling pauses (no double observation, no `reset` clash); it resumes 3 s after
 they stop. The dashboard shows whether the SDK is connected (and its version), or how to add it.
 
-<img alt="Screens tab: per-screen frames, jank %, typical and worst p90 frame time, and the dominant frame stage, sorted by jank" src="docs/images/dashboard-screens.png">
+<img width="363" alt="Screens tab: per-screen frames, jank %, stalls and the dominant frame stage, sorted by jank" src="docs/images/dashboard-screens.png">
 
-<sub>The Screens tab ranks screens by jank % and names the dominant frame stage for each one. Names come from the
-app's own screen alias when it has one (`home_tab`, `detail_page`, `legacy_page_2`), otherwise from the class.</sub>
+<sub>The Screens tab ranks screens by jank % and names the dominant frame stage for each one (p90 and slow frames
+join in when the panel is wider). Names come from the app's own screen alias when it has one (`home_tab`,
+`legacy_page_1`), otherwise from the class.</sub>
 
-<img alt="Stalls tab: offenders ranked by culprit line (SlowWork.kt:16), StrictMode DiskRead events and the Main thread lane" src="docs/images/dashboard-stalls.png">
+<img width="363" alt="Stalls tab: watchdog threshold and StrictMode controls, offenders ranked by culprit line (SlowWork.kt:16), and the stall events" src="docs/images/dashboard-stalls.png">
 
-<sub>The Stalls tab after tapping the sample's "Block main thread" and "Read file on main thread" buttons: the
-offenders table names the line that blocked the main thread, StrictMode DiskRead violations are listed with
-their stacks, and the Main thread lane marks each stall on the shared time axis.</sub>
+<sub>The Stalls tab after tapping the sample's "Block main thread" button three times from the Device column: the
+offenders table names the line that blocked the main thread and the screen it happened on, and each stall is
+listed with its duration; with StrictMode on, disk and network violations join the list with their stacks.</sub>
 
 ### Finding the line that blocks the main thread
 
@@ -149,7 +151,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.2.0"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.3.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -182,7 +184,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.2.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.3.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -329,7 +331,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.2.0`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.3.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

@@ -4,7 +4,7 @@ All notable changes to Lionscope are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/). The npm package, the server and the Android SDK share one version.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-22
 
 ### Added
 
@@ -25,10 +25,16 @@ All notable changes to Lionscope are documented here. The format is based on
 ### Changed
 
 - Layout: Device column on the left, logcat in a resizable, collapsible drawer below the timeline, Screens and
-  Stalls tabs on the right; below 1280 px the device screen opens as a drawer.
+  Stalls tabs on the right; below 1280 px the device screen opens as a drawer. The Screens table folds the dominant
+  stage under the screen name in a narrow panel, so names stay readable.
 - Dashboard protocol version 2 (the dashboard and the server ship together).
 - The CLI bundle includes a gRPC client (`@grpc/grpc-js`, `@grpc/proto-loader`); the npm package still has no
   runtime dependencies.
+
+### Fixed
+
+- Starting a second Lionscope server on the same machine no longer removes the first one's `adb reverse` mapping
+  (which cut its SDK link mid-session).
 
 ## [0.2.0] - 2026-10-21
 
@@ -109,7 +115,7 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.2.0...HEAD
+[0.3.0]: https://github.com/risyadul/Lionscope/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/risyadul/Lionscope/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/risyadul/Lionscope/releases/tag/0.1.0

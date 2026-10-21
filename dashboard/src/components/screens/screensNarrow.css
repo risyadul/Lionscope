@@ -1,0 +1,67 @@
+/* Screens table in a narrow side panel (container `screens`, declared in screens.css). Loaded after it. */
+
+/* Narrow panel, sized for the widest row (Stalls shown): drop slow first, then fold Dominant under the
+   screen name, then drop p90, so screen names keep room and nothing is clipped. */
+@container screens (max-width: 600px) {
+  .screens-table [data-col='slowPercent'] {
+    display: none;
+  }
+}
+
+/* Dominant stays its own cell (its header is still read out), drawn as a second line under the name. */
+@container screens (max-width: 540px) {
+  .screens-table tbody tr {
+    position: relative;
+  }
+
+  /* The name takes every spare pixel; the figures hug the right edge. */
+  .screens-table tbody th[data-col='name'] {
+    width: 100%;
+    padding-bottom: 25px;
+  }
+
+  .screens-table thead th[data-col='dominant'] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+  }
+
+  /* Lined up with the name, past its swatch (9px + 7px gap). */
+  .screens-table td[data-col='dominant'] {
+    position: absolute;
+    bottom: 7px;
+    left: calc(var(--space-4) + 16px);
+    padding: 0;
+  }
+
+  .screens-table td[data-col='dominant'] .dominant {
+    font-size: var(--text-overline);
+  }
+}
+
+@container screens (max-width: 430px) {
+  .screens-table [data-col='typicalP90Ms'] {
+    display: none;
+  }
+}
+
+/* Phone-width panel: tighter gutters buy the name a few more characters. */
+@container screens (max-width: 340px) {
+  .screens-table tbody th,
+  .screens-table td,
+  .sort-btn {
+    padding-inline: 5px;
+  }
+
+  .screens-table tbody th[data-col='name'],
+  th[data-col='name'] .sort-btn {
+    padding-left: var(--space-3);
+  }
+
+  .screens-table td[data-col='dominant'] {
+    left: calc(var(--space-3) + 16px);
+  }
+}
