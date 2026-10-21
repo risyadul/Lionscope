@@ -36,7 +36,7 @@ jobs:
           distribution: temurin
           java-version: 17
           cache: gradle
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest ships an Android SDK (ANDROID_HOME) with accepted licenses; AGP fetches missing platforms.
       - name: Test SDK, build no-op and sample
         working-directory: android-sdk
         run: ./gradlew :lionscope:test :lionscope-noop:assemble :sample:assembleDebug --no-daemon
