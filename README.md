@@ -62,8 +62,11 @@ their stacks, and the Main thread lane marks each stall on the shared time axis.
 With the SDK (0.2.0+ SDK and server), a watchdog thread posts a tick to the main thread every 50 ms. When a
 tick is not run within the threshold, it samples the main thread's stack every 50 ms until the block ends, then
 reports one stall: when it started, how long it lasted, the screen on top, and the most frequent sampled stack
-(a block is cut at 30 s). The dashboard ranks stalls by the first app frame (`Class.method (File.kt:87)`),
-shows the stack with framework frames collapsed, and flags stalls that happened while a debugger was attached.
+(a block is cut at 30 s). The dashboard ranks stalls by their culprit line (`Class.method (File.kt:87)`): the
+first app frame, skipping generated ViewBinding/DataBinding classes for the code that inflates them; when no app
+frame was on the stack, the first library frame outside the Android, Java, Kotlin and AndroidX packages (a
+third-party SDK blocking the main thread). It shows the stack with framework frames collapsed, and flags stalls
+that happened while a debugger was attached.
 The threshold is chosen in the Stalls tab (100, 150, 250, 500 or 1000 ms; default 150 ms). The watchdog runs only
 while a dashboard is connected at protocol v2 and an activity is started.
 

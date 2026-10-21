@@ -41,9 +41,34 @@ export function stallColor(stall: Pick<StallSample, 'durationMs' | 'debugger'>):
 /** `StackTraceElement` uses -2 for native methods. */
 export const NATIVE_LINE = -2;
 
-/** The app line responsible: the innermost in-app frame, else the innermost frame. */
+/** Packages of the runtime and of Google's support libraries: never the culprit while another frame can be. */
+const PLATFORM_PACKAGE =
+  /^(?:java|javax|jdk|sun|libcore|dalvik|kotlin|kotlinx|android|androidx|com\.android|com\.google\.android\.material)\./;
+
+/** ViewBinding / DataBinding output (`com.example.databinding.FragmentHomeBinding`): nobody edits that line. */
+const GENERATED_BINDING = /\.databinding\.[A-Za-z0-9_$]+(?:Binding|BindingImpl)$|\.DataBinderMapperImpl$/;
+
+export function isPlatformFrame(frame: StackFrame): boolean {
+  return PLATFORM_PACKAGE.test(frame.className);
+}
+
+export function isGeneratedFrame(frame: StackFrame): boolean {
+  return GENERATED_BINDING.test(frame.className);
+}
+
+/**
+ * The line responsible: the innermost hand-written app frame (its binding's caller rather than the
+ * generated binding), else the innermost library frame (a third-party SDK blocking the main thread
+ * is the finding, not the `Unsafe.park` it ends in), else the innermost frame.
+ */
 export function culpritFrame(frames: readonly StackFrame[]): StackFrame | null {
-  return frames.find((frame) => frame.inApp) ?? frames[0] ?? null;
+  return (
+    frames.find((frame) => frame.inApp && !isGeneratedFrame(frame)) ??
+    frames.find((frame) => frame.inApp) ??
+    frames.find((frame) => !isPlatformFrame(frame)) ??
+    frames[0] ??
+    null
+  );
 }
 
 /** `com.example.home.HomeViewModel$load$1` → `HomeViewModel$load$1`. */
@@ -114,9 +139,11 @@ export const MIN_COLLAPSE_RUN = 2;
 
 /**
  * Collapses runs of consecutive non-app frames. The innermost frame always stays visible: it says
- * what the thread was blocked in (`Thread.sleep`, a file read, a lock).
+ * what the thread was blocked in (`Thread.sleep`, a file read, a lock). So does the culprit, which
+ * can be a library frame.
  */
 export function collapseStack(frames: readonly StackFrame[]): StackItem[] {
+  const culprit = culpritFrame(frames);
   const items: StackItem[] = [];
   let run: { frame: StackFrame; index: number }[] = [];
   const flush = () => {
@@ -129,7 +156,7 @@ export function collapseStack(frames: readonly StackFrame[]): StackItem[] {
     run = [];
   };
   frames.forEach((frame, index) => {
-    if (frame.inApp || index === 0) {
+    if (frame.inApp || index === 0 || frame === culprit) {
       flush();
       items.push({ kind: 'frame', frame, index });
     } else {

@@ -19,7 +19,9 @@ All notable changes to Lionscope are documented here. The format is based on
   stack and 10 per second overall, and restores the app's policies when disabled or when the link closes.
 - Dashboard: a Main thread lane under Frame time, a Stalls tab (offenders by culprit line, event list, stack
   detail with framework frames collapsed, copy), a Stalls column in the Screens table, and controls for the
-  threshold and StrictMode.
+  threshold and StrictMode. The culprit is the first app frame, past generated ViewBinding/DataBinding classes;
+  without one, the first third-party library frame, so an SDK waiting on its own lock is named instead of
+  `Unsafe.park`.
 - Device protocol v2: `stall` and `strictmode` messages from the SDK and a `config` message from the server. It
   is negotiated, so a 0.1.1 server or SDK keeps working with a 0.2.0 one at protocol v1.
 

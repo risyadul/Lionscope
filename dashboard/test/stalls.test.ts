@@ -16,6 +16,8 @@ import {
   frameLocation,
   frameMethod,
   hitTestMarks,
+  isGeneratedFrame,
+  isPlatformFrame,
   NO_STACK_KEY,
   NO_STACK_LABEL,
   packageName,
@@ -61,11 +63,84 @@ describe('severity', () => {
 });
 
 describe('frames', () => {
-  it('the culprit is the innermost app frame, else the innermost frame', () => {
+  it('the culprit is the innermost app frame, else the innermost library frame, else the innermost frame', () => {
     expect(culpritFrame(HOME_STACK)?.method).toBe('mapItems');
-    const framework = HOME_STACK.map((f) => ({ ...f, inApp: false }));
-    expect(culpritFrame(framework)).toBe(framework[0]);
+    const library = HOME_STACK.map((f) => ({ ...f, inApp: false }));
+    expect(culpritFrame(library)).toBe(library[3]);
+    const platform = HOME_STACK.filter((f) => !f.inApp);
+    expect(culpritFrame(platform)).toBe(platform[0]);
     expect(culpritFrame([])).toBeNull();
+  });
+
+  it('a third-party SDK waiting on a lock is the culprit, not the lock', () => {
+    const frames = [
+      stackFrame('jdk.internal.misc.Unsafe', 'park', 'Unsafe.java', -2),
+      stackFrame('java.util.concurrent.locks.ReentrantLock', 'lock', 'ReentrantLock.java', 322),
+      stackFrame('com.vendor.replay.Lockable', 'read', 'Lockable.kt', 81),
+      stackFrame('androidx.recyclerview.widget.RecyclerView', 'onLayout', 'RecyclerView.java', 4578),
+      stackFrame('com.google.android.material.button.MaterialButton', 'onDraw', 'MaterialButton.java', 12),
+      stackFrame('android.view.ViewRootImpl', 'performTraversals', 'ViewRootImpl.java', 4284),
+    ];
+    expect(culpritFrame(frames)?.className).toBe('com.vendor.replay.Lockable');
+    expect(culpritFrame(frames.filter((f) => !f.className.startsWith('com.vendor')))).toBe(frames[0]);
+  });
+
+  it('skips generated bindings for the app frame that inflates them', () => {
+    const frames = [
+      stackFrame('android.view.LayoutInflater', 'inflate', 'LayoutInflater.java', 571),
+      stackFrame(
+        'com.example.shop.databinding.FragmentHomeBinding',
+        'inflate',
+        'FragmentHomeBinding.java',
+        364,
+        true,
+      ),
+      stackFrame(
+        'com.example.shop.databinding.ItemCartBindingImpl',
+        'executeBindings',
+        'ItemCartBindingImpl.java',
+        9,
+        true,
+      ),
+      stackFrame(
+        'com.example.shop.DataBinderMapperImpl',
+        'getDataBinder',
+        'DataBinderMapperImpl.java',
+        40,
+        true,
+      ),
+      stackFrame('com.example.shop.home.HomeFragment', 'onCreateView', 'HomeFragment.kt', 356, true),
+    ];
+    expect(isGeneratedFrame(frames[1]!)).toBe(true);
+    expect(isGeneratedFrame(frames[2]!)).toBe(true);
+    expect(isGeneratedFrame(frames[3]!)).toBe(true);
+    expect(isGeneratedFrame(frames[4]!)).toBe(false);
+    expect(culpritFrame(frames)?.method).toBe('onCreateView');
+    // A binding inflated from library code is still the app's own line.
+    expect(culpritFrame(frames.slice(0, 2))).toBe(frames[1]);
+  });
+
+  it('treats the runtime and Google support libraries as platform frames', () => {
+    for (const className of [
+      'java.io.File',
+      'jdk.internal.misc.Unsafe',
+      'kotlinx.coroutines.DispatchedTask',
+      'android.os.Looper',
+      'androidx.fragment.app.Fragment',
+      'com.android.internal.os.ZygoteInit',
+      'dalvik.system.VMStack',
+      'com.google.android.material.button.MaterialButton',
+    ]) {
+      expect(isPlatformFrame(stackFrame(className, 'm', null, null)), className).toBe(true);
+    }
+    for (const className of [
+      'com.vendor.Sdk',
+      'com.google.gson.Gson',
+      'io.reactivex.Observable',
+      'javalin.App',
+    ]) {
+      expect(isPlatformFrame(stackFrame(className, 'm', null, null)), className).toBe(false);
+    }
   });
 
   it('names classes, methods and locations as the JVM prints them', () => {
@@ -125,12 +200,20 @@ describe('collapseStack', () => {
     expect(collapseStack(frames).every((item) => item.kind === 'frame')).toBe(true);
   });
 
-  it('a stack with no app frame folds everything under the innermost frame', () => {
-    const frames = HOME_STACK.map((f) => ({ ...f, inApp: false }));
+  it('a stack of platform frames only folds everything under the innermost frame', () => {
+    const frames = HOME_STACK.filter((f) => !f.inApp);
     const items = collapseStack(frames);
     expect(items).toHaveLength(2);
     expect(items[1]).toMatchObject({ kind: 'collapsed', start: 1 });
     expect(collapseStack([])).toEqual([]);
+  });
+
+  it('keeps a library culprit visible when there is no app frame', () => {
+    const frames = HOME_STACK.map((f) => ({ ...f, inApp: false }));
+    const items = collapseStack(frames);
+    expect(
+      items.map((item) => (item.kind === 'frame' ? item.index : `+${item.frames.length}@${item.start}`)),
+    ).toEqual([0, '+2@1', 3, '+5@4']);
   });
 });
 
