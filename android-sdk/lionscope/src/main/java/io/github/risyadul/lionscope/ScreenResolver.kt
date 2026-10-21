@@ -7,11 +7,10 @@ package io.github.risyadul.lionscope
  * chain that has one, trying dialogs newest first, then the fragments beneath newest first; else the top activity
  * itself; null when no activity is started. Library fragments (maps, NavHostFragment, ...) are descended through
  * but never reported, so a library dialog or a newer top-level library fragment gives way to the app screen beneath.
- * App-owned = shares the first two package segments with the top activity's class or with [applicationId] (see
- * [appPackagePrefix], [packagePrefix]). Names are computed by [resolve]'s `describe` for the final pick only, so
- * dynamic aliases stay current.
+ * App-owned is decided by [ownership] (top activity's or application id's two-segment package root). Names are
+ * computed by [resolve]'s `describe` for the final pick only, so dynamic aliases stay current.
  */
-internal class ScreenResolver(applicationId: String = "") {
+internal class ScreenResolver(private val ownership: AppOwnership = AppOwnership()) {
     private class ActivityEntry {
         var order = 0L
         var started = false
@@ -26,16 +25,15 @@ internal class ScreenResolver(applicationId: String = "") {
     private val fragments = HashMap<Any, FragmentEntry>()
     private var sequence = 0L
 
-    /** Covers modules named after the app id (white-label builds, acquired code); empty when unknown. */
-    private val applicationPrefix = packagePrefix(applicationId)
-    private var cachedActivityClass: String? = null
-    private var cachedActivityPrefix = ""
-
     val hasStartedActivity: Boolean
         get() = activities.values.any { it.started }
 
     val hasResumedActivity: Boolean
         get() = activities.values.any { it.resumed }
+
+    /** The most recently started activity that is still started, or null. */
+    val topActivity: Any?
+        get() = activities.entries.filter { it.value.started }.maxByOrNull { it.value.order }?.key
 
     fun activityStarted(activity: Any) {
         val entry = activities.getOrPut(activity) { ActivityEntry() }
@@ -92,9 +90,9 @@ internal class ScreenResolver(applicationId: String = "") {
         val eligible = fragments.entries.filter { (fragment, entry) ->
             entry.activity === top.key && (entry.resumed || !activity.resumed) && isShown(fragment)
         }
-        val activityPrefix = activityPrefix(classNameOf(top.key))
+        val activityClass = classNameOf(top.key)
         val deepestAppOwned = { chain: List<Map.Entry<Any, FragmentEntry>> ->
-            chain.lastOrNull { isOwned(classNameOf(it.key), activityPrefix) }
+            chain.lastOrNull { ownership.isOwned(classNameOf(it.key), activityClass) }
         }
         val (dialogs, others) = eligible.partition { it.value.kind == ScreenKind.DIALOG }
         for (dialog in dialogs.sortedByDescending { it.value.order }) {
@@ -109,19 +107,6 @@ internal class ScreenResolver(applicationId: String = "") {
             return describe(pick.key, pick.value.kind)
         }
         return describe(top.key, ScreenKind.ACTIVITY)
-    }
-
-    private fun isOwned(className: String, activityPrefix: String): Boolean =
-        isAppOwned(className, activityPrefix) ||
-            (applicationPrefix.isNotEmpty() && isAppOwned(className, applicationPrefix))
-
-    /** Single-entry cache: the top activity rarely changes between resolves. */
-    private fun activityPrefix(className: String): String {
-        if (className != cachedActivityClass) {
-            cachedActivityPrefix = appPackagePrefix(className)
-            cachedActivityClass = className
-        }
-        return cachedActivityPrefix
     }
 
     /** [entry] and its shown ancestors among [candidates], outermost first. */
@@ -170,24 +155,8 @@ internal class ScreenResolver(applicationId: String = "") {
         return false
     }
 
-    internal companion object {
+    private companion object {
         /** Guards against pathological (cyclic) parent links. */
-        private const val MAX_DEPTH = 32
-
-        /** First two package segments of [activityClassName] (the whole package when it has fewer). */
-        fun appPackagePrefix(activityClassName: String): String =
-            packagePrefix(activityClassName.substringBeforeLast('.', ""))
-
-        /** First two segments of [packageName] (all of it when it has fewer). */
-        fun packagePrefix(packageName: String): String {
-            val first = packageName.indexOf('.')
-            if (first < 0) return packageName
-            val second = packageName.indexOf('.', first + 1)
-            return if (second < 0) packageName else packageName.substring(0, second)
-        }
-
-        /** True when [className] lives in [appPrefix] or below; an empty prefix (default package) owns everything. */
-        fun isAppOwned(className: String, appPrefix: String): Boolean = appPrefix.isEmpty() ||
-            (className.length > appPrefix.length && className.startsWith(appPrefix) && className[appPrefix.length] == '.')
+        const val MAX_DEPTH = 32
     }
 }

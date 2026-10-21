@@ -11,7 +11,17 @@ import {
 import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
-const EMPTY_SNAPSHOT = { cpu: [], memory: [], frames: [], logs: [], events: [], breakdown: [], screens: [] };
+const EMPTY_SNAPSHOT = {
+  cpu: [],
+  memory: [],
+  frames: [],
+  logs: [],
+  events: [],
+  breakdown: [],
+  stalls: [],
+  strictMode: [],
+  screens: [],
+};
 const DEVICES = fixture('adb-devices.txt');
 
 function setup() {

@@ -11,7 +11,8 @@ import android.content.Context
  *
  * Data flow: the SDK connects to `127.0.0.1:8700` on the device, which `adb reverse` forwards to the Lionscope
  * server on the laptop. Without that reverse mapping, any other app on the device listening on
- * 127.0.0.1:8700 would receive the stream (screen class names and frame timings only; debug builds only).
+ * 127.0.0.1:8700 would receive the stream (screen class names, frame timings and, while a v2 server asks for
+ * them, main-thread stack traces of stalls / StrictMode violations; debug builds only).
  */
 object Lionscope {
     /** SDK version (the Gradle build version), reported to the Lionscope server in `hello`. */

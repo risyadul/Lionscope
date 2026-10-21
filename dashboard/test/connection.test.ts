@@ -76,7 +76,7 @@ describe('parseServerMessage', () => {
     expect(parseServerMessage('{"type":"devices","devices":[]}')).toEqual({ type: 'devices', devices: [] });
   });
 
-  it('accepts every server message type, including the SDK screen and breakdown streams', () => {
+  it('accepts every server message type, including the SDK screen, breakdown, stall and StrictMode streams', () => {
     // A Record forces this list to grow with the protocol: a new type fails to compile here.
     const types: Record<ServerMessageType, true> = {
       hello: true,
@@ -91,6 +91,8 @@ describe('parseServerMessage', () => {
       event: true,
       screen: true,
       breakdown: true,
+      stall: true,
+      strictmode: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

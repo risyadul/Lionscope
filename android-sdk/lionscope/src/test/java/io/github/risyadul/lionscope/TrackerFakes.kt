@@ -32,11 +32,16 @@ internal class FakeScheduler : MainScheduler {
 
 internal class FakeLink : LinkPort {
     private val listeners = ArrayList<(Boolean) -> Unit>()
+    private val configListeners = ArrayList<(SdkOptions) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
+    val v2Lines = ArrayList<String>()
     var failure: Throwable? = null
 
     override var isWelcomed = false
+        private set
+
+    override var negotiatedVersion: Int? = null
         private set
 
     override fun onScreen(ts: Long, screen: ScreenRef?) {
@@ -52,8 +57,22 @@ internal class FakeLink : LinkPort {
         listeners += listener
     }
 
-    fun welcome(welcomed: Boolean) {
+    override fun addConfigListener(listener: (SdkOptions) -> Unit) {
+        configListeners += listener
+    }
+
+    /** Encodes right away, as the link thread would. */
+    override fun sendV2(sizeHint: Int, encode: () -> String?) {
+        encode()?.let { v2Lines += it }
+    }
+
+    fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION) {
         isWelcomed = welcomed
+        negotiatedVersion = if (welcomed) version else null
         listeners.forEach { it(welcomed) }
+    }
+
+    fun config(options: SdkOptions) {
+        configListeners.forEach { it(options) }
     }
 }

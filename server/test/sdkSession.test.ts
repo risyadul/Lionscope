@@ -1,4 +1,4 @@
-import type { ScreenRef, SdkFrame, ServerMessage } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DISCONNECTED_SDK,
@@ -8,95 +8,21 @@ import {
   SDK_CLOCK_MESSAGE,
   SDK_FRAMES_IDLE_MS,
 } from '../src/device/sdkBridge.ts';
-import type { ByeReason, SdkHello, SdkLink, SdkLinkHandler } from '../src/device/sdkLink.ts';
 import { log } from '../src/log.ts';
 import { ProfilingSession } from '../src/session/profilingSession.ts';
 import { FakeAdb, FakeDevice } from './helpers/fakes.ts';
-
-const PKG = 'com.google.android.apps.nexuslauncher';
-const START = 1_800_000_000_250;
-/** FakeDevice's clock runs 5 s behind the laptop. */
-const OFFSET_MS = 5000;
-const HOME: ScreenRef = { name: 'home', className: 'com.example.HomeFragment', kind: 'fragment' };
-const PROMO: ScreenRef = { name: 'Promo', className: 'com.example.PromoSheet', kind: 'dialog' };
-
-const HELLO: SdkHello = {
-  type: 'hello',
-  protocolVersion: 1,
-  sdkVersion: '0.1.0',
-  packageName: PKG,
-  processName: PKG,
-  pid: 1105,
-  apiLevel: 35,
-  deviceWallMs: START - OFFSET_MS,
-  refreshRateHz: 120,
-};
-
-class FakeLink implements SdkLink {
-  readonly protocolVersion = 1;
-  closedWith: ByeReason | 'none' | null = null;
-  close(reason?: ByeReason): void {
-    this.closedWith = reason ?? 'none';
-  }
-}
-
-/** Device wall-clock ms for "now" on the laptop. */
-const deviceNow = () => Date.now() - OFFSET_MS;
-
-function sdkFrame(ts: number, totalMs: number): SdkFrame {
-  return {
-    ts,
-    totalMs,
-    inputMs: 0.5,
-    animationMs: 0.5,
-    layoutMs: 1,
-    drawMs: 2,
-    syncMs: 0.5,
-    commandMs: 1,
-    swapMs: 0.5,
-    delayMs: 1,
-    gpuMs: 3,
-    deadlineMs: 16,
-    firstDraw: false,
-  };
-}
-
-async function setup() {
-  const device = new FakeDevice();
-  device.clockSkewMs = -OFFSET_MS;
-  const adb = new FakeAdb(
-    () => '',
-    (command) => device.handle(command),
-  );
-  const messages: ServerMessage[] = [];
-  const session = new ProfilingSession({
-    adb,
-    serial: 'emulator-5554',
-    packageName: PKG,
-    emit: (message) => messages.push(message),
-  });
-  await session.start();
-  const ofType = <T extends ServerMessage['type']>(type: T) =>
-    messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
-  const gfxinfoPolls = () => device.commands.filter((command) => command.includes('gfxinfo')).length;
-  /** Attach a link and let its PID check (a `pidof` on the device) finish. */
-  const connect = async (hello: SdkHello = HELLO): Promise<{ link: FakeLink; handler: SdkLinkHandler }> => {
-    const link = new FakeLink();
-    const handler = session.attachSdk(hello, link);
-    await vi.advanceTimersByTimeAsync(0);
-    return { link, handler };
-  };
-  /** pidof commands sent to the device (counted at the shell, whatever handles them). */
-  const pidofs = () =>
-    adb.shells.flatMap((shell) => shell.commands).filter((command) => command.startsWith('pidof')).length;
-  /** Send one 500 ms batch of `count` frames that just rendered. */
-  const sendFrames = (handler: SdkLinkHandler, count: number, totalMs = 6) => {
-    const end = deviceNow();
-    const frames = Array.from({ length: count }, (_, i) => sdkFrame(end - 499 + i * 8, totalMs));
-    handler.onMessage({ type: 'frames', window: 'com.example.MainActivity', intervalMs: 8.333, frames });
-  };
-  return { adb, device, session, messages, ofType, gfxinfoPolls, connect, sendFrames, pidofs };
-}
+import {
+  deviceNow,
+  FakeLink,
+  HELLO,
+  HOME,
+  OFFSET_MS,
+  PKG,
+  PROMO,
+  sdkFrame,
+  setupSdkSession as setup,
+  START,
+} from './helpers/sdkSession.ts';
 
 beforeEach(() => {
   vi.useFakeTimers({ now: START });
@@ -168,6 +94,8 @@ describe('ProfilingSession SDK link', () => {
       processName: PKG,
       apiLevel: 35,
       framesActive: false,
+      protocolVersion: 1,
+      options: DEFAULT_SDK_OPTIONS,
     };
     expect(session.state.sdk).toEqual(expected);
     expect(ofType('session').at(-1)?.session.sdk).toEqual(expected);

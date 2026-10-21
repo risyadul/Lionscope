@@ -7,7 +7,8 @@ It works in two modes:
 
 - **ADB-only** (no app changes): everything is collected through `adb shell` (`/proc`, `dumpsys`, `logcat`).
 - **With the optional SDK** in the app's **debug** build: adds which screen is on top (Activity, Fragment,
-  DialogFragment) and per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen.
+  DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
+  stalls with the app code line that caused them (plus opt-in StrictMode violations).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
@@ -39,6 +40,8 @@ With the SDK installed in the app's debug build, the dashboard also shows:
 | Rendering / Frame time (source `SDK`)             | `Window.OnFrameMetricsAvailableListener` (API 24+)          |
 | Frame breakdown (input … swap, delay, GPU)        | FrameMetrics stages, aggregated per 500 ms                  |
 | Per-screen table (frames, jank %, p90, top stage) | the above, grouped by screen                                |
+| Main thread lane (one bar per stall)              | Main-thread watchdog; StrictMode violations as ticks        |
+| Stalls tab (offenders, events, stack detail)      | Sampled main-thread stacks; StrictMode violations (opt-in)  |
 
 While SDK frames flow, `gfxinfo` polling pauses (no double observation, no `reset` clash); it resumes 3 s after
 they stop. The dashboard shows whether the SDK is connected (and its version), or how to add it.
@@ -47,6 +50,30 @@ they stop. The dashboard shows whether the SDK is connected (and its version), o
 
 <sub>The Screens tab ranks screens by jank % and names the dominant frame stage for each one. Names come from the
 app's own screen alias when it has one (`home_tab`, `detail_page`, `legacy_page_2`), otherwise from the class.</sub>
+
+<img alt="Stalls tab: offenders ranked by culprit line (SlowWork.kt:16), StrictMode DiskRead events and the Main thread lane" src="docs/images/dashboard-stalls.png">
+
+<sub>The Stalls tab after tapping the sample's "Block main thread" and "Read file on main thread" buttons: the
+offenders table names the line that blocked the main thread, StrictMode DiskRead violations are listed with
+their stacks, and the Main thread lane marks each stall on the shared time axis.</sub>
+
+### Finding the line that blocks the main thread
+
+With the SDK (0.2.0+ SDK and server), a watchdog thread posts a tick to the main thread every 50 ms. When a
+tick is not run within the threshold, it samples the main thread's stack every 50 ms until the block ends, then
+reports one stall: when it started, how long it lasted, the screen on top, and the most frequent sampled stack
+(a block is cut at 30 s). The dashboard ranks stalls by the first app frame (`Class.method (File.kt:87)`),
+shows the stack with framework frames collapsed, and flags stalls that happened while a debugger was attached.
+The threshold is chosen in the Stalls tab (100, 150, 250, 500 or 1000 ms; default 150 ms). The watchdog runs only
+while a dashboard is connected at protocol v2 and an activity is started.
+
+**StrictMode (opt-in, off by default).** The Stalls tab has a toggle for it (Android 9 / API 28+). When on, the
+SDK extends the app's current main-thread and process StrictMode policies with disk read/write, network, custom
+slow call and leaked-closable detection, and reports each violation with its stack. It restores the app's
+policies when you turn it off or the link closes. It refuses to touch a policy that has a death, dialog, flash
+or dropbox penalty, or that looks like it has the app's own `penaltyListener`, and it never re-arms a
+death-on-network penalty; the Stalls tab then says nothing was added. Violations are coalesced to one per second
+per stack, and at most 10 per second overall.
 
 ## Requirements
 
@@ -80,7 +107,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.1.1"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.2.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -113,7 +140,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.1"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.2.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -124,8 +151,11 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.1"
 - The SDK tries to reach `127.0.0.1:8700` every 1 → 2 → 5 s while the app is in the foreground (a refused
   local connection when nothing listens), slows to every 15 s after 10 minutes of foreground time without a
   dashboard, and stops trying 30 s after the app goes to the background until it comes back.
-- Its threads run at background priority (except the frame-metrics thread, which must not be starved during
-  jank); a bounded outbound queue drops the oldest messages instead of growing; SDK errors are contained and
+- The main-thread watchdog thread exists only while a dashboard has accepted the app at protocol v2 and an
+  activity is started; StrictMode is off until you enable it, and its reporter thread stays idle (no work)
+  after the first enable.
+- Its threads run at background priority (except the frame-metrics and watchdog threads, which must not be
+  starved while the app is busy); a bounded outbound queue drops the oldest messages instead of growing; SDK errors are contained and
   never reach the app's crash handler.
 
 ## Architecture
@@ -156,10 +186,12 @@ The SDK talks to the server over plain TCP with one JSON object per line rather 
 while plain sockets are not subject to that policy. The Kotlin encoders and the server's validator are both
 tested against the same golden file, `protocol/fixtures/device-messages.ndjson`.
 
-The SDK's `hello` carries its protocol version; the server answers `welcome` with the lower of that and its own
+The SDK's `hello` carries its protocol version (2 since 0.2.0: stall, StrictMode and `config` messages); the server answers `welcome` with the lower of that and its own
 (the negotiated version, accepted from 1 to 1000), and lines of a message type the server does not know are
 skipped and counted instead of closing the connection; known types are still validated strictly. From 0.1.1 on,
-an SDK and a server from different releases therefore keep working together. A 0.1.0 server only accepts
+an SDK and a server from different releases therefore keep working together: a 0.1.1 server or SDK negotiates
+protocol 1, and stalls and StrictMode are simply unavailable. The server drops invalid stall or StrictMode
+messages instead of closing the link. A 0.1.0 server only accepts
 protocol version 1 and closes the connection on unknown message types.
 
 ## Security model
@@ -171,7 +203,8 @@ protocol version 1 and closes the connection on unknown message types.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and only accepts data after the hello's PID is verified with `pidof` on the session's device.
-- The SDK only sends screen class names / aliases and frame timings, and only from debuggable builds. Without
+- The SDK only sends screen class names / aliases, frame timings and, with stalls enabled, stack frames of the
+  main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. Without
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could receive that stream.
 
 ## Known limitations
@@ -188,6 +221,13 @@ protocol version 1 and closes the connection on unknown message types.
 - **500 ms screen attribution.** SDK frames are aggregated into 500 ms buckets, and each bucket is attributed
   to the screen that was on top at its end. Frames from the last moments of a screen transition can be counted
   towards the next screen.
+- **Stall detection is sampled.** The watchdog works in about 50 ms steps, so durations are approximate and a
+  block only slightly over the threshold can be missed. Time a tick waits in the main queue behind other work
+  counts as blocked time.
+- **StrictMode shares the app's policy.** Detections Lionscope adds follow the penalties of the app's own base
+  policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
+  by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
+  permits network on the main thread.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.
 - Jank follows Android's own definition on API 31+ (frame finished after its deadline); "slow" frames are those
@@ -230,7 +270,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.1.1`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.2.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

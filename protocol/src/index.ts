@@ -9,14 +9,18 @@
  */
 import { z } from 'zod';
 import {
+  DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SDK_FRAMES_PER_BATCH,
+  MAX_STACK_FRAMES,
   MIN_DEVICE_PROTOCOL_VERSION,
   PACKAGE_NAME_PATTERN,
   SERIAL_PATTERN,
+  STALL_THRESHOLDS_MS,
   type ClientMessage,
   type DeviceMessage,
   type DeviceMessageType,
@@ -38,6 +42,17 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     .object({ type: z.literal('startSession'), serial: serialSchema, packageName: packageNameSchema })
     .strict(),
   z.object({ type: z.literal('stopSession') }).strict(),
+  z
+    .object({
+      type: z.literal('setSdkOptions'),
+      stallThresholdMs: z.literal(STALL_THRESHOLDS_MS).optional(),
+      strictMode: z.boolean().optional(),
+    })
+    .strict()
+    .refine(
+      (message) => message.stallThresholdMs !== undefined || message.strictMode !== undefined,
+      'no SDK option given',
+    ),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -130,6 +145,28 @@ const sdkFrameSchema = z
   })
   .strip();
 
+/** Java's `int`: `StackTraceElement.getLineNumber()`. */
+const MAX_STACK_LINE = 2_147_483_647;
+/** Longest stall the SDK reports (it cuts a block at 30 s; the rest is slack for late delivery). */
+export const MAX_STALL_DURATION_MS = 60_000;
+/** Upper bounds of a stall's stack sample count and of a coalesced StrictMode violation count. */
+export const MAX_STALL_SAMPLES = 10_000;
+export const MAX_STRICT_MODE_COUNT = 1_000_000;
+/** Runs of control / format characters in diagnostic text become one space (`message`, `violation`). */
+const CONTROL_OR_FORMAT_RUNS = /[\p{Cc}\p{Cf}]+/gu;
+const sanitized = (value: string): string => value.replace(CONTROL_OR_FORMAT_RUNS, ' ').trim();
+
+const stackFrameSchema = z
+  .object({
+    className: text,
+    method: text,
+    file: textOf(128).nullable(),
+    // -2 marks a native method; -1 (unknown) is tolerated although the SDK sends null for it.
+    line: z.number().int().min(-2).max(MAX_STACK_LINE).nullable(),
+    inApp: z.boolean(),
+  })
+  .strip();
+
 export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -158,24 +195,82 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({ type: z.literal('heartbeat'), ts: epochMs, droppedMessages: z.number().int().nonnegative() })
     .strip(),
+  z
+    .object({
+      type: z.literal('stall'),
+      ts: epochMs,
+      durationMs: z.number().nonnegative().max(MAX_STALL_DURATION_MS),
+      frames: z.array(stackFrameSchema).max(MAX_STACK_FRAMES),
+      samples: z.number().int().min(1).max(MAX_STALL_SAMPLES),
+      truncated: z.boolean(),
+      screen: text.nullable(),
+      debugger: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('strictmode'),
+      ts: epochMs,
+      policy: z.enum(['thread', 'vm']),
+      // Free text from the app's StrictMode violation: cleaned up rather than refused. An anonymous violation
+      // class has an empty simple name.
+      violation: z
+        .string()
+        .max(128)
+        .transform((value) => sanitized(value) || 'Violation'),
+      message: z
+        .string()
+        .max(MAX_SDK_TEXT_LENGTH)
+        .transform((value) => sanitized(value) || null)
+        .nullable(),
+      frames: z.array(stackFrameSchema).max(MAX_STACK_FRAMES),
+      count: z.number().int().min(1).max(MAX_STRICT_MODE_COUNT),
+      screen: text.nullable(),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
-/** Exhaustive over DeviceMessageType: a new message type must be listed here. */
-const DEVICE_MESSAGE_TYPES: Readonly<Record<DeviceMessageType, true>> = {
-  hello: true,
-  screen: true,
-  frames: true,
-  heartbeat: true,
+/**
+ * Diagnostics (v2): a line of these types that fails validation is dropped by the caller (`invalidDiagnostic`),
+ * not fatal to the link like a bad v1 message.
+ */
+const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set(['stall', 'strictmode']);
+
+/**
+ * Exhaustive over DeviceMessageType: a new message type must be listed here, with the device protocol version
+ * that introduced it.
+ */
+const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
+  hello: MIN_DEVICE_PROTOCOL_VERSION,
+  screen: MIN_DEVICE_PROTOCOL_VERSION,
+  frames: MIN_DEVICE_PROTOCOL_VERSION,
+  heartbeat: MIN_DEVICE_PROTOCOL_VERSION,
+  stall: DEVICE_PROTOCOL_V2,
+  strictmode: DEVICE_PROTOCOL_V2,
 };
 
 /**
- * `unknownType` is set when the line is a JSON object whose string `type` this build does not know (a newer
- * SDK): the caller may skip it. `unsupportedVersion` is set for a `hello` whose numeric `protocolVersion` is out
- * of range. Anything else that fails (bad JSON, a known type with invalid fields) is a plain error.
+ * Flags of a failed parse; at most one is set:
+ * - `unknownType`: a JSON object whose string `type` this build does not know (a newer SDK): skippable.
+ * - `unnegotiated`: a known type introduced after the link's negotiated protocol version (`since`): skippable.
+ * - `invalidDiagnostic`: a diagnostic (`stall` / `strictmode`) with invalid fields: skippable.
+ * - `unsupportedVersion`: a `hello` whose numeric `protocolVersion` is out of range.
+ * Anything else that fails (bad JSON, another known type with invalid fields) is a plain error.
  */
 export type DeviceParseResult =
   | { ok: true; value: DeviceMessage }
-  | { ok: false; error: string; unknownType?: string; unsupportedVersion?: number };
+  | {
+      ok: false;
+      error: string;
+      unknownType?: string;
+      unnegotiated?: { type: DeviceMessageType; since: number };
+      invalidDiagnostic?: DeviceMessageType;
+      unsupportedVersion?: number;
+    };
+
+function isKnownType(type: string): type is DeviceMessageType {
+  return Object.hasOwn(DEVICE_MESSAGE_VERSIONS, type);
+}
 
 function isSupportedProtocolVersion(version: number): boolean {
   return (
@@ -185,18 +280,33 @@ function isSupportedProtocolVersion(version: number): boolean {
   );
 }
 
-/** Parse one NDJSON line from the SDK (without its trailing newline). */
-export function parseDeviceMessage(line: string): DeviceParseResult {
+/**
+ * Parse one NDJSON line from the SDK (without its trailing newline). `protocolVersion` is the link's negotiated
+ * version: types introduced later are not validated but reported as `unnegotiated`.
+ */
+export function parseDeviceMessage(
+  line: string,
+  protocolVersion: number = DEVICE_PROTOCOL_VERSION,
+): DeviceParseResult {
   const json = readJson(line, MAX_DEVICE_LINE_BYTES);
   if (!json.ok) return json;
   const object = typeof json.value === 'object' && json.value !== null ? json.value : null;
-  const type: unknown = object && Reflect.get(object, 'type');
-  if (typeof type === 'string' && !Object.hasOwn(DEVICE_MESSAGE_TYPES, type)) {
-    return { ok: false, error: 'unknown message type', unknownType: type };
+  const rawType: unknown = object && Reflect.get(object, 'type');
+  let type: DeviceMessageType | null = null;
+  if (typeof rawType === 'string') {
+    if (!isKnownType(rawType)) return { ok: false, error: 'unknown message type', unknownType: rawType };
+    type = rawType;
+  }
+  const since = type === null ? MIN_DEVICE_PROTOCOL_VERSION : DEVICE_MESSAGE_VERSIONS[type];
+  if (type !== null && since > protocolVersion) {
+    return { ok: false, error: `${type} needs protocol version ${since}`, unnegotiated: { type, since } };
   }
   const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;
   if (typeof version === 'number' && !isSupportedProtocolVersion(version)) {
     return { ok: false, error: `unsupported protocol version ${version}`, unsupportedVersion: version };
   }
-  return validate(json.value, deviceMessageSchema);
+  const result = validate(json.value, deviceMessageSchema);
+  if (!result.ok && type !== null && DIAGNOSTIC_TYPES.has(type))
+    return { ...result, invalidDiagnostic: type };
+  return result;
 }

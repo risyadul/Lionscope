@@ -4,6 +4,32 @@ All notable changes to Lionscope are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/). The npm package, the server and the Android SDK share one version.
 
+## [0.2.0] - 2026-10-21
+
+### Added
+
+- Main-thread stall detection: a watchdog posts a tick to the main thread every 50 ms and, when one is late by
+  more than the threshold (100, 150, 250, 500 or 1000 ms; default 150 ms), samples the main thread's stack until
+  it is free. Each stall reports its start, duration, screen, whether a debugger was attached and the most
+  frequent sampled stack; a block is cut at 30 s. It runs only while a dashboard is connected at protocol v2 and
+  an activity is started.
+- Opt-in StrictMode reporting (API 28+, off by default): disk, network, slow-call and leaked-closable violations
+  with their stacks. It extends and never replaces the app's policies, refuses policies with death, dialog,
+  flash or dropbox penalties or an app listener, never re-arms death-on-network, coalesces to 1 per second per
+  stack and 10 per second overall, and restores the app's policies when disabled or when the link closes.
+- Dashboard: a Main thread lane under Frame time, a Stalls tab (offenders by culprit line, event list, stack
+  detail with framework frames collapsed, copy), a Stalls column in the Screens table, and controls for the
+  threshold and StrictMode.
+- Device protocol v2: `stall` and `strictmode` messages from the SDK and a `config` message from the server. It
+  is negotiated, so a 0.1.1 server or SDK keeps working with a 0.2.0 one at protocol v1.
+
+### Changed
+
+- The server sanitizes or drops invalid stall and StrictMode messages instead of closing the link.
+- The SDK removes control and format characters from every text field it sends.
+- Generic package roots (`io.github`, `com.google`, ...) use three segments when deciding which frames and
+  screens belong to the app.
+
 ## [0.1.1] - 2026-10-21
 
 ### Added
@@ -55,5 +81,6 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
+[0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/risyadul/Lionscope/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/risyadul/Lionscope/releases/tag/0.1.0

@@ -6,7 +6,12 @@ import {
   appendSpan,
   applyServerMessageAt,
   FUTURE_SLACK_MS,
+  insertByTs,
   MAX_SCREEN_SPANS,
+  MAX_STALLS,
+  MAX_STRICT_MODE,
+  normalizeStalls,
+  pruneStallsBefore,
   normalizeSpans,
   SDK_LINK_UNAVAILABLE_CODE,
   pruneSpans,
@@ -21,7 +26,7 @@ import {
   type DashboardState,
   type FlushScheduler,
 } from '../src/lib/store.ts';
-import { breakdown, cpu, frame, log, memory, session, span, T0 } from './fixtures.ts';
+import { breakdown, cpu, frame, log, memory, session, span, stall, T0, violation } from './fixtures.ts';
 
 const MIN = 60_000;
 
@@ -666,5 +671,143 @@ describe('SDK link and clock tolerance', () => {
     expect(next.screens.at(-1)?.screen?.name).toBe('future');
     const near = applyServerMessageAt(base, { type: 'screen', span: span(now + 1000, null, 'soon') }, now);
     expect(near.latestTs).toBe(now + 1000);
+  });
+});
+
+describe('stalls and StrictMode', () => {
+  const at = (state: DashboardState, msg: ServerMessage, now = T0 + 60_000) =>
+    applyServerMessageAt(state, msg, now);
+  const base = () => apply(createInitialState(), { type: 'cpu', sample: cpu(T0 + 30_000) });
+
+  it('slots a late-reported stall in by its start, without moving older samples', () => {
+    let state = base();
+    state = at(state, { type: 'stall', sample: stall(T0 + 29_000, 400) });
+    state = at(state, { type: 'stall', sample: stall(T0 + 10_000, 30_000) });
+    state = at(state, { type: 'stall', sample: stall(T0 + 31_000, 200) });
+    expect(state.stalls.map((s) => s.ts - T0)).toEqual([10_000, 29_000, 31_000]);
+    expect(state.latestTs).toBe(T0 + 31_000);
+    // A 30 s step back is a stall's normal lag, not a laptop clock reset.
+    expect(state.cpu).toHaveLength(1);
+  });
+
+  it('a re-sent stall (same start) replaces the stored one', () => {
+    let state = at(base(), { type: 'stall', sample: stall(T0 + 1000, 400) });
+    state = at(state, { type: 'stall', sample: stall(T0 + 1000, 450, { truncated: true }) });
+    expect(state.stalls).toHaveLength(1);
+    expect(state.stalls[0]).toMatchObject({ durationMs: 450, truncated: true });
+  });
+
+  it('keeps every violation, sorted, even with equal timestamps', () => {
+    let state = at(base(), { type: 'strictmode', sample: violation(T0 + 2000) });
+    state = at(state, { type: 'strictmode', sample: violation(T0 + 1000) });
+    state = at(state, {
+      type: 'strictmode',
+      sample: violation(T0 + 2000, { violation: 'NetworkViolation' }),
+    });
+    expect(state.strictMode.map((v) => `${v.ts - T0}:${v.violation}`)).toEqual([
+      '1000:DiskReadViolation',
+      '2000:DiskReadViolation',
+      '2000:NetworkViolation',
+    ]);
+  });
+
+  it('prunes both streams with the window and caps them, oldest first', () => {
+    let state = at(base(), { type: 'stall', sample: stall(T0, 300) });
+    state = at(state, { type: 'strictmode', sample: violation(T0) });
+    // The stall ends at T0 + 300: it leaves once the window's left edge passes its end.
+    state = apply(state, { type: 'cpu', sample: cpu(T0 + 10 * MIN + 301) });
+    expect(state.stalls).toEqual([]);
+    expect(state.strictMode).toEqual([]);
+    const many = Array.from({ length: MAX_STALLS + 5 }, (_, i) => ({ ts: i }));
+    const capped = insertByTs(many.slice(0, MAX_STALLS), { ts: MAX_STALLS }, MAX_STALLS, true);
+    expect(capped).toHaveLength(MAX_STALLS);
+    expect(capped[0]?.ts).toBe(1);
+    expect(MAX_STRICT_MODE).toBe(2000);
+  });
+
+  it('drops stalls and violations that claim to start past now + 5 s', () => {
+    const now = T0 + 40_000;
+    let state = at(base(), { type: 'stall', sample: stall(now + FUTURE_SLACK_MS + 1, 300) }, now);
+    state = at(state, { type: 'strictmode', sample: violation(now + 3_600_000) }, now);
+    expect(state.stalls).toEqual([]);
+    expect(state.strictMode).toEqual([]);
+    expect(state.latestTs).toBe(T0 + 30_000);
+    // Within the slack they are kept.
+    state = at(state, { type: 'stall', sample: stall(now + FUTURE_SLACK_MS, 300) }, now);
+    expect(state.stalls).toHaveLength(1);
+    const snap = applyServerMessageAt(
+      base(),
+      {
+        type: 'snapshot',
+        snapshot: {
+          cpu: [cpu(T0 + 30_000)],
+          memory: [],
+          frames: [],
+          logs: [],
+          events: [],
+          stalls: [stall(T0 + 1000, 300), stall(now + 60_000, 300)],
+          strictMode: [violation(now + 60_000)],
+        },
+      },
+      now,
+    );
+    expect(snap.stalls.map((s) => s.ts)).toEqual([T0 + 1000]);
+    expect(snap.strictMode).toEqual([]);
+  });
+
+  it('prunes a stall by its end: one still running into the window stays', () => {
+    let state = at(base(), { type: 'stall', sample: stall(T0, 20_000) });
+    state = at(state, { type: 'stall', sample: stall(T0 + 21_000, 300) });
+    state = apply(state, { type: 'cpu', sample: cpu(T0 + 10 * MIN + 10_000) });
+    expect(state.stalls.map((s) => s.ts)).toEqual([T0, T0 + 21_000]);
+    state = apply(state, { type: 'cpu', sample: cpu(T0 + 10 * MIN + 21_000) });
+    expect(state.stalls.map((s) => s.ts)).toEqual([T0 + 21_000]);
+    expect(pruneStallsBefore(state.stalls, 0)).toBe(state.stalls);
+  });
+
+  it('snapshots replace both streams (sorted, one stall per start) and tolerate older servers', () => {
+    let state = at(base(), { type: 'stall', sample: stall(T0 + 5000, 300) });
+    state = apply(state, {
+      type: 'snapshot',
+      snapshot: {
+        cpu: [cpu(T0 + 40_000)],
+        memory: [],
+        frames: [],
+        logs: [],
+        events: [],
+        stalls: [stall(T0 + 3000, 700), stall(T0 + 1000, 300), stall(T0 + 3000, 800)],
+        strictMode: [violation(T0 + 2000), violation(T0 + 500)],
+      },
+    });
+    expect(state.stalls.map((s) => [s.ts - T0, s.durationMs])).toEqual([
+      [1000, 300],
+      [3000, 800],
+    ]);
+    expect(state.strictMode.map((v) => v.ts - T0)).toEqual([500, 2000]);
+    const older = apply(state, {
+      type: 'snapshot',
+      snapshot: { cpu: [cpu(T0 + 50_000)], memory: [], frames: [], logs: [], events: [] },
+    });
+    expect(older.stalls).toEqual([]);
+    expect(older.strictMode).toEqual([]);
+    expect(normalizeStalls(Array.from({ length: MAX_STALLS + 1 }, (_, i) => stall(i, 200)))).toHaveLength(
+      MAX_STALLS,
+    );
+  });
+
+  it('a laptop clock reset clears both streams with the rest of the timeline', () => {
+    let state = at(base(), { type: 'stall', sample: stall(T0 + 20_000, 300) });
+    state = at(state, { type: 'strictmode', sample: violation(T0 + 20_000) });
+    state = apply(state, { type: 'cpu', sample: cpu(T0 - MIN) });
+    expect(state.stalls).toEqual([]);
+    expect(state.strictMode).toEqual([]);
+    expect(state.latestTs).toBe(T0 - MIN);
+  });
+
+  it('never mutates the previous state', () => {
+    const before = deepFreeze(at(base(), { type: 'stall', sample: stall(T0 + 1000, 300) }));
+    expect(() => at(before, { type: 'stall', sample: stall(T0 + 500, 300) })).not.toThrow();
+    expect(() => at(before, { type: 'strictmode', sample: violation(T0 + 500) })).not.toThrow();
+    expect(before.stalls).toHaveLength(1);
   });
 });

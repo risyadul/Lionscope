@@ -1,4 +1,5 @@
-import type { SdkFrame, SdkStatus } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
+import type { SdkFrame, SdkOptions, SdkStatus } from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { SdkFrameAggregator } from '../metrics/sdkFrames.ts';
@@ -26,6 +27,19 @@ export const MAX_HELD_MESSAGES = 16;
 export const droppedFramesMessage = (count: number): string =>
   `SDK reported ${count} dropped frames (device busy); frame counts may read low`;
 export const SDK_CLOCK_MESSAGE = 'SDK frames dropped: the device clock does not match the laptop clock';
+/**
+ * Accepted stall / StrictMode times (after the offset). Looser than frames on purpose: these are rare, discrete
+ * events sent when they end (a stall up to 30 s after its start, a coalesced violation up to 1 s later), possibly
+ * held while the link's PID is checked, so losing one costs more than placing one slightly off. The lead is
+ * judged on `ts` (then clamped to now), the age on completion (`ts + durationMs` for a stall).
+ */
+export const MAX_EVENT_AGE_MS = 60_000;
+export const MAX_EVENT_LEAD_MS = MAX_FRAME_LEAD_MS;
+export const INVALID_DIAGNOSTIC_MESSAGE = 'SDK sent an invalid diagnostic; ignored';
+/** Option changes are pushed to the SDK this long after the last one (a dashboard may send several at once). */
+export const CONFIG_DEBOUNCE_MS = 150;
+export const SDK_EVENT_CLOCK_MESSAGE =
+  'SDK stalls / StrictMode violations dropped: the device clock does not match the laptop clock';
 
 export const DISCONNECTED_SDK: SdkStatus = {
   connected: false,
@@ -33,6 +47,8 @@ export const DISCONNECTED_SDK: SdkStatus = {
   processName: null,
   apiLevel: null,
   framesActive: false,
+  protocolVersion: null,
+  options: DEFAULT_SDK_OPTIONS,
 };
 
 export interface SdkBridgeOptions {
@@ -60,10 +76,11 @@ interface LinkEntry {
 }
 
 /**
- * Feeds one session's SDK link into its store: screen spans, frame samples (`source: 'sdk'`) and frame
- * breakdowns. A new link is pending until its hello PID is confirmed to be the app's process on the session
- * device (anything on the phone can reach the gateway and claim a package name); until then its messages
- * are held back, never stored. Only one verified link is live at a time; a newly verified one replaces (and closes) the older.
+ * Feeds one session's SDK link into its store: screen spans, frame samples (`source: 'sdk'`), frame
+ * breakdowns, main-thread stalls and StrictMode violations; and pushes the session's SDK options to it. A new
+ * link is pending until its hello PID is confirmed to be the app's process on the session device (anything on
+ * the phone can reach the gateway and claim a package name); until then its messages are held back, never
+ * stored. Only one verified link is live at a time; a newly verified one replaces (and closes) the older.
  */
 export class SdkBridge {
   private current: SdkStatus = DISCONNECTED_SDK;
@@ -75,6 +92,7 @@ export class SdkBridge {
   /** Frames FrameMetrics dropped before the SDK saw them, summed over the session. */
   private droppedFrames = 0;
   private drainTimer: ReturnType<typeof setInterval> | null = null;
+  private configTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
 
   constructor(private readonly options: SdkBridgeOptions) {
@@ -85,9 +103,33 @@ export class SdkBridge {
     return this.current;
   }
 
+  /**
+   * Change the SDK options (partial): announced with the status at once and, when they changed, pushed to the
+   * links CONFIG_DEBOUNCE_MS after the last change.
+   */
+  setOptions(changes: Partial<SdkOptions>): void {
+    if (this.stopped) return;
+    const previous = this.sdkOptions;
+    const options: SdkOptions = {
+      stallThresholdMs: changes.stallThresholdMs ?? previous.stallThresholdMs,
+      strictMode: changes.strictMode ?? previous.strictMode,
+    };
+    this.update({ options });
+    if (
+      options.stallThresholdMs === previous.stallThresholdMs &&
+      options.strictMode === previous.strictMode
+    ) {
+      return;
+    }
+    if (this.configTimer) clearTimeout(this.configTimer);
+    this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
+  }
+
   attach(hello: SdkHello, link: SdkLink): SdkLinkHandler {
     const entry: LinkEntry = { hello, link, held: [] };
     this.pending.add(entry);
+    // Options are not sensitive: a link gets them right after its welcome, before its PID is verified.
+    link.sendConfig(this.sdkOptions);
     void this.verify(entry);
     return {
       onMessage: (message) => {
@@ -95,12 +137,17 @@ export class SdkBridge {
         if (this.active === entry) this.onMessage(message);
         else if (this.pending.has(entry) && entry.held.length < MAX_HELD_MESSAGES) entry.held.push(message);
       },
+      onInvalidDiagnostic: () => {
+        if (this.active === entry && !this.stopped) {
+          this.options.notify('sdk:invalid-diagnostic', INVALID_DIAGNOSTIC_MESSAGE);
+        }
+      },
       onClose: () => {
         this.pending.delete(entry);
         if (this.active !== entry || this.stopped) return;
         this.active = null;
         this.release();
-        this.update({ connected: false, framesActive: false });
+        this.update({ connected: false, framesActive: false, protocolVersion: null });
       },
     };
   }
@@ -109,13 +156,21 @@ export class SdkBridge {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.configTimer) clearTimeout(this.configTimer);
+    this.configTimer = null;
     for (const entry of this.pending) entry.link.close('no_session');
     this.pending.clear();
     const active = this.active;
     this.active = null;
     this.release();
     active?.link.close('no_session');
-    this.current = { ...this.current, connected: false, framesActive: false };
+    this.current = { ...this.current, connected: false, framesActive: false, protocolVersion: null };
+  }
+
+  private pushConfig(): void {
+    this.configTimer = null;
+    const links = this.active ? [...this.pending, this.active] : [...this.pending];
+    for (const entry of links) entry.link.sendConfig(this.sdkOptions);
   }
 
   private async verify(entry: LinkEntry): Promise<void> {
@@ -142,6 +197,7 @@ export class SdkBridge {
       sdkVersion: entry.hello.sdkVersion,
       processName: entry.hello.processName,
       apiLevel: entry.hello.apiLevel,
+      protocolVersion: entry.link.protocolVersion,
     });
     for (const message of entry.held.splice(0)) this.onMessage(message);
   }
@@ -182,7 +238,67 @@ export class SdkBridge {
           );
         }
         return;
+      case 'stall': {
+        const ts = this.eventTime(message.ts, message.durationMs);
+        if (ts === null) return;
+        const { durationMs, frames, samples, truncated, debugger: debuggerAttached } = message;
+        this.options.store.append('stalls', {
+          ts,
+          durationMs,
+          frames,
+          samples,
+          truncated,
+          screen: this.screenAt(ts, message.screen),
+          debugger: debuggerAttached,
+        });
+        return;
+      }
+      case 'strictmode': {
+        const ts = this.eventTime(message.ts, 0);
+        if (ts === null) return;
+        const { policy, violation, count, frames } = message;
+        this.options.store.append('strictMode', {
+          ts,
+          policy,
+          violation,
+          message: message.message,
+          frames,
+          count,
+          screen: this.screenAt(ts, message.screen),
+        });
+        return;
+      }
     }
+  }
+
+  /**
+   * Laptop time of a stall / StrictMode event, or null when it lies outside the accepted window (reported) or
+   * ended before the session started (dropped quietly). One that straddles the session start begins at it, like
+   * screen spans; its duration is kept.
+   */
+  private eventTime(deviceTs: number, durationMs: number): number | null {
+    const now = this.options.now();
+    const ts = this.toLaptop(deviceTs);
+    const lead = ts - (now + MAX_EVENT_LEAD_MS);
+    const age = ts + durationMs - (now - MAX_EVENT_AGE_MS);
+    if (lead <= 0 && age >= 0) {
+      const { startedAt } = this.options;
+      return ts + durationMs < startedAt ? null : Math.max(startedAt, Math.min(ts, now));
+    }
+    if (this.refusals.shouldReport('event-clock')) {
+      const skew = lead > 0 ? `${Math.round(lead)} ms ahead of` : `${Math.round(-age)} ms behind`;
+      log.warn(
+        `${this.options.logPrefix} dropped an SDK stall/StrictMode event ${skew} the accepted window ` +
+          `(clock offset ${this.options.clockOffsetMs()} ms)`,
+      );
+    }
+    this.options.notify('sdk:event-clock', SDK_EVENT_CLOCK_MESSAGE);
+    return null;
+  }
+
+  /** The SDK's own screen name, else the top screen of the recorded spans. */
+  private screenAt(ts: number, sdkScreen: string | null): string | null {
+    return sdkScreen ?? this.options.store.topScreenAt(ts);
   }
 
   private onFrames(message: Extract<SdkLinkMessage, { type: 'frames' }>): void {
@@ -255,6 +371,10 @@ export class SdkBridge {
     this.drainTimer = null;
     this.frames.reset();
     if (this.current.framesActive) this.options.setGfxinfoPaused(false);
+  }
+
+  private get sdkOptions(): SdkOptions {
+    return this.current.options ?? DEFAULT_SDK_OPTIONS;
   }
 
   private update(changes: Partial<SdkStatus>): void {

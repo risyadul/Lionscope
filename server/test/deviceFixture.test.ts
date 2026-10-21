@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
 import type { DeviceMessage, ServerMessage } from '@lionscope/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDeviceGateway } from '../src/device/deviceGateway.ts';
@@ -38,9 +39,11 @@ describe('golden device messages through the gateway', () => {
     await gateway?.close();
   });
 
-  it('produces screen spans, SDK frame samples and a breakdown', async () => {
-    // A step clock: frozen while the session starts (so the measured offset is exactly OFFSET_MS), then
-    // moved to just after the fixture's last screen change.
+  /**
+   * A running session on a step clock: frozen while the session starts (so the measured offset is exactly
+   * OFFSET_MS), then moved to just after the fixture's last screen change. Resolves with the gateway port.
+   */
+  async function startSession() {
     let clock = laptop(HELLO.deviceWallMs - 1000);
     const now = () => clock;
     const device = new FakeDevice();
@@ -57,19 +60,25 @@ describe('golden device messages through the gateway', () => {
     const messages: ServerMessage[] = [];
     const ofType = <T extends ServerMessage['type']>(type: T) =>
       messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
-    manager = new SessionManager({
+    const sessions = new SessionManager({
       adb,
       broadcast: (message) => messages.push(message),
       now,
       deviceGatewayPort: () => gateway?.address?.port ?? null,
     });
-    gateway = createDeviceGateway({ port: 0, target: manager });
+    manager = sessions;
+    gateway = createDeviceGateway({ port: 0, target: sessions });
     const { port } = await gateway.listen();
 
-    await manager.startSession('emulator-5554', HELLO.packageName);
-    await waitUntil(() => manager?.getSessionState().status === 'running');
-    expect(adb.reverseCalls[0]).toEqual(['-s', 'emulator-5554', 'reverse', 'tcp:8700', `tcp:${port}`]);
+    await sessions.startSession('emulator-5554', HELLO.packageName);
+    await waitUntil(() => sessions.getSessionState().status === 'running');
     clock = laptop(DEVICE_START_MS);
+    return { adb, device, manager: sessions, port, ofType };
+  }
+
+  it('produces screen spans, SDK frame samples and a breakdown', async () => {
+    const { adb, device, manager, port, ofType } = await startSession();
+    expect(adb.reverseCalls[0]).toEqual(['-s', 'emulator-5554', 'reverse', 'tcp:8700', `tcp:${port}`]);
 
     const client = await DeviceClient.open(port);
     for (const line of GOLDEN) client.send(line);
@@ -81,6 +90,8 @@ describe('golden device messages through the gateway', () => {
       processName: HELLO.processName,
       apiLevel: 35,
       framesActive: true,
+      protocolVersion: 1,
+      options: DEFAULT_SDK_OPTIONS,
     });
     // The hello's PID was checked with pidof right away.
     expect(device.commands.filter((command) => command.startsWith('pidof')).length).toBeGreaterThanOrEqual(2);
@@ -172,5 +183,55 @@ describe('golden device messages through the gateway', () => {
     ]);
     expect(snapshot.breakdown?.length).toBeGreaterThanOrEqual(1);
     expect(snapshot.frames.filter((sample) => sample.source === 'sdk').length).toBe(sdkFrames.length);
+  });
+  it('on a v2 link: config after the welcome, and stalls / StrictMode violations on the laptop clock', async () => {
+    const { manager, port, ofType } = await startSession();
+    const v2Lines = GOLDEN.slice(1).filter((line) => /"type":"(stall|strictmode)"/.test(line));
+    expect(v2Lines).toHaveLength(2);
+
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 2 });
+    for (const line of GOLDEN.slice(1)) client.send(line);
+    await client.waitFor((message) => message.type === 'config');
+    expect(client.rawLines.slice(0, 2)).toEqual([
+      '{"type":"welcome","protocolVersion":2}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false}',
+    ]);
+    await waitUntil(() => ofType('strictmode').length > 0);
+    expect(manager.getSessionState().sdk).toMatchObject({ connected: true, protocolVersion: 2 });
+
+    const [stallLine, strictLine] = v2Lines.map((line) => JSON.parse(line) as DeviceMessage);
+    const { type: _stall, ...stall } = stallLine as Extract<DeviceMessage, { type: 'stall' }>;
+    const { type: _strict, ...violation } = strictLine as Extract<DeviceMessage, { type: 'strictmode' }>;
+    expect(ofType('stall').map((message) => message.sample)).toEqual([{ ...stall, ts: laptop(stall.ts) }]);
+    // Sent 1 s ahead of the device's "now" (within the accepted lead): placed at now.
+    expect(ofType('strictmode').map((message) => message.sample)).toEqual([
+      { ...violation, ts: laptop(DEVICE_START_MS) },
+    ]);
+    expect(manager.getSnapshot()).toMatchObject({
+      stalls: [ofType('stall')[0]?.sample],
+      strictMode: [ofType('strictmode')[0]?.sample],
+    });
+
+    // Options changed from the dashboard reach the live link.
+    manager.setSdkOptions({ strictMode: true });
+    await client.waitFor((message) => message.type === 'config' && message.strictMode);
+    expect(client.rawLines.at(-1)).toBe('{"type":"config","stallThresholdMs":150,"strictMode":true}');
+    client.close();
+  });
+
+  it('ignores the v2 golden lines on a v1 link', async () => {
+    const { manager, port, ofType } = await startSession();
+    const client = await DeviceClient.open(port);
+    for (const line of GOLDEN) client.send(line);
+    // Lines are handled in order: once this one is through, the v2 lines before it were skipped.
+    const done = { name: 'done', className: 'com.example.shop.ui.DoneActivity', kind: 'activity' } as const;
+    client.send({ type: 'screen', ts: DEVICE_START_MS, screen: done });
+    await waitUntil(() => ofType('screen').some((message) => message.span.screen?.name === 'done'));
+    expect(client.rawLines).toEqual(['{"type":"welcome","protocolVersion":1}']);
+    expect(ofType('stall')).toEqual([]);
+    expect(ofType('strictmode')).toEqual([]);
+    expect(manager.getSessionState().sdk?.connected).toBe(true);
+    client.close();
   });
 });

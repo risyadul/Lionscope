@@ -1,0 +1,62 @@
+/* Stall / StrictMode identity marks shared by the Main thread lane and the Stalls panel. Text stays
+   in ink; these swatches carry the color. */
+
+[data-color='stall1'] {
+  --key: var(--viz-stall-1);
+}
+[data-color='stall2'] {
+  --key: var(--viz-stall-2);
+}
+[data-color='stall3'] {
+  --key: var(--viz-stall-3);
+}
+[data-color='stallDebug'] {
+  --key: var(--viz-stall-debug);
+}
+
+.stall-glyph {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px 2px 0 0;
+  background: var(--key, var(--viz-stall-2));
+}
+
+/* StrictMode: a teal diamond, the same glyph the lane draws on its rail. */
+.stall-glyph[data-kind='strictmode'] {
+  width: 7px;
+  height: 7px;
+  margin: 0 1px;
+  border-radius: 1px;
+  background: var(--viz-strictmode);
+  transform: rotate(45deg);
+}
+
+/* Debugger attached: washed gray with 45° hatching, as on the canvas. */
+.stall-glyph[data-kind='debugger'],
+.stall-glyph[data-color='stallDebug'] {
+  background:
+    repeating-linear-gradient(135deg, var(--viz-stall-debug) 0 1px, transparent 1px 3px),
+    color-mix(in srgb, var(--viz-stall-debug) 45%, var(--surface));
+}
+
+.stall-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+@media (forced-colors: active) {
+  .stall-glyph {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+}

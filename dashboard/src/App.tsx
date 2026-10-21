@@ -5,13 +5,22 @@ import type {
   FrameSample,
   MemorySample,
   ScreenSpan,
+  SdkOptions,
+  StallSample,
+  StrictModeSample,
   TimelineEvent,
 } from '@lionscope/protocol/wire';
-import { isValidPackageName, isValidSerial } from '@lionscope/protocol/wire';
+import {
+  DEFAULT_SDK_OPTIONS,
+  isValidPackageName,
+  isValidSerial,
+  STALL_THRESHOLDS_MS,
+} from '@lionscope/protocol/wire';
 import { useDashboardState, useServices } from './app/services.ts';
 import { LogcatPanel } from './components/logcat/LogcatPanel.tsx';
 import { ScreenPanel } from './components/screens/ScreenPanel.tsx';
 import { SidePanel, type SideTab } from './components/side/SidePanel.tsx';
+import { StallsPanel } from './components/stalls/StallsPanel.tsx';
 import { StatStrip } from './components/stats/StatStrip.tsx';
 import { WindowControls } from './components/stats/WindowControls.tsx';
 import { ConnectionBanner, ErrorBanner } from './components/states/Banners.tsx';
@@ -20,14 +29,19 @@ import { Timeline } from './components/timeline/Timeline.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
 import { useEscape } from './hooks/useEscape.ts';
 import { useNow } from './hooks/useNow.ts';
+import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { resolveSerial, serialUnavailableReason } from './lib/devices.ts';
-import { aggregateScreens } from './lib/screenStats.ts';
+import { aggregateScreens, withStallCounts } from './lib/screenStats.ts';
+import { countEventsInWindow, findFeedItem, stallsByScreen } from './lib/stalls.ts';
 import { aggregateFrames, computeStats } from './lib/stats.ts';
 import { isProtocolMismatch } from './lib/store.ts';
 import {
   hasSeries,
   isSessionActive,
+  isStallCapable,
   screensEmptyState,
+  sdkOptionsBlocker,
+  stallsEmptyState,
   timelineNotice,
   timelineState,
 } from './lib/viewState.ts';
@@ -46,12 +60,20 @@ interface PausedView {
   events: readonly TimelineEvent[];
   screens: readonly ScreenSpan[];
   breakdown: readonly FrameBreakdownSample[];
+  stalls: readonly StallSample[];
+  strictMode: readonly StrictModeSample[];
 }
 
 /** Marks a start/stop request until the server answers with `session` or `error`. */
 interface PendingRequest {
   sessionSeq: number;
   errorSeq: number;
+}
+
+const OFFLINE_OPTIONS_HINT = 'Offline — waiting for the server.';
+
+function isStallThreshold(value: number): boolean {
+  return (STALL_THRESHOLDS_MS as readonly number[]).includes(value);
 }
 
 function startHintFor(
@@ -77,6 +99,7 @@ export function App() {
   const [pending, setPending] = useState<PendingRequest | null>(null);
   const [selectedScreen, setSelectedScreen] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>('logcat');
+  const [selectedStall, setSelectedStall] = useState<string | null>(null);
   // Same request, read synchronously: two clicks in one task both run before React re-renders.
   const inFlight = useRef<PendingRequest | null>(null);
   const lastAppsRequest = useRef<{ serial: string; at: number } | null>(null);
@@ -160,12 +183,33 @@ export function App() {
       events: state.events,
       screens: state.screens,
       breakdown: state.breakdown,
+      stalls: state.stalls,
+      strictMode: state.strictMode,
     });
 
   // Selecting a screen never takes the side panel away from logcat; "View in Screens" does.
-  const clearScreen = useCallback(() => setSelectedScreen(null), []);
   const viewScreens = useCallback(() => setSideTab('screens'), []);
-  useEscape(selectedScreen !== null, clearScreen);
+  const viewStalls = useCallback(() => setSideTab('stalls'), []);
+  const selectStall = useCallback((key: string) => {
+    setSelectedStall(key);
+    setSideTab('stalls');
+  }, []);
+
+  const sdk = state.session.sdk;
+  const sdkOptions = sdk?.options ?? DEFAULT_SDK_OPTIONS;
+  const optionsControl = useSdkOptions({
+    send,
+    options: sdkOptions,
+    sessionSeq: state.sessionSeq,
+    errorSeq: state.errorSeq,
+    isOpen,
+  });
+  const optionsBlocker = isOpen ? sdkOptionsBlocker(isActive, sdk) : OFFLINE_OPTIONS_HINT;
+  const changeOptions = (patch: Partial<SdkOptions>) => {
+    if (optionsBlocker !== null) return;
+    if (patch.stallThresholdMs !== undefined && !isStallThreshold(patch.stallThresholdMs)) return;
+    optionsControl.change(patch);
+  };
 
   const isSdkConnected = isActive && state.session.sdk?.connected === true;
   const frameAggregate = useMemo(() => aggregateFrames(state.frames), [state.frames]);
@@ -185,10 +229,36 @@ export function App() {
   const isLive = isActive && isOpen;
   const endTs = paused?.at ?? (isLive || state.latestTs === 0 ? now : state.latestTs);
   const series = paused ?? state;
+  const startTs = endTs - windowMs;
   const screenRows = useMemo(
-    () => aggregateScreens(series.breakdown, endTs - windowMs, endTs),
-    [series.breakdown, endTs, windowMs],
+    () =>
+      withStallCounts(
+        aggregateScreens(series.breakdown, startTs, endTs),
+        stallsByScreen(series.stalls, startTs, endTs),
+      ),
+    [series.breakdown, series.stalls, startTs, endTs],
   );
+  const hasStallData = series.stalls.length > 0 || series.strictMode.length > 0;
+  const isStallDetailOpen =
+    sideTab === 'stalls' &&
+    selectedStall !== null &&
+    findFeedItem(series.stalls, series.strictMode, selectedStall) !== null;
+  // One Escape, one thing: an open stall detail closes first; otherwise the screen selection clears.
+  const handleEscape = () => {
+    if (isStallDetailOpen) setSelectedStall(null);
+    else setSelectedScreen(null);
+  };
+  useEscape(isStallDetailOpen || selectedScreen !== null, handleEscape);
+  const showMainThread = (isActive && isStallCapable(sdk)) || hasStallData;
+  const stallTabCount = countEventsInWindow(series.stalls, series.strictMode, startTs, endTs);
+  const stallsEmpty = stallsEmptyState({
+    hasItems: stallTabCount > 0,
+    hasAnyData: hasStallData,
+    isSessionActive: isActive,
+    sdk,
+    sdkLinkError: state.sdkLinkError,
+    thresholdMs: sdkOptions.stallThresholdMs,
+  });
   const showScreens = isSdkConnected || series.screens.length > 0;
   const showBreakdown = isSdkConnected || series.breakdown.length > 0;
   const screensEmpty = screensEmptyState({
@@ -251,8 +321,16 @@ export function App() {
             events={series.events}
             screens={series.screens}
             breakdown={series.breakdown}
+            stalls={series.stalls}
+            strictMode={series.strictMode}
             showScreens={showScreens}
             showBreakdown={showBreakdown}
+            showMainThread={showMainThread}
+            stallThresholdMs={sdkOptions.stallThresholdMs}
+            isStrictModeOn={isActive && sdkOptions.strictMode}
+            selectedStall={selectedStall}
+            onSelectStall={selectStall}
+            onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
             isSdkConnected={isSdkConnected}
             selectedScreen={selectedScreen}
             onSelectScreen={setSelectedScreen}
@@ -280,6 +358,7 @@ export function App() {
           tab={sideTab}
           onTabChange={setSideTab}
           screenCount={screenRows.length}
+          stallCount={stallTabCount}
           logcat={<LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} isTitleHidden />}
           screens={
             <ScreenPanel
@@ -287,6 +366,22 @@ export function App() {
               empty={screensEmpty}
               selected={selectedScreen}
               onSelect={setSelectedScreen}
+              showStalls={showMainThread}
+            />
+          }
+          stalls={
+            <StallsPanel
+              stalls={series.stalls}
+              strictMode={series.strictMode}
+              fromTs={startTs}
+              toTs={endTs}
+              empty={stallsEmpty}
+              options={optionsControl.shown}
+              optionsBlocker={optionsBlocker}
+              isOptionsPending={optionsControl.isPending}
+              onOptionsChange={changeOptions}
+              selectedKey={selectedStall}
+              onSelect={setSelectedStall}
             />
           }
         />

@@ -1,5 +1,6 @@
 /** Decides which empty / edge state the timeline shows. Pure so it can be tested directly. */
 import type { DeviceInfo, SdkStatus } from '@lionscope/protocol/wire';
+import { DEVICE_PROTOCOL_V2 } from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
 import type { DashboardState } from './store.ts';
 
@@ -92,4 +93,65 @@ export function screensEmptyState(input: ScreensEmptyInput): ScreensEmpty | null
   const version = input.sdk?.sdkVersion ?? null;
   if (version !== null) return { kind: 'disconnected', sdkVersion: version };
   return { kind: 'no-sdk' };
+}
+
+/** The live SDK link speaks protocol v2 (stalls, StrictMode, options). */
+export function isStallCapable(sdk: SdkStatus | undefined): boolean {
+  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V2;
+}
+
+export const SDK_UPDATE_HINT = 'Update the app’s Lionscope SDK to 0.2.0 for stall detection';
+
+/** Why the watchdog / StrictMode controls can't be used right now; null when they can. */
+export function sdkOptionsBlocker(isSessionActive: boolean, sdk: SdkStatus | undefined): string | null {
+  if (!isSessionActive) return 'Start a session to change the watchdog and StrictMode.';
+  if (sdk === undefined || (sdk.connected && sdk.options === undefined)) {
+    return 'This Lionscope server can’t configure the SDK — update it to 0.2.0.';
+  }
+  if (!sdk.connected) return 'Connect the app’s Lionscope SDK to change these.';
+  if (!isStallCapable(sdk)) return SDK_UPDATE_HINT;
+  return null;
+}
+
+/** Why the Stalls panel has nothing to list. */
+export type StallsEmpty =
+  /** Stalls are buffered, just not in the visible window. */
+  | { kind: 'window' }
+  | { kind: 'no-session' }
+  | { kind: 'no-sdk' }
+  | { kind: 'disconnected'; sdkVersion: string }
+  /** The server could not map the SDK port (`adb reverse`). */
+  | { kind: 'link-failed'; message: string }
+  /** The live link negotiated protocol v1: the app's SDK predates stall detection. */
+  | { kind: 'old-sdk'; sdkVersion: string | null }
+  /** The server doesn't report link versions: it predates stall detection. */
+  | { kind: 'old-server' }
+  | { kind: 'waiting'; thresholdMs: number };
+
+export interface StallsEmptyInput {
+  hasItems: boolean;
+  /** Any stall or violation in the buffer (not just the window). */
+  hasAnyData: boolean;
+  isSessionActive: boolean;
+  sdk: SdkStatus | undefined;
+  sdkLinkError: string | null;
+  thresholdMs: number;
+}
+
+/** Picks the Stalls panel empty state, most specific first; null when there are items. */
+export function stallsEmptyState(input: StallsEmptyInput): StallsEmpty | null {
+  if (input.hasItems) return null;
+  if (input.hasAnyData) return { kind: 'window' };
+  if (!input.isSessionActive) return { kind: 'no-session' };
+  const { sdk } = input;
+  if (sdk === undefined) return { kind: 'old-server' };
+  if (!sdk.connected) {
+    if (input.sdkLinkError !== null) return { kind: 'link-failed', message: input.sdkLinkError };
+    return sdk.sdkVersion === null
+      ? { kind: 'no-sdk' }
+      : { kind: 'disconnected', sdkVersion: sdk.sdkVersion };
+  }
+  if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
+  if (!isStallCapable(sdk)) return { kind: 'old-sdk', sdkVersion: sdk.sdkVersion };
+  return { kind: 'waiting', thresholdMs: input.thresholdMs };
 }

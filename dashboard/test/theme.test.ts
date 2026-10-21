@@ -7,6 +7,9 @@ import {
   FRAME_TIME_SPEC,
   MEMORY_SPEC,
   SLOW_TINT,
+  STALL_RAIL_PX,
+  STALL_SPEC,
+  stallTick,
 } from '../src/components/timeline/chartSpec.ts';
 import { eventLabel, identityColor, placeLabels } from '../src/components/timeline/marks.ts';
 import {
@@ -152,5 +155,23 @@ describe('placeLabels', () => {
       2,
     );
     expect(boxes.map((b) => b.row)).toEqual([0, 1, 1, 1]);
+  });
+});
+
+describe('stall lane spec', () => {
+  const threshold = [{ value: 150, label: '' }];
+
+  it('caps the scale and reserves a fixed-height rail under the baseline', () => {
+    const [min, max] = STALL_SPEC.yRange(342, threshold, 100);
+    expect(max).toBe(500);
+    // Value 0 sits STALL_RAIL_PX above the bottom of a 100 px plot.
+    expect(((0 - min) / (max - min)) * 100).toBeCloseTo(STALL_RAIL_PX);
+    expect(STALL_SPEC.yRange(null, [], 0)[1]).toBe(500);
+    expect(STALL_SPEC.yRange(40_000, threshold)[1]).toBe(2000);
+  });
+
+  it('ticks only at 0, half and the top, with seconds from 1 s', () => {
+    expect(STALL_SPEC.ySplits?.(-80, 2000)).toEqual([0, 1000, 2000]);
+    expect([0, 250, 1000, 1500].map(stallTick)).toEqual(['0', '250', '1s', '1.5s']);
   });
 });

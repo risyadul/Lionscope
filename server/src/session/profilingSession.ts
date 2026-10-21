@@ -2,6 +2,7 @@ import { isValidPackageName, isValidSerial } from '@lionscope/protocol';
 import type {
   CpuSample,
   MemorySample,
+  SdkOptions,
   ServerMessage,
   SessionState,
   SessionStatus,
@@ -170,6 +171,11 @@ export class ProfilingSession {
 
   snapshot(): Snapshot {
     return this.store.snapshot();
+  }
+
+  /** Change this session's SDK options (partial); the session is re-announced and live links get `config`. */
+  setSdkOptions(changes: Partial<SdkOptions>): void {
+    this.sdk.setOptions(changes);
   }
 
   /** Hand an SDK connection for this app to the session; it goes live once its PID checks out. */

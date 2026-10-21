@@ -26,6 +26,11 @@ export interface Backdrop {
 const SELECTED_WASH_GAIN = 2.2;
 const UNSELECTED_WASH_SHARE = 0.4;
 
+/** Custom marks a lane paints over its series (canvas px; read through `live` at draw time). */
+export interface MarkLayer {
+  draw: (u: uPlot, theme: ChartTheme) => void;
+}
+
 export interface LiveInputs {
   xMin: number;
   xMax: number;
@@ -35,6 +40,7 @@ export interface LiveInputs {
   /** Read at layout time, so moving the time axis to another lane never re-creates a plot. */
   showTimeAxis: boolean;
   showEventLabels: boolean;
+  marks: MarkLayer | null;
   onCursor: (idx: number | null, x: number | null) => void;
 }
 
@@ -180,13 +186,13 @@ function drawBackdrop(u: uPlot, live: LiveInputs, theme: ChartTheme): void {
   ctx.restore();
 }
 
-/** A small ink caret at the top edge over every bar that runs past the y range. */
-function drawClipMarks(u: uPlot, theme: ChartTheme): void {
-  const xs = u.data[0];
-  const top = u.data[1];
-  const max = u.scales.y?.max;
-  if (!top || max === undefined || max === null) return;
-  const { ctx, bbox } = u;
+/** The clipped-bar mark: a small ink caret hanging from the plot's top edge at `x` (canvas px). */
+export function drawClipCaret(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  top: number,
+  theme: ChartTheme,
+): void {
   const px = uPlot.pxRatio;
   const half = 3 * px;
   const depth = 4 * px;
@@ -194,21 +200,31 @@ function drawClipMarks(u: uPlot, theme: ChartTheme): void {
   ctx.fillStyle = theme.colors.ink;
   ctx.strokeStyle = theme.colors.surface;
   ctx.lineWidth = px;
+  ctx.beginPath();
+  ctx.moveTo(x - half, top);
+  ctx.lineTo(x + half, top);
+  ctx.lineTo(x, top + depth);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
+/** A small ink caret at the top edge over every bar that runs past the y range. */
+function drawClipMarks(u: uPlot, theme: ChartTheme): void {
+  const xs = u.data[0];
+  const top = u.data[1];
+  const max = u.scales.y?.max;
+  if (!top || max === undefined || max === null) return;
+  const { ctx, bbox } = u;
   for (let i = 0; i < xs.length; i++) {
     const value = top[i];
     const x0 = xs[i];
     if (value === null || value === undefined || x0 === undefined || value <= max) continue;
     const x = u.valToPos(x0, 'x', true);
     if (x < bbox.left || x > bbox.left + bbox.width) continue;
-    ctx.beginPath();
-    ctx.moveTo(x - half, bbox.top);
-    ctx.lineTo(x + half, bbox.top);
-    ctx.lineTo(x, bbox.top + depth);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fill();
+    drawClipCaret(ctx, x, bbox.top, theme);
   }
-  ctx.restore();
 }
 
 function drawThresholds(u: uPlot, live: LiveInputs, theme: ChartTheme): void {
@@ -253,6 +269,7 @@ export function buildOptions({ spec, theme, width, height, live }: BuildOptionsI
   // Integer px only: uPlot rescales the size for HiDPI with /(\d+)px/, which breaks on "10.5px".
   const font = `500 11px ${theme.fontMono}`;
   const finite = (v: number | null | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const ySplits = spec.ySplits;
 
   return {
     width,
@@ -267,7 +284,8 @@ export function buildOptions({ spec, theme, width, height, live }: BuildOptionsI
     scales: {
       x: { time: true, range: () => [live.current.xMin, live.current.xMax] },
       y: {
-        range: (_u, _min, max) => spec.yRange(finite(max), live.current.thresholds),
+        range: (u, _min, max) =>
+          spec.yRange(finite(max), live.current.thresholds, (u.bbox?.height ?? 0) / uPlot.pxRatio),
       },
     },
     axes: [
@@ -297,6 +315,7 @@ export function buildOptions({ spec, theme, width, height, live }: BuildOptionsI
         grid: { stroke: c.grid, width: 1 },
         ticks: { show: false },
         values: (_u, splits) => splits.map((v) => spec.yTick(v)),
+        ...(ySplits && { splits: (_u: uPlot, _i: number, min: number, max: number) => ySplits(min, max) }),
       },
     ],
     cursor: {
@@ -325,6 +344,7 @@ export function buildOptions({ spec, theme, width, height, live }: BuildOptionsI
       ],
       draw: [
         (u) => {
+          live.current.marks?.draw(u, theme);
           drawThresholds(u, live.current, theme);
           if (spec.marksClipped) drawClipMarks(u, theme);
           drawEvents(u, live.current, theme);

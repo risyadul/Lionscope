@@ -14,6 +14,8 @@ import type {
   ServerMessage,
   SessionState,
   Snapshot,
+  StallSample,
+  StrictModeSample,
   TimelineEvent,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
@@ -72,8 +74,13 @@ export interface DashboardState {
   screens: ScreenSpan[];
   /** SDK FrameMetrics aggregated per 500 ms bucket. */
   breakdown: FrameBreakdownSample[];
+  /** Main-thread stalls from the SDK watchdog, ascending by start; starts are unique. */
+  stalls: StallSample[];
+  /** Coalesced StrictMode violations, ascending by `ts`. */
+  strictMode: StrictModeSample[];
   /**
-   * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown); the pruning reference.
+   * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
+   * StrictMode); the pruning reference.
    * Logs never advance it: they carry the device clock, which can jump.
    */
   latestTs: number;
@@ -96,6 +103,9 @@ export const ADB_UNAVAILABLE_CODE = 'adb_unavailable';
 export const SDK_LINK_UNAVAILABLE_CODE = 'sdk_link_unavailable';
 /** Mirrors the server's span buffer cap; the oldest spans go first. */
 export const MAX_SCREEN_SPANS = 2000;
+/** Caps on the stall / StrictMode buffers (the oldest go first); the server's byte limits are tighter. */
+export const MAX_STALLS = 2000;
+export const MAX_STRICT_MODE = 2000;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -124,6 +134,8 @@ export function createInitialState(): DashboardState {
     events: [],
     screens: [],
     breakdown: [],
+    stalls: [],
+    strictMode: [],
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -227,6 +239,53 @@ function byTs<T extends { ts: number }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => a.ts - b.ts);
 }
 
+function capTail<T>(items: T[], max: number): T[] {
+  return items.length > max ? items.slice(items.length - max) : items;
+}
+
+/**
+ * Inserts a sample at its time position. Stalls are reported when the block ends, up to 30 s after
+ * their start, so they arrive behind newer metric samples; that is never a clock step. With
+ * `replaceSameTs`, a sample with the same `ts` replaces the stored one (a stall start is unique).
+ */
+export function insertByTs<T extends { ts: number }>(
+  items: T[],
+  sample: T,
+  max: number,
+  replaceSameTs: boolean,
+): T[] {
+  let at = items.length;
+  while (at > 0 && (items[at - 1]?.ts ?? -Infinity) > sample.ts) at--;
+  if (replaceSameTs && at > 0 && items[at - 1]?.ts === sample.ts) {
+    return [...items.slice(0, at - 1), sample, ...items.slice(at)];
+  }
+  return capTail([...items.slice(0, at), sample, ...items.slice(at)], max);
+}
+
+/**
+ * Drops leading stalls that ended before `cutoff`: one that started before the window's left edge is
+ * still on screen. Stalls on one main thread never overlap, so ends ascend with starts.
+ */
+export function pruneStallsBefore(stalls: StallSample[], cutoff: number): StallSample[] {
+  let first = 0;
+  while (first < stalls.length) {
+    const stall = stalls[first];
+    if (stall === undefined || stall.ts + stall.durationMs >= cutoff) break;
+    first++;
+  }
+  return first === 0 ? stalls : stalls.slice(first);
+}
+
+/** Sorted, one stall per start (the last report wins), capped. */
+export function normalizeStalls(stalls: readonly StallSample[]): StallSample[] {
+  const byStart = new Map<number, StallSample>();
+  for (const stall of stalls) {
+    byStart.delete(stall.ts);
+    byStart.set(stall.ts, stall);
+  }
+  return capTail(byTs([...byStart.values()]), MAX_STALLS);
+}
+
 function capLogs(logs: LogRecord[]): LogRecord[] {
   return logs.length > MAX_LOGS ? logs.slice(logs.length - MAX_LOGS) : logs;
 }
@@ -261,6 +320,8 @@ function pruneAll(state: DashboardState): DashboardState {
   const events = pruneBefore(state.events, cutoff);
   const screens = pruneSpans(state.screens, cutoff, state.latestTs);
   const breakdown = pruneBefore(state.breakdown, cutoff);
+  const stalls = pruneStallsBefore(state.stalls, cutoff);
+  const strictMode = pruneBefore(state.strictMode, cutoff);
   if (
     cpu === state.cpu &&
     memory === state.memory &&
@@ -268,17 +329,25 @@ function pruneAll(state: DashboardState): DashboardState {
     logs === state.logs &&
     events === state.events &&
     screens === state.screens &&
-    breakdown === state.breakdown
+    breakdown === state.breakdown &&
+    stalls === state.stalls &&
+    strictMode === state.strictMode
   ) {
     return state;
   }
-  return { ...state, cpu, memory, frames, logs, events, screens, breakdown };
+  return { ...state, cpu, memory, frames, logs, events, screens, breakdown, stalls, strictMode };
 }
 
-function applySnapshot(state: DashboardState, snapshot: Snapshot): DashboardState {
+function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): DashboardState {
   const logs = withSeq(byTs(snapshot.logs), state.nextLogSeq);
   const screens = normalizeSpans(snapshot.screens ?? []);
   const breakdown = byTs(snapshot.breakdown ?? []);
+  const horizon = now + FUTURE_SLACK_MS;
+  const stalls = normalizeStalls((snapshot.stalls ?? []).filter((s) => s.ts <= horizon));
+  const strictMode = capTail(
+    byTs((snapshot.strictMode ?? []).filter((v) => v.ts <= horizon)),
+    MAX_STRICT_MODE,
+  );
   const next: DashboardState = {
     ...state,
     cpu: byTs(snapshot.cpu),
@@ -288,9 +357,11 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot): DashboardStat
     events: byTs(snapshot.events),
     screens,
     breakdown,
+    stalls,
+    strictMode,
     nextLogSeq: state.nextLogSeq + logs.length,
     latestTs: Math.max(
-      maxTs(snapshot.cpu, snapshot.memory, snapshot.frames, snapshot.events, breakdown),
+      maxTs(snapshot.cpu, snapshot.memory, snapshot.frames, snapshot.events, breakdown, stalls, strictMode),
       maxSpanTs(screens),
     ),
   };
@@ -310,7 +381,18 @@ type MetricKey = 'cpu' | 'memory' | 'frames' | 'breakdown';
 function resetTimeline(state: DashboardState, ts: number): DashboardState {
   const open = state.screens[state.screens.length - 1];
   const screens = open !== undefined && open.end === null ? [{ ...open, start: ts }] : [];
-  return { ...state, cpu: [], memory: [], frames: [], events: [], screens, breakdown: [], latestTs: ts };
+  return {
+    ...state,
+    cpu: [],
+    memory: [],
+    frames: [],
+    events: [],
+    screens,
+    breakdown: [],
+    stalls: [],
+    strictMode: [],
+    latestTs: ts,
+  };
 }
 
 function applyMetric<K extends MetricKey>(
@@ -345,6 +427,23 @@ function applyScreen(state: DashboardState, span: ScreenSpan, now: number): Dash
   }
 }
 
+/**
+ * Stalls and violations slot in by time. One that claims to start more than `FUTURE_SLACK_MS` past the
+ * laptop clock is bogus (both are reported after the fact): it is dropped, so it can't sit in the buffer
+ * ahead of every real one or drag the window (and pruning) past the present.
+ */
+function applyStall(state: DashboardState, sample: StallSample, now: number): DashboardState {
+  if (sample.ts > now + FUTURE_SLACK_MS) return state;
+  const stalls = insertByTs(state.stalls, sample, MAX_STALLS, true);
+  return pruneAll({ ...state, stalls, latestTs: advance(state, sample.ts) });
+}
+
+function applyStrictMode(state: DashboardState, sample: StrictModeSample, now: number): DashboardState {
+  if (sample.ts > now + FUTURE_SLACK_MS) return state;
+  const strictMode = insertByTs(state.strictMode, sample, MAX_STRICT_MODE, false);
+  return pruneAll({ ...state, strictMode, latestTs: advance(state, sample.ts) });
+}
+
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
@@ -353,7 +452,7 @@ export function applyServerMessage(state: DashboardState, msg: ServerMessage): D
   return applyServerMessageAt(state, msg, Date.now());
 }
 
-/** `now` (laptop clock) only bounds how far an SDK screen span can move the pruning reference. */
+/** `now` (laptop clock) only bounds how far SDK spans / stalls / violations can move the pruning reference. */
 export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, now: number): DashboardState {
   switch (msg.type) {
     case 'hello': {
@@ -378,7 +477,7 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return { ...state, session: { ...msg.session }, sessionSeq: state.sessionSeq + 1, sdkLinkError };
     }
     case 'snapshot':
-      return applySnapshot(state, msg.snapshot);
+      return applySnapshot(state, msg.snapshot, now);
     case 'cpu':
       return applyMetric(state, 'cpu', msg.sample);
     case 'memory':
@@ -404,6 +503,10 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return applyScreen(state, msg.span, now);
     case 'breakdown':
       return applyMetric(state, 'breakdown', msg.sample);
+    case 'stall':
+      return applyStall(state, msg.sample, now);
+    case 'strictmode':
+      return applyStrictMode(state, msg.sample, now);
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

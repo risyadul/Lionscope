@@ -1,5 +1,12 @@
 import { DEVICE_LINK_PORT, isValidPackageName, isValidSerial } from '@lionscope/protocol';
-import type { AppInfo, DeviceInfo, ServerMessage, SessionState, Snapshot } from '@lionscope/protocol';
+import type {
+  AppInfo,
+  DeviceInfo,
+  SdkOptions,
+  ServerMessage,
+  SessionState,
+  Snapshot,
+} from '@lionscope/protocol';
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
@@ -133,6 +140,14 @@ export class SessionManager implements SdkLinkTarget {
       return { ok: false, reason: 'no_session' };
     }
     return { ok: true, handler: session.attachSdk(hello, link) };
+  }
+
+  /** Change the SDK options of the running session (announced with a `session` broadcast). false: no session. */
+  setSdkOptions(changes: Partial<SdkOptions>): boolean {
+    const session = this.session;
+    if (!session || session.isStopped) return false;
+    session.setSdkOptions(changes);
+    return true;
   }
 
   /** Poll `adb devices -l` every devicePollMs until close(). */

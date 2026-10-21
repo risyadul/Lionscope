@@ -75,3 +75,11 @@ export function formatDuration(ms: number): string {
   if (ms < 60_000) return `${Math.floor(ms / 1000)} s`;
   return formatElapsed(ms);
 }
+
+/** Main-thread block length: `342 ms`, `1.24 s`, `12.6 s`. */
+export function formatBlockMs(ms: number | null | undefined): string {
+  if (!isFiniteNumber(ms) || ms < 0) return EMPTY;
+  if (ms < 999.5) return `${Math.round(ms)} ms`;
+  if (ms < 9995) return `${(ms / 1000).toFixed(2)} s`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}

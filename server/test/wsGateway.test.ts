@@ -27,6 +27,7 @@ const manager: GatewayManager = {
   listApps: async () => [],
   startSession: async () => IDLE_SESSION,
   stopSession: async () => IDLE_SESSION,
+  setSdkOptions: () => false,
 };
 
 /** Stop reading on the client side so the server's send buffer fills up. */

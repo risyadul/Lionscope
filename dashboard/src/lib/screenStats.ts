@@ -27,9 +27,12 @@ export interface ScreenRow {
   /** Mean ms per frame for each stage (frame-weighted). */
   stageMs: Record<FrameStage, number>;
   dominant: StageShare | null;
+  /** Main-thread stalls on this screen in the window (debugger stalls excluded); 0 until attached. */
+  stallCount: number;
+  stallMs: number;
 }
 
-export type ScreenSortKey = 'name' | 'frames' | 'jankPercent' | 'slowPercent' | 'typicalP90Ms';
+export type ScreenSortKey = 'name' | 'frames' | 'jankPercent' | 'slowPercent' | 'typicalP90Ms' | 'stallCount';
 
 /** Buckets with fewer frames than this say little about a p90 and are left out of the typical one. */
 export const MIN_P90_BUCKET_FRAMES = 3;
@@ -118,12 +121,27 @@ export function aggregateScreens(
       worstP90Ms: acc.worstP90,
       stageMs,
       dominant: dominantStage(stageMs),
+      stallCount: 0,
+      stallMs: 0,
     };
+  });
+}
+
+/** Copies of `rows` carrying each screen's stall count and blocked time. */
+export function withStallCounts(
+  rows: readonly ScreenRow[],
+  byScreen: ReadonlyMap<string, { count: number; totalMs: number }>,
+): ScreenRow[] {
+  return rows.map((row) => {
+    const stalls = row.name === null ? undefined : byScreen.get(row.name);
+    return { ...row, stallCount: stalls?.count ?? 0, stallMs: stalls?.totalMs ?? 0 };
   });
 }
 
 function compareRows(a: ScreenRow, b: ScreenRow, key: ScreenSortKey, sign: number): number {
   if (key === 'name') return sign * (a.name ?? '').localeCompare(b.name ?? '');
+  // Equal counts rank by blocked time.
+  if (key === 'stallCount') return sign * (a.stallCount - b.stallCount || a.stallMs - b.stallMs);
   const av = a[key];
   const bv = b[key];
   // Rows without a value sort last in either direction.

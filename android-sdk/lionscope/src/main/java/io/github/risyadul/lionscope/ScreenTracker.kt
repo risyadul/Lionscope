@@ -25,9 +25,9 @@ internal class ScreenTracker(
     private val periodicFallback: Boolean = false,
     hooksFactory: (ScreenTracker) -> FragmentHooks? = ::createFragmentHooks,
     private val clock: () -> Long = System::currentTimeMillis,
-    applicationId: String = "",
+    ownership: AppOwnership = AppOwnership(),
 ) : Application.ActivityLifecycleCallbacks {
-    private val resolver = ScreenResolver(applicationId)
+    private val resolver = ScreenResolver(ownership)
     private val fragmentHooks: FragmentHooks? = try {
         hooksFactory(this)
     } catch (e: LinkageError) {
@@ -49,6 +49,8 @@ internal class ScreenTracker(
         }
     }
     private var tickScheduled = false
+
+    @Volatile
     private var lastScreen: ScreenRef? = null
     private var wasForeground = false
 
@@ -58,6 +60,15 @@ internal class ScreenTracker(
 
     val tracksFragments: Boolean
         get() = fragmentHooks != null
+
+    /** Name of the last reported top screen (null when none); readable from any thread. */
+    val currentScreenName: String?
+        get() = lastScreen?.name
+
+    /** Class name of the top started activity as of the last resolve; readable from any thread. */
+    @Volatile
+    var topActivityClassName: String? = null
+        private set
 
     /** Re-resolves the top screen on the main thread soon; safe to call from any thread, coalesced. */
     fun requestResolve() {
@@ -106,6 +117,7 @@ internal class ScreenTracker(
 
     private fun emit() {
         emitPending.set(false)
+        topActivityClassName = resolver.topActivity?.javaClass?.name
         val screen = resolver.resolve(isShown, describe)
         if (screen == lastScreen) return
         lastScreen = screen
@@ -142,3 +154,9 @@ internal inline fun guarded(block: () -> Unit) {
         // Swallowed on purpose: profiling must not break the app.
     }
 }
+
+/**
+ * The only failure SDK code lets through: a genuine heap OutOfMemoryError. Everything else is contained, including a
+ * failed thread start (an OutOfMemoryError from `pthread_create`) and other VirtualMachineErrors.
+ */
+internal fun isFatal(t: Throwable): Boolean = t is OutOfMemoryError && t.message?.contains("pthread_create") != true

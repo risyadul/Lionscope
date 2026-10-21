@@ -1,0 +1,129 @@
+/* Main thread lane: a canvas lane like the others, plus a DOM tooltip and an empty-window note. */
+
+.stall-plot {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stall-plot[data-hit] .lane-plot {
+  cursor: pointer;
+}
+
+.stall-plot-empty {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  left: 52px;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  text-align: center;
+  pointer-events: none;
+  transform: translateY(-60%);
+}
+
+.stall-ramp {
+  gap: var(--space-2);
+}
+
+.stall-ramp-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Above the plot: the lanes below may be the scroll container's last rows. */
+.stall-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  width: 280px;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  display: grid;
+  gap: 2px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: stall-tip-in 140ms var(--ease-out) both;
+}
+
+@keyframes stall-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 2px);
+  }
+}
+
+.stall-tip > p {
+  margin: 0;
+}
+
+.stall-tip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-bottom: 2px;
+}
+
+.stall-tip-name {
+  overflow: hidden;
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stall-tip-count {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.stall-tip-kind {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stall-tip-method {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The line is the answer: largest text in the tip. */
+.stall-tip-line {
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.stall-tip-meta {
+  padding-top: 2px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+.stall-tip > .stall-tip-hint {
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+.stall-tip-line[data-none] {
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+}

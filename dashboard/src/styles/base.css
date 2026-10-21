@@ -176,6 +176,10 @@ kbd {
   outline-offset: -2px;
 }
 
+.segmented[aria-disabled='true'] {
+  opacity: 0.5;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -380,20 +380,20 @@ class ScreenResolverTest {
 
     @Test
     fun appPackagePrefixTakesTheFirstTwoSegments() {
-        assertEquals("com.example", ScreenResolver.appPackagePrefix("com.example.shop.ui.MainActivity"))
-        assertEquals("com.example", ScreenResolver.appPackagePrefix("com.example.MainActivity\$Inner"))
-        assertEquals("shop", ScreenResolver.appPackagePrefix("shop.MainActivity"))
-        assertEquals("", ScreenResolver.appPackagePrefix("MainActivity"))
+        assertEquals("com.example", AppOwnership.appPackagePrefix("com.example.shop.ui.MainActivity"))
+        assertEquals("com.example", AppOwnership.appPackagePrefix("com.example.MainActivity\$Inner"))
+        assertEquals("shop", AppOwnership.appPackagePrefix("shop.MainActivity"))
+        assertEquals("", AppOwnership.appPackagePrefix("MainActivity"))
     }
 
     @Test
     fun appOwnershipMatchesWholeSegments() {
-        assertTrue(ScreenResolver.isAppOwned("com.example.shop.HomeFragment", "com.example"))
-        assertTrue(ScreenResolver.isAppOwned("com.example.HomeFragment", "com.example"))
-        assertFalse(ScreenResolver.isAppOwned("com.examples.HomeFragment", "com.example"))
-        assertFalse(ScreenResolver.isAppOwned(NAV_HOST, "com.example"))
-        assertFalse(ScreenResolver.isAppOwned("HomeFragment", "com.example"))
-        assertTrue(ScreenResolver.isAppOwned("anything.Goes", ""))
+        assertTrue(AppOwnership.isAppOwned("com.example.shop.HomeFragment", "com.example"))
+        assertTrue(AppOwnership.isAppOwned("com.example.HomeFragment", "com.example"))
+        assertFalse(AppOwnership.isAppOwned("com.examples.HomeFragment", "com.example"))
+        assertFalse(AppOwnership.isAppOwned(NAV_HOST, "com.example"))
+        assertFalse(AppOwnership.isAppOwned("HomeFragment", "com.example"))
+        assertTrue(AppOwnership.isAppOwned("anything.Goes", ""))
     }
 
     @Test
@@ -416,6 +416,20 @@ class ScreenResolverTest {
     }
 
     @Test
+    fun aGenericRootTakesThreeSegmentsForScreensAndStacksAlike() {
+        val ownership = AppOwnership("io.github.someone.app")
+        assertTrue(ownership.isOwned("io.github.someone.app.HomeFragment", null))
+        assertTrue(ownership.isOwned("io.github.someone.lib.Helper", null))
+        assertFalse(ownership.isOwned("io.github.other.lib.Widget", null)) // Another GitHub user's library.
+        assertFalse(ownership.isOwned("io.github.other.lib.Widget", "io.github.someone.app.MainActivity"))
+        assertTrue(ownership.isOwned("io.github.someone.ui.X", "io.github.someone.ui.MainActivity"))
+        // The sample: its own frames are app code, an unrelated io.github library is not.
+        val sample = AppOwnership("io.github.risyadul.lionscope.sample")
+        assertTrue(sample.isOwned("io.github.risyadul.lionscope.sample.SlowWork", null))
+        assertFalse(sample.isOwned("io.github.square.Lib", null))
+    }
+
+    @Test
     fun applicationIdRootAlsoCountsAsAppOwned() {
         val main = Instance("main", "com.acme.platform.ui.MainActivity")
         val offers = Instance("offers", "com.example.shop.offers.OffersFragment")
@@ -423,7 +437,7 @@ class ScreenResolverTest {
         resumeFragment(offers, main, fragmentRef("Offers"))
         assertEquals(activityRef("MainActivity"), top())
 
-        resolver = ScreenResolver(applicationId = "com.example.shop.debug")
+        resolver = ScreenResolver(AppOwnership(applicationId = "com.example.shop.debug"))
         launch(main, "MainActivity")
         resumeFragment(offers, main, fragmentRef("Offers"))
         resumeFragment(Instance("map", MAP_FRAGMENT), main, fragmentRef("SupportMapFragment"), parent = offers)
@@ -505,10 +519,16 @@ class ScreenResolverTest {
 
     @Test
     fun packagePrefixTakesTheFirstTwoSegmentsOfAPackage() {
-        assertEquals("com.example", ScreenResolver.packagePrefix("com.example.shop.debug"))
-        assertEquals("com.example", ScreenResolver.packagePrefix("com.example"))
-        assertEquals("shop", ScreenResolver.packagePrefix("shop"))
-        assertEquals("", ScreenResolver.packagePrefix(""))
+        assertEquals("io.github.risyadul", AppOwnership.packagePrefix("io.github.risyadul.lionscope.sample"))
+        assertEquals("com.google.maps", AppOwnership.packagePrefix("com.google.maps.app"))
+        assertEquals("androidx.navigation.fragment", AppOwnership.packagePrefix("androidx.navigation.fragment.Nav"))
+        assertEquals("kotlin.io.path", AppOwnership.packagePrefix("kotlin.io.path"))
+        assertEquals("io.github", AppOwnership.packagePrefix("io.github")) // Nothing more to take.
+        assertEquals("io.githubx", AppOwnership.packagePrefix("io.githubx.app"))
+        assertEquals("com.example", AppOwnership.packagePrefix("com.example.shop.debug"))
+        assertEquals("com.example", AppOwnership.packagePrefix("com.example"))
+        assertEquals("shop", AppOwnership.packagePrefix("shop"))
+        assertEquals("", AppOwnership.packagePrefix(""))
     }
 
     private companion object {

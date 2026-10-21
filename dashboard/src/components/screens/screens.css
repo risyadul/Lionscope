@@ -229,6 +229,25 @@ td[data-col='jankPercent'] {
   font-size: var(--text-overline);
 }
 
+.stall-count {
+  color: var(--ink-muted);
+}
+
+/* Blocked time under the count, like the worst p90 under the typical one. */
+.stall-blocked {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+/* A screen with stalls: ink figure over a stall-colored rule. */
+.stall-count[data-flag] {
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--viz-stall-2);
+}
+
 td[data-col='dominant'] {
   padding-right: var(--space-4);
   text-align: left;

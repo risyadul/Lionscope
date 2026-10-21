@@ -143,7 +143,22 @@ export interface SdkStatus {
   apiLevel: number | null;
   /** SDK frames are flowing, so the gfxinfo poller is paused. */
   framesActive: boolean;
+  /** Negotiated device protocol version of the live link (null when not connected); absent on older servers. */
+  protocolVersion?: number | null;
+  /** SDK options for this session (applied to protocol ≥ 2 links); absent on older servers. */
+  options?: SdkOptions;
 }
+
+/** Per-session SDK options, set from the dashboard (`setSdkOptions`) and pushed to the SDK as `config`. */
+export interface SdkOptions {
+  /** Main-thread watchdog threshold: a block at least this long is reported as a stall. One of STALL_THRESHOLDS_MS. */
+  stallThresholdMs: number;
+  /** StrictMode thread/VM violation reporting (off by default; it changes the app's StrictMode policies). */
+  strictMode: boolean;
+}
+
+export const STALL_THRESHOLDS_MS = [100, 150, 250, 500, 1000] as const;
+export const DEFAULT_SDK_OPTIONS: SdkOptions = { stallThresholdMs: 150, strictMode: false };
 
 export interface SessionState {
   status: SessionStatus;
@@ -202,6 +217,52 @@ export interface FrameBreakdownSample {
   frameIntervalMs: number;
 }
 
+/** One stack frame as captured on the device (`StackTraceElement`). */
+export interface StackFrame {
+  className: string;
+  method: string;
+  /** Source file name (e.g. `HomeViewModel.kt`), null when unknown. */
+  file: string | null;
+  /** Line number; null when unknown; -2 for native methods (as in `StackTraceElement`). */
+  line: number | null;
+  /** The frame belongs to the app (same ownership rule as screens: Activity / applicationId package root). */
+  inApp: boolean;
+}
+
+/** Max frames per captured stack (innermost first); longer stacks are cut and flagged `truncated`. */
+export const MAX_STACK_FRAMES = 64;
+
+/** A main-thread block detected by the SDK watchdog (laptop clock). */
+export interface StallSample {
+  /** Start of the block (when the watchdog's tick was posted). */
+  ts: number;
+  durationMs: number;
+  /** Representative main-thread stack (the most frequent of the samples taken while blocked), innermost first. */
+  frames: StackFrame[];
+  /** How many stack samples were taken while blocked. */
+  samples: number;
+  truncated: boolean;
+  /** Top screen name when the block started (SDK's view), null if unknown/background. */
+  screen: string | null;
+  /** A debugger was attached (blocks are likely breakpoints, not app work). */
+  debugger: boolean;
+}
+
+export type StrictModePolicy = 'thread' | 'vm';
+
+/** StrictMode violation(s) reported by the SDK, coalesced per stack (laptop clock). */
+export interface StrictModeSample {
+  ts: number;
+  policy: StrictModePolicy;
+  /** Violation class simple name, e.g. `DiskReadViolation`, `NetworkViolation`, `LeakedClosableViolation`. */
+  violation: string;
+  message: string | null;
+  frames: StackFrame[];
+  /** Occurrences of this violation+stack coalesced into this sample. */
+  count: number;
+  screen: string | null;
+}
+
 export interface Snapshot {
   cpu: CpuSample[];
   memory: MemorySample[];
@@ -211,6 +272,9 @@ export interface Snapshot {
   /** Phase 2 streams are optional: older servers omit them (dashboard reads `?? []`). */
   screens?: ScreenSpan[];
   breakdown?: FrameBreakdownSample[];
+  /** Phase 3 streams, optional like the Phase 2 ones. */
+  stalls?: StallSample[];
+  strictMode?: StrictModeSample[];
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +300,8 @@ export type ServerMessage =
    */
   | { type: 'screen'; span: ScreenSpan }
   | { type: 'breakdown'; sample: FrameBreakdownSample }
+  | { type: 'stall'; sample: StallSample }
+  | { type: 'strictmode'; sample: StrictModeSample }
   | { type: 'error'; message: string; code?: string };
 
 export type ServerMessageType = ServerMessage['type'];
@@ -262,7 +328,9 @@ export type ClientMessage =
   | { type: 'refreshDevices' }
   | { type: 'listApps'; serial: string }
   | { type: 'startSession'; serial: string; packageName: string }
-  | { type: 'stopSession' };
+  | { type: 'stopSession' }
+  /** Change SDK options for the current session (partial). The server answers with an updated `session`. */
+  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean };
 
 /** Max accepted size of a dashboard → server frame, in bytes. */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -283,8 +351,14 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 1;
+export const DEVICE_PROTOCOL_VERSION = 2;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
+/**
+ * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
+ * v2 adds SDK → server `stall` and `strictmode`, and server → SDK `config`. Neither side sends a v2 type on a
+ * link negotiated at 1.
+ */
+export const DEVICE_PROTOCOL_V2 = 2;
 /**
  * Highest `hello.protocolVersion` the server accepts (and negotiates down). It bounds the field to a plausible
  * range: anything above is garbage, not a future SDK.
@@ -340,7 +414,29 @@ export type DeviceMessage =
       /** Frames FrameMetrics dropped before the SDK saw them (`dropCountSinceLastInvocation`); absent = 0. */
       droppedFrames?: number;
     }
-  | { type: 'heartbeat'; ts: number; droppedMessages: number };
+  | { type: 'heartbeat'; ts: number; droppedMessages: number }
+  /** v2. A main-thread block ≥ the configured threshold; sent when the block ends (or is cut at 30 s). */
+  | {
+      type: 'stall';
+      ts: number;
+      durationMs: number;
+      frames: StackFrame[];
+      samples: number;
+      truncated: boolean;
+      screen: string | null;
+      debugger: boolean;
+    }
+  /** v2. Coalesced StrictMode violation(s) with the same violation + stack, at most one per stack per second. */
+  | {
+      type: 'strictmode';
+      ts: number;
+      policy: StrictModePolicy;
+      violation: string;
+      message: string | null;
+      frames: StackFrame[];
+      count: number;
+      screen: string | null;
+    };
 
 export type DeviceMessageType = DeviceMessage['type'];
 
@@ -352,4 +448,6 @@ export type DeviceMessageType = DeviceMessage['type'];
 export type GatewayMessage =
   | { type: 'welcome'; protocolVersion: number }
   /** The server will close the connection; the SDK retries with backoff. */
-  | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' };
+  | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
+  /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
+  | { type: 'config'; stallThresholdMs: number; strictMode: boolean };

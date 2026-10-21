@@ -1,6 +1,18 @@
-import type { ScreenRef, ServerMessage } from '@lionscope/protocol';
+import { MAX_STACK_FRAMES } from '@lionscope/protocol';
+import type {
+  ScreenRef,
+  ServerMessage,
+  StackFrame,
+  StallSample,
+  StrictModeSample,
+} from '@lionscope/protocol';
 import { describe, expect, it } from 'vitest';
-import { emptySnapshot, SAMPLE_STREAMS, SessionStore } from '../src/store/sessionStore.ts';
+import {
+  emptySnapshot,
+  MAX_EVENT_STREAM_BYTES,
+  SAMPLE_STREAMS,
+  SessionStore,
+} from '../src/store/sessionStore.ts';
 
 const HOME: ScreenRef = { name: 'home', className: 'com.example.HomeFragment', kind: 'fragment' };
 const PROMO: ScreenRef = { name: 'Promo', className: 'com.example.PromoSheet', kind: 'dialog' };
@@ -19,7 +31,7 @@ function setup(windowMs = 10_000, start = 100_000) {
 }
 
 describe('SessionStore', () => {
-  it('has an empty snapshot with every stream, including the Phase 2 ones', () => {
+  it('has an empty snapshot with every stream, including the Phase 2 and 3 ones', () => {
     expect(emptySnapshot()).toEqual({
       cpu: [],
       memory: [],
@@ -27,10 +39,13 @@ describe('SessionStore', () => {
       logs: [],
       events: [],
       breakdown: [],
+      stalls: [],
+      strictMode: [],
       screens: [],
     });
     expect(setup().store.snapshot()).toEqual(emptySnapshot());
     expect(SAMPLE_STREAMS).toContain('breakdown');
+    expect(SAMPLE_STREAMS).toContain('stalls');
   });
 
   it('buffers then announces each appended item with its stream message', () => {
@@ -80,6 +95,80 @@ describe('SessionStore', () => {
     const entry = (ts: number) => ({ ts, pid: 1, tid: 1, level: 'I' as const, tag: 'T', message: 'm' });
     store.append('logs', entry(99_200), entry(99_100));
     expect(store.snapshot().logs).toHaveLength(2);
+  });
+
+  it('buffers and announces stalls and StrictMode violations', () => {
+    const { store, messages } = setup();
+    const frames: StackFrame[] = [{ className: 'a.B', method: 'c', file: null, line: -2, inApp: false }];
+    const stall: StallSample = {
+      ts: 99_000,
+      durationMs: 342,
+      frames,
+      samples: 6,
+      truncated: false,
+      screen: 'home',
+      debugger: false,
+    };
+    const violation: StrictModeSample = {
+      ts: 99_500,
+      policy: 'vm',
+      violation: 'LeakedClosableViolation',
+      message: 'leak',
+      frames,
+      count: 2,
+      screen: null,
+    };
+    store.append('stalls', stall);
+    store.append('strictMode', violation);
+    expect(messages).toEqual([
+      { type: 'stall', sample: stall },
+      { type: 'strictmode', sample: violation },
+    ]);
+    expect(store.snapshot()).toMatchObject({ stalls: [stall], strictMode: [violation] });
+  });
+
+  it('caps the stall and StrictMode streams by count and by serialised size', () => {
+    const { store } = setup(60_000);
+    const stall = (ts: number): StallSample => ({
+      ts,
+      durationMs: 200,
+      frames: [],
+      samples: 4,
+      truncated: false,
+      screen: null,
+      debugger: false,
+    });
+    for (let i = 0; i < 2100; i += 1) store.append('stalls', stall(50_000 + i));
+    expect(store.snapshot().stalls).toHaveLength(2000);
+    expect(store.snapshot().stalls[0]?.ts).toBe(50_100);
+
+    // 2000 maximal items (a full stack of maximal strings, ~47 KB serialised each): what is kept still fits.
+    const big: StackFrame = {
+      className: 'c'.repeat(256),
+      method: 'm'.repeat(256),
+      file: 'f'.repeat(128),
+      line: -2,
+      inApp: true,
+    };
+    const frames = Array.from({ length: MAX_STACK_FRAMES }, () => big);
+    for (let i = 0; i < 2000; i += 1) {
+      store.append('stalls', { ...stall(60_000 + i), frames, truncated: true, screen: 's'.repeat(256) });
+      store.append('strictMode', {
+        ts: 60_000 + i,
+        policy: 'thread',
+        violation: 'v'.repeat(128),
+        message: 'é'.repeat(256), // two bytes each in UTF-8
+        frames,
+        count: 1_000_000,
+        screen: 's'.repeat(256),
+      });
+    }
+    const snapshot = store.snapshot();
+    for (const kept of [snapshot.stalls, snapshot.strictMode]) {
+      expect(Buffer.byteLength(JSON.stringify(kept))).toBeLessThanOrEqual(MAX_EVENT_STREAM_BYTES);
+      expect(kept.length).toBeGreaterThan(30);
+      expect(kept.at(-1)?.ts).toBe(61_999);
+    }
   });
 
   it('prunes timestamped streams against the clock when taking a snapshot', () => {

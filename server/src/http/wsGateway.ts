@@ -81,6 +81,7 @@ export type GatewayManager = Pick<
   | 'listApps'
   | 'startSession'
   | 'stopSession'
+  | 'setSdkOptions'
 >;
 
 export interface WsGatewayOptions {
@@ -103,7 +104,9 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   listApps: 'Could not list apps on the device',
   startSession: 'Could not start the profiling session',
   stopSession: 'Could not stop the profiling session',
+  setSdkOptions: 'Could not change the SDK options',
 };
+export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
   const { server, manager } = options;
@@ -158,6 +161,14 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       case 'stopSession':
         send(ws, { type: 'session', session: await manager.stopSession() });
         return;
+      case 'setSdkOptions': {
+        const { stallThresholdMs, strictMode } = message;
+        // Answered by the `session` broadcast that carries the new options.
+        if (!manager.setSdkOptions({ stallThresholdMs, strictMode })) {
+          send(ws, { type: 'error', code: 'no_session', message: NO_SESSION_MESSAGE });
+        }
+        return;
+      }
     }
   };
 

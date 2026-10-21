@@ -2,11 +2,12 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'logcat' | 'screens';
+export type SideTab = 'logcat' | 'screens' | 'stalls';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'logcat', label: 'Logcat' },
   { id: 'screens', label: 'Screens' },
+  { id: 'stalls', label: 'Stalls' },
 ];
 
 type Props = {
@@ -14,12 +15,17 @@ type Props = {
   onTabChange: (tab: SideTab) => void;
   /** Rows in the screens table, shown on its tab. */
   screenCount: number;
+  /** Stalls in the visible window, shown on its tab. */
+  stallCount: number;
   logcat: ReactNode;
   screens: ReactNode;
+  stalls: ReactNode;
 };
 
-/** The right-hand column: logcat and the per-screen table share it as tabs (both stay mounted). */
-export function SidePanel({ tab, onTabChange, screenCount, logcat, screens }: Props) {
+/** The right-hand column: logcat, the per-screen table and stalls share it as tabs (all stay mounted). */
+export function SidePanel({ tab, onTabChange, screenCount, stallCount, logcat, screens, stalls }: Props) {
+  const counts: Record<SideTab, number> = { logcat: 0, screens: screenCount, stalls: stallCount };
+  const panels: Record<SideTab, ReactNode> = { logcat, screens, stalls };
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -37,7 +43,7 @@ export function SidePanel({ tab, onTabChange, screenCount, logcat, screens }: Pr
   };
 
   return (
-    <aside className="side" aria-label="Logs and screens">
+    <aside className="side" aria-label="Logs, screens and stalls">
       <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button
@@ -52,32 +58,27 @@ export function SidePanel({ tab, onTabChange, screenCount, logcat, screens }: Pr
             onClick={() => onTabChange(t.id)}
           >
             {t.label}
-            {t.id === 'screens' && screenCount > 0 && (
-              <span className="side-tab-count mono">{formatInteger(screenCount)}</span>
+            {counts[t.id] > 0 && (
+              <span className="side-tab-count mono" data-tab={t.id}>
+                {formatInteger(counts[t.id])}
+              </span>
             )}
           </button>
         ))}
       </div>
-      <div
-        id="side-panel-logcat"
-        className="side-panel"
-        role="tabpanel"
-        aria-labelledby="side-tab-logcat"
-        tabIndex={0}
-        hidden={tab !== 'logcat'}
-      >
-        {logcat}
-      </div>
-      <div
-        id="side-panel-screens"
-        className="side-panel"
-        role="tabpanel"
-        aria-labelledby="side-tab-screens"
-        tabIndex={0}
-        hidden={tab !== 'screens'}
-      >
-        {screens}
-      </div>
+      {TABS.map((t) => (
+        <div
+          key={t.id}
+          id={`side-panel-${t.id}`}
+          className="side-panel"
+          role="tabpanel"
+          aria-labelledby={`side-tab-${t.id}`}
+          tabIndex={0}
+          hidden={tab !== t.id}
+        >
+          {panels[t.id]}
+        </div>
+      ))}
     </aside>
   );
 }

@@ -7,7 +7,11 @@ import type {
   MemorySample,
   ScreenKind,
   ScreenSpan,
+  SdkStatus,
   SessionState,
+  StackFrame,
+  StallSample,
+  StrictModeSample,
 } from '@lionscope/protocol/wire';
 
 export const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
@@ -110,3 +114,69 @@ export function breakdown(
     ...rest,
   };
 }
+
+export function stackFrame(
+  className: string,
+  method: string,
+  file: string | null,
+  line: number | null,
+  inApp = false,
+): StackFrame {
+  return { className, method, file, line, inApp };
+}
+
+/** Innermost first: a framework sort under an app method, then the Looper. */
+export const HOME_STACK: StackFrame[] = [
+  stackFrame('java.util.TimSort', 'sort', 'TimSort.java', 245),
+  stackFrame('java.util.Arrays', 'sort', 'Arrays.java', 1498),
+  stackFrame('kotlin.collections.CollectionsKt___CollectionsKt', 'sortedWith', '_Collections.kt', 1105),
+  stackFrame('com.example.shop.home.HomeViewModel', 'mapItems', 'HomeViewModel.kt', 87, true),
+  stackFrame('com.example.shop.home.HomeViewModel$load$1', 'invokeSuspend', 'HomeViewModel.kt', 52, true),
+  stackFrame('kotlinx.coroutines.DispatchedTask', 'run', 'DispatchedTask.kt', 108),
+  stackFrame('android.os.Handler', 'dispatchMessage', 'Handler.java', 99),
+  stackFrame('android.os.Looper', 'loop', 'Looper.java', 294),
+  stackFrame('java.lang.reflect.Method', 'invoke', null, -2),
+];
+
+export const CART_STACK: StackFrame[] = [
+  stackFrame('java.io.FileInputStream', 'read', 'FileInputStream.java', 321),
+  stackFrame('com.example.shop.data.CartRepository', 'loadFromDisk', 'CartRepository.kt', 41, true),
+  stackFrame('android.os.Looper', 'loop', 'Looper.java', 294),
+];
+
+export function stall(ts: number, durationMs: number, overrides: Partial<StallSample> = {}): StallSample {
+  return {
+    ts,
+    durationMs,
+    frames: HOME_STACK,
+    samples: Math.max(1, Math.round(durationMs / 50)),
+    truncated: false,
+    screen: 'homepage',
+    debugger: false,
+    ...overrides,
+  };
+}
+
+export function violation(ts: number, overrides: Partial<StrictModeSample> = {}): StrictModeSample {
+  return {
+    ts,
+    policy: 'thread',
+    violation: 'DiskReadViolation',
+    message: null,
+    frames: CART_STACK,
+    count: 1,
+    screen: 'CartFragment',
+    ...overrides,
+  };
+}
+
+/** A live protocol-v2 SDK link with the default options. */
+export const SDK_V2: SdkStatus = {
+  connected: true,
+  sdkVersion: '0.2.0',
+  processName: 'com.example.shop',
+  apiLevel: 34,
+  framesActive: true,
+  protocolVersion: 2,
+  options: { stallThresholdMs: 150, strictMode: false },
+};

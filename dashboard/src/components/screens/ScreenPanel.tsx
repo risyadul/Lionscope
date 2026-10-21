@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { FrameStage } from '@lionscope/protocol/wire';
-import { formatFixed, formatInteger } from '../../lib/format.ts';
+import { formatBlockMs, formatFixed, formatInteger } from '../../lib/format.ts';
 import { screenColor } from '../../lib/screens.ts';
 import {
   sortScreenRows,
@@ -25,6 +25,8 @@ type Props = {
   empty: ScreenPanelEmpty | null;
   selected: string | null;
   onSelect: (name: string | null) => void;
+  /** Show the Stalls column (a v2 SDK is linked or stalls were recorded). */
+  showStalls?: boolean;
 };
 
 interface Column {
@@ -48,6 +50,14 @@ const COLUMNS: readonly Column[] = [
     firstDirection: 'desc',
   },
 ];
+
+const STALLS_COLUMN: Column = {
+  key: 'stallCount',
+  label: 'Stalls',
+  title:
+    'Main-thread stalls on this screen in the window and the time they blocked it (debugger stalls excluded)',
+  firstDirection: 'desc',
+};
 
 function EmptyPanel({ empty }: { empty: ScreenPanelEmpty }) {
   if (empty.kind === 'link-failed') {
@@ -150,9 +160,10 @@ function stageSummary(row: ScreenRow, stages: readonly FrameStage[]): string {
   return stages.map((stage) => `${STAGE_LABELS[stage]} ${formatFixed(row.stageMs[stage], 2)} ms`).join(', ');
 }
 
-export function ScreenPanel({ rows, empty, selected, onSelect }: Props) {
+export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = false }: Props) {
   const [sortKey, setSortKey] = useState<ScreenSortKey>('jankPercent');
   const [direction, setDirection] = useState<SortDirection>('desc');
+  const columns = showStalls ? [...COLUMNS, STALLS_COLUMN] : COLUMNS;
 
   const sorted = sortScreenRows(rows, sortKey, direction);
   const shown = selected === null ? sorted : sorted.filter((row) => row.name === selected);
@@ -197,7 +208,7 @@ export function ScreenPanel({ rows, empty, selected, onSelect }: Props) {
             <table className="screens-table">
               <thead>
                 <tr>
-                  {COLUMNS.map((column) => (
+                  {columns.map((column) => (
                     <th
                       key={column.key}
                       scope="col"
@@ -286,6 +297,24 @@ export function ScreenPanel({ rows, empty, selected, onSelect }: Props) {
                         {formatFixed(row.typicalP90Ms, 1)}
                         <span className="p90-worst">worst {formatFixed(row.worstP90Ms, 1)}</span>
                       </td>
+                      {showStalls && (
+                        <td
+                          data-col="stallCount"
+                          className="mono"
+                          title={row.stallCount > 0 ? `${formatBlockMs(row.stallMs)} blocked` : undefined}
+                        >
+                          <span className="stall-count" data-flag={row.stallCount > 0 || undefined}>
+                            {formatInteger(row.stallCount)}
+                          </span>
+                          {row.stallCount > 0 && (
+                            <span className="stall-blocked">
+                              <span className="sr-only">, </span>
+                              {formatBlockMs(row.stallMs)}
+                              <span className="sr-only"> blocked</span>
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td data-col="dominant">
                         {row.dominant ? (
                           <span className="dominant" title={STAGE_LABELS[row.dominant.stage]}>

@@ -10,3 +10,12 @@ internal fun lowerThreadPriority() {
         // Best effort.
     }
 }
+
+/** For threads that must keep running while the app is busy (the main-thread watchdog). */
+internal fun defaultThreadPriority() {
+    try {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT)
+    } catch (e: RuntimeException) {
+        // Best effort.
+    }
+}

@@ -38,7 +38,7 @@ internal class DeviceLink(
      * disconnect. Message types newer than this must not be sent.
      */
     @Volatile
-    var negotiatedVersion: Int? = null
+    override var negotiatedVersion: Int? = null
         private set
 
     @Volatile
@@ -50,6 +50,7 @@ internal class DeviceLink(
     private val stateLock = ReentrantLock()
     private val stateChanged = stateLock.newCondition()
     private val welcomeListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
+    private val configListeners = CopyOnWriteArrayList<(SdkOptions) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -59,6 +60,10 @@ internal class DeviceLink(
 
     fun send(line: String) {
         if (isConnected) queue.offer(line)
+    }
+
+    override fun sendV2(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && speaksV2()) queue.offer(V2Item(sizeHint, encode))
     }
 
     /** Records the top screen (re-sent after every reconnect); encoding happens on the link thread. */
@@ -75,6 +80,12 @@ internal class DeviceLink(
     override fun addWelcomeListener(listener: (welcomed: Boolean) -> Unit) {
         welcomeListeners.add(listener)
     }
+
+    override fun addConfigListener(listener: (SdkOptions) -> Unit) {
+        configListeners.add(listener)
+    }
+
+    private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
 
     private fun runForever() {
         try {
@@ -135,7 +146,7 @@ internal class DeviceLink(
         while (!session.closed) {
             queue.drainTo(batch, DRAIN_BATCH, (nextHeartbeat - clock()).coerceAtLeast(0))
             if (session.closed) return
-            for (item in batch) out.writeLine(encode(item))
+            for (item in batch) encode(item, negotiatedVersion)?.let { out.writeLine(it) }
             batch.clear()
             val now = clock()
             if (now >= nextHeartbeat) {
@@ -146,10 +157,6 @@ internal class DeviceLink(
         }
     }
 
-    private fun encode(item: Any): String = when (item) {
-        is ScreenEvent -> DeviceMessages.screen(item.ts, item.screen)
-        else -> item.toString()
-    }
 
     private fun BufferedWriter.writeLine(line: String) {
         write(line)
@@ -158,9 +165,13 @@ internal class DeviceLink(
 
     private fun setWelcomed(welcomed: Boolean) {
         isWelcomed = welcomed
-        for (listener in welcomeListeners) {
+        dispatch(welcomeListeners, welcomed)
+    }
+
+    private fun <T> dispatch(listeners: List<(T) -> Unit>, value: T) {
+        for (listener in listeners) {
             try {
-                listener(welcomed)
+                listener(value)
             } catch (e: Exception) {
                 // A failing listener must not take the link down.
             }
@@ -194,7 +205,15 @@ internal class DeviceLink(
                     byeReason = message.reason
                     close()
                 }
+                is GatewayMessage.Config -> onConfig(message.options)
             }
+        }
+
+        /** Ignored before `welcome`, after close, and on a link negotiated below v2. */
+        @Synchronized
+        private fun onConfig(options: SdkOptions) {
+            if (!welcomed || closed || !speaksV2()) return
+            dispatch(configListeners, options)
         }
 
         /** Synchronized with [close] so a late welcome can never outlive its connection. */
@@ -226,14 +245,41 @@ internal class DeviceLink(
     /** A screen change waiting to be encoded on the link thread. */
     private class ScreenEvent(val ts: Long, val screen: ScreenRef?)
 
-    private companion object {
+    /** A v2-only message, encoded on the link thread only if the connection it ends up on negotiated v2. */
+    internal class V2Item(val sizeHint: Int, val encode: () -> String?)
+
+    internal companion object {
         const val CONNECT_TIMEOUT_MS = 1_000
         const val HEARTBEAT_INTERVAL_MS = 5_000L
         const val DRAIN_BATCH = 64
         const val WRITE_BUFFER = 16 * 1024
         const val SCREEN_SIZE_HINT = 256
 
-        fun sizeHint(item: Any): Int = if (item is String) item.length else SCREEN_SIZE_HINT
+        fun sizeHint(item: Any): Int = when (item) {
+            is String -> item.length
+            is V2Item -> item.sizeHint
+            else -> SCREEN_SIZE_HINT
+        }
+
+        fun speaksV2(negotiatedVersion: Int?): Boolean = (negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V2
+
+        /**
+         * The line to write for a queued [item], or null. A v2 item can have been queued for an earlier connection
+         * (the offer raced a reconnect); on a connection negotiated at v1, or not welcomed yet, it is dropped here.
+         * A failing v2 encoder drops that one message, never the connection.
+         */
+        fun encode(item: Any, negotiatedVersion: Int?): String? = when (item) {
+            is ScreenEvent -> DeviceMessages.screen(item.ts, item.screen)
+            is V2Item -> if (speaksV2(negotiatedVersion)) encodeContained(item) else null
+            else -> item.toString()
+        }
+
+        private fun encodeContained(item: V2Item): String? = try {
+            item.encode()
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            null
+        }
     }
 }
 

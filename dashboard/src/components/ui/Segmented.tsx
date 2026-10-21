@@ -14,6 +14,12 @@ type Props<T extends string | number> = {
   onChange: (value: T) => void;
   label: string;
   className?: string;
+  /** Every option is inert (the group stays visible to show the current value). */
+  disabled?: boolean;
+  /** Id of the element explaining why the group is disabled. */
+  describedBy?: string;
+  /** Held arrow keys don't step: each change is a server request (rate-limited socket). */
+  ignoreRepeat?: boolean;
 };
 
 const STEP: Partial<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -25,6 +31,9 @@ export function Segmented<T extends string | number>({
   onChange,
   label,
   className,
+  disabled = false,
+  describedBy,
+  ignoreRepeat = false,
 }: Props<T>) {
   const current = Math.max(
     0,
@@ -32,6 +41,11 @@ export function Segmented<T extends string | number>({
   );
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    if (ignoreRepeat && event.repeat) {
+      if (event.key in STEP || event.key === 'Home' || event.key === 'End') event.preventDefault();
+      return;
+    }
     let next: number | null = null;
     const step = STEP[event.key];
     if (step !== undefined) next = (current + step + options.length) % options.length;
@@ -50,6 +64,8 @@ export function Segmented<T extends string | number>({
       className={className ? `segmented ${className}` : 'segmented'}
       role="radiogroup"
       aria-label={label}
+      aria-disabled={disabled || undefined}
+      aria-describedby={describedBy}
       onKeyDown={handleKeyDown}
     >
       {options.map((option, i) => (
@@ -60,6 +76,7 @@ export function Segmented<T extends string | number>({
           aria-checked={option.value === value}
           tabIndex={i === current ? 0 : -1}
           title={option.title}
+          disabled={disabled}
           onClick={() => onChange(option.value)}
           {...option.data}
         >

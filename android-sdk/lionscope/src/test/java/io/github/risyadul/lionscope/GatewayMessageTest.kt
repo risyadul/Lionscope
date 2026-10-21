@@ -1,6 +1,7 @@
 package io.github.risyadul.lionscope
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -57,6 +58,43 @@ class GatewayMessageTest {
     @Test
     fun byeWithoutReasonIsUnknown() {
         assertEquals("unknown", (GatewayMessage.parse("{\"type\":\"bye\"}") as GatewayMessage.Bye).reason)
+    }
+
+    private fun config(line: String) = (GatewayMessage.parse(line) as GatewayMessage.Config).options
+
+    @Test
+    fun parsesConfigAndToleratesUnknownFields() {
+        assertEquals(SdkOptions(250, true), config("{\"type\":\"config\",\"stallThresholdMs\":250,\"strictMode\":true}"))
+        assertEquals(
+            SdkOptions(1000, false),
+            config("{\"type\":\"config\",\"future\":[1,2],\"strictMode\" : false,\"stallThresholdMs\" : 1000,\"x\":\"y\"}"),
+        )
+    }
+
+    @Test
+    fun configThresholdSnapsToTheNearestAllowedValueOrTheDefault() {
+        fun threshold(raw: String) =
+            config("{\"type\":\"config\",\"stallThresholdMs\":$raw,\"strictMode\":false}").stallThresholdMs
+        assertEquals(100L, threshold("100"))
+        assertEquals(100L, threshold("1"))
+        assertEquals(100L, threshold("-50"))
+        assertEquals(100L, threshold("125")) // Tie: the lower one.
+        assertEquals(150L, threshold("149.9"))
+        assertEquals(250L, threshold("300"))
+        assertEquals(1000L, threshold("1e9"))
+        assertEquals(150L, threshold("\"250\""))
+        assertEquals(150L, threshold("null"))
+        assertEquals(SdkOptions.DEFAULT, config("{\"type\":\"config\"}"))
+    }
+
+    @Test
+    fun configStrictModeIsOnlyALiteralTrue() {
+        fun strict(raw: String) = config("{\"type\":\"config\",\"stallThresholdMs\":150,\"strictMode\":$raw}").strictMode
+        assertTrue(strict("true"))
+        assertFalse(strict("false"))
+        assertFalse(strict("\"true\""))
+        assertFalse(strict("1"))
+        assertFalse(strict("trueish"))
     }
 
     @Test

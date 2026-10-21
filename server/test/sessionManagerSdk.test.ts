@@ -27,7 +27,7 @@ const HELLO: SdkHello = {
   deviceWallMs: 1,
   refreshRateHz: 60,
 };
-const link: SdkLink = { protocolVersion: 1, close: () => undefined };
+const link: SdkLink = { protocolVersion: 1, close: () => undefined, sendConfig: () => undefined };
 
 function setup(gatewayPort: (() => number | null) | null = () => GATEWAY_PORT) {
   const device = new FakeDevice();
@@ -100,6 +100,21 @@ describe('SessionManager SDK link', () => {
     expect(manager.getSessionState().sdk?.connected).toBe(true);
     await manager.stopSession();
     expect(manager.attachSdk(HELLO, link)).toEqual({ ok: false, reason: 'no_session' });
+    await manager.close();
+  });
+
+  it('sets the SDK options of the running session only, announcing them with the session', async () => {
+    const { manager, messages, start } = setup();
+    expect(manager.setSdkOptions({ strictMode: true })).toBe(false);
+    await start();
+    expect(manager.setSdkOptions({ stallThresholdMs: 250 })).toBe(true);
+    const options = { stallThresholdMs: 250, strictMode: false };
+    expect(manager.getSessionState().sdk?.options).toEqual(options);
+    const last = messages.at(-1);
+    expect(last?.type === 'session' && last.session.sdk?.options).toEqual(options);
+    await manager.stopSession();
+    expect(manager.setSdkOptions({ strictMode: true })).toBe(false);
+    expect(manager.getSessionState().sdk?.options).toEqual(options);
     await manager.close();
   });
 

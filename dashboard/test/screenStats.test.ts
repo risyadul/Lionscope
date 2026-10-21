@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateScreens, dominantStage, sortScreenRows, weightedMedian } from '../src/lib/screenStats.ts';
+import {
+  aggregateScreens,
+  dominantStage,
+  sortScreenRows,
+  weightedMedian,
+  withStallCounts,
+} from '../src/lib/screenStats.ts';
 import { breakdown, STAGES_ZERO, T0 } from './fixtures.ts';
 
 describe('aggregateScreens', () => {
@@ -142,5 +148,34 @@ describe('typical p90', () => {
     );
     expect(sortScreenRows(rows, 'typicalP90Ms', 'desc').map((r) => r.name)).toEqual(['slow', 'fast', 'tiny']);
     expect(sortScreenRows(rows, 'typicalP90Ms', 'asc').map((r) => r.name)).toEqual(['fast', 'slow', 'tiny']);
+  });
+});
+
+describe('withStallCounts', () => {
+  const rows = aggregateScreens(
+    [breakdown(T0, 'a'), breakdown(T0, 'b'), breakdown(T0, 'c'), breakdown(T0, null)],
+    T0,
+    T0,
+  );
+  const byScreen = new Map([
+    ['a', { count: 2, totalMs: 400 }],
+    ['b', { count: 2, totalMs: 900 }],
+    ['c', { count: 5, totalMs: 800 }],
+  ]);
+
+  it('attaches counts without touching the input; screens without stalls and no-screen rows get 0', () => {
+    const withStalls = withStallCounts(rows, byScreen);
+    expect(withStalls.map((r) => [r.name, r.stallCount, r.stallMs])).toEqual([
+      ['a', 2, 400],
+      ['b', 2, 900],
+      ['c', 5, 800],
+      [null, 0, 0],
+    ]);
+    expect(rows.every((r) => r.stallCount === 0 && r.stallMs === 0)).toBe(true);
+  });
+
+  it('sorts by stall count, equal counts by blocked time', () => {
+    const sorted = sortScreenRows(withStallCounts(rows, byScreen), 'stallCount', 'desc');
+    expect(sorted.map((r) => r.name)).toEqual(['c', 'b', 'a', null]);
   });
 });

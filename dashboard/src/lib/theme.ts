@@ -35,6 +35,11 @@ export const CHART_COLOR_TOKENS = {
   screen1: '--viz-screen-1',
   screen2: '--viz-screen-2',
   screen3: '--viz-screen-3',
+  stall1: '--viz-stall-1',
+  stall2: '--viz-stall-2',
+  stall3: '--viz-stall-3',
+  stallDebug: '--viz-stall-debug',
+  strictMode: '--viz-strictmode',
 } as const;
 
 export type ChartColor = keyof typeof CHART_COLOR_TOKENS;
@@ -80,6 +85,11 @@ export const FALLBACK_COLORS: ChartColors = {
   screen1: '#2a78d6',
   screen2: '#e87ba4',
   screen3: '#008300',
+  stall1: '#df7e82',
+  stall2: '#ba2840',
+  stall3: '#89142a',
+  stallDebug: '#8b919c',
+  strictMode: '#00a396',
 };
 
 const FALLBACK_SCREEN_WASH = 0.06;

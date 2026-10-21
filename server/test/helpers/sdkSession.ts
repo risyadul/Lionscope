@@ -1,0 +1,97 @@
+import type { ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
+import { vi } from 'vitest';
+import type { ByeReason, SdkHello, SdkLink, SdkLinkHandler } from '../../src/device/sdkLink.ts';
+import { ProfilingSession } from '../../src/session/profilingSession.ts';
+import { FakeAdb, FakeDevice } from './fakes.ts';
+
+export const PKG = 'com.google.android.apps.nexuslauncher';
+export const START = 1_800_000_000_250;
+/** FakeDevice's clock runs 5 s behind the laptop. */
+export const OFFSET_MS = 5000;
+export const HOME: ScreenRef = { name: 'home', className: 'com.example.HomeFragment', kind: 'fragment' };
+export const PROMO: ScreenRef = { name: 'Promo', className: 'com.example.PromoSheet', kind: 'dialog' };
+
+export const HELLO: SdkHello = {
+  type: 'hello',
+  protocolVersion: 1,
+  sdkVersion: '0.1.0',
+  packageName: PKG,
+  processName: PKG,
+  pid: 1105,
+  apiLevel: 35,
+  deviceWallMs: START - OFFSET_MS,
+  refreshRateHz: 120,
+};
+
+export class FakeLink implements SdkLink {
+  readonly configs: SdkOptions[] = [];
+  closedWith: ByeReason | 'none' | null = null;
+  constructor(readonly protocolVersion = 1) {}
+  close(reason?: ByeReason): void {
+    this.closedWith = reason ?? 'none';
+  }
+  sendConfig(options: SdkOptions): void {
+    this.configs.push(options);
+  }
+}
+
+/** Device wall-clock ms for "now" on the laptop. */
+export const deviceNow = () => Date.now() - OFFSET_MS;
+
+export function sdkFrame(ts: number, totalMs: number): SdkFrame {
+  return {
+    ts,
+    totalMs,
+    inputMs: 0.5,
+    animationMs: 0.5,
+    layoutMs: 1,
+    drawMs: 2,
+    syncMs: 0.5,
+    commandMs: 1,
+    swapMs: 0.5,
+    delayMs: 1,
+    gpuMs: 3,
+    deadlineMs: 16,
+    firstDraw: false,
+  };
+}
+
+/** A started session (fake timers must be on) with helpers to attach SDK links and feed them. */
+export async function setupSdkSession() {
+  const device = new FakeDevice();
+  device.clockSkewMs = -OFFSET_MS;
+  const adb = new FakeAdb(
+    () => '',
+    (command) => device.handle(command),
+  );
+  const messages: ServerMessage[] = [];
+  const session = new ProfilingSession({
+    adb,
+    serial: 'emulator-5554',
+    packageName: PKG,
+    emit: (message) => messages.push(message),
+  });
+  await session.start();
+  const ofType = <T extends ServerMessage['type']>(type: T) =>
+    messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
+  const gfxinfoPolls = () => device.commands.filter((command) => command.includes('gfxinfo')).length;
+  /** Attach a link and let its PID check (a `pidof` on the device) finish. */
+  const connect = async (
+    hello: SdkHello = HELLO,
+    link = new FakeLink(hello.protocolVersion),
+  ): Promise<{ link: FakeLink; handler: SdkLinkHandler }> => {
+    const handler = session.attachSdk(hello, link);
+    await vi.advanceTimersByTimeAsync(0);
+    return { link, handler };
+  };
+  /** pidof commands sent to the device (counted at the shell, whatever handles them). */
+  const pidofs = () =>
+    adb.shells.flatMap((shell) => shell.commands).filter((command) => command.startsWith('pidof')).length;
+  /** Send one 500 ms batch of `count` frames that just rendered. */
+  const sendFrames = (handler: SdkLinkHandler, count: number, totalMs = 6) => {
+    const end = deviceNow();
+    const frames = Array.from({ length: count }, (_, i) => sdkFrame(end - 499 + i * 8, totalMs));
+    handler.onMessage({ type: 'frames', window: 'com.example.MainActivity', intervalMs: 8.333, frames });
+  };
+  return { adb, device, session, messages, ofType, gfxinfoPolls, connect, sendFrames, pidofs };
+}

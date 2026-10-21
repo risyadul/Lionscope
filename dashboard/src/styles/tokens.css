@@ -98,6 +98,16 @@
   /* Opacity of the active-screen tint behind every lane. */
   --viz-screen-wash: 0.06;
 
+  /* Main thread: watchdog stalls wear a crimson ordinal ramp (severity: under 500 ms → 500 ms → 1 s,
+     light → dark; validated as a ramp and against jank amber / event violet). StrictMode violations
+     are teal diamonds; stalls with a debugger attached recede to hatched gray. */
+  --viz-stall-1: #df7e82;
+  --viz-stall-2: #ba2840;
+  --viz-stall-3: #89142a;
+  --viz-stall-debug: #8b919c;
+  --viz-strictmode: #00a396;
+  --stall-wash: rgba(186, 40, 64, 0.08);
+
   /* Log levels (text, ≥ 4.5:1) */
   --log-v: #5f6673;
   --log-d: #3f4752;
@@ -167,6 +177,14 @@
     --viz-screen-2: #d55181;
     --viz-screen-3: #008300;
     --viz-screen-wash: 0.085;
+
+    /* Dark: the ramp flips so the most severe stall is the brightest. */
+    --viz-stall-1: #96353b;
+    --viz-stall-2: #d64e57;
+    --viz-stall-3: #f08e8e;
+    --viz-stall-debug: #6f7682;
+    --viz-strictmode: #20a89b;
+    --stall-wash: rgba(214, 78, 87, 0.12);
 
     --log-v: #8a919c;
     --log-d: #c9ced6;

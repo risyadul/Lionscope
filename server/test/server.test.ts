@@ -4,7 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PROTOCOL_VERSION, WS_PATH } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS, PROTOCOL_VERSION, WS_PATH } from '@lionscope/protocol';
+import type { SessionState } from '@lionscope/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { BUFFER_WINDOW_MS } from '../src/config.ts';
@@ -21,6 +22,7 @@ import {
   isAllowedHost,
   isAllowedOrigin,
   MAX_CLIENTS,
+  NO_SESSION_MESSAGE,
 } from '../src/http/wsGateway.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
@@ -348,8 +350,21 @@ describe('Lionscope server', () => {
       const a = await Client.open(port);
       const b = await Client.open(port);
       await Promise.all([a.waitFor('snapshot'), b.waitFor('snapshot')]);
+      a.send({ type: 'setSdkOptions', strictMode: true });
+      expect(await a.waitFor('error')).toEqual({
+        type: 'error',
+        code: 'no_session',
+        message: NO_SESSION_MESSAGE,
+      });
       a.send({ type: 'startSession', serial: 'emulator-5554', packageName: PKG });
       const running = await b.waitFor('session', (m) => m.session.status === 'running');
+      expect(running.session.sdk?.options).toEqual(DEFAULT_SDK_OPTIONS);
+      // Any client may change the options; every client gets the updated session.
+      a.send({ type: 'setSdkOptions', stallThresholdMs: 500, strictMode: true });
+      const updated = (m: { session: SessionState }) => m.session.sdk?.options?.strictMode === true;
+      const [mine, theirs] = await Promise.all([a.next('session', updated), b.waitFor('session', updated)]);
+      expect(mine.session.sdk?.options).toEqual({ stallThresholdMs: 500, strictMode: true });
+      expect(theirs.session).toEqual(mine.session);
       expect(running.session).toMatchObject({ serial: 'emulator-5554', packageName: PKG, pid: 1105 });
       const [cpu, memory, frames] = await Promise.all([
         b.waitFor('cpu'),
@@ -373,6 +388,9 @@ describe('Lionscope server', () => {
       const again = a.next('session');
       a.send({ type: 'stopSession' });
       expect((await again).session.status).toBe('idle');
+      const refused = a.next('error');
+      a.send({ type: 'setSdkOptions', strictMode: false });
+      expect((await refused).code).toBe('no_session');
       for (const client of [a, b, late]) client.close();
     });
 

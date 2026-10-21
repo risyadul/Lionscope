@@ -119,14 +119,14 @@ describe('SDK status', () => {
     fireEvent.click(button);
     const dialog = screen.getByRole('dialog', { name: 'Add the Lionscope SDK' });
     expect(dialog.textContent).toContain(
-      'debugImplementation "com.github.risyadul.Lionscope:lionscope:0.1.1"',
+      'debugImplementation "com.github.risyadul.Lionscope:lionscope:0.2.0"',
     );
     // Public JitPack artifact, repository scoped to the Lionscope group; no mavenLocal, no credentials.
     expect(dialog.textContent).toContain(
       'maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }',
     );
     expect(dialog.textContent).toContain(
-      'releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.1"',
+      'releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.2.0"',
     );
     expect(dialog.textContent).not.toContain('mavenLocal');
     expect(dialog.textContent).toContain('dependencyResolutionManagement');
@@ -322,7 +322,9 @@ describe('SDK review round 1', () => {
   it('a known SDK that dropped before any frame says disconnected in the Screens panel', () => {
     setup(running({ ...CONNECTED, connected: false, framesActive: false }, Date.now()));
     fireEvent.click(screen.getByRole('tab', { name: /Screens/ }));
-    expect(screen.getByText('SDK disconnected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('tabpanel', { name: /Screens/ })).getByText('SDK disconnected'),
+    ).toBeTruthy();
     expect(screen.queryByText('No screen data yet')).toBeNull();
   });
 
@@ -390,6 +392,8 @@ describe('SDK review round 1', () => {
     setup(running(MISSING, Date.now()));
     const logcatTab = screen.getByRole('tab', { name: 'Logcat' });
     fireEvent.keyDown(logcatTab, { key: 'End' });
+    expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'ArrowLeft' });
     expect(screen.getByRole('tab', { name: /Screens/ }).getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(screen.getByRole('tab', { name: /Screens/ }), { key: 'Home' });
     expect(logcatTab.getAttribute('aria-selected')).toBe('true');

@@ -5,6 +5,9 @@
     <string name="tab_pager">Pager</string>
     <string name="tab_more">More</string>
     <string name="toggle_alias">Toggle alias</string>
+    <string name="block_main">Block main thread 400 ms</string>
+    <string name="read_file">Read file on main thread</string>
+    <string name="read_file_done">Read %1$d bytes on the main thread</string>
     <string name="page_format">Page %1$d of a legacy ViewPager (BEHAVIOR_SET_USER_VISIBLE_HINT). Swipe: no lifecycle event fires, Lionscope re-resolves from frames.</string>
     <string name="home_body">HomeFragment implements ScreenName, so Lionscope reports it as \"home_tab\". The button flips its alias to \"home_tab_alt\" without any lifecycle event.</string>
     <string name="jank_toggle">Slow onBindViewHolder (jank)</string>

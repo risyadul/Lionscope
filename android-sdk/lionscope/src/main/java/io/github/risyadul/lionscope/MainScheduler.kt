@@ -23,10 +23,22 @@ internal interface LinkPort {
     /** True between the server's `welcome` and the end of that connection. */
     val isWelcomed: Boolean
 
+    /** Protocol version agreed in the current connection's `welcome`; null while not welcomed. */
+    val negotiatedVersion: Int?
+
     fun onScreen(ts: Long, screen: ScreenRef?)
 
     fun setForeground(foreground: Boolean)
 
     /** [listener] is called on a link thread; it must only hand off (e.g. post to the main thread). */
     fun addWelcomeListener(listener: (welcomed: Boolean) -> Unit)
+
+    /** v2 options from each `config` on a v2 link; called on a link thread, it must only hand off. */
+    fun addConfigListener(listener: (SdkOptions) -> Unit)
+
+    /**
+     * Queues a v2 message, encoded later on the link thread by [encode] (null = nothing to send). Dropped unless the
+     * current connection negotiated v2, checked again when it is written. [sizeHint] ≈ its encoded length.
+     */
+    fun sendV2(sizeHint: Int, encode: () -> String?)
 }

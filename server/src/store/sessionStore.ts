@@ -8,6 +8,8 @@ import type {
   ScreenSpan,
   ServerMessage,
   Snapshot,
+  StallSample,
+  StrictModeSample,
   TimelineEvent,
 } from '@lionscope/protocol';
 import { TimeWindowBuffer } from './timeWindowBuffer.ts';
@@ -21,6 +23,8 @@ export interface StreamItems {
   logs: LogEntry;
   events: TimelineEvent;
   breakdown: FrameBreakdownSample;
+  stalls: StallSample;
+  strictMode: StrictModeSample;
 }
 export type SampleStream = keyof StreamItems;
 
@@ -35,6 +39,16 @@ interface StreamSpec<S extends SampleStream> {
 
 const MAX_SAMPLES = 5000;
 const MAX_SCREEN_SPANS = 2000;
+/**
+ * Stalls / StrictMode violations: rare, but each carries a stack of up to MAX_STACK_FRAMES frames. Sized as
+ * serialised (they arrive at a low rate), so each stream stays well within a client's send buffer in a snapshot.
+ */
+const MAX_EVENTS = 2000;
+export const MAX_EVENT_STREAM_BYTES = 2 * 1024 * 1024;
+const eventLimit = {
+  maxBytes: MAX_EVENT_STREAM_BYTES,
+  sizeOf: (item: object) => Buffer.byteLength(JSON.stringify(item)),
+};
 
 const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
   cpu: { maxItems: MAX_SAMPLES, toMessages: (items) => items.map((sample) => ({ type: 'cpu', sample })) },
@@ -61,6 +75,16 @@ const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
     maxItems: MAX_SAMPLES,
     increasing: true,
     toMessages: (items) => items.map((sample) => ({ type: 'breakdown', sample })),
+  },
+  stalls: {
+    maxItems: MAX_EVENTS,
+    byteLimit: eventLimit,
+    toMessages: (items) => items.map((sample) => ({ type: 'stall', sample })),
+  },
+  strictMode: {
+    maxItems: MAX_EVENTS,
+    byteLimit: eventLimit,
+    toMessages: (items) => items.map((sample) => ({ type: 'strictmode', sample })),
   },
 };
 
@@ -110,6 +134,8 @@ export class SessionStore {
       logs: buffer('logs'),
       events: buffer('events'),
       breakdown: buffer('breakdown'),
+      stalls: buffer('stalls'),
+      strictMode: buffer('strictMode'),
     };
     this.screens = new TimeWindowBuffer(options.windowMs, MAX_SCREEN_SPANS);
   }

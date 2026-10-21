@@ -1,12 +1,17 @@
 import { createServer } from 'node:net';
 import type { AddressInfo, Socket } from 'node:net';
-import { DEVICE_PROTOCOL_VERSION, MAX_DEVICE_LINE_BYTES, parseDeviceMessage } from '@lionscope/protocol';
-import type { GatewayMessage } from '@lionscope/protocol';
+import {
+  DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_VERSION,
+  MAX_DEVICE_LINE_BYTES,
+  parseDeviceMessage,
+} from '@lionscope/protocol';
+import type { GatewayMessage, SdkOptions } from '@lionscope/protocol';
 import { HOST } from '../config.ts';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
-import type { ByeReason, SdkLinkHandler, SdkLinkTarget } from './sdkLink.ts';
+import type { ByeReason, SdkLink, SdkLinkHandler, SdkLinkTarget } from './sdkLink.ts';
 
 export interface DeviceGatewayLimits {
   /** Connections still waiting for their hello; a new one evicts the oldest (it can't lock others out). */
@@ -62,8 +67,9 @@ export interface DeviceGateway {
 /**
  * TCP listener for the in-app SDK (reached through `adb reverse`), loopback only. Speaks NDJSON: every
  * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts, and
- * `welcome` answers with the negotiated protocol version. Later lines of an unknown `type` (a newer SDK) are
- * skipped; any other protocol violation closes the connection, and the SDK reconnects with backoff.
+ * `welcome` answers with the negotiated protocol version (on a v2 link followed by `config`). Later lines of an
+ * unknown `type` (a newer SDK) or of a type the negotiated version lacks are skipped; any other protocol
+ * violation closes the connection, and the SDK reconnects with backoff.
  */
 export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGateway {
   const limits = { ...DEFAULT_DEVICE_LIMITS, ...options.limits };
@@ -74,6 +80,8 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   const warnings = new ErrorThrottle();
   let address: AddressInfo | null = null;
   let ignoredMessages = 0;
+  let unnegotiatedMessages = 0;
+  let invalidDiagnostics = 0;
 
   const warn = (reason: string): void => {
     if (warnings.shouldReport(reason)) log.warn(`Device gateway: closed a connection (${reason})`);
@@ -85,6 +93,21 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
     const shown = type.slice(0, MAX_LOGGED_TYPE_LENGTH).replace(/[^\x20-\x7e]/g, '?');
     log.warn(
       `Device gateway: ignoring SDK messages of unknown type "${shown}" (a newer SDK?), ${ignoredMessages} so far`,
+    );
+  };
+  const skipUnnegotiated = (type: string, since: number, negotiated: number): void => {
+    unnegotiatedMessages += 1;
+    if (!warnings.shouldReport('unnegotiated type')) return;
+    log.warn(
+      `Device gateway: ignoring "${type}": SDK sent a v${since} message on a v${negotiated} link, ` +
+        `${unnegotiatedMessages} so far`,
+    );
+  };
+  const dropDiagnostic = (type: string, error: string): void => {
+    invalidDiagnostics += 1;
+    if (!warnings.shouldReport('invalid diagnostic')) return;
+    log.warn(
+      `Device gateway: dropped an invalid SDK ${type} message (${error.slice(0, 200)}), ${invalidDiagnostics} so far`,
     );
   };
 
@@ -109,7 +132,16 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
       linked.add(socket);
       return null;
     };
-    serveConnection(socket, { target: options.target, limits, now, warn, ignore, admit });
+    serveConnection(socket, {
+      target: options.target,
+      limits,
+      now,
+      warn,
+      ignore,
+      skipUnnegotiated,
+      dropDiagnostic,
+      admit,
+    });
   });
 
   return {
@@ -137,8 +169,17 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   };
 }
 
+/** One gateway line: `JSON.stringify` keeps insertion order, so `type` (written first) is the first key. */
+function gatewayLine(message: GatewayMessage): string {
+  return `${JSON.stringify(message)}\n`;
+}
+
+function configMessage(options: SdkOptions): GatewayMessage {
+  return { type: 'config', stallThresholdMs: options.stallThresholdMs, strictMode: options.strictMode };
+}
+
 function endSocket(socket: Socket, message?: GatewayMessage): void {
-  if (message) socket.end(`${JSON.stringify(message)}\n`);
+  if (message) socket.end(gatewayLine(message));
   else socket.end();
   setTimeout(() => socket.destroy(), CLOSE_GRACE_MS).unref();
 }
@@ -150,16 +191,24 @@ interface ConnectionContext {
   warn: (reason: string) => void;
   /** A message of a type this build does not know arrived after the hello (skipped, counted). */
   ignore: (type: string) => void;
+  /** A message of a type the negotiated protocol version lacks (skipped, counted). */
+  skipUnnegotiated: (type: string, since: number, negotiated: number) => void;
+  /** A diagnostic (`stall` / `strictmode`) failed validation (dropped, counted; the link stays up). */
+  dropDiagnostic: (type: string, error: string) => void;
   /** A valid hello arrived: move the socket to the link pool, or say why not. */
   admit: () => ByeReason | null;
 }
 
 function serveConnection(socket: Socket, context: ConnectionContext): void {
-  const { target, limits, warn, ignore } = context;
+  const { target, limits, warn, ignore, skipUnnegotiated, dropDiagnostic } = context;
   const bucket = new TokenBucket(limits.lineBurst, limits.linesPerSecond, context.now);
   let partial: Buffer[] = [];
   let partialBytes = 0;
   let handler: SdkLinkHandler | null = null;
+  /** Negotiated on the hello. */
+  let protocolVersion = 0;
+  /** A `config` asked for before the `welcome` went out. */
+  let pendingConfig: GatewayMessage | null = null;
   let closing = false;
 
   const close = (bye?: ByeReason): void => {
@@ -190,12 +239,24 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       return close(refused);
     }
     // The schema already refused versions below MIN_DEVICE_PROTOCOL_VERSION; a newer SDK speaks ours.
-    const protocolVersion = Math.min(parsed.value.protocolVersion, DEVICE_PROTOCOL_VERSION);
-    const result = target.attachSdk(parsed.value, { close, protocolVersion });
+    protocolVersion = Math.min(parsed.value.protocolVersion, DEVICE_PROTOCOL_VERSION);
+    const link: SdkLink = {
+      protocolVersion,
+      close,
+      sendConfig: (options) => {
+        if (protocolVersion < DEVICE_PROTOCOL_V2 || closing) return;
+        if (handler) socket.write(gatewayLine(configMessage(options)));
+        else pendingConfig = configMessage(options);
+      },
+    };
+    const result = target.attachSdk(parsed.value, link);
     if (!result.ok) return close(result.reason);
     handler = result.handler;
-    const welcome: GatewayMessage = { type: 'welcome', protocolVersion };
-    socket.write(`${JSON.stringify(welcome)}\n`);
+    // The target may have closed the link while attaching it.
+    if (closing) return;
+    socket.write(gatewayLine({ type: 'welcome', protocolVersion }));
+    if (pendingConfig) socket.write(gatewayLine(pendingConfig));
+    pendingConfig = null;
   };
 
   const onLine = (raw: string): void => {
@@ -205,8 +266,15 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     }
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if (!handler) return onHello(line);
-    const parsed = parseDeviceMessage(line);
+    const parsed = parseDeviceMessage(line, protocolVersion);
     if (!parsed.ok && parsed.unknownType !== undefined) return ignore(parsed.unknownType);
+    if (!parsed.ok && parsed.unnegotiated) {
+      return skipUnnegotiated(parsed.unnegotiated.type, parsed.unnegotiated.since, protocolVersion);
+    }
+    if (!parsed.ok && parsed.invalidDiagnostic !== undefined) {
+      dropDiagnostic(parsed.invalidDiagnostic, parsed.error);
+      return handler.onInvalidDiagnostic();
+    }
     if (!parsed.ok || parsed.value.type === 'hello') {
       warn('invalid message');
       return close('protocol_error');

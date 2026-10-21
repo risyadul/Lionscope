@@ -6,10 +6,22 @@ import type { Aligned } from '../../lib/series.ts';
 import type { Signal } from '../../lib/signal.ts';
 import type { ChartTheme } from '../../lib/theme.ts';
 import type { ChartSpec, Threshold } from './chartSpec.ts';
-import { buildOptions, type Backdrop, type LiveInputs } from './uplotOptions.ts';
+import { buildOptions, type Backdrop, type LiveInputs, type MarkLayer } from './uplotOptions.ts';
 
 const FALLBACK_SIZE = { width: 480, height: 120 };
 const NO_THRESHOLDS: readonly Threshold[] = [];
+
+/** The pointer over this lane's own plot area (not the synced cursor from another lane). */
+export interface PlotPointer {
+  kind: 'move' | 'click';
+  /** Epoch ms under the pointer. */
+  ts: number;
+  pxPerMs: number;
+  /** CSS px from the plot area's top-left corner. */
+  left: number;
+  top: number;
+  plotHeight: number;
+}
 
 type Props = {
   spec: ChartSpec;
@@ -24,6 +36,10 @@ type Props = {
   thresholds?: readonly Threshold[];
   showTimeAxis: boolean;
   showEventLabels: boolean;
+  /** Extra marks painted over the series. */
+  marks?: MarkLayer | null;
+  /** Pointer moves (null on leave) and clicks over the plot area, for lanes with their own hit testing. */
+  onPointer?: (pointer: PlotPointer | null) => void;
   /** Epoch ms to mark with a probe line (log row hover). */
   probeTs: Signal<number | null>;
   onCursor: (idx: number | null, x: number | null) => void;
@@ -50,10 +66,13 @@ export function TimelineChart({
   thresholds = NO_THRESHOLDS,
   showTimeAxis,
   showEventLabels,
+  marks = null,
+  onPointer,
   probeTs,
   onCursor,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const pointerRef = useRef(onPointer);
   const plotRef = useRef<uPlot | null>(null);
   const dataRef = useRef<Aligned>(data);
   const liveRef = useRef<LiveInputs>({
@@ -64,6 +83,7 @@ export function TimelineChart({
     thresholds,
     showTimeAxis,
     showEventLabels,
+    marks,
     onCursor,
   });
 
@@ -71,14 +91,37 @@ export function TimelineChart({
   // refs are current when the plot is first built.
   useLayoutEffect(() => {
     const axisMoved = liveRef.current.showTimeAxis !== showTimeAxis;
-    liveRef.current = { xMin, xMax, backdrop, events, thresholds, showTimeAxis, showEventLabels, onCursor };
+    liveRef.current = {
+      xMin,
+      xMax,
+      backdrop,
+      events,
+      thresholds,
+      showTimeAxis,
+      showEventLabels,
+      marks,
+      onCursor,
+    };
     dataRef.current = data;
+    pointerRef.current = onPointer;
     const plot = plotRef.current;
     if (!plot) return;
     // setSize re-runs uPlot's axis/padding layout, which reads `showTimeAxis` from the live ref.
     if (axisMoved) plot.setSize({ width: plot.width, height: plot.height });
     plot.setData(data);
-  }, [data, xMin, xMax, backdrop, events, thresholds, showTimeAxis, showEventLabels, onCursor]);
+  }, [
+    data,
+    xMin,
+    xMax,
+    backdrop,
+    events,
+    thresholds,
+    showTimeAxis,
+    showEventLabels,
+    marks,
+    onPointer,
+    onCursor,
+  ]);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -104,6 +147,32 @@ export function TimelineChart({
     plot.hooks.draw?.push(placeProbe);
     const unsubscribeProbe = probeTs.subscribe(placeProbe);
 
+    const over = plot.over;
+    const pointerAt = (event: MouseEvent, kind: PlotPointer['kind']): PlotPointer | null => {
+      const rect = over.getBoundingClientRect();
+      const { xMin: from, xMax: to } = liveRef.current;
+      if (rect.width <= 0 || to <= from) return null;
+      const left = event.clientX - rect.left;
+      const rangeMs = (to - from) * 1000;
+      return {
+        kind,
+        ts: from * 1000 + (left / rect.width) * rangeMs,
+        pxPerMs: rect.width / rangeMs,
+        left,
+        top: event.clientY - rect.top,
+        plotHeight: rect.height,
+      };
+    };
+    const onMove = (event: MouseEvent) => pointerRef.current?.(pointerAt(event, 'move'));
+    const onLeave = () => pointerRef.current?.(null);
+    const onClick = (event: MouseEvent) => {
+      const pointer = pointerAt(event, 'click');
+      if (pointer) pointerRef.current?.(pointer);
+    };
+    over.addEventListener('mousemove', onMove);
+    over.addEventListener('mouseleave', onLeave);
+    over.addEventListener('click', onClick);
+
     const resize = new ResizeObserver(() => {
       const next = hostSize(host);
       if (next.width !== plot.width || next.height !== plot.height) plot.setSize(next);
@@ -117,6 +186,9 @@ export function TimelineChart({
 
     return () => {
       disposed = true;
+      over.removeEventListener('mousemove', onMove);
+      over.removeEventListener('mouseleave', onLeave);
+      over.removeEventListener('click', onClick);
       resize.disconnect();
       unsubscribeProbe();
       plot.destroy();

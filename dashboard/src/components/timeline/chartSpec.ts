@@ -1,8 +1,10 @@
 /** Declarative lane definitions consumed by `TimelineChart`. Kept free of uPlot so they're plain data. */
+import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol/wire';
 import { formatTick } from '../../lib/format.ts';
 import { STACK_ORDER, STAGE_COLORS, STAGE_LABELS } from '../../lib/stages.ts';
 import type { ChartColor } from '../../lib/theme.ts';
 import { niceCeil } from '../../lib/series.ts';
+import { stallScaleMax } from '../../lib/stalls.ts';
 
 export interface SeriesSpec {
   label: string;
@@ -46,7 +48,14 @@ export interface ChartSpec {
   /** Series 1 is a stack top: mark x positions where it runs past the y range (clipped bars). */
   marksClipped?: boolean;
   bands?: readonly BandSpec[];
-  yRange: (dataMax: number | null, thresholds: readonly Threshold[]) => [number, number];
+  /** `plotHeightPx`: the plot area's CSS height, 0 (or omitted) before the first layout. */
+  yRange: (
+    dataMax: number | null,
+    thresholds: readonly Threshold[],
+    plotHeightPx?: number,
+  ) => [number, number];
+  /** Explicit y ticks (default: uPlot's spacing-based splits). */
+  ySplits?: (min: number, max: number) => number[];
   yTick: (value: number) => string;
 }
 
@@ -132,4 +141,30 @@ export const BREAKDOWN_SPEC: ChartSpec = {
     return [0, Math.max(budget * 1.5, Math.min(cap, niceCeil((max ?? 0) * 1.1)))];
   },
   yTick: (v) => `${formatTick(v)}`,
+};
+
+/** Height of the StrictMode rail under the stall baseline, CSS px. */
+export const STALL_RAIL_PX = 14;
+const FALLBACK_PLOT_HEIGHT_PX = 72;
+
+/** `250`, `500`, `1s`, `1.5s`: the lane's subtitle carries the unit. */
+export function stallTick(value: number): string {
+  if (value >= 1000) return `${formatTick(value / 1000)}s`;
+  return formatTick(value);
+}
+
+/**
+ * Main thread lane. The single series only feeds y auto-ranging (stall lengths); the bars and
+ * the StrictMode glyphs are drawn by the lane's mark layer. The scale is linear and capped
+ * (`stallScaleMax`); below 0 sits a fixed-height rail for StrictMode violations.
+ */
+export const STALL_SPEC: ChartSpec = {
+  series: [{ label: 'Stall', width: 0 }],
+  yRange: (max, thresholds, plotHeightPx = 0) => {
+    const cap = stallScaleMax(max, thresholds[0]?.value ?? DEFAULT_SDK_OPTIONS.stallThresholdMs);
+    const height = plotHeightPx > STALL_RAIL_PX * 3 ? plotHeightPx : FALLBACK_PLOT_HEIGHT_PX;
+    return [-(STALL_RAIL_PX * cap) / (height - STALL_RAIL_PX), cap];
+  },
+  ySplits: (_min, max) => [0, max / 2, max],
+  yTick: stallTick,
 };

@@ -1,7 +1,24 @@
 package io.github.risyadul.lionscope
 
-/** Encoders for SDK → server lines (no trailing newline). Field order matches the golden fixtures. */
+/**
+ * Encoders for SDK → server lines (no trailing newline). Field order matches the golden fixtures. They also enforce
+ * the server's bounds (see protocol/src/wire.ts): SDK-produced text via [WireText], numbers clamped, at most
+ * [MAX_STACK_FRAMES] frames, so no field can get a message rejected or the link closed. `hello`'s package and
+ * process names come from the system and are sent as they are.
+ */
 internal object DeviceMessages {
+    private const val MAX_NAME_LENGTH = 256
+    private const val MAX_SCREEN_NAME_LENGTH = 256
+    private const val MAX_WINDOW_LENGTH = 256
+    private const val VIOLATION_FALLBACK = "Violation"
+    private const val MAX_FILE_LENGTH = 128
+    private const val MAX_VIOLATION_LENGTH = 128
+    private const val MAX_MESSAGE_LENGTH = 256
+    private const val MAX_SCREEN_LENGTH = 256
+    private const val MAX_STALL_MS = 60_000.0
+    private const val MAX_SAMPLES = 10_000
+    private const val MAX_COUNT = 1_000_000
+    private const val NATIVE_LINE = -2
 
     fun hello(
         packageName: String,
@@ -33,8 +50,8 @@ internal object DeviceMessages {
             json.nullValue()
         } else {
             json.beginObject()
-                .name("name").value(screen.name)
-                .name("className").value(screen.className)
+                .name("name").value(screenName(screen))
+                .name("className").value(WireText.required(screen.className, MAX_NAME_LENGTH))
                 .name("kind").value(screen.kind.wire)
                 .endObject()
         }
@@ -45,7 +62,7 @@ internal object DeviceMessages {
     fun frames(window: String, intervalMs: Double, frames: List<SdkFrame>, droppedFrames: Int = 0): String {
         val json = JsonWriter().beginObject()
             .name("type").value("frames")
-            .name("window").value(window)
+            .name("window").value(WireText.required(window, MAX_WINDOW_LENGTH))
             .name("intervalMs").value(intervalMs)
             .name("frames").beginArray()
         for (frame in frames) writeFrame(json, frame)
@@ -59,6 +76,69 @@ internal object DeviceMessages {
         .name("ts").value(ts)
         .name("droppedMessages").value(droppedMessages)
         .endObject().toString()
+
+    /** v2. */
+    fun stall(
+        ts: Long,
+        durationMs: Double,
+        frames: List<StackFrame>,
+        samples: Int,
+        truncated: Boolean,
+        screen: String?,
+        debugger: Boolean,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("stall")
+            .name("ts").value(ts)
+            .name("durationMs").value(if (durationMs.isNaN()) 0.0 else durationMs.coerceIn(0.0, MAX_STALL_MS))
+        writeStack(json, frames)
+        return json.name("samples").value(samples.coerceIn(1, MAX_SAMPLES))
+            .name("truncated").value(truncated || frames.size > MAX_STACK_FRAMES)
+            .name("screen").value(WireText.clean(screen, MAX_SCREEN_LENGTH))
+            .name("debugger").value(debugger)
+            .endObject().toString()
+    }
+
+    /** v2. */
+    fun strictMode(
+        ts: Long,
+        policy: StrictModePolicy,
+        violation: String,
+        message: String?,
+        frames: List<StackFrame>,
+        count: Int,
+        screen: String?,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("strictmode")
+            .name("ts").value(ts)
+            .name("policy").value(policy.wire)
+            .name("violation").value(WireText.required(violation, MAX_VIOLATION_LENGTH, VIOLATION_FALLBACK))
+            .name("message").value(WireText.clean(message, MAX_MESSAGE_LENGTH))
+        writeStack(json, frames)
+        return json.name("count").value(count.coerceIn(1, MAX_COUNT))
+            .name("screen").value(WireText.clean(screen, MAX_SCREEN_LENGTH))
+            .endObject().toString()
+    }
+
+    /** An alias that cleans to nothing falls back to the simple class name. */
+    private fun screenName(screen: ScreenRef): String = WireText.clean(screen.name, MAX_SCREEN_NAME_LENGTH)
+        ?: WireText.required(screen.className.substringAfterLast('.'), MAX_SCREEN_NAME_LENGTH)
+
+    private fun writeStack(json: JsonWriter, frames: List<StackFrame>) {
+        json.name("frames").beginArray()
+        for (frame in frames.take(MAX_STACK_FRAMES)) {
+            json.beginObject()
+                .name("className").value(WireText.required(frame.className, MAX_NAME_LENGTH))
+                .name("method").value(WireText.required(frame.method, MAX_NAME_LENGTH))
+                .name("file").value(WireText.clean(frame.file, MAX_FILE_LENGTH))
+                .name("line")
+            val line = frame.line?.takeIf { it >= 0 || it == NATIVE_LINE }
+            if (line == null) json.nullValue() else json.value(line)
+            json.name("inApp").value(frame.inApp).endObject()
+        }
+        json.endArray()
+    }
 
     private fun writeFrame(json: JsonWriter, frame: SdkFrame) {
         json.beginObject()

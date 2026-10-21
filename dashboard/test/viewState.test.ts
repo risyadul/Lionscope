@@ -3,11 +3,15 @@ import { createInitialState, type DashboardState } from '../src/lib/store.ts';
 import {
   hasSeries,
   isSessionActive,
+  isStallCapable,
   screensEmptyState,
+  SDK_UPDATE_HINT,
+  sdkOptionsBlocker,
+  stallsEmptyState,
   timelineNotice,
   timelineState,
 } from '../src/lib/viewState.ts';
-import { cpu, session, T0 } from './fixtures.ts';
+import { cpu, SDK_V2, session, T0 } from './fixtures.ts';
 
 function connected(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -112,5 +116,55 @@ describe('screensEmptyState', () => {
     expect(screensEmptyState({ ...base, sdk: known })).toEqual({ kind: 'disconnected', sdkVersion: '0.1.0' });
     expect(screensEmptyState({ ...base, sdk: { ...known, sdkVersion: null } })).toEqual({ kind: 'no-sdk' });
     expect(screensEmptyState(base)).toEqual({ kind: 'no-sdk' });
+  });
+});
+
+describe('stall view state', () => {
+  const v1 = { ...SDK_V2, sdkVersion: '0.1.1', protocolVersion: 1 };
+  const gone = { ...SDK_V2, connected: false, protocolVersion: null };
+  const missing = { ...gone, sdkVersion: null };
+
+  it('only a live v2 link can detect stalls', () => {
+    expect(isStallCapable(SDK_V2)).toBe(true);
+    expect(isStallCapable(v1)).toBe(false);
+    expect(isStallCapable(gone)).toBe(false);
+    expect(isStallCapable(undefined)).toBe(false);
+  });
+
+  it('explains why the SDK options are disabled', () => {
+    expect(sdkOptionsBlocker(true, SDK_V2)).toBeNull();
+    expect(sdkOptionsBlocker(false, SDK_V2)).toMatch(/Start a session/);
+    expect(sdkOptionsBlocker(true, gone)).toMatch(/Connect the app/);
+    expect(sdkOptionsBlocker(true, v1)).toBe(SDK_UPDATE_HINT);
+    expect(SDK_UPDATE_HINT).toBe('Update the app’s Lionscope SDK to 0.2.0 for stall detection');
+    // Older servers: no SDK state at all, or a link without options.
+    expect(sdkOptionsBlocker(true, undefined)).toMatch(/server/);
+    expect(sdkOptionsBlocker(true, { ...SDK_V2, options: undefined })).toMatch(/server/);
+  });
+
+  it('picks the Stalls empty state, most specific first', () => {
+    const input = {
+      hasItems: false,
+      hasAnyData: false,
+      isSessionActive: true,
+      sdk: SDK_V2,
+      sdkLinkError: null,
+      thresholdMs: 250,
+    };
+    expect(stallsEmptyState({ ...input, hasItems: true })).toBeNull();
+    expect(stallsEmptyState({ ...input, hasAnyData: true })).toEqual({ kind: 'window' });
+    expect(stallsEmptyState(input)).toEqual({ kind: 'waiting', thresholdMs: 250 });
+    expect(stallsEmptyState({ ...input, isSessionActive: false })).toEqual({ kind: 'no-session' });
+    expect(stallsEmptyState({ ...input, sdk: v1 })).toEqual({ kind: 'old-sdk', sdkVersion: '0.1.1' });
+    expect(stallsEmptyState({ ...input, sdk: { ...SDK_V2, protocolVersion: undefined } })).toEqual({
+      kind: 'old-server',
+    });
+    expect(stallsEmptyState({ ...input, sdk: undefined })).toEqual({ kind: 'old-server' });
+    expect(stallsEmptyState({ ...input, sdk: missing })).toEqual({ kind: 'no-sdk' });
+    expect(stallsEmptyState({ ...input, sdk: gone })).toEqual({ kind: 'disconnected', sdkVersion: '0.2.0' });
+    expect(stallsEmptyState({ ...input, sdk: missing, sdkLinkError: 'closed' })).toEqual({
+      kind: 'link-failed',
+      message: 'closed',
+    });
   });
 });

@@ -50,6 +50,7 @@ internal object LionscopeRuntime {
             )
         })
         val main = HandlerScheduler(Handler(Looper.getMainLooper()))
+        val ownership = AppOwnership(app.packageName)
         lateinit var screens: ScreenTracker
         val frames = if (Build.VERSION.SDK_INT >= 24) {
             FrameTracker(app, deviceLink, main) { screens.requestResolve() }
@@ -61,13 +62,45 @@ internal object LionscopeRuntime {
             main,
             dialogWindows = frames,
             periodicFallback = frames == null,
-            applicationId = app.packageName,
+            ownership = ownership,
         )
+        // Built before any registration: a failure here leaves the SDK without diagnostics, never half-registered.
+        val diagnostics = try {
+            diagnostics(deviceLink, main, screens, ownership)
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            Log.w(LOG_TAG, "Lionscope diagnostics disabled: $t")
+            null
+        }
         app.registerActivityLifecycleCallbacks(screens)
         frames?.let(app::registerActivityLifecycleCallbacks)
+        diagnostics?.let(app::registerActivityLifecycleCallbacks)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.
         deviceLink.start()
         Lionscope.installed = true
+    }
+
+    /** Main-thread watchdog and (API 28+) StrictMode reporting; both inert until a v2 server says so. */
+    private fun diagnostics(
+        link: DeviceLink,
+        main: MainScheduler,
+        screens: ScreenTracker,
+        ownership: AppOwnership,
+    ): DiagnosticsController {
+        val sink = DiagnosticsSink(link, ownership) { screens.topActivityClassName }
+        val mainThread by lazy { Looper.getMainLooper().thread }
+        val watchdog = MainThreadWatchdog(
+            main = main,
+            sampleStack = { mainThread.stackTrace },
+            screenName = { screens.currentScreenName },
+            report = sink::stall,
+        )
+        val strictMode = if (Build.VERSION.SDK_INT >= 28) {
+            StrictModeController.create(main, { screens.currentScreenName }, sink::strictMode)
+        } else {
+            null
+        }
+        return DiagnosticsController(link, main, watchdog, strictMode)
     }
 
     private fun defaultRefreshRate(context: Context): Double {

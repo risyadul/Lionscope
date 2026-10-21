@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  DEVICE_PROTOCOL_V2,
   isValidPackageName,
   isValidProcessName,
   isValidSerial,
@@ -10,11 +11,13 @@ import {
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SDK_FRAMES_PER_BATCH,
+  MAX_STACK_FRAMES,
   MIN_DEVICE_PROTOCOL_VERSION,
   parseClientMessage,
   parseDeviceMessage,
+  STALL_THRESHOLDS_MS,
 } from '../src/index.ts';
-import type { DeviceMessage, SdkFrame } from '../src/index.ts';
+import type { DeviceMessage, SdkFrame, StackFrame } from '../src/index.ts';
 
 const GOLDEN_LINES = readFileSync(new URL('../fixtures/device-messages.ndjson', import.meta.url), 'utf8')
   .split('\n')
@@ -81,6 +84,31 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage('{nope')).toEqual({ ok: false, error: 'invalid JSON' });
   });
 
+  it('parses setSdkOptions with any non-empty subset of the options', () => {
+    const parse = (value: object) => parseClientMessage(JSON.stringify({ type: 'setSdkOptions', ...value }));
+    for (const stallThresholdMs of STALL_THRESHOLDS_MS) {
+      expect(parse({ stallThresholdMs })).toEqual({
+        ok: true,
+        value: { type: 'setSdkOptions', stallThresholdMs },
+      });
+    }
+    expect(parse({ strictMode: true })).toEqual({
+      ok: true,
+      value: { type: 'setSdkOptions', strictMode: true },
+    });
+    expect(parse({ stallThresholdMs: 500, strictMode: false }).ok).toBe(true);
+  });
+
+  it('rejects setSdkOptions without options, with an unlisted threshold or with extra fields', () => {
+    const parse = (value: object) => parseClientMessage(JSON.stringify({ type: 'setSdkOptions', ...value }));
+    expect(parse({})).toEqual({ ok: false, error: 'no SDK option given' });
+    for (const stallThresholdMs of [0, 1, 149, 150.5, 2000, '150', null]) {
+      expect(parse({ stallThresholdMs }).ok).toBe(false);
+    }
+    expect(parse({ strictMode: 'yes' }).ok).toBe(false);
+    expect(parse({ strictMode: true, extra: 1 }).ok).toBe(false);
+  });
+
   it('rejects unknown message types', () => {
     expect(parseClientMessage('{"type":"rm"}').ok).toBe(false);
   });
@@ -126,6 +154,8 @@ describe('isValidProcessName', () => {
   );
 });
 
+const HEARTBEAT_V1 = { type: 'heartbeat', ts: 1, droppedMessages: 0 };
+
 describe('parseDeviceMessage', () => {
   const frame: SdkFrame = {
     ts: 1792516375300,
@@ -166,7 +196,9 @@ describe('parseDeviceMessage', () => {
       expect(parseDeviceMessage(line)).toEqual({ ok: true, value: JSON.parse(line) });
     }
     const types = GOLDEN_LINES.map((line) => (JSON.parse(line) as DeviceMessage).type);
-    expect(new Set(types)).toEqual(new Set(['hello', 'screen', 'frames', 'heartbeat']));
+    expect(new Set(types)).toEqual(
+      new Set(['hello', 'screen', 'frames', 'heartbeat', 'stall', 'strictmode']),
+    );
   });
 
   it('accepts a private process name and a null screen', () => {
@@ -337,6 +369,154 @@ describe('parseDeviceMessage', () => {
     expect(
       errorOf(JSON.stringify({ type: 'frames', window: 'w'.repeat(257), intervalMs: 8, frames: [] })),
     ).not.toBeNull();
+  });
+
+  describe('v2 stall and strictmode', () => {
+    const appFrame: StackFrame = {
+      className: 'com.example.app.HomeViewModel',
+      method: 'mapItems',
+      file: 'HomeViewModel.kt',
+      line: 87,
+      inApp: true,
+    };
+    const stall = {
+      type: 'stall',
+      ts: 1792516378000,
+      durationMs: 342.5,
+      frames: [appFrame],
+      samples: 6,
+      truncated: false,
+      screen: 'homepage',
+      debugger: false,
+    };
+    const strictmode = {
+      type: 'strictmode',
+      ts: 1792516379000,
+      policy: 'thread',
+      violation: 'DiskReadViolation',
+      message: null,
+      frames: [appFrame],
+      count: 3,
+      screen: null,
+    };
+    const withFrame = (message: object, frame: Partial<StackFrame>) =>
+      errorOf(JSON.stringify({ ...message, frames: [{ ...appFrame, ...frame }] }));
+
+    it('parses both, stripping unknown fields at every level', () => {
+      expect(parseDeviceMessage(JSON.stringify(stall))).toEqual({ ok: true, value: stall });
+      expect(parseDeviceMessage(JSON.stringify(strictmode))).toEqual({ ok: true, value: strictmode });
+      const extended = { ...stall, cpu: 1, frames: [{ ...appFrame, module: 'app' }] };
+      expect(parseDeviceMessage(JSON.stringify(extended))).toEqual({ ok: true, value: stall });
+      const vm = { ...strictmode, policy: 'vm', violation: 'LeakedClosableViolation', message: 'leak' };
+      expect(parseDeviceMessage(JSON.stringify(vm))).toEqual({ ok: true, value: vm });
+    });
+
+    it('flags them as unnegotiated on a link negotiated below v2, without validating them', () => {
+      for (const message of [stall, strictmode, { type: 'stall' }]) {
+        expect(parseDeviceMessage(JSON.stringify(message), MIN_DEVICE_PROTOCOL_VERSION)).toEqual({
+          ok: false,
+          error: `${message.type} needs protocol version 2`,
+          unnegotiated: { type: message.type, since: DEVICE_PROTOCOL_V2 },
+        });
+      }
+      expect(parseDeviceMessage(JSON.stringify(stall), DEVICE_PROTOCOL_V2).ok).toBe(true);
+      expect(parseDeviceMessage(JSON.stringify(HEARTBEAT_V1), MIN_DEVICE_PROTOCOL_VERSION).ok).toBe(true);
+      // Unknown types stay unknown at any version.
+      expect(parseDeviceMessage('{"type":"memory"}', MIN_DEVICE_PROTOCOL_VERSION)).toEqual({
+        ok: false,
+        error: 'unknown message type',
+        unknownType: 'memory',
+      });
+    });
+
+    it('flags an invalid diagnostic (skippable) apart from an invalid v1 message (fatal)', () => {
+      for (const message of [{ type: 'stall' }, { ...strictmode, count: 0 }]) {
+        const result = parseDeviceMessage(JSON.stringify(message), DEVICE_PROTOCOL_V2);
+        expect(result).toMatchObject({ ok: false, invalidDiagnostic: message.type });
+        expect(result).not.toHaveProperty('unknownType');
+        expect(result).not.toHaveProperty('unnegotiated');
+      }
+      for (const line of [
+        '{"type":"heartbeat","ts":-1,"droppedMessages":0}',
+        '{"type":"screen"}',
+        '{"ts":1}',
+      ]) {
+        expect(parseDeviceMessage(line)).not.toHaveProperty('invalidDiagnostic');
+      }
+    });
+
+    it('accepts unknown (null) and native (-2) lines and files, and rejects other line values', () => {
+      expect(withFrame(stall, { line: null, file: null })).toBeNull();
+      expect(withFrame(stall, { line: -2 })).toBeNull();
+      expect(withFrame(stall, { line: 0 })).toBeNull();
+      expect(withFrame(stall, { line: 2_147_483_647 })).toBeNull();
+      for (const line of [-3, 1.5, 2_147_483_648, '87']) {
+        expect(withFrame(stall, { line } as unknown as Partial<StackFrame>)).not.toBeNull();
+      }
+      expect(withFrame(stall, { inApp: 'yes' } as unknown as Partial<StackFrame>)).not.toBeNull();
+    });
+
+    it('caps stack frames, string lengths and numbers', () => {
+      const frames = (count: number) => Array.from({ length: count }, () => appFrame);
+      const error = (value: object) => errorOf(JSON.stringify(value));
+      expect(error({ ...stall, frames: [] })).toBeNull();
+      expect(error({ ...stall, frames: frames(MAX_STACK_FRAMES) })).toBeNull();
+      expect(error({ ...stall, frames: frames(MAX_STACK_FRAMES + 1) })).not.toBeNull();
+      expect(error({ ...strictmode, frames: frames(64) })).toBeNull();
+      expect(error({ ...strictmode, frames: frames(65) })).not.toBeNull();
+
+      expect(withFrame(stall, { className: 'c'.repeat(256), method: 'm'.repeat(256) })).toBeNull();
+      expect(withFrame(stall, { className: 'c'.repeat(257) })).not.toBeNull();
+      expect(withFrame(stall, { method: '' })).not.toBeNull();
+      expect(withFrame(stall, { file: 'f'.repeat(128) })).toBeNull();
+      expect(withFrame(stall, { file: 'f'.repeat(129) })).not.toBeNull();
+      expect(withFrame(stall, { file: '' })).not.toBeNull();
+      expect(error({ ...stall, screen: 's'.repeat(257) })).not.toBeNull();
+      expect(error({ ...strictmode, violation: 'v'.repeat(128) })).toBeNull();
+      expect(error({ ...strictmode, violation: 'v'.repeat(129) })).not.toBeNull();
+      expect(error({ ...strictmode, message: 'm'.repeat(256) })).toBeNull();
+      expect(error({ ...strictmode, message: 'm'.repeat(257) })).not.toBeNull();
+
+      expect(error({ ...stall, durationMs: 0 })).toBeNull();
+      expect(error({ ...stall, durationMs: 60_000 })).toBeNull();
+      for (const durationMs of [-1, 60_000.5, '342']) expect(error({ ...stall, durationMs })).not.toBeNull();
+      expect(error({ ...stall, samples: 10_000 })).toBeNull();
+      for (const samples of [0, 1.5, 10_001]) expect(error({ ...stall, samples })).not.toBeNull();
+      expect(error({ ...strictmode, count: 1_000_000 })).toBeNull();
+      for (const count of [0, 2.5, 1_000_001]) expect(error({ ...strictmode, count })).not.toBeNull();
+      expect(error({ ...stall, ts: 0 })).not.toBeNull();
+      expect(error({ ...strictmode, policy: 'process' })).not.toBeNull();
+      expect(error({ ...stall, debugger: 1 })).not.toBeNull();
+      expect(error({ ...stall, truncated: null })).not.toBeNull();
+    });
+
+    it('rejects control and format characters in stack frames and screen names', () => {
+      const error = (value: object) => errorOf(JSON.stringify(value));
+      for (const bad of ['a\nb', 'tab\there', 'evil\u202Eexe', 'zero\u200Bwidth']) {
+        expect(withFrame(stall, { className: bad })).toContain('control or format');
+        expect(withFrame(strictmode, { method: bad })).toContain('control or format');
+        expect(withFrame(stall, { file: bad })).toContain('control or format');
+        expect(error({ ...stall, screen: bad })).toContain('control or format');
+      }
+      expect(withFrame(stall, { className: 'com.example.Ünïcödé$1', method: '<init>' })).toBeNull();
+    });
+
+    it('cleans up the free text of a StrictMode violation instead of refusing it', () => {
+      const parsed = (changes: object) => {
+        const result = parseDeviceMessage(JSON.stringify({ ...strictmode, ...changes }));
+        return result.ok && result.value.type === 'strictmode' ? result.value : null;
+      };
+      expect(parsed({ message: 'read\n\tfrom\u202Edisk\n' })?.message).toBe('read from disk');
+      expect(parsed({ message: 'Ünïcödé 主页' })?.message).toBe('Ünïcödé 主页');
+      for (const empty of ['', '  ', '\n\u200B']) expect(parsed({ message: empty })?.message).toBeNull();
+      expect(parsed({ violation: '' })?.violation).toBe('Violation');
+      expect(parsed({ violation: '\u0000' })?.violation).toBe('Violation');
+      expect(parsed({ violation: 'Disk\u202EReadViolation' })?.violation).toBe('Disk ReadViolation');
+      // Lengths are checked on the raw text.
+      expect(parsed({ message: 'm'.repeat(256) })).not.toBeNull();
+      expect(parsed({ message: 'm'.repeat(257) })).toBeNull();
+      expect(parsed({ violation: 'v'.repeat(129) })).toBeNull();
+    });
   });
 
   it('rejects lines over MAX_DEVICE_LINE_BYTES (in UTF-8 bytes)', () => {

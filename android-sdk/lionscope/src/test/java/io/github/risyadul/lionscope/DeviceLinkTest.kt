@@ -12,7 +12,9 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.concurrent.Callable
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 
 class DeviceLinkTest {
 
@@ -154,6 +156,109 @@ class DeviceLinkTest {
                 assertEquals(MIN_DEVICE_PROTOCOL_VERSION, link.negotiatedVersion)
             }
         }
+    }
+
+    /** A single-thread executor as the main thread; [onMain] runs a block there and waits for it. */
+    private class ExecutorMain : MainScheduler, AutoCloseable {
+        private val executor = Executors.newSingleThreadExecutor()
+
+        override fun post(task: Runnable) {
+            executor.execute(task)
+        }
+
+        override fun postDelayed(task: Runnable, delayMs: Long) = error("unused")
+
+        fun <T> onMain(block: () -> T): T = executor.submit(Callable(block)).get()
+
+        override fun close() {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun v2WelcomeAndConfigDriveTheWatchdogAndStrictMode() {
+        localServer().use { server ->
+            ExecutorMain().use { main ->
+                val link = link(server.localPort)
+                val watchdog = FakeWatchdog()
+                val strictMode = FakeStrictMode()
+                val controller = DiagnosticsController(link, main, watchdog, strictMode)
+                main.onMain { controller.onActivityStarted(PlainTestActivity()) }
+                link.start()
+
+                server.accept().use { client ->
+                    val input = client.reader()
+                    assertEquals(hello, input.readLine())
+                    link.sendV2(16) { "{\"type\":\"stall\",\"n\":0}" } // Not welcomed yet: dropped.
+                    client.reply("{\"type\":\"config\",\"stallThresholdMs\":500,\"strictMode\":true}") // Ignored.
+                    client.reply("{\"type\":\"welcome\",\"protocolVersion\":2}")
+                    waitFor { main.onMain { watchdog.isRunning } }
+                    assertEquals(2, link.negotiatedVersion)
+                    assertEquals(SdkOptions.DEFAULT.stallThresholdMs, main.onMain { watchdog.thresholdMs })
+                    assertFalse(strictMode.enabled)
+
+                    client.reply("{\"type\":\"config\",\"stallThresholdMs\":250,\"strictMode\":true,\"later\":1}")
+                    waitFor { strictMode.enabled }
+                    assertEquals(250L, main.onMain { watchdog.thresholdMs })
+
+                    link.sendV2(16) { "{\"type\":\"stall\",\"n\":1}" }
+                    assertEquals(1.0, input.readUntil { it["type"] != "heartbeat" }["n"])
+                }
+                // Link closed: watchdog stopped, StrictMode policies restored.
+                waitFor { main.onMain { !watchdog.isRunning && !strictMode.enabled } }
+                assertEquals(listOf(true, false), strictMode.changes)
+            }
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun aV1LinkSendsNoV2MessagesAndIgnoresConfig() {
+        localServer().use { server ->
+            ExecutorMain().use { main ->
+                val link = link(server.localPort)
+                val watchdog = FakeWatchdog()
+                val strictMode = FakeStrictMode()
+                val controller = DiagnosticsController(link, main, watchdog, strictMode)
+                main.onMain { controller.onActivityStarted(PlainTestActivity()) }
+                link.start()
+
+                server.accept().use { client ->
+                    val input = client.reader()
+                    assertEquals(hello, input.readLine())
+                    client.reply("{\"type\":\"welcome\",\"protocolVersion\":1}") // A 0.1.x server.
+                    waitFor { link.isWelcomed }
+                    client.reply("{\"type\":\"config\",\"stallThresholdMs\":250,\"strictMode\":true}")
+                    link.sendV2(16) { "{\"type\":\"stall\"}" }
+                    link.sendV2(16) { "{\"type\":\"strictmode\"}" }
+                    link.send("{\"type\":\"marker\"}")
+                    assertEquals("marker", input.readUntil { it["type"] != "heartbeat" }["type"])
+                    Thread.sleep(300) // Let the reader get to the config line.
+                    main.onMain {
+                        assertFalse(watchdog.isRunning)
+                        assertEquals(0, watchdog.starts)
+                    }
+                    assertFalse(strictMode.enabled)
+                    assertTrue(strictMode.changes.isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aV2ItemIsEncodedOnlyOnAV2ConnectionAndAFailingEncoderDropsJustThatMessage() {
+        var encoded = 0
+        val item = DeviceLink.V2Item(16) {
+            encoded++
+            "{\"type\":\"stall\"}"
+        }
+        // Queued while v2, written after a reconnect that negotiated v1 (or before its welcome): dropped unencoded.
+        assertNull(DeviceLink.encode(item, negotiatedVersion = 1))
+        assertNull(DeviceLink.encode(item, negotiatedVersion = null))
+        assertEquals(0, encoded)
+        assertEquals("{\"type\":\"stall\"}", DeviceLink.encode(item, negotiatedVersion = 2))
+        assertEquals(1, encoded)
+        assertNull(DeviceLink.encode(DeviceLink.V2Item(16) { error("bad stack") }, negotiatedVersion = 2))
+        assertEquals("{\"type\":\"custom\"}", DeviceLink.encode("{\"type\":\"custom\"}", negotiatedVersion = 1))
     }
 
     @Test(timeout = 20_000)

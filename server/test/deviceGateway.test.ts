@@ -1,4 +1,9 @@
-import { DEVICE_PROTOCOL_VERSION, MAX_DEVICE_LINE_BYTES } from '@lionscope/protocol';
+import {
+  DEFAULT_SDK_OPTIONS,
+  DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_VERSION,
+  MAX_DEVICE_LINE_BYTES,
+} from '@lionscope/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeviceGateway, DEFAULT_DEVICE_LIMITS } from '../src/device/deviceGateway.ts';
 import type { DeviceGateway, DeviceGatewayLimits } from '../src/device/deviceGateway.ts';
@@ -25,19 +30,46 @@ const HELLO: SdkHello = {
   refreshRateHz: 120,
 };
 const HEARTBEAT = { type: 'heartbeat', ts: 1792516380000, droppedMessages: 0 };
+const STALL = {
+  type: 'stall',
+  ts: 1792516378000,
+  durationMs: 342.5,
+  frames: [{ className: 'com.example.app.Home', method: 'load', file: 'Home.kt', line: 87, inApp: true }],
+  samples: 6,
+  truncated: false,
+  screen: 'home',
+  debugger: false,
+};
+const STRICTMODE = {
+  type: 'strictmode',
+  ts: 1792516379000,
+  policy: 'thread',
+  violation: 'DiskReadViolation',
+  message: null,
+  frames: [],
+  count: 1,
+  screen: null,
+};
 
 class FakeTarget implements SdkLinkTarget {
   answer: 'ok' | ByeReason = 'ok';
   /** Make the link handler throw on every message (a bug downstream). */
   throwing = false;
+  /** Ask for a `config` while attaching (before the welcome went out), like the session does. */
+  configOnAttach = false;
+  /** Close the link from inside attachSdk (e.g. the session stopped meanwhile). */
+  closeOnAttach = false;
   readonly hellos: SdkHello[] = [];
   readonly links: SdkLink[] = [];
   readonly messages: SdkLinkMessage[] = [];
   closes = 0;
+  invalidDiagnostics = 0;
 
   attachSdk(hello: SdkHello, link: SdkLink): SdkAttachResult {
     this.hellos.push(hello);
     this.links.push(link);
+    if (this.configOnAttach) link.sendConfig(DEFAULT_SDK_OPTIONS);
+    if (this.closeOnAttach) link.close('no_session');
     if (this.answer !== 'ok') return { ok: false, reason: this.answer };
     return {
       ok: true,
@@ -45,6 +77,9 @@ class FakeTarget implements SdkLinkTarget {
         onMessage: (message) => {
           if (this.throwing) throw new Error('boom');
           this.messages.push(message);
+        },
+        onInvalidDiagnostic: () => {
+          this.invalidDiagnostics += 1;
         },
         onClose: () => {
           this.closes += 1;
@@ -249,17 +284,135 @@ describe('device gateway', () => {
     const refused = await open(port);
     refused.send(HEARTBEAT);
     await refused.closed;
-    const lines = [...client.rawLines, ...refused.rawLines];
+    target.configOnAttach = true;
+    const v2 = await open(port);
+    v2.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await v2.waitFor((message) => message.type === 'config');
+    // Key order of the options object must not leak into the line.
+    target.links.at(-1)?.sendConfig({ strictMode: true, stallThresholdMs: 1000 });
+    await v2.waitFor((message) => message.type === 'config' && message.strictMode);
+    const lines = [...client.rawLines, ...refused.rawLines, ...v2.rawLines];
     expect(lines).toEqual([
       '{"type":"welcome","protocolVersion":1}',
       '{"type":"bye","reason":"no_session"}',
       '{"type":"bye","reason":"protocol_error"}',
+      '{"type":"welcome","protocolVersion":2}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false}',
+      '{"type":"config","stallThresholdMs":1000,"strictMode":true}',
     ]);
     for (const line of lines) {
       expect(line.startsWith('{"type":')).toBe(true);
       const values = Object.values(JSON.parse(line) as Record<string, unknown>);
       expect(values.every((value) => typeof value !== 'object')).toBe(true);
     }
+  });
+
+  it('sends config right after the welcome on a v2 link, and again whenever asked', async () => {
+    const port = await start();
+    target.configOnAttach = true;
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await client.waitFor((message) => message.type === 'config');
+    expect(client.received).toEqual([
+      { type: 'welcome', protocolVersion: 2 },
+      { type: 'config', stallThresholdMs: 150, strictMode: false },
+    ]);
+    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true });
+    await client.waitFor((message) => message.type === 'config' && message.strictMode);
+    expect(client.received.at(-1)).toEqual({ type: 'config', stallThresholdMs: 500, strictMode: true });
+
+    target.links[0]?.close('no_session');
+    target.links[0]?.sendConfig(DEFAULT_SDK_OPTIONS); // closing: nothing more is sent
+    await client.closed;
+    expect(client.received.map((message) => message.type)).toEqual(['welcome', 'config', 'config', 'bye']);
+  });
+
+  it('never sends config on a link negotiated at v1', async () => {
+    const port = await start();
+    target.configOnAttach = true;
+    const client = await linked(port);
+    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true });
+    client.send(HEARTBEAT);
+    await waitUntil(() => target.messages.length === 1);
+    expect(client.received).toEqual([{ type: 'welcome', protocolVersion: 1 }]);
+  });
+
+  it('does not send a config asked for by a target that refuses the hello', async () => {
+    const port = await start();
+    target.configOnAttach = true;
+    target.answer = 'no_session';
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await client.closed;
+    expect(client.received).toEqual([{ type: 'bye', reason: 'no_session' }]);
+  });
+
+  it('skips and counts v2 messages on a v1 link, and forwards them on a v2 link', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    const port = await start();
+    const v1 = await linked(port);
+    v1.send(STALL);
+    v1.send(STRICTMODE);
+    v1.send({ type: 'stall' }); // not even validated
+    v1.send(HEARTBEAT);
+    await waitUntil(() => target.messages.length === 1);
+    expect(target.messages.map((message) => message.type)).toEqual(['heartbeat']);
+    expect(v1.isClosed).toBe(false);
+    const lines = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('"stall"'));
+    expect(lines).toEqual(['Device gateway: ignoring "stall": SDK sent a v2 message on a v1 link, 1 so far']);
+
+    const v2 = await open(port);
+    v2.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await v2.waitFor((message) => message.type === 'welcome');
+    v2.send(STALL);
+    v2.send(STRICTMODE);
+    await waitUntil(() => target.messages.length === 3);
+    expect(target.messages.slice(1)).toEqual([STALL, STRICTMODE]);
+  });
+
+  it('drops an invalid diagnostic but keeps the link, and cleans up StrictMode text', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    const port = await start();
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await client.waitFor((message) => message.type === 'welcome');
+    const frame = STALL.frames[0];
+    client.send({ ...STRICTMODE, message: 'a\nb' });
+    client.send({ ...STRICTMODE, message: '' });
+    client.send({ ...STRICTMODE, violation: '' });
+    client.send({ ...STALL, frames: [{ ...frame, className: 'c'.repeat(257) }] }); // dropped
+    client.send({ ...STRICTMODE, frames: [{ ...frame, line: '87' }] }); // dropped
+    client.send({ ...STALL, durationMs: -1 }); // dropped
+    client.send({ type: 'frames', window: 'w', intervalMs: 16.6, frames: [] });
+    await waitUntil(() => target.messages.length === 4);
+    expect(target.messages).toEqual([
+      { ...STRICTMODE, message: 'a b' },
+      { ...STRICTMODE, message: null },
+      { ...STRICTMODE, violation: 'Violation' },
+      { type: 'frames', window: 'w', intervalMs: 16.6, frames: [] },
+    ]);
+    expect(target.invalidDiagnostics).toBe(3);
+    expect(client.isClosed).toBe(false);
+    const lines = warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes('invalid SDK'));
+    expect(lines).toHaveLength(1); // throttled
+    expect(lines[0]).toMatch(/^Device gateway: dropped an invalid SDK stall message \(.+\), 1 so far$/);
+
+    // An invalid v1 message still closes the link.
+    client.send({ ...HEARTBEAT, droppedMessages: -1 });
+    await client.closed;
+    expect(client.received.at(-1)).toEqual({ type: 'bye', reason: 'protocol_error' });
+  });
+
+  it('writes neither welcome nor config when the target closed the link while attaching it', async () => {
+    const port = await start();
+    target.configOnAttach = true;
+    target.closeOnAttach = true;
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
+    await client.closed;
+    expect(client.received).toEqual([{ type: 'bye', reason: 'no_session' }]);
   });
 
   it('welcomes a hello with unknown extra fields (a newer SDK)', async () => {

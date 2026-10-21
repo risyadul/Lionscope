@@ -1,16 +1,21 @@
 package io.github.risyadul.lionscope
 
-/** Server → SDK line, parsed just enough to react to `welcome` / `bye`. */
+/** Server → SDK line, parsed just enough to react to `welcome` / `bye` / `config`. */
 internal sealed class GatewayMessage {
     /** [protocolVersion] is the server's negotiated version as sent (1 when it is missing or not an integer). */
     class Welcome(val protocolVersion: Int) : GatewayMessage()
     class Bye(val reason: String) : GatewayMessage()
+
+    /** v2: the session's SDK options, already normalised (see [parseConfig]). */
+    class Config(val options: SdkOptions) : GatewayMessage()
 
     companion object {
         private val TYPE = Regex("\"type\"\\s*:\\s*\"([A-Za-z_]+)\"")
         private val REASON = Regex("\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"")
         /** A JSON integer only: `2.5`, `1e3` or `"2"` do not match. */
         private val PROTOCOL_VERSION = Regex("\"protocolVersion\"\\s*:\\s*(-?\\d+)(?![\\d.eE])")
+        private val STALL_THRESHOLD = Regex("\"stallThresholdMs\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)")
+        private val STRICT_MODE = Regex("\"strictMode\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
 
         /**
          * Returns null for unknown or malformed lines; unknown fields are ignored. A top-level scan, not a JSON
@@ -23,7 +28,21 @@ internal sealed class GatewayMessage {
                 PROTOCOL_VERSION.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: MIN_DEVICE_PROTOCOL_VERSION,
             )
             "bye" -> Bye(REASON.find(line)?.groupValues?.get(1) ?: "unknown")
+            "config" -> Config(parseConfig(line))
             else -> null
+        }
+
+        /**
+         * A missing or non-numeric threshold is the default; any other number snaps to the nearest allowed value
+         * (the lower one on a tie). `strictMode` is on only for a literal `true`.
+         */
+        private fun parseConfig(line: String): SdkOptions {
+            val threshold = STALL_THRESHOLD.find(line)?.groupValues?.get(1)?.toDoubleOrNull()
+                ?.takeIf { !it.isNaN() && !it.isInfinite() }
+                ?.let { value -> STALL_THRESHOLDS_MS.minByOrNull { Math.abs(it - value) } }
+                ?: SdkOptions.DEFAULT.stallThresholdMs
+            val strictMode = STRICT_MODE.find(line)?.groupValues?.get(1) == "true"
+            return SdkOptions(threshold, strictMode)
         }
     }
 }

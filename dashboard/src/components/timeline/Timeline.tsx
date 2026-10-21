@@ -6,6 +6,8 @@ import type {
   FrameSource,
   MemorySample,
   ScreenSpan,
+  StallSample,
+  StrictModeSample,
   TimelineEvent,
 } from '@lionscope/protocol/wire';
 import { useColorScheme } from '../../hooks/useColorScheme.ts';
@@ -46,6 +48,7 @@ import {
   type Threshold,
 } from './chartSpec.ts';
 import { Lane, type LegendItem } from './Lane.tsx';
+import { MainThreadLane } from './MainThreadLane.tsx';
 import { ScreensLane } from './ScreensLane.tsx';
 import type { Backdrop } from './uplotOptions.ts';
 import './timeline.css';
@@ -128,6 +131,9 @@ function dominantLegendIndex(values: readonly (number | null)[]): number | null 
   return best;
 }
 
+/** From this many lanes, every lane gets the tighter minimum height so a laptop viewport fits them. */
+const DENSE_LANE_COUNT = 6;
+
 const SOURCE_LABELS: Record<FrameSource, string> = { gfxinfo: 'gfxinfo', sdk: 'SDK FrameMetrics' };
 const SDK_IDLE_TITLE =
   'The SDK is linked but the app’s windows drew no frames. Until they do, gfxinfo polling may fill in.';
@@ -154,6 +160,8 @@ type Props = {
   events: readonly TimelineEvent[];
   screens: readonly ScreenSpan[];
   breakdown: readonly FrameBreakdownSample[];
+  stalls: readonly StallSample[];
+  strictMode: readonly StrictModeSample[];
   /** Show the Screens lane (an SDK is connected or spans were recorded). */
   showScreens: boolean;
   /**
@@ -161,6 +169,15 @@ type Props = {
    * bucket is in the window, so lanes don't reflow as frames come and go.
    */
   showBreakdown: boolean;
+  /** Show the Main thread lane (a v2 SDK is linked or stalls / violations are buffered). */
+  showMainThread: boolean;
+  /** The watchdog threshold the SDK runs with (the lane's dashed line). */
+  stallThresholdMs: number;
+  isStrictModeOn: boolean;
+  selectedStall: string | null;
+  onSelectStall: (key: string) => void;
+  /** Reveals the Stalls tab; offered while it is hidden. */
+  onViewStalls?: () => void;
   /** The in-app SDK is linked: it owns frame accounting, idle or not. */
   isSdkConnected: boolean;
   selectedScreen: string | null;
@@ -185,8 +202,16 @@ export function Timeline({
   events,
   screens,
   breakdown,
+  stalls,
+  strictMode,
   showScreens,
   showBreakdown,
+  showMainThread,
+  stallThresholdMs,
+  isStrictModeOn,
+  selectedStall,
+  onSelectStall,
+  onViewStalls,
   isSdkConnected,
   selectedScreen,
   onSelectScreen,
@@ -232,6 +257,7 @@ export function Timeline({
     [screens, endTs, selectedScreen],
   );
   const shared = { theme, xMin, xMax, backdrop, events, probeTs, cursorX };
+  const laneCount = 4 + Number(showScreens) + Number(showBreakdown) + Number(showMainThread);
 
   const cpuToggle = (
     <button
@@ -252,7 +278,7 @@ export function Timeline({
         {toolbar}
       </div>
       {notice}
-      <div className="timeline-lanes" data-dense={(showScreens && showBreakdown) || undefined}>
+      <div className="timeline-lanes" data-dense={laneCount >= DENSE_LANE_COUNT || undefined}>
         {showScreens && (
           <ScreensLane
             spans={screens}
@@ -313,10 +339,26 @@ export function Timeline({
           legendItems={FRAME_TIME_LEGEND}
           legendColumns={frameTimeData.slice(1)}
           thresholds={thresholds}
-          showTimeAxis={!showBreakdown}
+          showTimeAxis={!showBreakdown && !showMainThread}
           weight={1.1}
           {...shared}
         />
+        {showMainThread && (
+          <MainThreadLane
+            stalls={stalls}
+            strictMode={strictMode}
+            fromTs={startTs}
+            toTs={endTs}
+            thresholdMs={stallThresholdMs}
+            isStrictModeOn={isStrictModeOn}
+            selectedKey={selectedStall}
+            onSelect={onSelectStall}
+            onViewList={onViewStalls}
+            showTimeAxis={!showBreakdown}
+            weight={0.95}
+            {...shared}
+          />
+        )}
         {showBreakdown && (
           <Lane
             id="lane-breakdown"
