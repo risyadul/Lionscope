@@ -9,11 +9,19 @@ It works in two modes:
 - **With the optional SDK** in the app's **debug** build: adds which screen is on top (Activity, Fragment,
   DialogFragment) and per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img alt="Lionscope dashboard profiling the sample app: screens lane, CPU, memory, rendering, frame time and frame breakdown charts on one time axis, with logcat on the right" src="docs/images/dashboard-light.png">
+</picture>
+
+<sub>The bundled sample app on an emulator with its deliberate-jank list enabled: screen bands across all
+charts, SDK FrameMetrics in the Rendering, Frame time and Frame breakdown lanes, and the app's logcat.</sub>
+
 ## What the dashboard shows
 
 The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session, then
-stacked timeline charts that share one time axis (last 1, 5 or 10 minutes) and can be paused, and a logcat
-panel below.
+stacked timeline charts that share one time axis (last 1, 5 or 10 minutes) and can be paused, and a side
+panel on the right with the app's logcat and, with the SDK, a per-screen table.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
@@ -34,6 +42,11 @@ With the SDK installed in the app's debug build, the dashboard also shows:
 
 While SDK frames flow, `gfxinfo` polling pauses (no double observation, no `reset` clash); it resumes 3 s after
 they stop. The dashboard shows whether the SDK is connected (and its version), or how to add it.
+
+<img alt="Screens tab: per-screen frames, jank %, typical and worst p90 frame time, and the dominant frame stage, sorted by jank" src="docs/images/dashboard-screens.png">
+
+<sub>The Screens tab ranks screens by jank % and names the dominant frame stage for each one. Names come from the
+app's own screen alias when it has one (`home_tab`, `detail_page`, `legacy_page_2`), otherwise from the class.</sub>
 
 ## Requirements
 
