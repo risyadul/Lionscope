@@ -4,17 +4,25 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEVICE_PROTOCOL_V2,
+  isValidAvdName,
   isValidPackageName,
   isValidProcessName,
   isValidSerial,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
+  MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_KEY_CHARS,
+  MAX_SCREEN_TEXT_CHARS,
+  MAX_SCREEN_WHEEL_DELTA,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
+  MAX_TOUCH_POINTS,
   MIN_DEVICE_PROTOCOL_VERSION,
   parseClientMessage,
   parseDeviceMessage,
+  parseScreenClientMessage,
+  SCREEN_SIZES,
   STALL_THRESHOLDS_MS,
 } from '../src/index.ts';
 import type { DeviceMessage, SdkFrame, StackFrame } from '../src/index.ts';
@@ -138,6 +146,136 @@ describe('parseClientMessage', () => {
     const tooBig = `{"type":"stopSession","x":"${'é'.repeat(2100)}"}`;
     expect(tooBig.length).toBeLessThan(MAX_CLIENT_MESSAGE_BYTES);
     expect(parseClientMessage(tooBig)).toEqual({ ok: false, error: 'message too large' });
+  });
+});
+
+describe('emulator messages', () => {
+  it.each(['Pixel_9a', 'Medium_Phone_API_36.1', 'tv-1080p', 'a'])('accepts the AVD name %s', (name) => {
+    expect(isValidAvdName(name)).toBe(true);
+  });
+
+  it.each(['', 'Pixel 9a', '-no-window', '-wipe-data', '../evil', 'a;b', '$(id)', 'x'.repeat(129)])(
+    'rejects the AVD name %j',
+    (name) => {
+      expect(isValidAvdName(name)).toBe(false);
+    },
+  );
+
+  it('parses bootEmulator in both modes and shutdownEmulator', () => {
+    for (const mode of ['quick', 'cold'] as const) {
+      expect(parseClientMessage(JSON.stringify({ type: 'bootEmulator', avdName: 'Pixel_9a', mode }))).toEqual(
+        {
+          ok: true,
+          value: { type: 'bootEmulator', avdName: 'Pixel_9a', mode },
+        },
+      );
+    }
+    expect(parseClientMessage('{"type":"shutdownEmulator","avdName":"Pixel_9a"}')).toEqual({
+      ok: true,
+      value: { type: 'shutdownEmulator', avdName: 'Pixel_9a' },
+    });
+  });
+
+  it('rejects an invalid AVD name, an unknown boot mode and extra fields', () => {
+    const boot = (value: object) => parseClientMessage(JSON.stringify({ type: 'bootEmulator', ...value }));
+    expect(boot({ avdName: 'Pixel 9a', mode: 'quick' })).toEqual({ ok: false, error: 'invalid AVD name' });
+    expect(boot({ avdName: 'Pixel_9a', mode: 'warm' }).ok).toBe(false);
+    expect(boot({ avdName: 'Pixel_9a' }).ok).toBe(false);
+    expect(boot({ avdName: 'Pixel_9a', mode: 'quick', args: ['-wipe-data'] }).ok).toBe(false);
+    expect(parseClientMessage('{"type":"shutdownEmulator","avdName":"$(id)"}').ok).toBe(false);
+    expect(boot({ avdName: '-no-snapshot-save', mode: 'quick' })).toEqual({
+      ok: false,
+      error: 'invalid AVD name',
+    });
+  });
+});
+
+describe('parseScreenClientMessage', () => {
+  const parse = (value: object) => parseScreenClientMessage(JSON.stringify(value));
+  const point = (id: number, extra: object = {}) => ({ id, x: 0.5, y: 0.25, pressure: 1, ...extra });
+
+  it('parses every message type', () => {
+    const messages = [
+      { type: 'touch', touches: [point(0), point(1, { pressure: 0 })] },
+      { type: 'wheel', x: 0, y: 1, dx: 0, dy: -120 },
+      { type: 'key', key: 'Enter', eventType: 'keydown' },
+      { type: 'key', key: 'a', eventType: 'keypress' },
+      { type: 'text', text: 'hello world\n' },
+      { type: 'nav', button: 'recents' },
+      { type: 'rotate', direction: 'left' },
+      { type: 'screenshot' },
+      ...SCREEN_SIZES.map((size) => ({ type: 'setSize', size })),
+    ];
+    for (const message of messages) expect(parse(message)).toEqual({ ok: true, value: message });
+  });
+
+  it('accepts up to MAX_TOUCH_POINTS distinct fingers and ids 0..MAX_TOUCH_POINTS-1', () => {
+    const touches = Array.from({ length: MAX_TOUCH_POINTS }, (_, id) => point(id));
+    expect(parse({ type: 'touch', touches }).ok).toBe(true);
+    expect(parse({ type: 'touch', touches: [...touches, point(0)] }).ok).toBe(false);
+    expect(parse({ type: 'touch', touches: [] }).ok).toBe(false);
+  });
+
+  it('rejects duplicate ids, out-of-range ids, coordinates and pressures', () => {
+    expect(parse({ type: 'touch', touches: [point(3), point(3)] })).toEqual({
+      ok: false,
+      error: 'duplicate id',
+    });
+    for (const bad of [
+      point(-1),
+      point(MAX_TOUCH_POINTS),
+      point(1.5),
+      point(0, { x: -0.01 }),
+      point(0, { y: 1.01 }),
+      point(0, { pressure: 2 }),
+      point(0, { x: '0.5' }),
+      point(0, { extra: true }),
+    ]) {
+      expect(parse({ type: 'touch', touches: [bad] }).ok).toBe(false);
+    }
+    // 1e999 parses to Infinity.
+    expect(
+      parseScreenClientMessage('{"type":"touch","touches":[{"id":0,"x":1e999,"y":0,"pressure":1}]}').ok,
+    ).toBe(false);
+  });
+
+  it('bounds wheel deltas and positions', () => {
+    const wheel = (value: object) => parse({ type: 'wheel', x: 0.5, y: 0.5, dx: 0, dy: 0, ...value });
+    expect(wheel({ dy: MAX_SCREEN_WHEEL_DELTA }).ok).toBe(true);
+    expect(wheel({ dy: MAX_SCREEN_WHEEL_DELTA + 1 }).ok).toBe(false);
+    expect(wheel({ dx: -MAX_SCREEN_WHEEL_DELTA - 1 }).ok).toBe(false);
+    expect(wheel({ x: 2 }).ok).toBe(false);
+  });
+
+  it('bounds keys and text and refuses control characters', () => {
+    expect(parse({ type: 'key', key: 'x'.repeat(MAX_SCREEN_KEY_CHARS), eventType: 'keyup' }).ok).toBe(true);
+    expect(parse({ type: 'key', key: 'x'.repeat(MAX_SCREEN_KEY_CHARS + 1), eventType: 'keyup' }).ok).toBe(
+      false,
+    );
+    expect(parse({ type: 'key', key: '', eventType: 'keyup' }).ok).toBe(false);
+    expect(parse({ type: 'key', key: '\u0000', eventType: 'keyup' }).ok).toBe(false);
+    expect(parse({ type: 'key', key: 'a', eventType: 'click' }).ok).toBe(false);
+    expect(parse({ type: 'text', text: 'é'.repeat(MAX_SCREEN_TEXT_CHARS) }).ok).toBe(true);
+    expect(parse({ type: 'text', text: 'x'.repeat(MAX_SCREEN_TEXT_CHARS + 1) }).ok).toBe(false);
+    expect(parse({ type: 'text', text: '' }).ok).toBe(false);
+    expect(parse({ type: 'text', text: 'tab\tok' }).ok).toBe(true);
+    expect(parse({ type: 'text', text: 'bell\u0007' }).ok).toBe(false);
+    expect(parse({ type: 'text', text: 'bidi‮' }).ok).toBe(false);
+  });
+
+  it('rejects unknown buttons, directions, sizes and types', () => {
+    expect(parse({ type: 'nav', button: 'menu' }).ok).toBe(false);
+    expect(parse({ type: 'rotate', direction: 'up' }).ok).toBe(false);
+    expect(parse({ type: 'setSize', size: 1080 }).ok).toBe(false);
+    expect(parse({ type: 'setSize', size: '540' }).ok).toBe(false);
+    expect(parse({ type: 'screenshot', full: true }).ok).toBe(false);
+    expect(parse({ type: 'startSession' }).ok).toBe(false);
+    expect(parseScreenClientMessage('{nope')).toEqual({ ok: false, error: 'invalid JSON' });
+  });
+
+  it('rejects messages over MAX_SCREEN_CLIENT_MESSAGE_BYTES', () => {
+    const raw = JSON.stringify({ type: 'text', text: 'é'.repeat(MAX_SCREEN_CLIENT_MESSAGE_BYTES / 2) });
+    expect(parseScreenClientMessage(raw)).toEqual({ ok: false, error: 'message too large' });
   });
 });
 

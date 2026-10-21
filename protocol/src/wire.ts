@@ -6,7 +6,8 @@
  * dashboard → server messages lives in `./index.ts`.
  */
 
-export const PROTOCOL_VERSION = 1;
+/** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
+export const PROTOCOL_VERSION = 2;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -278,12 +279,150 @@ export interface Snapshot {
 }
 
 // ---------------------------------------------------------------------------
+// Emulators (0.3.0): boot AVDs headless, mirror and operate them in the dashboard
+//
+// The server talks to each emulator over its own gRPC endpoint (EmulatorController), found through the
+// emulator's discovery file (`pid_<pid>.ini`: `port.serial`, `grpc.port`, `grpc.token`). The token never
+// leaves the server. Physical devices are not mirrored in 0.3.0.
+// ---------------------------------------------------------------------------
+
+/**
+ * AVD ids as `emulator -list-avds` prints them (`Pixel_9a`). Validated: they end up in emulator arguments, so a
+ * leading `-` (which would read as a flag) is refused. The server also requires the name to be listed.
+ */
+export const AVD_NAME_PATTERN = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$/;
+
+export function isValidAvdName(value: string): boolean {
+  return AVD_NAME_PATTERN.test(value);
+}
+
+/** `quick` loads the Quick Boot snapshot and saves it on shutdown; `cold` boots from scratch (`-no-snapshot-load`). */
+export type BootMode = 'quick' | 'cold';
+
+export type EmulatorState = 'off' | 'booting' | 'running' | 'shutting_down';
+
+/**
+ * How the emulator renders. `software` (SwiftShader / lavapipe, e.g. `-no-window` without `-gpu host`) burns host
+ * CPU and makes frame times meaningless, so the dashboard warns. `unknown` until the server has checked.
+ */
+export type EmulatorRenderer = 'host' | 'software' | 'unknown';
+
+export interface EmulatorInfo {
+  avdName: string;
+  /** `avd.ini.displayname` (`Pixel 9a`) when the AVD config has one. */
+  displayName: string | null;
+  state: EmulatorState;
+  /** adb serial (`emulator-5554`) while it runs; null when off or before adb sees it. */
+  serial: string | null;
+  /** Booted by this server: shut down when the server stops, and only these can be shut down from the dashboard. */
+  managed: boolean;
+  /** gRPC endpoint and token found: the screen can be mirrored and operated. */
+  canMirror: boolean;
+  renderer: EmulatorRenderer;
+}
+
+/** Screen mirror WebSocket on the dashboard HTTP server: `/ws/screen?serial=<serial>&size=<SCREEN_SIZES>`. */
+export const SCREEN_WS_PATH = '/ws/screen';
+
+/** Frame size presets: pixels along the screen's SHORT edge (aspect ratio kept, also in landscape). */
+export const SCREEN_SIZES = [360, 540, 720] as const;
+export type ScreenSize = (typeof SCREEN_SIZES)[number];
+export const DEFAULT_SCREEN_SIZE: ScreenSize = 540;
+
+/** The emulator accepts up to 10 concurrent touch points. */
+export const MAX_TOUCH_POINTS = 10;
+export const MAX_SCREEN_TEXT_CHARS = 256;
+/** W3C `KeyboardEvent.key` values are short (`a`, `Enter`, `ArrowLeft`, `GoBack`). */
+export const MAX_SCREEN_KEY_CHARS = 32;
+/** Max accepted size of one dashboard → server screen message, in bytes. */
+export const MAX_SCREEN_CLIENT_MESSAGE_BYTES = 2048;
+/** Input messages per second per screen socket before the server drops them (touch moves come at ~60–120/s). */
+export const MAX_SCREEN_INPUT_PER_SECOND = 400;
+
+/**
+ * Binary server → dashboard messages on the screen socket: one kind byte, then a PNG.
+ * `frame` is a live, scaled frame; `screenshot` is the full-resolution answer to a `screenshot` request.
+ */
+export const SCREEN_BINARY_KIND = { frame: 1, screenshot: 2 } as const;
+
+/** Degrees clockwise from the display's natural (portrait) orientation, as the frame is shown. */
+export type ScreenRotation = 0 | 90 | 180 | 270;
+
+export type ScreenErrorCode =
+  /** The serial is not a running emulator (physical devices are mirrored from 0.3.1 on). */
+  | 'not_emulator'
+  /** The emulator has no usable gRPC endpoint or token (too old, or started with `-grpc` without a token). */
+  | 'unavailable'
+  /** The emulator rejected the token. */
+  | 'auth'
+  /** The stream ended: emulator shut down, crashed or stopped responding. */
+  | 'ended'
+  /** Too many open screen sockets. */
+  | 'busy';
+
+/** Text server → dashboard messages on the screen socket. */
+export type ScreenServerMessage =
+  /**
+   * Sent before the first frame and again before the first frame after any change. `displayWidth/Height` are
+   * the display's natural (unrotated) size in device pixels; `frameWidth/Height` the PNG size as delivered
+   * (already rotated: a landscape frame is wider than tall).
+   */
+  | {
+      type: 'screenInfo';
+      serial: string;
+      displayWidth: number;
+      displayHeight: number;
+      rotation: ScreenRotation;
+      frameWidth: number;
+      frameHeight: number;
+    }
+  | { type: 'screenError'; code: ScreenErrorCode; message: string };
+
+/**
+ * One touch point in FRAME coordinates normalized to 0..1 (0,0 = top-left of the frame as shown, after
+ * rotation). The server maps them to the emulator's native display coordinates (touches are always injected
+ * unrotated: verified on emulator 36.6 in REVERSE_LANDSCAPE, frame (x, y) = (H − nativeY, nativeX)).
+ * `pressure` 0 lifts the point. `id` 0..MAX_TOUCH_POINTS-1 tracks a finger for the whole gesture.
+ */
+export interface ScreenTouchPoint {
+  id: number;
+  x: number;
+  y: number;
+  pressure: number;
+}
+
+export type ScreenNavButton = 'back' | 'home' | 'recents' | 'power';
+
+/** Text dashboard → server messages on the screen socket (JSON, ≤ MAX_SCREEN_CLIENT_MESSAGE_BYTES). */
+export type ScreenClientMessage =
+  /** Every point currently changing (move/down/up); 1..MAX_TOUCH_POINTS points. */
+  | { type: 'touch'; touches: ScreenTouchPoint[] }
+  /**
+   * Mouse wheel at a frame position; 120 = one notch, positive dy = wheel away from the user (scroll up),
+   * |dx|, |dy| ≤ MAX_SCREEN_WHEEL_DELTA (protocol index.ts). AVDs have no mouse device, so the server turns
+   * the wheel into a short touch drag at that position (never shorter than the touch slop, so it never taps).
+   */
+  | { type: 'wheel'; x: number; y: number; dx: number; dy: number }
+  /** A physical key by its W3C `key` value. */
+  | { type: 'key'; key: string; eventType: 'keydown' | 'keyup' | 'keypress' }
+  /** Typed or pasted text (printable ASCII is reliable; the emulator may drop other characters). */
+  | { type: 'text'; text: string }
+  | { type: 'nav'; button: ScreenNavButton }
+  /** Rotate the virtual device a quarter turn. */
+  | { type: 'rotate'; direction: 'left' | 'right' }
+  | { type: 'setSize'; size: ScreenSize }
+  /** Answered with one SCREEN_BINARY_KIND.screenshot message (full resolution, as shown). */
+  | { type: 'screenshot' };
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
 export type ServerMessage =
   | { type: 'hello'; protocolVersion: number; serverVersion: string; bufferWindowMs: number }
   | { type: 'devices'; devices: DeviceInfo[] }
+  /** Every AVD (off or running) and its state; sent on connect, on refresh and on every state change. */
+  | { type: 'emulators'; emulators: EmulatorInfo[] }
   | { type: 'apps'; serial: string; apps: AppInfo[] }
   | { type: 'session'; session: SessionState }
   /** Sent on connect and when a new session starts: full ring-buffer contents. */
@@ -314,6 +453,7 @@ export type ServerMessageType = ServerMessage['type'];
 export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set([
   'hello',
   'devices',
+  'emulators',
   'apps',
   'session',
   'snapshot',
@@ -325,7 +465,15 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
 // ---------------------------------------------------------------------------
 
 export type ClientMessage =
+  /** Also refreshes the AVD list (`emulators`). */
   | { type: 'refreshDevices' }
+  /**
+   * Refused with an `error` when the AVD is unknown or already running; if the emulator process later exits
+   * unexpectedly (while booting or running) the server sends `error` with code `emulator_exited`.
+   */
+  | { type: 'bootEmulator'; avdName: string; mode: BootMode }
+  /** Only emulators this server booted (`managed`); others are refused with an `error`. */
+  | { type: 'shutdownEmulator'; avdName: string }
   | { type: 'listApps'; serial: string }
   | { type: 'startSession'; serial: string; packageName: string }
   | { type: 'stopSession' }

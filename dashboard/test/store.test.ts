@@ -66,6 +66,35 @@ describe('applyServerMessage', () => {
     expect(isProtocolMismatch(next)).toBe(true);
   });
 
+  it('flags a 0.2 server (protocol 1) as a mismatch: the versions must match exactly', () => {
+    expect(PROTOCOL_VERSION).toBe(2);
+    const next = apply(createInitialState(), {
+      type: 'hello',
+      protocolVersion: 1,
+      serverVersion: '0.2.0',
+      bufferWindowMs: 5 * MIN,
+    });
+    expect(isProtocolMismatch(next)).toBe(true);
+  });
+
+  it('emulators replaces the AVD list (null until the first message)', () => {
+    expect(createInitialState().emulators).toBeNull();
+    const avd = {
+      avdName: 'Pixel_9a',
+      displayName: 'Pixel 9a',
+      state: 'off' as const,
+      serial: null,
+      managed: false,
+      canMirror: false,
+      renderer: 'unknown' as const,
+    };
+    const once = apply(createInitialState(), { type: 'emulators', emulators: [avd] });
+    expect(once.emulators).toEqual([avd]);
+    const twice = apply(once, { type: 'emulators', emulators: [] });
+    expect(twice.emulators).toEqual([]);
+    expect(twice.emulators).not.toBe(once.emulators);
+  });
+
   it('hello with a shorter window prunes existing buffers', () => {
     const filled = apply(
       createInitialState(),

@@ -1,4 +1,4 @@
-/* Right-hand column: a tab strip over logcat and the screens table. */
+/* Right-hand column: a tab strip over the screens table and stalls. */
 
 .side {
   display: flex;
@@ -90,8 +90,4 @@
 
 .side-panel[hidden] {
   display: none;
-}
-
-.side-panel > .logcat {
-  flex: 1 1 auto;
 }

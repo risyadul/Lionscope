@@ -1,4 +1,5 @@
-import type { AppInfo, DeviceInfo, SessionState } from '@lionscope/protocol/wire';
+import type { ReactNode } from 'react';
+import type { AppInfo, DeviceInfo, EmulatorInfo, SessionState } from '@lionscope/protocol/wire';
 import type { ConnectionStatus } from '../../lib/store.ts';
 import { BrandMark } from '../brand/BrandMark.tsx';
 import { AppCombobox } from './AppCombobox.tsx';
@@ -11,8 +12,16 @@ type Props = {
   connection: ConnectionStatus;
   serverVersion: string | null;
   devices: readonly DeviceInfo[] | null;
+  emulators: readonly EmulatorInfo[] | null;
   serial: string | null;
+  /** The AVD behind the selection (also while it is off). */
+  emulator: EmulatorInfo | null;
   onSerialChange: (serial: string) => void;
+  onAvdChange: (avdName: string) => void;
+  /** Boot / Shut down beside the device picker. */
+  emulatorActions: ReactNode;
+  /** Opens the device drawer on narrow screens. */
+  deviceToggle: ReactNode;
   onRefreshDevices: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
@@ -34,8 +43,13 @@ export function TopBar({
   connection,
   serverVersion,
   devices,
+  emulators,
   serial,
+  emulator,
   onSerialChange,
+  onAvdChange,
+  emulatorActions,
+  deviceToggle,
   onRefreshDevices,
   apps,
   packageName,
@@ -57,7 +71,9 @@ export function TopBar({
     : isSessionActive
       ? 'Stop the session to change app'
       : serial === null
-        ? 'Select a device first'
+        ? emulator !== null
+          ? 'Boot the emulator first'
+          : 'Select a device first'
         : undefined;
   return (
     <header className="topbar">
@@ -68,13 +84,18 @@ export function TopBar({
         </span>
       </div>
       <div className="topbar-controls">
+        {deviceToggle}
         <DevicePicker
           devices={devices}
+          emulators={emulators}
           value={serial}
+          emulator={emulator}
           onChange={onSerialChange}
+          onAvdChange={onAvdChange}
           onRefresh={onRefreshDevices}
           isLocked={isSessionActive}
           isOffline={isOffline}
+          actions={emulatorActions}
         />
         <AppCombobox
           apps={apps}

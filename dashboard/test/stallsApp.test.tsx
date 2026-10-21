@@ -1,13 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, DeviceInfo, SdkStatus, ServerMessage } from '@lionscope/protocol/wire';
+import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 import { App } from '../src/App.tsx';
+import { DEVICE_OVERLAY_QUERY } from '../src/hooks/useDeviceColumn.ts';
 import { ServicesContext, type DashboardServices } from '../src/app/services.ts';
 import { createSignal } from '../src/lib/signal.ts';
 import { stackText } from '../src/lib/stalls.ts';
 import { createStore, type ConnectionState } from '../src/lib/store.ts';
 import { SDK_UPDATE_HINT } from '../src/lib/viewState.ts';
 import { breakdown, CART_STACK, frame, SDK_V2, session, span, stall, violation } from './fixtures.ts';
+import { binaryMessage, emulator, FakeScreenSocket, installCanvasStubs } from './screenFakes.ts';
 import { plots, resetPlots } from './uplotMock.ts';
 
 vi.mock('uplot', () => import('./uplotMock.ts'));
@@ -28,7 +31,7 @@ const OPEN: ConnectionState = { status: 'open', attempt: 0, retryAt: null, close
 const EMULATOR: DeviceInfo = { serial: 'emulator-5554', state: 'device', model: 'sdk_gphone64' };
 const hello: ServerMessage = {
   type: 'hello',
-  protocolVersion: 1,
+  protocolVersion: PROTOCOL_VERSION,
   serverVersion: '0.2.0',
   bufferWindowMs: 600_000,
 };
@@ -491,5 +494,77 @@ describe('lane hover', () => {
       },
     });
     expect(lane.querySelector('.stall-tip')).toBeNull();
+  });
+});
+
+describe('Escape with the device screen', () => {
+  class NoopResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+
+  beforeEach(() => {
+    FakeScreenSocket.reset();
+    vi.stubGlobal('WebSocket', FakeScreenSocket);
+    installCanvasStubs();
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('ResizeObserver', NoopResizeObserver);
+  });
+
+  const withEmulator = (now: number): ServerMessage[] => [
+    ...withStalls(now),
+    { type: 'emulators', emulators: [emulator()] },
+  ];
+
+  async function goLive() {
+    const socket = FakeScreenSocket.latest();
+    act(() => {
+      socket.open();
+      socket.receive(binaryMessage('frame'));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return socket;
+  }
+
+  it('Esc on the focused screen is the device’s Back and leaves the stall detail open', async () => {
+    setup(withEmulator(Date.now()));
+    const socket = await goLive();
+    openStalls();
+    fireEvent.click(within(stallsPanel()).getByRole('button', { name: /blocked 450 ms/ }));
+    const canvas = screen.getByLabelText('Pixel 9a screen');
+    canvas.focus();
+    fireEvent.keyDown(canvas, { key: 'Escape' });
+    expect(socket.messages()).toEqual([{ type: 'nav', button: 'back' }]);
+    expect(within(stallsPanel()).getByRole('article', { name: 'Selected event' })).toBeTruthy();
+  });
+
+  it('one Esc closes the device drawer on top, the next the stall detail', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === DEVICE_OVERLAY_QUERY,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    setup(withEmulator(Date.now()));
+    openStalls();
+    fireEvent.click(within(stallsPanel()).getByRole('button', { name: /blocked 450 ms/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Screen' }));
+    const drawer = () => screen.queryByRole('complementary', { name: 'Device' });
+    expect(drawer()).not.toBeNull();
+    const detail = () => within(stallsPanel()).queryByRole('article', { name: 'Selected event' });
+    expect(document.activeElement).toBe(drawer());
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(drawer()).toBeNull();
+    expect(detail()).not.toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(detail()).toBeNull();
   });
 });

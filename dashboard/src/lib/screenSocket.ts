@@ -1,0 +1,203 @@
+/** Screen mirror WebSocket (`SCREEN_WS_PATH`): binary PNG frames in, JSON input out, reconnect with backoff. */
+import type {
+  ScreenClientMessage,
+  ScreenErrorCode,
+  ScreenServerMessage,
+  ScreenSize,
+} from '@lionscope/protocol/wire';
+import {
+  MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  SCREEN_BINARY_KIND,
+  SCREEN_WS_PATH,
+} from '@lionscope/protocol/wire';
+import { backoffDelay, type SocketLike } from './connection.ts';
+
+export function screenUrl(
+  location: Pick<Location, 'protocol' | 'host'>,
+  serial: string,
+  size: ScreenSize,
+): string {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const query = new URLSearchParams({ serial, size: String(size) });
+  return `${scheme}://${location.host}${SCREEN_WS_PATH}?${query.toString()}`;
+}
+
+export type ScreenBinaryKind = keyof typeof SCREEN_BINARY_KIND;
+
+export interface ScreenBinary {
+  kind: ScreenBinaryKind;
+  png: Blob;
+}
+
+/** One kind byte, then a PNG. Unknown kinds and empty payloads are dropped. */
+export function parseScreenBinary(data: ArrayBuffer): ScreenBinary | null {
+  if (data.byteLength < 2) return null;
+  const kindByte = new Uint8Array(data, 0, 1)[0];
+  const kind = (Object.keys(SCREEN_BINARY_KIND) as ScreenBinaryKind[]).find(
+    (k) => SCREEN_BINARY_KIND[k] === kindByte,
+  );
+  if (kind === undefined) return null;
+  return { kind, png: new Blob([new Uint8Array(data, 1)], { type: 'image/png' }) };
+}
+
+export function parseScreenMessage(raw: unknown): ScreenServerMessage | null {
+  if (typeof raw !== 'string') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const type: unknown = (parsed as { type?: unknown }).type;
+  return type === 'screenInfo' || type === 'screenError' ? (parsed as ScreenServerMessage) : null;
+}
+
+/** Retrying can't fix these: the panel shows the reason and stops reconnecting. */
+export const PERMANENT_SCREEN_ERRORS: ReadonlySet<ScreenErrorCode> = new Set([
+  'not_emulator',
+  'unavailable',
+  'auth',
+]);
+
+export type ScreenStatus = 'connecting' | 'live' | 'reconnecting' | 'failed';
+
+export interface ScreenError {
+  code: ScreenErrorCode;
+  message: string;
+}
+
+export interface ScreenConnectionState {
+  status: ScreenStatus;
+  /** Consecutive attempts without a frame. */
+  attempt: number;
+  /** The last error the server reported; kept while reconnecting so the panel can say why. */
+  error: ScreenError | null;
+}
+
+export type ScreenInfo = Extract<ScreenServerMessage, { type: 'screenInfo' }>;
+
+export interface ScreenSocketLike extends SocketLike {
+  binaryType: BinaryType;
+}
+
+export interface ScreenConnectionOptions {
+  /** Read on every (re)connect, so a size picked meanwhile is used. */
+  url: () => string;
+  onBinary: (msg: ScreenBinary) => void;
+  onInfo: (info: ScreenInfo) => void;
+  onState: (state: ScreenConnectionState) => void;
+  createSocket?: (url: string) => ScreenSocketLike;
+  random?: () => number;
+}
+
+export interface ScreenConnection {
+  /**
+   * Sends when open; returns false (dropped) otherwise or when the message is over the size limit. A
+   * `setSize` sent before the socket opens is held and sent on open (a reconnect takes the size from `url`).
+   */
+  send(msg: ScreenClientMessage): boolean;
+  close(): void;
+}
+
+const OPEN = 1;
+const encoder = new TextEncoder();
+
+export function createScreenConnection(options: ScreenConnectionOptions): ScreenConnection {
+  const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url));
+  const random = options.random ?? Math.random;
+  let socket: ScreenSocketLike | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+  let error: ScreenError | null = null;
+  let isLive = false;
+  let isClosed = false;
+  let isFailed = false;
+  let heldSize: ScreenClientMessage | null = null;
+
+  const report = (status: ScreenStatus) => options.onState({ status, attempt, error });
+
+  const markLive = () => {
+    if (isLive) return;
+    isLive = true;
+    attempt = 0;
+    error = null;
+    report('live');
+  };
+
+  const connect = () => {
+    retryTimer = null;
+    if (isClosed) return;
+    isLive = false;
+    heldSize = null;
+    report(attempt === 0 ? 'connecting' : 'reconnecting');
+    const ws = createSocket(options.url());
+    ws.binaryType = 'arraybuffer';
+    socket = ws;
+    ws.onopen = () => {
+      if (socket !== ws || heldSize === null) return;
+      ws.send(JSON.stringify(heldSize));
+      heldSize = null;
+    };
+    ws.onmessage = (event) => {
+      if (socket !== ws) return;
+      if (event.data instanceof ArrayBuffer) {
+        const binary = parseScreenBinary(event.data);
+        if (!binary) return;
+        if (binary.kind === 'frame') markLive();
+        options.onBinary(binary);
+        return;
+      }
+      const msg = parseScreenMessage(event.data);
+      if (!msg) return;
+      if (msg.type === 'screenInfo') {
+        options.onInfo(msg);
+        return;
+      }
+      error = { code: msg.code, message: msg.message };
+      if (PERMANENT_SCREEN_ERRORS.has(msg.code)) {
+        isFailed = true;
+        report('failed');
+        ws.close();
+      }
+    };
+    ws.onerror = () => {
+      // A close event always follows; the retry is scheduled there.
+    };
+    ws.onclose = () => {
+      if (socket !== ws) return;
+      socket = null;
+      if (isClosed || isFailed) return;
+      const delay = backoffDelay(attempt, random);
+      attempt++;
+      report('reconnecting');
+      retryTimer = setTimeout(connect, delay);
+    };
+  };
+
+  connect();
+
+  return {
+    send(msg) {
+      if (isClosed || isFailed) return false;
+      if (msg.type === 'setSize' && socket?.readyState !== OPEN) {
+        heldSize = msg;
+        return true;
+      }
+      if (!socket || socket.readyState !== OPEN) return false;
+      const json = JSON.stringify(msg);
+      if (encoder.encode(json).length > MAX_SCREEN_CLIENT_MESSAGE_BYTES) return false;
+      socket.send(json);
+      return true;
+    },
+    close() {
+      if (isClosed) return;
+      isClosed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      retryTimer = null;
+      const ws = socket;
+      socket = null;
+      ws?.close();
+    },
+  };
+}

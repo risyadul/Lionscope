@@ -10,6 +10,9 @@ It works in two modes:
   DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
   stalls with the app code line that caused them (plus opt-in StrictMode violations).
 
+On an emulator you can also boot the AVD headless from the dashboard and see and operate its screen right
+next to the charts (0.3.0+); physical devices follow in a later release.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
   <img alt="Lionscope dashboard profiling the sample app: screens lane, CPU, memory, rendering, frame time and frame breakdown charts on one time axis, with logcat on the right" src="docs/images/dashboard-light.png">
@@ -20,9 +23,10 @@ charts, SDK FrameMetrics in the Rendering, Frame time and Frame breakdown lanes,
 
 ## What the dashboard shows
 
-The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session, then
-stacked timeline charts that share one time axis (last 1, 5 or 10 minutes) and can be paused, and a side
-panel on the right with the app's logcat and, with the SDK, a per-screen table.
+The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session; the
+emulator's screen on the left; stacked timeline charts in the middle that share one time axis (last 1, 5 or 10
+minutes) and can be paused, with the app's logcat in a resizable drawer below them; and, with the SDK, the
+Screens and Stalls tabs on the right. Below 1280 px the screen opens as a drawer from the top bar.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
@@ -77,6 +81,29 @@ policies when you turn it off or the link closes. It refuses to touch a policy t
 or dropbox penalty, or that looks like it has the app's own `penaltyListener`, and it never re-arms a
 death-on-network penalty; the Stalls tab then says nothing was added. Violations are coalesced to one per second
 per stack, and at most 10 per second overall.
+
+### Operating the emulator from the dashboard
+
+The device picker lists every AVD, also the ones that are off. **Boot** starts one without a window on the host
+GPU (`-no-window -gpu host`), as a **Quick boot** (loads the Quick Boot snapshot and saves it on shutdown) or a
+**Cold boot** (`-no-snapshot-load`). Its screen then shows in the Device column, where you use it like the
+emulator window: click and drag to touch, Alt+drag to pinch (two fingers mirrored around the centre), scroll
+with the wheel, type when the screen has focus (Esc is Back, pasting sends the text), and use the toolbar for
+Back, Home, Recents, Power, rotation, a full-resolution screenshot and the frame size (360, 540 or 720 px along
+the short edge). Mirroring works with or without a profiling session, and only streams while the column is
+open and the tab is visible.
+
+Emulators that Lionscope booted can be shut down from the dashboard and are shut down when the server stops;
+an emulator you started yourself is never shut down by Lionscope, but you can still mirror it.
+
+Lionscope talks to the emulator's own gRPC endpoint, found through the emulator's discovery file
+(`avd/running/pid_<pid>.ini`, which holds its port and access token). Frames are captured by the emulator on
+the host side and sent as PNG only when the screen changes, so Android inside the emulator does no extra work
+and the app's measurements are not affected. On an M-series Mac at 540 px that is about 58 fps, ~140 KB per
+frame and ~55 ms from input to frame.
+
+If an emulator renders in software (SwiftShader, e.g. `-no-window` without `-gpu host`), the dashboard warns:
+frame times are then not representative of a device.
 
 ## Requirements
 
@@ -177,6 +204,7 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.2.0"
                                                                  │ HTTP + WebSocket :8701
                                                                  ▼
                                                                dashboard/ in the browser
+ emulator ◀─────────── gRPC (EmulatorController, token) ─────── server/ emulator manager + /ws/screen
 ```
 
 | Directory      | What it is                                                                                                                       |
@@ -209,6 +237,14 @@ protocol version 1 and closes the connection on unknown message types.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and only accepts data after the hello's PID is verified with `pidof` on the session's device.
+- The dashboard and screen sockets have no password of their own: any process of any user on the same machine
+  that can reach `127.0.0.1` can use them, including operating a mirrored emulator. That is no more access than
+  the adb server on `127.0.0.1:5037` already gives local processes; do not run Lionscope on a machine you share
+  with people you don't trust.
+- Emulator access tokens are read from the emulator's discovery file and used only by the server; they are
+  never logged or sent to the browser. The screen socket (`/ws/screen`) has the same Host/Origin checks, a
+  size cap and an input rate limit. AVD names must match `emulator -list-avds` before anything is spawned, and
+  only emulators this server booted can be shut down.
 - The SDK only sends screen class names / aliases, frame timings and, with stalls enabled, stack frames of the
   main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. Without
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could receive that stream.
@@ -237,6 +273,11 @@ protocol version 1 and closes the connection on unknown message types.
   policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
   by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
   permits network on the main thread.
+- **Emulators only, for the screen.** Mirroring and controlling the screen needs an emulator whose discovery file
+  has a gRPC port and token (tested with emulator 36.6); physical devices are not mirrored yet. AVDs have no
+  mouse, so the wheel scrolls with a short touch drag. Text input is reliable for printable ASCII; the emulator
+  may drop other characters. The discovery locations for Linux and Windows follow Android Studio's and have not
+  been tried on those systems yet.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.
 - Jank follows Android's own definition on API 31+ (frame finished after its deadline); "slow" frames are those

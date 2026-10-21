@@ -4,6 +4,12 @@ import { IS_BUNDLE, loadConfig, parseCliArgs, SERVER_VERSION, USAGE } from './co
 import { errorMessage, log } from './log.ts';
 import { createLionscopeServer } from './server.ts';
 
+/**
+ * Hard cap for a clean exit. Shutting down the emulators this server booted takes up to ~5 s (1 s for a boot or
+ * shutdown in flight, then 2 s for the gRPC SHUTDOWN and 2 s for `adb emu kill`), next to the session's cleanup.
+ */
+const SHUTDOWN_DEADLINE_MS = 10_000;
+
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
   if (args.help || args.version) {
@@ -47,7 +53,7 @@ async function main(): Promise<void> {
     if (shuttingDown) process.exit(1);
     shuttingDown = true;
     log.info(`${reason}, shutting down`);
-    const force = setTimeout(() => process.exit(1), 5000);
+    const force = setTimeout(() => process.exit(1), SHUTDOWN_DEADLINE_MS);
     force.unref();
     server.close().then(
       () => process.exit(0),

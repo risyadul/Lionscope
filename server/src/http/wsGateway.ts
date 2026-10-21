@@ -14,6 +14,7 @@ import { DEV_ORIGINS } from '../config.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
+import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -59,7 +60,12 @@ export function isAllowedOrigin(origin: string | undefined, allowed: ReadonlySet
 export const CLIENT_CAP_RETRY_AFTER_S = 30;
 
 /** Answer the upgrade request with a plain HTTP error; the socket is never upgraded. */
-function reject(socket: Duplex, status: 400 | 403 | 404 | 503, reason: string, extraHeaders = ''): void {
+export function rejectUpgrade(
+  socket: Duplex,
+  status: 400 | 403 | 404 | 503,
+  reason: string,
+  extraHeaders = '',
+): void {
   socket.once('finish', () => socket.destroy());
   socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n${extraHeaders}Content-Length: 0\r\n\r\n`);
 }
@@ -70,6 +76,9 @@ interface ClientState {
   /** Live data was skipped; the next live broadcast after draining sends a snapshot instead. */
   needsResync: boolean;
 }
+
+/** What the gateway needs from the emulator manager. */
+export type GatewayEmulators = Pick<EmulatorManager, 'getEmulators' | 'refresh' | 'boot' | 'shutdown'>;
 
 /** What the gateway needs from the session manager. */
 export type GatewayManager = Pick<
@@ -87,11 +96,14 @@ export type GatewayManager = Pick<
 export interface WsGatewayOptions {
   server: Server;
   manager: GatewayManager;
+  emulators: GatewayEmulators;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
   allowedOrigins: () => ReadonlySet<string>;
   pingIntervalMs?: number;
+  /** Paths whose upgrades another listener on `server` answers (the screen socket). */
+  delegatedPaths?: ReadonlySet<string>;
 }
 
 export interface WsGateway {
@@ -101,6 +113,8 @@ export interface WsGateway {
 
 const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   refreshDevices: 'Could not list devices',
+  bootEmulator: 'Could not boot the emulator',
+  shutdownEmulator: 'Could not shut down the emulator',
   listApps: 'Could not list apps on the device',
   startSession: 'Could not start the profiling session',
   stopSession: 'Could not stop the profiling session',
@@ -109,7 +123,8 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
-  const { server, manager } = options;
+  const { server, manager, emulators } = options;
+  const delegatedPaths = options.delegatedPaths ?? new Set<string>();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIENT_MESSAGE_BYTES });
   const clients = new Map<WebSocket, ClientState>();
 
@@ -130,27 +145,45 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     try {
       pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     } catch {
-      return reject(socket, 400, 'Bad Request');
+      return rejectUpgrade(socket, 400, 'Bad Request');
     }
-    if (pathname !== WS_PATH) return reject(socket, 404, 'Not Found');
+    if (delegatedPaths.has(pathname)) return;
+    if (pathname !== WS_PATH) return rejectUpgrade(socket, 404, 'Not Found');
     if (!isAllowedHost(req.headers.host) || !isAllowedOrigin(req.headers.origin, options.allowedOrigins())) {
       log.warn(
         `Rejected WebSocket upgrade (host=${req.headers.host ?? '-'}, origin=${req.headers.origin ?? '-'})`,
       );
-      return reject(socket, 403, 'Forbidden');
+      return rejectUpgrade(socket, 403, 'Forbidden');
     }
     if (clients.size >= MAX_CLIENTS) {
       log.warn(`Rejected WebSocket upgrade: ${MAX_CLIENTS} clients already connected`);
       // Rejected before the upgrade so the browser's onopen never fires (and its backoff keeps growing).
-      return reject(socket, 503, 'Service Unavailable', `Retry-After: ${CLIENT_CAP_RETRY_AFTER_S}\r\n`);
+      return rejectUpgrade(
+        socket,
+        503,
+        'Service Unavailable',
+        `Retry-After: ${CLIENT_CAP_RETRY_AFTER_S}\r\n`,
+      );
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
   const handle = async (ws: WebSocket, message: ClientMessage): Promise<void> => {
     switch (message.type) {
-      case 'refreshDevices':
+      case 'refreshDevices': {
+        const avds = emulators.refresh();
+        // Awaited below; until then a rejection must not count as unhandled (e.g. when the device list fails).
+        avds.catch(() => undefined);
         send(ws, { type: 'devices', devices: await manager.refreshDevices() });
+        send(ws, { type: 'emulators', emulators: await avds });
+        return;
+      }
+      case 'bootEmulator':
+        // Answered by the `emulators` broadcasts that follow the boot.
+        await emulators.boot(message.avdName, message.mode);
+        return;
+      case 'shutdownEmulator':
+        await emulators.shutdown(message.avdName);
         return;
       case 'listApps':
         send(ws, { type: 'apps', serial: message.serial, apps: await manager.listApps(message.serial) });
@@ -216,6 +249,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       bufferWindowMs: options.bufferWindowMs,
     });
     send(ws, { type: 'devices', devices: manager.getDevices() });
+    send(ws, { type: 'emulators', emulators: emulators.getEmulators() });
     send(ws, { type: 'session', session: manager.getSessionState() });
     send(ws, { type: 'snapshot', snapshot: manager.getSnapshot() });
   });

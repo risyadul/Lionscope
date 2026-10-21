@@ -1,0 +1,229 @@
+// Copyright (C) 2018 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Trimmed copy of the Android Emulator's emulator_controller.proto (emulator 36.6, <sdk>/emulator/lib) for the
+// Lionscope tests: only the methods and fields Lionscope uses, with their original names and field numbers.
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.android.emulator.control";
+option objc_class_prefix = "AEC";
+
+package android.emulation.control;
+import "google/protobuf/empty.proto";
+
+service EmulatorController {
+    rpc setPhysicalModel(PhysicalModelValue) returns (google.protobuf.Empty) {}
+    rpc getPhysicalModel(PhysicalModelValue) returns (PhysicalModelValue) {}
+    rpc streamInputEvent(stream InputEvent) returns (google.protobuf.Empty) {}
+    rpc getStatus(google.protobuf.Empty) returns (EmulatorStatus) {}
+    rpc getScreenshot(ImageFormat) returns (Image) {}
+    rpc streamScreenshot(ImageFormat) returns (stream Image) {}
+    rpc setVmState(VmRunState) returns (google.protobuf.Empty) {}
+    rpc getDisplayConfigurations(google.protobuf.Empty)
+            returns (DisplayConfigurations) {}
+}
+
+message VmRunState {
+    enum RunState {
+        UNKNOWN = 0;
+        RUNNING = 1;
+        RESTORE_VM = 2;
+        PAUSED = 3;
+        SAVE_VM = 4;
+        SHUTDOWN = 5;
+        TERMINATE = 7;
+        RESET = 9;
+        INTERNAL_ERROR = 10;
+        RESTART = 11;
+        START = 12;
+        STOP = 13;
+    }
+
+    RunState state = 1;
+}
+
+message ParameterValue {
+    repeated float data = 1 [packed = true];
+}
+
+message PhysicalModelValue {
+    enum State {
+        OK = 0;
+        NO_SERVICE = -3;
+        DISABLED = -2;
+        UNKNOWN = -1;
+    }
+
+    enum PhysicalType {
+        POSITION = 0;
+        ROTATION = 1;
+        MAGNETIC_FIELD = 2;
+        TEMPERATURE = 3;
+        PROXIMITY = 4;
+        LIGHT = 5;
+        PRESSURE = 6;
+        HUMIDITY = 7;
+        VELOCITY = 8;
+        AMBIENT_MOTION = 9;
+        HINGE_ANGLE0 = 10;
+        HINGE_ANGLE1 = 11;
+        HINGE_ANGLE2 = 12;
+        ROLLABLE0 = 13;
+        ROLLABLE1 = 14;
+        ROLLABLE2 = 15;
+        POSTURE = 16;
+        HEART_RATE = 17;
+        RGBC_LIGHT = 18;
+        WRIST_TILT = 19;
+    }
+    PhysicalType target = 1;
+    State status = 2;
+    ParameterValue value = 3;
+
+    enum Interpolation {
+        SMOOTH = 0;
+        STEP = 1;
+    }
+
+    Interpolation interpolation = 4;
+}
+
+message Touch {
+    int32 x = 1;
+    int32 y = 2;
+    int32 identifier = 3;
+    int32 pressure = 4;
+    int32 touch_major = 5;
+    int32 touch_minor = 6;
+
+    enum EventExpiration {
+        EVENT_EXPIRATION_UNSPECIFIED = 0;
+        NEVER_EXPIRE = 1;
+    }
+
+    EventExpiration expiration = 7;
+    int32 orientation = 8;
+}
+
+message TouchEvent {
+    repeated Touch touches = 1;
+    int32 display = 2;
+}
+
+message MouseEvent {
+    int32 x = 1;
+    int32 y = 2;
+    int32 buttons = 3;
+    int32 display = 4;
+}
+
+message WheelEvent {
+    int32 dx = 1;
+    int32 dy = 2;
+    int32 display = 3;
+}
+
+message KeyboardEvent {
+    enum KeyCodeType {
+        Usb = 0;
+        Evdev = 1;
+        XKB = 2;
+        Win = 3;
+        Mac = 4;
+    }
+
+    enum KeyEventType {
+        keydown = 0;
+        keyup = 1;
+        keypress = 2;
+    }
+
+    KeyCodeType codeType = 1;
+    KeyEventType eventType = 2;
+    int32 keyCode = 3;
+    string key = 4;
+    string text = 5;
+}
+
+message InputEvent {
+    oneof type {
+        KeyboardEvent key_event = 1;
+        TouchEvent touch_event = 2;
+        MouseEvent mouse_event = 3;
+        WheelEvent wheel_event = 6;
+    }
+};
+
+message ImageFormat {
+    enum ImgFormat {
+        PNG = 0;
+        RGBA8888 = 1;
+        RGB888 = 2;
+    }
+
+    ImgFormat format = 1;
+    Rotation rotation = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+    uint32 display = 5;
+}
+
+message Image {
+    ImageFormat format = 1;
+
+    uint32 width = 2 [deprecated = true];
+    uint32 height = 3 [deprecated = true];
+
+    bytes image = 4;
+    uint32 seq = 5;
+    uint64 timestampUs = 6;
+}
+
+message Rotation {
+    enum SkinRotation {
+        PORTRAIT = 0;           // 0 degrees
+        LANDSCAPE = 1;          // 90 degrees
+        REVERSE_PORTRAIT = 2;   // -180 degrees
+        REVERSE_LANDSCAPE = 3;  // -90 degrees
+    }
+
+    SkinRotation rotation = 1;
+    double xAxis = 2;
+    double yAxis = 3;
+    double zAxis = 4;
+}
+
+message EmulatorStatus {
+    string version = 1;
+    uint64 uptime = 2;
+    bool booted = 3;
+    uint64 heartbeat = 6;
+    map<string, string> guestConfig = 7;
+    map<string, string> platformConfig = 8;
+}
+
+message DisplayConfiguration {
+    uint32 width = 1;
+    uint32 height = 2;
+    uint32 dpi = 3;
+    uint32 flags = 4;
+    uint32 display = 5;
+}
+
+message DisplayConfigurations {
+    repeated DisplayConfiguration displays = 1;
+    uint32 userConfigurable = 2;
+    uint32 maxDisplays = 3;
+}

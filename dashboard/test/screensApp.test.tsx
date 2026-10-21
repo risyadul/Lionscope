@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeviceInfo, SdkStatus, ServerMessage } from '@lionscope/protocol/wire';
+import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 import { App } from '../src/App.tsx';
 import { SDK_GRADLE_SNIPPET } from '../src/components/topbar/SdkStatus.tsx';
 import { ServicesContext, type DashboardServices } from '../src/app/services.ts';
@@ -27,7 +28,7 @@ const OPEN: ConnectionState = { status: 'open', attempt: 0, retryAt: null, close
 const EMULATOR: DeviceInfo = { serial: 'emulator-5554', state: 'device', model: 'sdk_gphone64' };
 const hello: ServerMessage = {
   type: 'hello',
-  protocolVersion: 1,
+  protocolVersion: PROTOCOL_VERSION,
   serverVersion: '0.1.0',
   bufferWindowMs: 600_000,
 };
@@ -198,13 +199,14 @@ describe('Screens', () => {
     expect(plotWith('GPU')).toBeDefined();
   });
 
-  it('clicking a band selects the screen without leaving logcat; View in Screens filters the table', () => {
+  it('clicking a band selects the screen without switching tabs; View in Screens filters the table', () => {
     const now = Date.now();
     setup(sdkSession(now));
+    fireEvent.click(screen.getByRole('tab', { name: /Stalls/ }));
     const lane = screen.getByRole('figure', { name: 'Screens' });
     fireEvent.click(within(lane).getByRole('button', { name: /^MainActivity,/ }));
 
-    expect(screen.getByRole('tab', { name: 'Logcat' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
     fireEvent.click(within(lane).getByRole('button', { name: 'View in Screens' }));
     expect(screen.getByRole('tab', { name: /Screens/ }).getAttribute('aria-selected')).toBe('true');
     expect(within(lane).queryByRole('button', { name: 'View in Screens' })).toBeNull();
@@ -388,16 +390,20 @@ describe('SDK review round 1', () => {
     expect(bands[0]?.getAttribute('tabindex')).toBe('0');
   });
 
-  it('tabs move with Home / End and the panels are focusable', () => {
+  it('tabs move with Home / End and the panels are focusable; logcat is no longer a tab', () => {
     setup(running(MISSING, Date.now()));
-    const logcatTab = screen.getByRole('tab', { name: 'Logcat' });
-    fireEvent.keyDown(logcatTab, { key: 'End' });
+    expect(screen.queryByRole('tab', { name: 'Logcat' })).toBeNull();
+    const screensTab = screen.getByRole('tab', { name: /Screens/ });
+    expect(screensTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(screensTab, { key: 'End' });
     expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
-    fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'ArrowLeft' });
-    expect(screen.getByRole('tab', { name: /Screens/ }).getAttribute('aria-selected')).toBe('true');
-    fireEvent.keyDown(screen.getByRole('tab', { name: /Screens/ }), { key: 'Home' });
-    expect(logcatTab.getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tabpanel', { name: 'Logcat' }).getAttribute('tabindex')).toBe('0');
+    fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'ArrowRight' });
+    expect(screensTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(screensTab, { key: 'ArrowLeft' });
+    expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'Home' });
+    expect(screensTab.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tabpanel', { name: /Screens/ }).getAttribute('tabindex')).toBe('0');
   });
 
   it('shows the typical p90 with the worst bucket under it', () => {

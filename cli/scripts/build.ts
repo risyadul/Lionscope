@@ -107,6 +107,9 @@ async function main(): Promise<void> {
     // IS_BUNDLE in server/src/config.ts: serve only the packaged dashboard, warn about --dev.
     define: { __LIONSCOPE_BUNDLE__: 'true' },
     legalComments: 'none',
+    // Whitespace and syntax only: identifiers stay, so stack traces remain readable.
+    minifyWhitespace: true,
+    minifySyntax: true,
     metafile: true,
     logLevel: 'warning',
   });

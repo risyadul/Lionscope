@@ -109,3 +109,18 @@ export function ErrorBanner({ error, onDismiss }: ErrorBannerProps) {
     </div>
   );
 }
+
+/** Shown while the selected (or session) emulator renders with SwiftShader instead of the host GPU. */
+export function SoftwareRendererBanner({ deviceLabel }: { deviceLabel: string | null }) {
+  if (deviceLabel === null) return null;
+  return (
+    <div className="banner" data-tone="warning" role="status">
+      <span className="banner-dot" aria-hidden="true" />
+      <strong>{deviceLabel} renders in software (SwiftShader).</strong>
+      <span className="banner-hint">
+        Frame times and CPU aren’t representative of a real device. Restart it with <code>-gpu host</code> —
+        emulators booted from Lionscope already use it.
+      </span>
+    </div>
+  );
+}

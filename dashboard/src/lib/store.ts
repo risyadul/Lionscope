@@ -6,6 +6,7 @@ import type {
   AppInfo,
   CpuSample,
   DeviceInfo,
+  EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
   LogEntry,
@@ -63,6 +64,8 @@ export interface DashboardState {
   bufferWindowMs: number;
   /** null until the first `devices` message. */
   devices: DeviceInfo[] | null;
+  /** Every AVD (off or running); null until the first `emulators` message (older servers never send one). */
+  emulators: EmulatorInfo[] | null;
   apps: { serial: string; apps: AppInfo[] } | null;
   session: SessionState;
   cpu: CpuSample[];
@@ -125,6 +128,7 @@ export function createInitialState(): DashboardState {
     server: null,
     bufferWindowMs: DEFAULT_BUFFER_WINDOW_MS,
     devices: null,
+    emulators: null,
     apps: null,
     session: IDLE_SESSION,
     cpu: [],
@@ -469,6 +473,8 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
         devices: [...msg.devices],
         adbUnavailable: msg.devices.length > 0 ? null : state.adbUnavailable,
       };
+    case 'emulators':
+      return { ...state, emulators: [...msg.emulators] };
     case 'apps':
       return { ...state, apps: { serial: msg.serial, apps: [...msg.apps] } };
     case 'session': {

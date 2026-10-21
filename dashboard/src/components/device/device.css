@@ -1,0 +1,435 @@
+/* Left-hand Device column: the emulator's live screen in a hardware-dark frame on the graph-paper bench
+   the empty states use, so it reads as a device placed on the instrument, not another chart panel. */
+
+.device-col {
+  /* Portrait 9:20 at the viewport height; a landscape frame widens the column (see :has below). */
+  --device-col-w: clamp(296px, 24vw, 372px);
+  --bezel: #101317;
+  --bezel-ring: rgba(17, 20, 24, 0.22);
+  --bezel-shine: rgba(255, 255, 255, 0.07);
+  --glass-ink: #d5d9df;
+
+  display: flex;
+  flex-direction: column;
+  width: var(--device-col-w);
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--surface-sunk);
+  background-image: radial-gradient(circle, var(--rule) 1px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+
+.device-col:has(.device-bezel[data-orientation='landscape']) {
+  --device-col-w: clamp(420px, 36vw, 620px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .device-col {
+    --bezel: #050608;
+    --bezel-ring: rgba(233, 235, 238, 0.12);
+    --bezel-shine: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* Collapsed: a slim rail that keeps the column discoverable. */
+.device-col[data-collapsed] {
+  width: 36px;
+  background-image: none;
+}
+
+.device-rail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  transition:
+    background-color var(--dur-fast) linear,
+    color var(--dur-fast) linear;
+}
+
+.device-rail:hover {
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+.device-rail:focus-visible {
+  outline-offset: -2px;
+}
+
+.device-rail-label {
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.device-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 6px var(--space-2) 6px var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.device-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.device-head .overline {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.device-head-name {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-collapse {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.device-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Screen ------------------------------------------------------------------------ */
+
+.screen-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.device-toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.device-tool {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.device-tool:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.device-size {
+  margin-left: var(--space-1);
+}
+
+.device-size > button {
+  min-width: 30px;
+  height: 24px;
+}
+
+.device-fps {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.device-fps[data-live] {
+  color: var(--ink);
+}
+
+.device-fps-unit {
+  color: var(--ink-muted);
+}
+
+.device-stage {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-height: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+}
+
+.device-bezel {
+  /* BEZEL_PX in screenInput.ts */
+  padding: 7px;
+  border-radius: 26px;
+  background: var(--bezel);
+  box-shadow:
+    0 0 0 1px var(--bezel-ring),
+    inset 0 1px 0 var(--bezel-shine),
+    0 24px 44px -24px rgba(17, 20, 24, 0.55),
+    0 2px 6px -2px rgba(17, 20, 24, 0.25);
+  transition: box-shadow var(--dur-fast) linear;
+}
+
+.device-bezel[data-orientation='landscape'] {
+  border-radius: 22px;
+}
+
+/* Keyboard input goes to the focused screen: say so with a ring around the whole frame. */
+.device-bezel:has(.device-canvas:focus) {
+  box-shadow:
+    0 0 0 1px var(--bezel-ring),
+    0 0 0 3px var(--focus),
+    0 24px 44px -24px rgba(17, 20, 24, 0.55);
+}
+
+.device-glass {
+  position: relative;
+  /* Until measured: a portrait phone that fits the stage. */
+  width: auto;
+  height: min(60vh, 560px);
+  aspect-ratio: 9 / 20;
+  overflow: hidden;
+  border-radius: 19px;
+  background: #000;
+}
+
+.device-glass[style] {
+  aspect-ratio: auto;
+}
+
+.device-bezel[data-orientation='landscape'] .device-glass {
+  border-radius: 15px;
+}
+
+.device-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  outline: none;
+  cursor: default;
+  touch-action: none;
+}
+
+.device-glass-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--glass-ink);
+  font-size: var(--text-small);
+  text-align: center;
+  animation: glass-in var(--dur) var(--ease-out) both;
+}
+
+.device-glass-status .banner-spinner {
+  border-color: rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+}
+
+.device-glass-status[data-tone='failed'] {
+  background: rgba(0, 0, 0, 0.78);
+}
+
+@keyframes glass-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Alt held: the anchor, its mirror and the centre they pinch around. */
+.pinch-hint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pinch-dot,
+.pinch-centre {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.pinch-dot {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--focus) 45%, transparent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.pinch-dot--mirror {
+  border-style: dashed;
+  background: transparent;
+}
+
+.pinch-centre {
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+/* Android's three-button bar under the screen. */
+.device-nav {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: 2px 0 0;
+}
+
+.device-nav .device-tool {
+  width: 44px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+}
+
+.device-hint {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  text-align: center;
+}
+
+.device-hint kbd {
+  padding: 0 3px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  font-size: var(--text-overline);
+}
+
+/* Empty / busy states: an outlined phone with the reason under it. */
+.device-note {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  text-align: center;
+}
+
+.device-note p {
+  max-width: 30ch;
+  margin: 0;
+}
+
+.device-note-glyph {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 112px;
+  margin-bottom: var(--space-2);
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.device-note-glyph[data-busy] {
+  border-style: solid;
+}
+
+.device-note .device-note-title {
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.device-note-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* Narrow viewports: a drawer over the page, opened from the top bar. */
+.device-col[data-mode='overlay'] {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  width: min(var(--device-col-w), calc(100vw - 40px));
+  border-right: 1px solid var(--rule-strong);
+  box-shadow: var(--shadow-pop);
+  animation: drawer-in var(--dur) var(--ease-out) both;
+}
+
+.device-col[data-mode='overlay']:focus-visible {
+  outline-offset: -2px;
+}
+
+.device-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgba(11, 13, 16, 0.36);
+  animation: glass-in var(--dur) var(--ease-out) both;
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+
+.device-retry {
+  margin-top: var(--space-1);
+  border-color: rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: #fff;
+}
+
+.device-retry:hover:not(:disabled) {
+  border-color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Paste truncation note; empty (and collapsed) the rest of the time. */
+.device-paste-note {
+  flex: none;
+  margin: 0;
+  padding: 0 var(--space-3);
+  color: var(--jank-text);
+  font-size: var(--text-overline);
+  text-align: center;
+}
+
+.device-paste-note:empty {
+  display: none;
+}

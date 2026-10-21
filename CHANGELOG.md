@@ -4,6 +4,29 @@ All notable changes to Lionscope are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/). The npm package, the server and the Android SDK share one version.
 
+## [Unreleased]
+
+### Added
+
+- Emulators in the dashboard. The device picker lists every AVD, also the ones that are off, and boots them
+  headless on the host GPU (`-no-window -gpu host`) as a Quick boot (snapshot) or a Cold boot
+  (`-no-snapshot-load`). Emulators Lionscope booted can be shut down from the dashboard and are shut down when
+  the server stops; emulators you started yourself are never shut down.
+- Device column: the emulator's screen, live, operated from the browser: touch and drag, multi-touch (Alt+drag
+  pinch), wheel scrolling, keyboard and pasted text, Back / Home / Recents / Power, rotation, a full-resolution
+  screenshot, and a frame size of 360, 540 or 720 px. It uses the emulator's own gRPC endpoint, so nothing runs
+  inside Android and the app's measurements are unaffected; it works with or without a profiling session.
+- A warning when the selected emulator renders in software (SwiftShader): frame times are then not
+  representative.
+
+### Changed
+
+- Layout: Device column on the left, logcat in a resizable, collapsible drawer below the timeline, Screens and
+  Stalls tabs on the right; below 1280 px the device screen opens as a drawer.
+- Dashboard protocol version 2 (the dashboard and the server ship together).
+- The CLI bundle includes a gRPC client (`@grpc/grpc-js`, `@grpc/proto-loader`); the npm package still has no
+  runtime dependencies.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added
@@ -83,6 +106,7 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.2.0...HEAD
 [0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/risyadul/Lionscope/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/risyadul/Lionscope/releases/tag/0.1.0

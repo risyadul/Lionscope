@@ -669,3 +669,95 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
     max-width: 100%;
   }
 }
+
+/* Emulators ------------------------------------------------------------------- */
+
+.emu-action {
+  flex: none;
+}
+
+.emu-action svg {
+  margin-right: -2px;
+}
+
+.emu-busy {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.boot-menu {
+  position: relative;
+  flex: none;
+}
+
+.boot-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  padding: var(--space-1);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  transform-origin: top left;
+  animation: pop-in 160ms var(--ease-out) both;
+}
+
+.boot-item {
+  display: grid;
+  gap: 1px;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  text-align: left;
+}
+
+.boot-item:hover,
+.boot-item:focus-visible {
+  background: var(--active-wash);
+}
+
+.boot-item:focus-visible {
+  outline-offset: -2px;
+}
+
+.boot-item-label {
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.boot-item-detail {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+/* Narrow screens: the device column is a drawer; this opens it. */
+.device-toggle {
+  align-self: flex-end;
+}
+
+.device-toggle[aria-expanded='true'] {
+  background: var(--active-wash);
+  border-color: var(--ink-muted);
+}
+
+@media (max-width: 640px) {
+  .boot-pop {
+    right: 0;
+    left: auto;
+    transform-origin: top right;
+  }
+}

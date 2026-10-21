@@ -5,7 +5,7 @@ import { CONTROL_SERVER_MESSAGE_TYPES } from '@lionscope/protocol';
 import type { CpuSample, Snapshot } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAllowedOrigins, createWsGateway, MAX_CLIENT_BUFFERED_BYTES } from '../src/http/wsGateway.ts';
-import type { GatewayManager, WsGateway } from '../src/http/wsGateway.ts';
+import type { GatewayEmulators, GatewayManager, WsGateway } from '../src/http/wsGateway.ts';
 import { IDLE_SESSION } from '../src/session/sessionManager.ts';
 import { Client } from './helpers/net.ts';
 
@@ -28,6 +28,13 @@ const manager: GatewayManager = {
   startSession: async () => IDLE_SESSION,
   stopSession: async () => IDLE_SESSION,
   setSdkOptions: () => false,
+};
+
+const emulators: GatewayEmulators = {
+  getEmulators: () => [],
+  refresh: async () => [],
+  boot: async () => undefined,
+  shutdown: async () => undefined,
 };
 
 /** Stop reading on the client side so the server's send buffer fills up. */
@@ -57,6 +64,7 @@ describe('WebSocket gateway back-pressure', () => {
     gateway = createWsGateway({
       server,
       manager,
+      emulators,
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -98,6 +106,7 @@ describe('WebSocket gateway back-pressure', () => {
     expect([...CONTROL_SERVER_MESSAGE_TYPES].sort()).toEqual([
       'apps',
       'devices',
+      'emulators',
       'error',
       'hello',
       'session',
@@ -178,5 +187,38 @@ describe('WebSocket gateway back-pressure', () => {
     }
     socketOf(client).resume();
     expect(await closed).toBe(1006);
+  });
+});
+
+describe('WebSocket gateway refreshDevices', () => {
+  it('answers with an error, and leaves no unhandled rejection, when both listings fail', async () => {
+    const server = createServer();
+    let port = 0;
+    const gateway = createWsGateway({
+      server,
+      manager: { ...manager, refreshDevices: () => Promise.reject(new Error('adb gone')) },
+      emulators: { ...emulators, refresh: () => Promise.reject(new Error('emulator gone')) },
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const client = await Client.open(port);
+      await client.waitFor('snapshot');
+      client.send({ type: 'refreshDevices' });
+      expect(await client.waitFor('error')).toMatchObject({ code: 'refreshDevices_failed' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+      client.close();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

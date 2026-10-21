@@ -1,6 +1,18 @@
 /** Decides which empty / edge state the timeline shows. Pure so it can be tested directly. */
-import type { DeviceInfo, SdkStatus } from '@lionscope/protocol/wire';
-import { DEVICE_PROTOCOL_V2 } from '@lionscope/protocol/wire';
+import type {
+  CpuSample,
+  DeviceInfo,
+  EmulatorInfo,
+  FrameBreakdownSample,
+  FrameSample,
+  MemorySample,
+  ScreenSpan,
+  SdkStatus,
+  StallSample,
+  StrictModeSample,
+  TimelineEvent,
+} from '@lionscope/protocol/wire';
+import { DEVICE_PROTOCOL_V2, isValidPackageName } from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
 import type { DashboardState } from './store.ts';
 
@@ -154,4 +166,52 @@ export function stallsEmptyState(input: StallsEmptyInput): StallsEmpty | null {
   if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
   if (!isStallCapable(sdk)) return { kind: 'old-sdk', sdkVersion: sdk.sdkVersion };
   return { kind: 'waiting', thresholdMs: input.thresholdMs };
+}
+
+export interface StartHintInput {
+  isOpen: boolean;
+  serial: string | null;
+  /** The AVD behind the selection; an AVD that is off has no serial yet. */
+  emulator: EmulatorInfo | null;
+  deviceReason: string | null;
+  packageName: string | null;
+}
+
+/** Why Start is disabled, phrased as the next step; null when a session can start. */
+export function startHint({
+  isOpen,
+  serial,
+  emulator,
+  deviceReason,
+  packageName,
+}: StartHintInput): string | null {
+  if (!isOpen) return 'Offline — waiting for the server';
+  if (serial === null && emulator !== null) {
+    if (emulator.state === 'off') return 'Boot the emulator first';
+    return emulator.state === 'shutting_down'
+      ? 'The emulator is shutting down'
+      : 'Wait for the emulator to boot';
+  }
+  if (serial === null) return 'Connect a device first';
+  if (deviceReason !== null) return deviceReason;
+  if (packageName === null || !isValidPackageName(packageName)) return 'Pick an app to profile';
+  return null;
+}
+
+/** The series the timeline draws, captured whole when paused so nothing moves underneath. */
+export interface PausedView {
+  at: number;
+  cpu: readonly CpuSample[];
+  memory: readonly MemorySample[];
+  frames: readonly FrameSample[];
+  events: readonly TimelineEvent[];
+  screens: readonly ScreenSpan[];
+  breakdown: readonly FrameBreakdownSample[];
+  stalls: readonly StallSample[];
+  strictMode: readonly StrictModeSample[];
+}
+
+export function captureView(state: DashboardState, at: number): PausedView {
+  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode } = state;
+  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode };
 }

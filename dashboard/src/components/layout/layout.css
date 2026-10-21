@@ -1,0 +1,107 @@
+/* Logcat drawer under the timeline: a hairline splitter with a grip, a slim title bar, then the panel. */
+
+.logcat-drawer {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--rule-strong);
+  background: var(--surface);
+}
+
+/* 9 px hit area straddling the border; the visible grip is a short pill. */
+.drawer-handle {
+  position: absolute;
+  top: -5px;
+  right: 0;
+  left: 0;
+  z-index: 4;
+  height: 9px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.drawer-handle::before {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 36px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--rule-strong);
+  content: '';
+  transform: translateX(-50%);
+  transition:
+    background-color var(--dur-fast) linear,
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.drawer-handle:hover::before,
+.drawer-handle:active::before {
+  background: var(--ink-muted);
+  transform: translateX(-50%) scaleX(1.5);
+}
+
+.drawer-handle:focus-visible {
+  outline: none;
+}
+
+.drawer-handle:focus-visible::before {
+  background: var(--focus);
+  transform: translateX(-50%) scaleX(1.5);
+}
+
+.drawer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 2px var(--space-2) 2px var(--space-4);
+}
+
+.drawer-title {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drawer-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.drawer-toggle {
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.drawer-toggle svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.logcat-drawer[data-collapsed] .drawer-toggle svg {
+  transform: rotate(180deg);
+}
+
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.drawer-body[hidden] {
+  display: none;
+}
+
+.drawer-body > .logcat {
+  flex: 1 1 auto;
+}

@@ -24,9 +24,11 @@ import {
   MAX_CLIENTS,
   NO_SESSION_MESSAGE,
 } from '../src/http/wsGateway.ts';
+import { NO_EMULATOR_MESSAGE } from '../src/emulator/emulatorManager.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
+import { noEmulatorHost } from './helpers/emulators.ts';
 import { Client, handshakeResponse, handshakeStatus, rawRequest } from './helpers/net.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
@@ -67,6 +69,7 @@ describe('Lionscope server', () => {
       port: 0,
       devicePort: 0,
       adb,
+      emulatorHost: noEmulatorHost(),
       dashboardDir: dist,
       sessionIntervals: { cpuMs: 50, framesMs: 50, memoryMs: 50, logFlushMs: 20 },
     });
@@ -168,6 +171,7 @@ describe('Lionscope server', () => {
         port: 0,
         devicePort: 0,
         adb: new FakeAdb(() => ''),
+        emulatorHost: noEmulatorHost(),
         dashboardDir: path.join(dist, 'does-not-exist'),
       });
       const { port: barePort } = await bare.listen();
@@ -233,6 +237,7 @@ describe('Lionscope server', () => {
         port: 0,
         devicePort: 0,
         adb: new FakeAdb(() => ''),
+        emulatorHost: noEmulatorHost(),
         dashboardDir: dist,
         dev: true,
       });
@@ -262,12 +267,13 @@ describe('Lionscope server', () => {
   });
 
   describe('WebSocket protocol', () => {
-    it('greets with hello, devices, session, snapshot in that order', async () => {
+    it('greets with hello, devices, emulators, session, snapshot in that order', async () => {
       const client = await Client.open(port);
       await client.waitFor('snapshot');
-      expect(client.messages.slice(0, 4).map((message) => message.type)).toEqual([
+      expect(client.messages.slice(0, 5).map((message) => message.type)).toEqual([
         'hello',
         'devices',
+        'emulators',
         'session',
         'snapshot',
       ]);
@@ -299,9 +305,28 @@ describe('Lionscope server', () => {
       expect(errors[1]?.message).toContain('invalid package name');
 
       const devices = client.next('devices');
+      const emulators = client.next('emulators');
       client.send({ type: 'refreshDevices' });
       expect((await devices).devices[0]?.serial).toBe('emulator-5554');
+      expect((await emulators).emulators).toEqual([]);
       expect(client.ws.readyState).toBe(WebSocket.OPEN);
+      client.close();
+    });
+
+    it('answers emulator requests it cannot carry out with an error', async () => {
+      const client = await Client.open(port);
+      client.send({ type: 'bootEmulator', avdName: 'Pixel_9a', mode: 'quick' });
+      expect(await client.waitFor('error')).toEqual({
+        type: 'error',
+        code: 'bootEmulator_failed',
+        message: NO_EMULATOR_MESSAGE,
+      });
+      client.send({ type: 'shutdownEmulator', avdName: 'Pixel_9a' });
+      expect(await client.waitFor('error', (error) => error.code === 'shutdownEmulator_failed')).toEqual({
+        type: 'error',
+        code: 'shutdownEmulator_failed',
+        message: 'Pixel_9a was not started by Lionscope: close it where it was started (e.g. Android Studio)',
+      });
       client.close();
     });
 

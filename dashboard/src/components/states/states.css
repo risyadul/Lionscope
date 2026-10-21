@@ -135,6 +135,15 @@
   background: color-mix(in srgb, var(--critical) 7%, var(--surface));
 }
 
+.banner[data-tone='warning'] {
+  border-bottom-color: color-mix(in srgb, var(--jank) 40%, var(--rule));
+  background: color-mix(in srgb, var(--jank) 9%, var(--surface));
+}
+
+.banner[data-tone='warning'] .banner-dot {
+  background: var(--jank);
+}
+
 .banner[data-tone='quiet'] {
   color: var(--ink-2);
 }

@@ -6,6 +6,7 @@ import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { DeviceClient } from './helpers/deviceClient.ts';
 import { FakeAdb } from './helpers/fakes.ts';
+import { noEmulatorHost } from './helpers/emulators.ts';
 
 const HELLO = {
   type: 'hello',
@@ -29,7 +30,12 @@ describe('Lionscope server SDK gateway', () => {
   });
 
   it('listens for the SDK on loopback next to HTTP, and closes it with the server', async () => {
-    server = createLionscopeServer({ port: 0, devicePort: 0, adb: new FakeAdb(() => '') });
+    server = createLionscopeServer({
+      port: 0,
+      devicePort: 0,
+      adb: new FakeAdb(() => ''),
+      emulatorHost: noEmulatorHost(),
+    });
     const http = await server.listen();
     const device = server.deviceAddress;
     expect(device?.address).toBe('127.0.0.1');
@@ -52,7 +58,12 @@ describe('Lionscope server SDK gateway', () => {
     const blocker = createServer();
     await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
     const taken = (blocker.address() as AddressInfo).port;
-    server = createLionscopeServer({ port: 0, devicePort: taken, adb: new FakeAdb(() => '') });
+    server = createLionscopeServer({
+      port: 0,
+      devicePort: taken,
+      adb: new FakeAdb(() => ''),
+      emulatorHost: noEmulatorHost(),
+    });
     expect((await server.listen()).port).toBeGreaterThan(0);
     expect(server.deviceAddress?.port).toBeGreaterThan(0);
     expect(server.deviceAddress?.port).not.toBe(taken);
@@ -62,7 +73,12 @@ describe('Lionscope server SDK gateway', () => {
 
   it('keeps serving the dashboard when the SDK gateway cannot listen at all', async () => {
     const warn = vi.spyOn(log, 'warn');
-    server = createLionscopeServer({ port: 0, devicePort: 70_000, adb: new FakeAdb(() => '') });
+    server = createLionscopeServer({
+      port: 0,
+      devicePort: 70_000,
+      adb: new FakeAdb(() => ''),
+      emulatorHost: noEmulatorHost(),
+    });
     expect((await server.listen()).port).toBeGreaterThan(0);
     expect(server.deviceAddress).toBeNull();
     expect(warn.mock.calls.some((call) => String(call[0]).includes('SDK gateway cannot listen'))).toBe(true);

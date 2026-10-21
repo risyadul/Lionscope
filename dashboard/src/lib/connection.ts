@@ -9,6 +9,7 @@ export const BACKOFF_CAP_MS = 5000;
 const SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<ServerMessageType>([
   'hello',
   'devices',
+  'emulators',
   'apps',
   'session',
   'snapshot',

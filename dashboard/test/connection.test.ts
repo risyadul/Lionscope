@@ -81,6 +81,7 @@ describe('parseServerMessage', () => {
     const types: Record<ServerMessageType, true> = {
       hello: true,
       devices: true,
+      emulators: true,
       apps: true,
       session: true,
       snapshot: true,

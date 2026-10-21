@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, DeviceInfo, ServerMessage } from '@lionscope/protocol/wire';
+import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 import { App } from '../src/App.tsx';
 import { ErrorBoundary } from '../src/app/ErrorBoundary.tsx';
 import { ServicesContext, type DashboardServices } from '../src/app/services.ts';
@@ -28,7 +29,7 @@ const OPEN: ConnectionState = { status: 'open', attempt: 0, retryAt: null, close
 const EMULATOR: DeviceInfo = { serial: 'emulator-5554', state: 'device', model: 'sdk_gphone64' };
 const hello: ServerMessage = {
   type: 'hello',
-  protocolVersion: 1,
+  protocolVersion: PROTOCOL_VERSION,
   serverVersion: '0.1.0',
   bufferWindowMs: 600_000,
 };

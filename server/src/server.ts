@@ -1,11 +1,15 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { WS_PATH } from '@lionscope/protocol';
+import { SCREEN_WS_PATH, WS_PATH } from '@lionscope/protocol';
 import type { Adb } from './adb/adb.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
+import { createEmulatorHost } from './emulator/emulatorHost.ts';
+import type { EmulatorHost } from './emulator/emulatorHost.ts';
+import { EmulatorManager } from './emulator/emulatorManager.ts';
+import { createScreenGateway } from './emulator/screenGateway.ts';
 import { errorMessage, log } from './log.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
 import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
@@ -29,6 +33,9 @@ export interface LionscopeServerOptions {
   pingIntervalMs?: number;
   /** Also accept WebSocket connections from the Vite dev server origins. */
   dev?: boolean;
+  /** Defaults to the emulator of adb's SDK (tests pass a fake). */
+  emulatorHost?: EmulatorHost;
+  emulatorPollMs?: number;
 }
 
 export interface LionscopeServer {
@@ -38,6 +45,7 @@ export interface LionscopeServer {
   /** Bound SDK gateway address; null when it could not listen (sessions then run ADB-only). */
   readonly deviceAddress: AddressInfo | null;
   readonly manager: SessionManager;
+  readonly emulators: EmulatorManager;
 }
 
 function sendPlain(res: ServerResponse, status: number, body: string): void {
@@ -59,9 +67,20 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   // Empty until listen() knows the real port (port 0 picks one).
   let allowedOrigins: ReadonlySet<string> = new Set();
 
+  const emulatorHost = options.emulatorHost ?? createEmulatorHost(options.adb.path);
+  const emulators = new EmulatorManager({
+    adb: options.adb,
+    host: emulatorHost,
+    broadcast: (message) => gateway?.broadcast(message),
+    pollMs: options.emulatorPollMs,
+  });
   const manager = new SessionManager({
     adb: options.adb,
-    broadcast: (message) => gateway?.broadcast(message),
+    broadcast: (message) => {
+      // A change in the adb device list can be an emulator starting or stopping.
+      if (message.type === 'devices') emulators.setDevices(message.devices);
+      gateway?.broadcast(message);
+    },
     devicePollMs: options.devicePollMs,
     bufferWindowMs,
     sessionIntervals: options.sessionIntervals,
@@ -91,7 +110,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       sendPlain(res, 400, 'Bad request\n');
       return;
     }
-    if (pathname === WS_PATH) {
+    if (pathname === WS_PATH || pathname === SCREEN_WS_PATH) {
       sendPlain(res, 426, 'WebSocket upgrade required\n');
       return;
     }
@@ -109,14 +128,24 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   gateway = createWsGateway({
     server,
     manager,
+    emulators,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
+    allowedOrigins: () => allowedOrigins,
+    pingIntervalMs: options.pingIntervalMs,
+    delegatedPaths: new Set([SCREEN_WS_PATH]),
+  });
+  const screenGateway = createScreenGateway({
+    server,
+    emulators,
+    createClient: emulatorHost.createClient,
     allowedOrigins: () => allowedOrigins,
     pingIntervalMs: options.pingIntervalMs,
   });
 
   return {
     manager,
+    emulators,
     get address() {
       return address;
     },
@@ -149,10 +178,13 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         }
       }
       manager.startDevicePolling();
+      void emulators.refresh();
       return bound;
     },
     async close() {
-      await manager.close();
+      await screenGateway.close();
+      // Emulators this server booted are shut down (in parallel with the session).
+      await Promise.all([manager.close(), emulators.close()]);
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

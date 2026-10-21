@@ -9,27 +9,35 @@
  */
 import { z } from 'zod';
 import {
+  AVD_NAME_PATTERN,
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
+  MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_KEY_CHARS,
+  MAX_SCREEN_TEXT_CHARS,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
+  MAX_TOUCH_POINTS,
   MIN_DEVICE_PROTOCOL_VERSION,
   PACKAGE_NAME_PATTERN,
+  SCREEN_SIZES,
   SERIAL_PATTERN,
   STALL_THRESHOLDS_MS,
   type ClientMessage,
   type DeviceMessage,
   type DeviceMessageType,
+  type ScreenClientMessage,
 } from './wire.ts';
 
 export * from './wire.ts';
 
 export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
+export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
 
 // ---------------------------------------------------------------------------
 // Dashboard → server (validated)
@@ -37,6 +45,10 @@ export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN,
 
 export const clientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('refreshDevices') }).strict(),
+  z
+    .object({ type: z.literal('bootEmulator'), avdName: avdNameSchema, mode: z.enum(['quick', 'cold']) })
+    .strict(),
+  z.object({ type: z.literal('shutdownEmulator'), avdName: avdNameSchema }).strict(),
   z.object({ type: z.literal('listApps'), serial: serialSchema }).strict(),
   z
     .object({ type: z.literal('startSession'), serial: serialSchema, packageName: packageNameSchema })
@@ -82,6 +94,85 @@ function validate<T>(json: unknown, schema: z.ZodType<T>): ParseResult<T> {
 export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
   const json = readJson(raw, MAX_CLIENT_MESSAGE_BYTES);
   return json.ok ? validate(json.value, clientMessageSchema) : json;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard → server on the screen socket (validated)
+// ---------------------------------------------------------------------------
+
+/**
+ * Largest accepted `wheel` dx / dy per message (wire.ts ScreenClientMessage): 100 notches of 120. The server turns
+ * the wheel into a touch drag of limited length, so larger values would not scroll further anyway.
+ */
+export const MAX_SCREEN_WHEEL_DELTA = 12_000;
+/** Control (Cc) and format (Cf) characters, except tab and newline in typed or pasted text. */
+const KEY_FORBIDDEN = /[\p{Cc}\p{Cf}]/u;
+const TEXT_FORBIDDEN = /[^\P{Cc}\t\n]|\p{Cf}/u;
+
+// z.number() already rejects NaN and ±Infinity.
+const unitInterval = z.number().min(0).max(1);
+const wheelDelta = z.number().min(-MAX_SCREEN_WHEEL_DELTA).max(MAX_SCREEN_WHEEL_DELTA);
+
+const touchPointSchema = z
+  .object({
+    id: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_TOUCH_POINTS - 1),
+    x: unitInterval,
+    y: unitInterval,
+    pressure: unitInterval,
+  })
+  .strict();
+
+export const screenClientMessageSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('touch'),
+      touches: z
+        .array(touchPointSchema)
+        .min(1)
+        .max(MAX_TOUCH_POINTS)
+        .refine(
+          (touches) => new Set(touches.map((touch) => touch.id)).size === touches.length,
+          'duplicate id',
+        ),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal('wheel'), x: unitInterval, y: unitInterval, dx: wheelDelta, dy: wheelDelta })
+    .strict(),
+  z
+    .object({
+      type: z.literal('key'),
+      key: z
+        .string()
+        .min(1)
+        .max(MAX_SCREEN_KEY_CHARS)
+        .refine((key) => !KEY_FORBIDDEN.test(key), 'control or format character'),
+      eventType: z.enum(['keydown', 'keyup', 'keypress']),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('text'),
+      text: z
+        .string()
+        .min(1)
+        .max(MAX_SCREEN_TEXT_CHARS)
+        .refine((text) => !TEXT_FORBIDDEN.test(text), 'control or format character'),
+    })
+    .strict(),
+  z.object({ type: z.literal('nav'), button: z.enum(['back', 'home', 'recents', 'power']) }).strict(),
+  z.object({ type: z.literal('rotate'), direction: z.enum(['left', 'right']) }).strict(),
+  z.object({ type: z.literal('setSize'), size: z.literal(SCREEN_SIZES) }).strict(),
+  z.object({ type: z.literal('screenshot') }).strict(),
+]) satisfies z.ZodType<ScreenClientMessage>;
+
+export function parseScreenClientMessage(raw: string): ParseResult<ScreenClientMessage> {
+  const json = readJson(raw, MAX_SCREEN_CLIENT_MESSAGE_BYTES);
+  return json.ok ? validate(json.value, screenClientMessageSchema) : json;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@grpc/grpc-js": "1.14.6",
+    "@grpc/proto-loader": "0.8.1",
     "@lionscope/protocol": "0.2.0",
     "tsx": "^4.23.15",
     "ws": "^8.22.0",
