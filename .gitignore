@@ -1,6 +1,11 @@
 node_modules/
 dist/
 coverage/
+# npm package build output (cli/dist is covered by dist/)
+cli/dashboard/
+cli/LICENSE
+cli/NOTICE
+*.tgz
 *.log
 .DS_Store
 **/.omc/*

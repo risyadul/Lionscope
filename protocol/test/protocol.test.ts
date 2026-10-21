@@ -8,7 +8,9 @@ import {
   isValidSerial,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
+  MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SDK_FRAMES_PER_BATCH,
+  MIN_DEVICE_PROTOCOL_VERSION,
   parseClientMessage,
   parseDeviceMessage,
 } from '../src/index.ts';
@@ -181,9 +183,58 @@ describe('parseDeviceMessage', () => {
     expect(errorOf('')).toBe('invalid JSON');
   });
 
-  it('rejects unknown types', () => {
-    expect(errorOf('{"type":"exec","cmd":"reboot"}')).not.toBeNull();
-    expect(errorOf('{"ts":1}')).not.toBeNull();
+  it('flags a JSON object with an unknown string type (a newer SDK) apart from malformed input', () => {
+    expect(parseDeviceMessage('{"type":"exec","cmd":"reboot"}')).toEqual({
+      ok: false,
+      error: 'unknown message type',
+      unknownType: 'exec',
+    });
+    expect(parseDeviceMessage('{"type":"constructor"}')).toMatchObject({ unknownType: 'constructor' });
+    expect(parseDeviceMessage('{"type":"__proto__"}')).toMatchObject({ unknownType: '__proto__' });
+    for (const line of ['{"ts":1}', '{"type":7}', '["screen"]', '"screen"', 'null', '{nope']) {
+      const result = parseDeviceMessage(line);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('unknownType');
+    }
+    // A known type with invalid fields is malformed, not unknown.
+    expect(parseDeviceMessage('{"type":"heartbeat","ts":-1,"droppedMessages":0}')).not.toHaveProperty(
+      'unknownType',
+    );
+  });
+
+  it(`accepts a hello protocolVersion from ${MIN_DEVICE_PROTOCOL_VERSION} to ${MAX_DEVICE_PROTOCOL_VERSION}`, () => {
+    const version = (protocolVersion: unknown) => errorOf(JSON.stringify({ ...hello, protocolVersion }));
+    expect(version(MIN_DEVICE_PROTOCOL_VERSION)).toBeNull();
+    expect(version(5)).toBeNull(); // a future SDK
+    expect(version(MAX_DEVICE_PROTOCOL_VERSION)).toBeNull();
+    for (const bad of [
+      MIN_DEVICE_PROTOCOL_VERSION - 1,
+      -1,
+      1.5,
+      MAX_DEVICE_PROTOCOL_VERSION + 1,
+      '1',
+      null,
+    ]) {
+      expect(version(bad)).not.toBeNull();
+    }
+    // A numeric out-of-range version is reported as such; a non-number is just an invalid hello.
+    expect(parseDeviceMessage(JSON.stringify({ ...hello, protocolVersion: 0 }))).toEqual({
+      ok: false,
+      error: 'unsupported protocol version 0',
+      unsupportedVersion: 0,
+    });
+    expect(parseDeviceMessage(JSON.stringify({ ...hello, protocolVersion: 1001 }))).toMatchObject({
+      unsupportedVersion: 1001,
+    });
+    expect(parseDeviceMessage(JSON.stringify({ ...hello, protocolVersion: '1' }))).not.toHaveProperty(
+      'unsupportedVersion',
+    );
+    // Only a hello carries a protocol version.
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({ type: 'heartbeat', ts: 1, droppedMessages: 0, protocolVersion: 0 }),
+      ),
+    ).not.toHaveProperty('unsupportedVersion');
   });
 
   it('strips unknown fields at every level (forward compatible with newer SDKs)', () => {

@@ -275,7 +275,21 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
 // the laptop clock. Golden examples: `protocol/fixtures/device-messages.ndjson` (shared by SDK and server tests).
 // ---------------------------------------------------------------------------
 
+/**
+ * Highest device protocol version this build speaks. The SDK sends its own in `hello`; the server accepts any
+ * version from MIN_DEVICE_PROTOCOL_VERSION to MAX_DEVICE_PROTOCOL_VERSION and answers
+ * `welcome.protocolVersion = min(sdk, server)`. Both sides only use message types available in the negotiated
+ * version, and the server ignores (counts) unknown `type`s instead of closing the link, so from 0.1.1 on, newer
+ * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
+ * than 1 and closes the link on unknown types.)
+ */
 export const DEVICE_PROTOCOL_VERSION = 1;
+export const MIN_DEVICE_PROTOCOL_VERSION = 1;
+/**
+ * Highest `hello.protocolVersion` the server accepts (and negotiates down). It bounds the field to a plausible
+ * range: anything above is garbage, not a future SDK.
+ */
+export const MAX_DEVICE_PROTOCOL_VERSION = 1000;
 /** Port the SDK connects to on the device (`adb reverse tcp:8700 tcp:<gateway port>`). */
 export const DEVICE_LINK_PORT = DEFAULT_DEVICE_GATEWAY_PORT;
 /** Max bytes per line from the SDK (a frames batch at 120 Hz × 0.5 s is ~10 KB). */
@@ -330,7 +344,11 @@ export type DeviceMessage =
 
 export type DeviceMessageType = DeviceMessage['type'];
 
-/** Server → SDK. */
+/**
+ * Server → SDK. Contract: each line is a flat JSON object serialised with `type` as its FIRST key and with no
+ * nested objects that contain `type` or `protocolVersion` keys, because the SDK reads these lines with a
+ * dependency-free top-level scan rather than a full JSON parser. New fields must be appended after `type`.
+ */
 export type GatewayMessage =
   | { type: 'welcome'; protocolVersion: number }
   /** The server will close the connection; the SDK retries with backoff. */

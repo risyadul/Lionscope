@@ -12,11 +12,14 @@ import {
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
+  MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SDK_FRAMES_PER_BATCH,
+  MIN_DEVICE_PROTOCOL_VERSION,
   PACKAGE_NAME_PATTERN,
   SERIAL_PATTERN,
   type ClientMessage,
   type DeviceMessage,
+  type DeviceMessageType,
 } from './wire.ts';
 
 export * from './wire.ts';
@@ -41,17 +44,19 @@ export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string
 
 const utf8 = new TextEncoder();
 
-function parseJson<T>(raw: string, maxBytes: number, schema: z.ZodType<T>): ParseResult<T> {
+function readJson(raw: string, maxBytes: number): ParseResult<unknown> {
   // Cheap pre-check (a UTF-16 unit encodes to at least one byte), then the real UTF-8 size.
   if (raw.length > maxBytes || utf8.encode(raw).length > maxBytes) {
     return { ok: false, error: 'message too large' };
   }
-  let json: unknown;
   try {
-    json = JSON.parse(raw);
+    return { ok: true, value: JSON.parse(raw) };
   } catch {
     return { ok: false, error: 'invalid JSON' };
   }
+}
+
+function validate<T>(json: unknown, schema: z.ZodType<T>): ParseResult<T> {
   const result = schema.safeParse(json);
   if (!result.success) {
     return { ok: false, error: result.error.issues.map((issue) => issue.message).join('; ') };
@@ -60,7 +65,8 @@ function parseJson<T>(raw: string, maxBytes: number, schema: z.ZodType<T>): Pars
 }
 
 export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
-  return parseJson(raw, MAX_CLIENT_MESSAGE_BYTES, clientMessageSchema);
+  const json = readJson(raw, MAX_CLIENT_MESSAGE_BYTES);
+  return json.ok ? validate(json.value, clientMessageSchema) : json;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +134,8 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('hello'),
-      protocolVersion: z.number().int().positive(),
+      // Any version from MIN up: a newer SDK announces its own and the server answers with the lower one.
+      protocolVersion: z.number().int().min(MIN_DEVICE_PROTOCOL_VERSION).max(MAX_DEVICE_PROTOCOL_VERSION),
       sdkVersion: textOf(64),
       packageName: packageNameSchema,
       processName: z.string().max(MAX_SDK_TEXT_LENGTH).refine(isValidProcessName, 'invalid process name'),
@@ -153,7 +160,43 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
     .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
+/** Exhaustive over DeviceMessageType: a new message type must be listed here. */
+const DEVICE_MESSAGE_TYPES: Readonly<Record<DeviceMessageType, true>> = {
+  hello: true,
+  screen: true,
+  frames: true,
+  heartbeat: true,
+};
+
+/**
+ * `unknownType` is set when the line is a JSON object whose string `type` this build does not know (a newer
+ * SDK): the caller may skip it. `unsupportedVersion` is set for a `hello` whose numeric `protocolVersion` is out
+ * of range. Anything else that fails (bad JSON, a known type with invalid fields) is a plain error.
+ */
+export type DeviceParseResult =
+  | { ok: true; value: DeviceMessage }
+  | { ok: false; error: string; unknownType?: string; unsupportedVersion?: number };
+
+function isSupportedProtocolVersion(version: number): boolean {
+  return (
+    Number.isInteger(version) &&
+    version >= MIN_DEVICE_PROTOCOL_VERSION &&
+    version <= MAX_DEVICE_PROTOCOL_VERSION
+  );
+}
+
 /** Parse one NDJSON line from the SDK (without its trailing newline). */
-export function parseDeviceMessage(line: string): ParseResult<DeviceMessage> {
-  return parseJson(line, MAX_DEVICE_LINE_BYTES, deviceMessageSchema);
+export function parseDeviceMessage(line: string): DeviceParseResult {
+  const json = readJson(line, MAX_DEVICE_LINE_BYTES);
+  if (!json.ok) return json;
+  const object = typeof json.value === 'object' && json.value !== null ? json.value : null;
+  const type: unknown = object && Reflect.get(object, 'type');
+  if (typeof type === 'string' && !Object.hasOwn(DEVICE_MESSAGE_TYPES, type)) {
+    return { ok: false, error: 'unknown message type', unknownType: type };
+  }
+  const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;
+  if (typeof version === 'number' && !isSupportedProtocolVersion(version)) {
+    return { ok: false, error: `unsupported protocol version ${version}`, unsupportedVersion: version };
+  }
+  return validate(json.value, deviceMessageSchema);
 }

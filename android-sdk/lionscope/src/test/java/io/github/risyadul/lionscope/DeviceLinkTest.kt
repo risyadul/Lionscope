@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.BufferedReader
@@ -79,9 +80,11 @@ class DeviceLinkTest {
                 assertEquals("screen", screen["type"])
                 assertEquals("homepage", (screen["screen"] as Map<*, *>)["name"])
                 assertFalse(link.isWelcomed)
+                assertNull(link.negotiatedVersion)
 
                 client.reply("{\"type\":\"welcome\",\"protocolVersion\":1}")
                 waitFor { link.isWelcomed }
+                assertEquals(1, link.negotiatedVersion)
                 link.send("{\"type\":\"custom\",\"n\":1}")
                 assertEquals(1.0, input.readUntil { it["type"] == "custom" }["n"])
                 link.onScreen(2, null) // Encoded on the link thread.
@@ -93,6 +96,7 @@ class DeviceLinkTest {
                 client.reply("{\"type\":\"bye\",\"reason\":\"no_session\"}")
                 waitFor { !link.isConnected }
                 assertFalse(link.isWelcomed)
+                assertNull(link.negotiatedVersion)
                 link.send("{\"type\":\"stale\"}") // Discarded while disconnected.
             }
             assertEquals(listOf(true, false), welcomeEvents.toList())
@@ -106,6 +110,48 @@ class DeviceLinkTest {
                 link.send("{\"type\":\"fresh\"}")
                 val next = input.readUntil { it["type"] != "heartbeat" }
                 assertEquals("fresh", next["type"])
+            }
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun unknownGatewayMessagesAreIgnoredAndTheWelcomeVersionIsNegotiated() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            link.start()
+
+            server.accept().use { client ->
+                val input = client.reader()
+                assertEquals(hello, input.readLine())
+                // A newer server: unknown types before and after welcome, extra welcome fields, higher version.
+                client.reply("{\"type\":\"configure\",\"protocolVersion\":7,\"sampleRate\":10}")
+                client.reply("{\"type\":\"welcome\",\"serverVersion\":\"9.0.0\",\"protocolVersion\":7,\"extra\":[1,2]}")
+                waitFor { link.isWelcomed }
+                // Never above what this SDK speaks.
+                assertEquals(DEVICE_PROTOCOL_VERSION, link.negotiatedVersion)
+                client.reply("{\"type\":\"future_thing\",\"payload\":{\"a\":1}}")
+                link.send("{\"type\":\"still_here\"}")
+                assertEquals("still_here", input.readUntil { it["type"] != "heartbeat" }["type"])
+                assertTrue(link.isConnected)
+                assertTrue(link.isWelcomed)
+            }
+            waitFor { !link.isConnected }
+            assertNull(link.negotiatedVersion)
+
+            server.accept().use { client ->
+                assertEquals(hello, client.reader().readLine())
+                assertNull(link.negotiatedVersion) // Reset per connection, not carried over.
+                client.reply("{\"type\":\"welcome\"}") // Older server without the field: version 1.
+                waitFor { link.isWelcomed }
+                assertEquals(1, link.negotiatedVersion)
+            }
+            waitFor { !link.isConnected }
+
+            server.accept().use { client ->
+                assertEquals(hello, client.reader().readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":0}") // Below MIN: clamped up for now.
+                waitFor { link.isWelcomed }
+                assertEquals(MIN_DEVICE_PROTOCOL_VERSION, link.negotiatedVersion)
             }
         }
     }

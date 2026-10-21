@@ -14,8 +14,8 @@ import android.content.Context
  * 127.0.0.1:8700 would receive the stream (screen class names and frame timings only; debug builds only).
  */
 object Lionscope {
-    /** SDK version, reported to the Lionscope server in `hello`. */
-    const val VERSION = "0.1.0"
+    /** SDK version (the Gradle build version), reported to the Lionscope server in `hello`. */
+    const val VERSION = LionscopeBuild.VERSION
 
     @Volatile
     internal var installed = false

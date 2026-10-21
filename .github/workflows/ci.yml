@@ -24,7 +24,20 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
-      - run: npm run build
+      # Builds the dashboard, then bundles the server into cli/dist with the dashboard next to it.
+      - run: npm run build:cli
+      - name: Smoke-test the npm package
+        run: |
+          node cli/dist/lionscope.mjs --version
+          node cli/dist/lionscope.mjs --help
+          # No absolute build paths in the bundle (`! grep` would not fail the step under bash -e).
+          if grep -q "/Users/\|/home/runner" cli/dist/lionscope.mjs; then echo "absolute path in bundle"; exit 1; fi
+          node cli/dist/lionscope.mjs --port 8799 --device-port 8798 --adb /nonexistent &
+          server=$!
+          for _ in $(seq 1 50); do curl -sf -o /dev/null http://localhost:8799/ && break; sleep 0.2; done
+          curl -sf http://localhost:8799/ | grep -q Lionscope
+          kill "$server"
+          cd cli && npm pack --dry-run --ignore-scripts
 
   android:
     name: Android SDK

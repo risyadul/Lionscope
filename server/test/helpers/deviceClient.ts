@@ -5,6 +5,8 @@ import type { GatewayMessage } from '@lionscope/protocol';
 /** A raw TCP client standing in for the in-app SDK: records every line the gateway sends. */
 export class DeviceClient {
   readonly received: GatewayMessage[] = [];
+  /** The same lines as sent, before parsing. */
+  readonly rawLines: string[] = [];
   readonly closed: Promise<void>;
   private buffer = '';
   private waiters: { predicate: (message: GatewayMessage) => boolean; resolve: () => void }[] = [];
@@ -15,7 +17,9 @@ export class DeviceClient {
       this.buffer += chunk;
       let newline = this.buffer.indexOf('\n');
       while (newline !== -1) {
-        const message = JSON.parse(this.buffer.slice(0, newline)) as GatewayMessage;
+        const line = this.buffer.slice(0, newline);
+        this.rawLines.push(line);
+        const message = JSON.parse(line) as GatewayMessage;
         this.buffer = this.buffer.slice(newline + 1);
         this.received.push(message);
         this.waiters = this.waiters.filter((waiter) => {

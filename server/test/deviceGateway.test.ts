@@ -1,4 +1,4 @@
-import { MAX_DEVICE_LINE_BYTES } from '@lionscope/protocol';
+import { DEVICE_PROTOCOL_VERSION, MAX_DEVICE_LINE_BYTES } from '@lionscope/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeviceGateway, DEFAULT_DEVICE_LIMITS } from '../src/device/deviceGateway.ts';
 import type { DeviceGateway, DeviceGatewayLimits } from '../src/device/deviceGateway.ts';
@@ -148,8 +148,9 @@ describe('device gateway', () => {
 
   it.each([
     ['a non-hello first message', JSON.stringify(HEARTBEAT)],
+    ['an unknown first message', JSON.stringify({ type: 'future', ts: 1 })],
     ['invalid JSON', '{nope'],
-    ['an unsupported protocol version', JSON.stringify({ ...HELLO, protocolVersion: 2 })],
+    ['a protocol version below the minimum', JSON.stringify({ ...HELLO, protocolVersion: 0 })],
   ])('closes with bye protocol_error on %s', async (_name, line) => {
     const port = await start();
     const client = await open(port);
@@ -182,6 +183,83 @@ describe('device gateway', () => {
     await waitUntil(() => target.messages.length === 2);
     expect(client.isClosed).toBe(false);
     expect(client.received).toEqual([{ type: 'welcome', protocolVersion: 1 }]);
+  });
+
+  it('negotiates down to its own protocol version with a newer SDK and keeps it on the link', async () => {
+    const port = await start();
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: 5 });
+    await client.waitFor((message) => message.type === 'welcome');
+    expect(client.received).toEqual([{ type: 'welcome', protocolVersion: DEVICE_PROTOCOL_VERSION }]);
+    expect(target.hellos[0]?.protocolVersion).toBe(5);
+    expect(target.links[0]?.protocolVersion).toBe(DEVICE_PROTOCOL_VERSION);
+  });
+
+  it('skips and counts messages of an unknown type (a newer SDK) without closing the link', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    const port = await start();
+    const client = await linked(port);
+    client.send({ type: 'memory', ts: 1792516380000, heapBytes: 1 });
+    client.send(HEARTBEAT);
+    client.send({ type: 'memory', ts: 1792516380002, heapBytes: 2 });
+    client.send({ type: 'screen', ts: 1792516380001, screen: null });
+    await waitUntil(() => target.messages.length === 2);
+    expect(target.messages.map((message) => message.type)).toEqual(['heartbeat', 'screen']);
+    expect(client.isClosed).toBe(false);
+    // One throttled log line, naming the first type and the count so far.
+    const lines = warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes('unknown type'));
+    expect(lines).toEqual([
+      'Device gateway: ignoring SDK messages of unknown type "memory" (a newer SDK?), 1 so far',
+    ]);
+
+    // A known type that is malformed still closes the link.
+    client.send({ ...HEARTBEAT, ts: 'later' });
+    await client.closed;
+    expect(client.received.at(-1)).toEqual({ type: 'bye', reason: 'protocol_error' });
+  });
+
+  it('logs an unknown type as shortened printable ASCII', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    const port = await start();
+    const client = await linked(port);
+    client.send({ type: `evil\u202e\u0000${'x'.repeat(200)}` });
+    client.send(HEARTBEAT);
+    await waitUntil(() => target.messages.length === 1);
+    const line = warn.mock.calls.map((call) => String(call[0])).find((text) => text.includes('unknown type'));
+    expect(line).toContain(`"evil??${'x'.repeat(58)}"`);
+  });
+
+  it('logs an out-of-range hello protocol version as unsupported', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    const port = await start();
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: 0 });
+    await client.closed;
+    expect(client.received).toEqual([{ type: 'bye', reason: 'protocol_error' }]);
+    expect(warn).toHaveBeenCalledWith('Device gateway: closed a connection (unsupported protocol version 0)');
+  });
+
+  it('sends flat gateway lines with type as the first key (the SDK scans them without a JSON parser)', async () => {
+    const port = await start();
+    const client = await linked(port);
+    target.links[0]?.close('no_session');
+    await client.closed;
+    const refused = await open(port);
+    refused.send(HEARTBEAT);
+    await refused.closed;
+    const lines = [...client.rawLines, ...refused.rawLines];
+    expect(lines).toEqual([
+      '{"type":"welcome","protocolVersion":1}',
+      '{"type":"bye","reason":"no_session"}',
+      '{"type":"bye","reason":"protocol_error"}',
+    ]);
+    for (const line of lines) {
+      expect(line.startsWith('{"type":')).toBe(true);
+      const values = Object.values(JSON.parse(line) as Record<string, unknown>);
+      expect(values.every((value) => typeof value !== 'object')).toBe(true);
+    }
   });
 
   it('welcomes a hello with unknown extra fields (a newer SDK)', async () => {

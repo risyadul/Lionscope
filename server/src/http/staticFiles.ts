@@ -1,9 +1,10 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { IS_BUNDLE } from '../config.ts';
 import { log } from '../log.ts';
 
 const MIME_TYPES: Readonly<Record<string, string>> = {
@@ -27,10 +28,27 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
   '.wasm': 'application/wasm',
 };
 
-/** `LIONSCOPE_DASHBOARD_DIR`, else `dashboard/dist` relative to this package. */
-export function resolveDashboardDir(explicit?: string): string {
+/**
+ * The dashboard to serve: `LIONSCOPE_DASHBOARD_DIR`; else `../dashboard` next to the running module when it
+ * holds an index.html, and always in the bundled npm package (`dist/lionscope.mjs` + `dashboard/`); else the
+ * repo's `dashboard/dist` relative to this source file (development).
+ */
+export function resolveDashboardDir(
+  explicit?: string,
+  moduleUrl: string = import.meta.url,
+  bundled: boolean = IS_BUNDLE,
+): string {
   if (explicit) return path.resolve(explicit);
-  return fileURLToPath(new URL('../../../dashboard/dist', import.meta.url));
+  const packaged = fileURLToPath(new URL('../dashboard', moduleUrl));
+  if (bundled || existsSync(path.join(packaged, 'index.html'))) return packaged;
+  return fileURLToPath(new URL('../../../dashboard/dist', moduleUrl));
+}
+
+/** The 503 body without a dashboard (no filesystem paths: it goes to the browser). */
+export function missingDashboardMessage(bundled: boolean = IS_BUNDLE): string {
+  return bundled
+    ? 'The Lionscope dashboard files are missing.\nReinstall lionscope (or run `npm run build` in a clone) and reload.\n'
+    : 'The Lionscope dashboard is not built.\nRun `npm run build` (or start with `npm run lionscope`) and reload.\n';
 }
 
 function sendText(res: ServerResponse, status: number, body: string): void {
@@ -93,7 +111,7 @@ function sendFile(res: ServerResponse, file: string, info: Stats, immutable: boo
 }
 
 /** Serves the built dashboard with SPA fallback to index.html for extension-less paths. */
-export function createStaticHandler(dashboardDir: string) {
+export function createStaticHandler(dashboardDir: string, bundled: boolean = IS_BUNDLE) {
   const root = path.resolve(dashboardDir);
   let missingLogged = false;
 
@@ -105,11 +123,7 @@ export function createStaticHandler(dashboardDir: string) {
         missingLogged = true;
         log.warn(`Dashboard not built: no index.html in ${root}`);
       }
-      sendText(
-        res,
-        503,
-        'Lionscope dashboard is not built.\nRun `npm run build` (or `npm run lionscope`) and reload.\n',
-      );
+      sendText(res, 503, missingDashboardMessage(bundled));
       return;
     }
     missingLogged = false;

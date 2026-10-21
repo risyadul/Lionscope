@@ -1,6 +1,6 @@
 {
-  "name": "lionscope",
-  "version": "0.1.0",
+  "name": "lionscope-workspace",
+  "version": "0.1.1",
   "private": true,
   "description": "Lionscope — lightweight Android profiler with a web dashboard",
   "license": "Apache-2.0",
@@ -13,7 +13,8 @@
   "workspaces": [
     "protocol",
     "server",
-    "dashboard"
+    "dashboard",
+    "cli"
   ],
   "engines": {
     "node": ">=22.12.0"
@@ -22,6 +23,7 @@
     "lionscope": "npm run build -w @lionscope/dashboard && npm run start -w @lionscope/server",
     "dev": "concurrently -k -n server,dashboard -c blue,magenta \"npm run dev -w @lionscope/server\" \"npm run dev -w @lionscope/dashboard\"",
     "build": "npm run build -w @lionscope/dashboard",
+    "build:cli": "npm run build -w lionscope",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format": "prettier --write .",

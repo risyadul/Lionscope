@@ -59,14 +59,17 @@ app's own screen alias when it has one (`home_tab`, `detail_page`, `legacy_page_
 ## Quick start
 
 ```bash
-git clone https://github.com/risyadul/Lionscope.git
-cd Lionscope
-npm install && npm run lionscope   # builds the dashboard, starts the server
+npx lionscope
 # open http://localhost:8701
 ```
 
+From source instead (the npm package may lag the latest git tag):
+`git clone https://github.com/risyadul/Lionscope.git && cd Lionscope && npm install && npm run lionscope`.
+
 Pick the device, pick the app, press **Start**. Nothing needs to be installed on the device for the ADB-only
-mode.
+mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`); the
+[`lionscope`](https://www.npmjs.com/package/lionscope) package is a single bundled file plus the built
+dashboard, with no runtime dependencies.
 
 ## Adding the SDK (optional, debug builds only)
 
@@ -77,7 +80,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.1.0"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.1.1"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -110,7 +113,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.1"
 ```
 
 ### Cost when no dashboard is connected
@@ -146,11 +149,18 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.1.0"
 | `server/`      | Node.js + TypeScript: adb collectors and parsers, session store (10-minute ring buffers), WebSocket gateway, SDK gateway         |
 | `dashboard/`   | Vite + React + uPlot single-page app, served by the server                                                                       |
 | `android-sdk/` | Gradle build: `:lionscope` (debug SDK), `:lionscope-noop` (release no-op), `:sample` (demo app)                                  |
+| `cli/`         | The `lionscope` npm package: the server bundled with esbuild into `dist/lionscope.mjs`, plus the built dashboard                 |
 
 The SDK talks to the server over plain TCP with one JSON object per line rather than WebSocket: apps with
 `usesCleartextTraffic=false` (or a network security config without localhost) would block `ws://localhost`,
 while plain sockets are not subject to that policy. The Kotlin encoders and the server's validator are both
 tested against the same golden file, `protocol/fixtures/device-messages.ndjson`.
+
+The SDK's `hello` carries its protocol version; the server answers `welcome` with the lower of that and its own
+(the negotiated version, accepted from 1 to 1000), and lines of a message type the server does not know are
+skipped and counted instead of closing the connection; known types are still validated strictly. From 0.1.1 on,
+an SDK and a server from different releases therefore keep working together. A 0.1.0 server only accepts
+protocol version 1 and closes the connection on unknown message types.
 
 ## Security model
 
@@ -187,12 +197,16 @@ tested against the same golden file, `protocol/fixtures/device-messages.ndjson`.
 
 ## Configuration
 
-| Env var                   | Default          | Purpose                                              |
-| ------------------------- | ---------------- | ---------------------------------------------------- |
-| `LIONSCOPE_PORT`          | `8701`           | Dashboard HTTP + WebSocket port                      |
-| `LIONSCOPE_DEVICE_PORT`   | `8700`           | SDK gateway (TCP, NDJSON); reached via `adb reverse` |
-| `LIONSCOPE_ADB`           | auto             | Path to the `adb` binary                             |
-| `LIONSCOPE_DASHBOARD_DIR` | `dashboard/dist` | Built dashboard to serve                             |
+| Flag                   | Env var                   | Default | Purpose                                              |
+| ---------------------- | ------------------------- | ------- | ---------------------------------------------------- |
+| `--port <port>`        | `LIONSCOPE_PORT`          | `8701`  | Dashboard HTTP + WebSocket port                      |
+| `--device-port <port>` | `LIONSCOPE_DEVICE_PORT`   | `8700`  | SDK gateway (TCP, NDJSON); reached via `adb reverse` |
+| `--adb <path>`         | `LIONSCOPE_ADB`           | auto    | Path to the `adb` binary                             |
+|                        | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                             |
+
+Flags win over environment variables. Without `LIONSCOPE_DASHBOARD_DIR`, the server serves the dashboard that
+ships next to it in the npm package, or `dashboard/dist` in a clone. There is no option to listen on anything
+but `127.0.0.1`.
 
 ## Development
 
@@ -205,6 +219,7 @@ npm run typecheck
 npm run lint
 npm run format:check     # or `npm run format` to fix
 npm run build            # production dashboard build
+npm run build:cli        # the npm package in cli/ (dashboard + bundled server); `cd cli && npm pack` to try it
 ```
 
 Android SDK (JDK 17 and the Android SDK required):
@@ -215,7 +230,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.1.0`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.1.1`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

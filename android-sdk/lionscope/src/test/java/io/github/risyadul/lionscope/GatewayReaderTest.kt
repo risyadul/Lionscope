@@ -26,6 +26,15 @@ class GatewayReaderTest {
     }
 
     @Test
+    fun skipsUnknownMessageTypesAndKeepsReading() {
+        val lines = "{\"type\":\"future_thing\",\"x\":1}\nnot json\n{\"type\":\"welcome\",\"protocolVersion\":1}\n"
+        val (messages, closed) = read(ByteArrayInputStream(lines.toByteArray()))
+        assertEquals(1, messages.size)
+        assertTrue(messages[0] is GatewayMessage.Welcome)
+        assertEquals(1, closed)
+    }
+
+    @Test
     fun skipsOversizedLinesAndKeepsReading() {
         val huge = "{\"type\":\"welcome\",\"pad\":\"" + "x".repeat(GatewayReader.MAX_LINE_BYTES * 2) + "\"}\n"
         val (messages, closed) = read(ByteArrayInputStream((huge + "{\"type\":\"bye\",\"reason\":\"after\"}\n").toByteArray()))

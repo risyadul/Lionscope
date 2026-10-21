@@ -1,0 +1,51 @@
+{
+  "name": "lionscope",
+  "version": "0.1.1",
+  "description": "Lightweight Android profiler with a web dashboard: CPU, memory, frames, screens and logcat for one app over adb",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/risyadul/Lionscope.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/risyadul/Lionscope#readme",
+  "bugs": {
+    "url": "https://github.com/risyadul/Lionscope/issues"
+  },
+  "keywords": [
+    "android",
+    "profiler",
+    "adb",
+    "performance",
+    "fps",
+    "jank",
+    "frame-metrics",
+    "cpu",
+    "memory",
+    "logcat",
+    "dashboard"
+  ],
+  "type": "module",
+  "bin": {
+    "lionscope": "dist/lionscope.mjs"
+  },
+  "files": [
+    "dist",
+    "dashboard",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "npm run build -w @lionscope/dashboard && tsx scripts/build.ts",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15"
+  }
+}

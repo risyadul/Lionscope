@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { adbShell, createAdb } from '../src/adb/adb.ts';
 import { resolveAdbPath } from '../src/adb/resolveAdb.ts';
-import { loadConfig, parsePort, SERVER_VERSION } from '../src/config.ts';
 
 describe('createAdb (against a stand-in POSIX adb script)', () => {
   let dir: string;
@@ -112,45 +111,5 @@ describe('resolveAdbPath', () => {
   it('falls back to adb on PATH', () => {
     expect(resolveAdbPath({ env: {}, exists: none, platform: 'linux', home: '/x' })).toBe('adb');
     expect(resolveAdbPath({ env: {}, exists: none, platform: 'win32' })).toBe('adb.exe');
-  });
-});
-
-describe('config', () => {
-  it('defaults to port 8701 on 127.0.0.1 (SDK gateway 8700), not in dev mode', () => {
-    expect(loadConfig({}, [])).toEqual({
-      host: '127.0.0.1',
-      port: 8701,
-      devicePort: 8700,
-      dashboardDir: undefined,
-      dev: false,
-    });
-  });
-
-  it('reads env overrides', () => {
-    expect(
-      loadConfig({ LIONSCOPE_PORT: '0', LIONSCOPE_DEVICE_PORT: '9700', LIONSCOPE_DASHBOARD_DIR: '/d' }, []),
-    ).toEqual({
-      host: '127.0.0.1',
-      port: 0,
-      devicePort: 9700,
-      dashboardDir: '/d',
-      dev: false,
-    });
-    expect(parsePort(' ')).toBe(8701);
-    expect(() => loadConfig({ LIONSCOPE_DEVICE_PORT: '70000' }, [])).toThrow(/LIONSCOPE_DEVICE_PORT/);
-  });
-
-  it('enables dev mode with --dev or LIONSCOPE_DEV=1', () => {
-    expect(loadConfig({}, ['--dev']).dev).toBe(true);
-    expect(loadConfig({ LIONSCOPE_DEV: '1' }, []).dev).toBe(true);
-    expect(loadConfig({ LIONSCOPE_DEV: 'true' }, []).dev).toBe(false);
-  });
-
-  it.each(['abc', '-1', '70000', '1.5'])('rejects port %j', (raw) => {
-    expect(() => parsePort(raw)).toThrow(/LIONSCOPE_PORT/);
-  });
-
-  it('reads the server version from package.json', () => {
-    expect(SERVER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 });

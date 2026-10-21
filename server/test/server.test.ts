@@ -1,12 +1,20 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION, WS_PATH } from '@lionscope/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { BUFFER_WINDOW_MS } from '../src/config.ts';
 import { CONTENT_SECURITY_POLICY } from '../src/http/securityHeaders.ts';
-import { resolveSafePath } from '../src/http/staticFiles.ts';
+import {
+  createStaticHandler,
+  missingDashboardMessage,
+  resolveDashboardDir,
+  resolveSafePath,
+} from '../src/http/staticFiles.ts';
 import {
   buildAllowedOrigins,
   CLIENT_CAP_RETRY_AFTER_S,
@@ -163,7 +171,9 @@ describe('Lionscope server', () => {
       const { port: barePort } = await bare.listen();
       const res = await rawRequest(barePort, '/');
       expect(res.status).toBe(503);
-      expect(res.body).toContain('npm run build');
+      expect(res.body).toBe(
+        'The Lionscope dashboard is not built.\nRun `npm run build` (or start with `npm run lionscope`) and reload.\n',
+      );
       expect(res.body).not.toContain(tmp);
       expect(res.body).not.toContain('/');
       await bare.close();
@@ -415,5 +425,62 @@ describe('resolveSafePath', () => {
     expect(resolveSafePath(root, '/..%2f..%2fetc%2fpasswd')).toBe(path.join(root, 'etc', 'passwd'));
     expect(resolveSafePath(root, '/%00')).toBeNull();
     expect(resolveSafePath(root, '/%E0%A4%A')).toBeNull();
+  });
+});
+
+describe('resolveDashboardDir', () => {
+  const bases: string[] = [];
+  /** A fresh `<base>/pkg/dist/lionscope.mjs` layout (the npm package), optionally with a built dashboard. */
+  function layout(withIndex: boolean): { base: string; bundleUrl: string } {
+    const base = mkdtempSync(path.join(tmpdir(), 'lionscope-dashboard-dir-'));
+    bases.push(base);
+    mkdirSync(path.join(base, 'pkg', 'dist'), { recursive: true });
+    if (withIndex) {
+      mkdirSync(path.join(base, 'pkg', 'dashboard'));
+      writeFileSync(path.join(base, 'pkg', 'dashboard', 'index.html'), '<!doctype html>');
+    }
+    return { base, bundleUrl: pathToFileURL(path.join(base, 'pkg', 'dist', 'lionscope.mjs')).href };
+  }
+  afterAll(() => {
+    for (const base of bases) rmSync(base, { recursive: true, force: true });
+  });
+
+  it('prefers an explicit directory (LIONSCOPE_DASHBOARD_DIR), resolved to an absolute path', () => {
+    const { bundleUrl } = layout(true);
+    expect(resolveDashboardDir('custom', bundleUrl, false)).toBe(path.resolve('custom'));
+    expect(resolveDashboardDir('custom', bundleUrl, true)).toBe(path.resolve('custom'));
+  });
+
+  it('uses ../dashboard next to the running module when it holds an index.html', () => {
+    const { base, bundleUrl } = layout(true);
+    expect(resolveDashboardDir(undefined, bundleUrl, false)).toBe(path.join(base, 'pkg', 'dashboard'));
+    expect(resolveDashboardDir('', bundleUrl, false)).toBe(path.join(base, 'pkg', 'dashboard'));
+  });
+
+  it("falls back to the repo's dashboard/dist without a packaged index.html (development)", () => {
+    const { base } = layout(false);
+    const source = pathToFileURL(path.join(base, 'repo', 'server', 'src', 'http', 'staticFiles.ts')).href;
+    expect(resolveDashboardDir(undefined, source, false)).toBe(path.join(base, 'repo', 'dashboard', 'dist'));
+    // The default module URL is this source file: server/src/http → <repo>/dashboard/dist.
+    const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+    expect(resolveDashboardDir()).toBe(path.join(repoRoot, 'dashboard', 'dist'));
+  });
+
+  it('never leaves the package in the bundled build, even without a packaged index.html', () => {
+    const { base, bundleUrl } = layout(false);
+    expect(resolveDashboardDir(undefined, bundleUrl, true)).toBe(path.join(base, 'pkg', 'dashboard'));
+  });
+
+  it('tells a bundled install to reinstall when its dashboard files are missing', async () => {
+    const { base } = layout(false);
+    const handler = createStaticHandler(path.join(base, 'pkg', 'dashboard'), true);
+    const server = createServer((req, res) => void handler(req, res, '/'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const res = await rawRequest((server.address() as AddressInfo).port, '/');
+    server.close();
+    expect(res.status).toBe(503);
+    expect(res.body).toBe(missingDashboardMessage(true));
+    expect(res.body).toContain('Reinstall lionscope (or run `npm run build` in a clone)');
+    expect(res.body).not.toContain('/');
   });
 });

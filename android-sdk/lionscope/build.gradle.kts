@@ -30,6 +30,8 @@ android {
             val fixtures = rootProject.file("../protocol/fixtures")
             it.inputs.dir(fixtures)
             it.systemProperty("lionscope.fixtures", fixtures.absolutePath)
+            // Lionscope.VERSION must equal the version this build publishes.
+            it.systemProperty("lionscope.version", project.version.toString())
         }
     }
 

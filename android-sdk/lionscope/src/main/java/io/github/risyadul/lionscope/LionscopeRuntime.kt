@@ -56,7 +56,13 @@ internal object LionscopeRuntime {
         } else {
             null
         }
-        screens = ScreenTracker(deviceLink, main, dialogWindows = frames, periodicFallback = frames == null)
+        screens = ScreenTracker(
+            deviceLink,
+            main,
+            dialogWindows = frames,
+            periodicFallback = frames == null,
+            applicationId = app.packageName,
+        )
         app.registerActivityLifecycleCallbacks(screens)
         frames?.let(app::registerActivityLifecycleCallbacks)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.

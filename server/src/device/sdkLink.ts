@@ -7,6 +7,11 @@ export type ByeReason = Extract<GatewayMessage, { type: 'bye' }>['reason'];
 
 /** The device gateway's side of one accepted SDK connection. */
 export interface SdkLink {
+  /**
+   * Negotiated device protocol version: min(the SDK's hello, DEVICE_PROTOCOL_VERSION). Messages added in later
+   * versions are only sent to links that negotiated them.
+   */
+  readonly protocolVersion: number;
   /** Close the connection, telling the SDK why when a reason is given. */
   close(reason?: ByeReason): void;
 }

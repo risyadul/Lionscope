@@ -4,7 +4,16 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', '.omc/**', 'android-sdk/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      'cli/dashboard/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      '.omc/**',
+      'android-sdk/**',
+    ],
+  },
   js.configs.recommended,
   tseslint.configs.recommended,
   {

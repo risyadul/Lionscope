@@ -27,7 +27,7 @@ const HELLO: SdkHello = {
   deviceWallMs: 1,
   refreshRateHz: 60,
 };
-const link: SdkLink = { close: () => undefined };
+const link: SdkLink = { protocolVersion: 1, close: () => undefined };
 
 function setup(gatewayPort: (() => number | null) | null = () => GATEWAY_PORT) {
   const device = new FakeDevice();

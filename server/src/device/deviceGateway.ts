@@ -41,6 +41,7 @@ const HTTP_REQUEST_LINE = /^(GET|POST|PUT|HEAD|OPTIONS|DELETE|PATCH|CONNECT) /;
 /** After `end()`, a peer that doesn't close its side is destroyed this much later. */
 const CLOSE_GRACE_MS = 1000;
 const NEWLINE = 0x0a;
+const MAX_LOGGED_TYPE_LENGTH = 64;
 
 export interface DeviceGatewayOptions {
   /** 0 picks a free port (tests). */
@@ -60,8 +61,9 @@ export interface DeviceGateway {
 
 /**
  * TCP listener for the in-app SDK (reached through `adb reverse`), loopback only. Speaks NDJSON: every
- * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts.
- * Any protocol violation closes the connection; the SDK reconnects with backoff.
+ * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts, and
+ * `welcome` answers with the negotiated protocol version. Later lines of an unknown `type` (a newer SDK) are
+ * skipped; any other protocol violation closes the connection, and the SDK reconnects with backoff.
  */
 export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGateway {
   const limits = { ...DEFAULT_DEVICE_LIMITS, ...options.limits };
@@ -71,9 +73,19 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   const hellos = new TokenBucket(limits.helloBurst, limits.hellosPerSecond, now);
   const warnings = new ErrorThrottle();
   let address: AddressInfo | null = null;
+  let ignoredMessages = 0;
 
   const warn = (reason: string): void => {
     if (warnings.shouldReport(reason)) log.warn(`Device gateway: closed a connection (${reason})`);
+  };
+  const ignore = (type: string): void => {
+    ignoredMessages += 1;
+    if (!warnings.shouldReport('unknown message type')) return;
+    // `type` is untrusted: shortened and reduced to printable ASCII before it reaches the log.
+    const shown = type.slice(0, MAX_LOGGED_TYPE_LENGTH).replace(/[^\x20-\x7e]/g, '?');
+    log.warn(
+      `Device gateway: ignoring SDK messages of unknown type "${shown}" (a newer SDK?), ${ignoredMessages} so far`,
+    );
   };
 
   const server = createServer((socket) => {
@@ -97,7 +109,7 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
       linked.add(socket);
       return null;
     };
-    serveConnection(socket, { target: options.target, limits, now, warn, admit });
+    serveConnection(socket, { target: options.target, limits, now, warn, ignore, admit });
   });
 
   return {
@@ -136,12 +148,14 @@ interface ConnectionContext {
   limits: DeviceGatewayLimits;
   now: () => number;
   warn: (reason: string) => void;
+  /** A message of a type this build does not know arrived after the hello (skipped, counted). */
+  ignore: (type: string) => void;
   /** A valid hello arrived: move the socket to the link pool, or say why not. */
   admit: () => ByeReason | null;
 }
 
 function serveConnection(socket: Socket, context: ConnectionContext): void {
-  const { target, limits, warn } = context;
+  const { target, limits, warn, ignore } = context;
   const bucket = new TokenBucket(limits.lineBurst, limits.linesPerSecond, context.now);
   let partial: Buffer[] = [];
   let partialBytes = 0;
@@ -166,11 +180,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     if (HTTP_REQUEST_LINE.test(line)) return abort('HTTP request');
     const parsed = parseDeviceMessage(line);
     if (!parsed.ok || parsed.value.type !== 'hello') {
-      warn('invalid hello');
-      return close('protocol_error');
-    }
-    if (parsed.value.protocolVersion !== DEVICE_PROTOCOL_VERSION) {
-      warn(`unsupported protocol version ${parsed.value.protocolVersion}`);
+      warn(!parsed.ok && parsed.unsupportedVersion !== undefined ? parsed.error : 'invalid hello');
       return close('protocol_error');
     }
     clearTimeout(helloTimer);
@@ -179,10 +189,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       warn('too many SDK connections');
       return close(refused);
     }
-    const result = target.attachSdk(parsed.value, { close });
+    // The schema already refused versions below MIN_DEVICE_PROTOCOL_VERSION; a newer SDK speaks ours.
+    const protocolVersion = Math.min(parsed.value.protocolVersion, DEVICE_PROTOCOL_VERSION);
+    const result = target.attachSdk(parsed.value, { close, protocolVersion });
     if (!result.ok) return close(result.reason);
     handler = result.handler;
-    socket.write(`${JSON.stringify({ type: 'welcome', protocolVersion: DEVICE_PROTOCOL_VERSION })}\n`);
+    const welcome: GatewayMessage = { type: 'welcome', protocolVersion };
+    socket.write(`${JSON.stringify(welcome)}\n`);
   };
 
   const onLine = (raw: string): void => {
@@ -193,6 +206,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if (!handler) return onHello(line);
     const parsed = parseDeviceMessage(line);
+    if (!parsed.ok && parsed.unknownType !== undefined) return ignore(parsed.unknownType);
     if (!parsed.ok || parsed.value.type === 'hello') {
       warn('invalid message');
       return close('protocol_error');

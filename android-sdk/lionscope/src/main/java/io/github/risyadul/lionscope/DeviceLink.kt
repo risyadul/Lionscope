@@ -33,6 +33,14 @@ internal class DeviceLink(
     override var isWelcomed = false
         private set
 
+    /**
+     * Protocol version agreed in `welcome` (clamped to what this SDK speaks); null until welcomed and after each
+     * disconnect. Message types newer than this must not be sent.
+     */
+    @Volatile
+    var negotiatedVersion: Int? = null
+        private set
+
     @Volatile
     private var currentScreen: ScreenRef? = null
 
@@ -111,6 +119,7 @@ internal class DeviceLink(
         } finally {
             isConnected = false
             session.close()
+            negotiatedVersion = null
             if (session.welcomed) setWelcomed(false)
         }
         val reason = session.byeReason
@@ -180,7 +189,7 @@ internal class DeviceLink(
 
         fun onMessage(message: GatewayMessage) {
             when (message) {
-                is GatewayMessage.Welcome -> onWelcome()
+                is GatewayMessage.Welcome -> onWelcome(message.protocolVersion)
                 is GatewayMessage.Bye -> {
                     byeReason = message.reason
                     close()
@@ -190,9 +199,12 @@ internal class DeviceLink(
 
         /** Synchronized with [close] so a late welcome can never outlive its connection. */
         @Synchronized
-        private fun onWelcome() {
+        private fun onWelcome(protocolVersion: Int) {
             if (welcomed || closed) return
             welcomed = true
+            // Nothing below MIN exists while MIN is 1. Once MIN > 1, a welcome below MIN must close the link
+            // (unsupported server) instead of being clamped up.
+            negotiatedVersion = protocolVersion.coerceIn(MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION)
             stateLock.withLock { policy.onWelcome(clock()) }
             logState(LinkState.CONNECTED)
             setWelcomed(true)

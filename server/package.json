@@ -1,6 +1,6 @@
 {
   "name": "@lionscope/server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@lionscope/protocol": "0.1.0",
+    "@lionscope/protocol": "0.1.1",
     "tsx": "^4.23.15",
     "ws": "^8.22.0",
     "zod": "^4.6.7"

@@ -6,8 +6,8 @@ import android.content.Context
  * Release stand-in for the Lionscope SDK: same public API, no provider, no permissions, no threads.
  */
 object Lionscope {
-    /** SDK version, kept in sync with the debug artifact. */
-    const val VERSION = "0.1.0"
+    /** SDK version (the Gradle build version, same as the debug artifact). */
+    const val VERSION = LionscopeBuild.VERSION
 
     /** Always false: the no-op artifact never profiles. */
     fun isActive(): Boolean = false

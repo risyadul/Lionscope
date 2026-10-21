@@ -38,7 +38,16 @@ class DeviceMessagesTest {
         ) as Map<*, *>
         assertEquals(DEVICE_PROTOCOL_VERSION.toDouble(), hello["protocolVersion"])
         assertEquals(Lionscope.VERSION, hello["sdkVersion"])
+        assertEquals(builtVersion(), hello["sdkVersion"])
     }
+
+    @Test
+    fun sdkVersionIsTheGradleBuildVersion() {
+        assertEquals(builtVersion(), Lionscope.VERSION)
+    }
+
+    /** `project.version` of this build (passed by lionscope/build.gradle.kts). */
+    private fun builtVersion(): String = checkNotNull(System.getProperty("lionscope.version")) { "run via Gradle" }
 
     @Test
     fun goldenFixtureHasAFramesLineWithDroppedFrames() {

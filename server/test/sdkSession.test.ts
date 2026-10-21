@@ -33,6 +33,7 @@ const HELLO: SdkHello = {
 };
 
 class FakeLink implements SdkLink {
+  readonly protocolVersion = 1;
   closedWith: ByeReason | 'none' | null = null;
   close(reason?: ByeReason): void {
     this.closedWith = reason ?? 'none';

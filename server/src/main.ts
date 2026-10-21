@@ -1,17 +1,27 @@
 import { createAdb } from './adb/adb.ts';
 import { resolveAdbPath } from './adb/resolveAdb.ts';
-import { loadConfig } from './config.ts';
+import { IS_BUNDLE, loadConfig, parseCliArgs, SERVER_VERSION, USAGE } from './config.ts';
 import { errorMessage, log } from './log.ts';
 import { createLionscopeServer } from './server.ts';
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const adb = createAdb(resolveAdbPath());
+  const args = parseCliArgs(process.argv.slice(2));
+  if (args.help || args.version) {
+    process.stdout.write(args.help ? USAGE : `${SERVER_VERSION}\n`);
+    return;
+  }
+  const config = loadConfig(process.env, args);
+  if (config.dev && IS_BUNDLE) {
+    log.warn('Dev mode widens the WebSocket origin allowlist to the Vite dev server (localhost:5173)');
+  }
+  const adb = createAdb(config.adb ?? resolveAdbPath());
   try {
     const version = await adb.exec(['version'], { timeoutMs: 5000 });
     log.info(`Using ${version.split('\n')[0]?.trim() ?? 'adb'} at ${adb.path}`);
   } catch (error) {
-    log.warn(`adb not usable at "${adb.path}" (${errorMessage(error)}). Set LIONSCOPE_ADB or ANDROID_HOME.`);
+    log.warn(
+      `adb not usable at "${adb.path}" (${errorMessage(error)}). Pass --adb, or set LIONSCOPE_ADB or ANDROID_HOME.`,
+    );
   }
 
   const server = createLionscopeServer({

@@ -25,8 +25,9 @@ internal class ScreenTracker(
     private val periodicFallback: Boolean = false,
     hooksFactory: (ScreenTracker) -> FragmentHooks? = ::createFragmentHooks,
     private val clock: () -> Long = System::currentTimeMillis,
+    applicationId: String = "",
 ) : Application.ActivityLifecycleCallbacks {
-    private val resolver = ScreenResolver()
+    private val resolver = ScreenResolver(applicationId)
     private val fragmentHooks: FragmentHooks? = try {
         hooksFactory(this)
     } catch (e: LinkageError) {
