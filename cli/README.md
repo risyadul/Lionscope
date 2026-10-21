@@ -4,9 +4,12 @@ Lightweight Android profiler with a web dashboard. It shows CPU, memory, frame r
 on a connected device, on a single shared time axis, without opening Android Studio.
 
 ```bash
-npx lionscope
+npx lionscope@latest
 # open http://localhost:8701, pick the device and the app, press Start
 ```
+
+`@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
+earlier.
 
 Requirements: Node.js ≥ 22.12, Android SDK platform-tools (`adb`), and a device or emulator with USB debugging
 on Android 7.0 (API 24) or newer. Everything listens on 127.0.0.1 only.

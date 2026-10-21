@@ -89,9 +89,12 @@ per stack, and at most 10 per second overall.
 ## Quick start
 
 ```bash
-npx lionscope
+npx lionscope@latest
 # open http://localhost:8701
 ```
+
+`@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
+earlier.
 
 From source instead (the npm package may lag the latest git tag):
 `git clone https://github.com/risyadul/Lionscope.git && cd Lionscope && npm install && npm run lionscope`.
@@ -227,6 +230,9 @@ protocol version 1 and closes the connection on unknown message types.
 - **Stall detection is sampled.** The watchdog works in about 50 ms steps, so durations are approximate and a
   block only slightly over the threshold can be missed. Time a tick waits in the main queue behind other work
   counts as blocked time.
+- **Obfuscated SDKs keep their names short.** When a stall's culprit is a third-party SDK shipped with R8 or
+  ProGuard, its frames read like `com.vendor.internal.b.a (SourceFile:22)`: the package says which SDK blocked
+  the main thread, but the line number does not point at readable source.
 - **StrictMode shares the app's policy.** Detections Lionscope adds follow the penalties of the app's own base
   policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
   by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
