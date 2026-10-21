@@ -1,0 +1,373 @@
+/* Per-screen table: dense mono figures, a jank meter per row, and a stage profile for the
+   selected screen. Relies on the shared swatch / legend-key color hooks. */
+
+.screens {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  container: screens / inline-size;
+}
+
+.screens-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.screens-scope {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.screens-filter {
+  height: 26px;
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border-color: var(--ink);
+  font-size: var(--text-meta);
+}
+
+.screens-filter-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.screens-filter-hint {
+  color: var(--ink-muted);
+}
+
+.screens-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Table ------------------------------------------------------------------------ */
+
+.screens-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.screens-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: right;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.screens-table thead th[data-col='name'],
+.screens-table thead th[data-col='dominant'] {
+  text-align: left;
+}
+
+.screens-table thead th[data-col='dominant'] > span {
+  display: inline-block;
+  padding: 8px var(--space-4) 7px var(--space-2);
+}
+
+.sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--space-2) 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  transition: color var(--dur-fast) linear;
+}
+
+th[data-col='name'] .sort-btn {
+  padding-left: var(--space-4);
+}
+
+.sort-btn:hover {
+  color: var(--ink);
+}
+
+.sort-btn svg {
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) linear,
+    transform var(--dur) var(--ease-out);
+}
+
+th[aria-sort] .sort-btn {
+  color: var(--ink);
+}
+
+th[aria-sort] .sort-btn svg {
+  opacity: 1;
+}
+
+th[aria-sort='ascending'] .sort-btn svg {
+  transform: rotate(180deg);
+}
+
+.screens-table tbody tr {
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) linear;
+}
+
+.screens-table tbody tr:hover {
+  background: var(--hover-wash);
+}
+
+.screens-table tbody tr[data-selected] {
+  background: var(--active-wash);
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+
+.screens-table tbody th,
+.screens-table td {
+  padding: 7px var(--space-2);
+  font-weight: 400;
+  text-align: right;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.screens-table tbody th {
+  max-width: 0;
+  width: 40%;
+  padding-left: var(--space-4);
+  text-align: left;
+}
+
+.screens-table td.mono {
+  font-size: var(--text-meta);
+}
+
+.screen-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+}
+
+.screen-cell[data-none] {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+}
+
+.screen-cell-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen-cell:focus-visible {
+  outline-offset: 3px;
+}
+
+/* Jank: the number in ink, a meter in the jank hue scaled to the worst row. */
+td[data-col='jankPercent'] {
+  min-width: 64px;
+}
+
+.jank-value[data-flag] {
+  color: var(--jank-text);
+  font-weight: 600;
+}
+
+.jank-meter {
+  display: block;
+  height: 3px;
+  margin-top: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--rule);
+}
+
+.jank-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--jank);
+  transform-origin: left;
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.p90-worst {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+td[data-col='dominant'] {
+  padding-right: var(--space-4);
+  text-align: left;
+}
+
+.dominant {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-meta);
+}
+
+.dominant-name {
+  color: var(--ink-2);
+}
+
+/* Stage profile of the selected screen ------------------------------------------ */
+
+.stage-profile {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  animation: profile-in var(--dur) var(--ease-out) both;
+}
+
+@keyframes profile-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+.stage-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+}
+
+.stage-seg {
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--key, var(--ink-muted));
+}
+
+.stage-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-meta);
+}
+
+.stage-list li {
+  display: grid;
+  grid-template-columns: auto 1fr auto 4ch;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stage-name {
+  color: var(--ink-2);
+}
+
+.stage-share {
+  color: var(--ink-muted);
+  text-align: right;
+}
+
+.screens-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+/* Empty state ---------------------------------------------------------------------- */
+
+.screens-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  max-width: 560px;
+  padding: var(--space-5) var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.screens-empty p {
+  margin: 0;
+}
+
+.screens-empty-title {
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.screens-empty[data-tone='critical'] .screens-empty-title {
+  color: var(--log-e);
+}
+
+.screens-empty-detail {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--critical);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.screens-empty .screens-empty-note {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.screens-snippet {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+}
+
+/* Narrow panel: drop slow first, then p90, so screen names keep room. */
+@container screens (max-width: 560px) {
+  .screens-table [data-col='slowPercent'] {
+    display: none;
+  }
+}
+
+@container screens (max-width: 440px) {
+  .screens-table [data-col='typicalP90Ms'] {
+    display: none;
+  }
+}

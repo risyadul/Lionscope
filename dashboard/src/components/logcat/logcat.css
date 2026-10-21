@@ -1,0 +1,279 @@
+.logcat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  container: logcat / inline-size;
+}
+
+.logcat-head {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.logcat-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.logcat-title {
+  margin: 0;
+  font-size: var(--text-small);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.logcat-pid {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.logcat-count {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.logcat-count-unit {
+  color: var(--ink-muted);
+}
+
+.logcat-clear {
+  align-self: center;
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+.logcat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Level chips: the selected minimum and everything more severe stay lit. */
+.level-filter > button:not([data-included]) {
+  color: var(--ink-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--rule-strong);
+}
+
+.level-filter > button[data-included]:not([aria-checked='true']) {
+  background: var(--surface-sunk);
+}
+
+.logcat-search {
+  position: relative;
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  min-width: 0;
+  color: var(--ink-muted);
+}
+
+.logcat-search svg {
+  position: absolute;
+  left: 9px;
+  pointer-events: none;
+}
+
+.logcat-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--space-2) 0 28px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  transition:
+    border-color var(--dur-fast) linear,
+    background-color var(--dur-fast) linear;
+}
+
+.logcat-search input::placeholder {
+  color: var(--ink-muted);
+}
+
+.logcat-search input:hover {
+  border-color: var(--ink-muted);
+}
+
+.logcat-search input:focus-visible {
+  border-color: var(--focus);
+  background: var(--surface);
+  outline-offset: 0;
+}
+
+.logcat-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.logcat-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-1) 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 12.5ch 1.5ch minmax(0, 15ch) minmax(0, 1fr);
+  column-gap: 1.25ch;
+  padding: 1px var(--space-4) 1px calc(var(--space-4) - 2px);
+  border-left: 2px solid transparent;
+}
+
+.log-row:hover {
+  background: var(--hover-wash);
+}
+
+.log-time {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-level {
+  font-weight: 600;
+  text-align: center;
+}
+
+.log-tag {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-msg {
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-row mark {
+  border-radius: 2px;
+  background: var(--event-wash);
+  box-shadow: 0 0 0 1px var(--event-wash);
+  color: inherit;
+}
+
+.log-row[data-level='V'] .log-level {
+  color: var(--log-v);
+}
+.log-row[data-level='V'] .log-msg {
+  color: var(--ink-2);
+}
+.log-row[data-level='D'] .log-level {
+  color: var(--log-d);
+}
+.log-row[data-level='I'] .log-level {
+  color: var(--log-i);
+}
+.log-row[data-level='W'] {
+  border-left-color: var(--jank);
+  background: var(--jank-wash);
+}
+.log-row[data-level='W'] .log-level {
+  color: var(--log-w);
+}
+.log-row[data-level='E'],
+.log-row[data-level='F'] {
+  border-left-color: var(--critical);
+  background: var(--critical-wash);
+}
+.log-row[data-level='E'] .log-level {
+  color: var(--log-e);
+}
+.log-row[data-level='F'] .log-level {
+  color: var(--log-f);
+}
+.log-row[data-level='F'] .log-msg {
+  font-weight: 500;
+}
+
+.logcat-empty {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  padding: var(--space-5);
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+  text-align: center;
+}
+
+.logcat-empty p {
+  margin: 0;
+  max-width: 32ch;
+}
+
+.logcat-empty-title {
+  margin-bottom: var(--space-1) !important;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.jump-latest {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  transform: translateX(-50%);
+  animation: jump-in var(--dur) var(--ease-out) both;
+}
+
+.jump-latest:hover {
+  background: var(--ink-2);
+}
+
+.jump-count {
+  padding-left: 6px;
+  border-left: 1px solid color-mix(in srgb, var(--ink-inverse) 35%, transparent);
+}
+
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+/* Narrow panel: the message gets its own line, indented under the level column. */
+@container logcat (max-width: 560px) {
+  .log-row {
+    grid-template-columns: 12.5ch 1.5ch minmax(0, 1fr);
+    padding-block: 2px;
+  }
+
+  .log-msg {
+    grid-column: 2 / -1;
+  }
+}

@@ -1,0 +1,165 @@
+import { createServer } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { WS_PATH } from '@lionscope/protocol';
+import type { Adb } from './adb/adb.ts';
+import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
+import { createDeviceGateway } from './device/deviceGateway.ts';
+import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
+import { errorMessage, log } from './log.ts';
+import { applySecurityHeaders } from './http/securityHeaders.ts';
+import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
+import { buildAllowedOrigins, createWsGateway, isAllowedHost } from './http/wsGateway.ts';
+import type { WsGateway } from './http/wsGateway.ts';
+import { SessionManager } from './session/sessionManager.ts';
+import type { CollectorIntervals } from './session/profilingSession.ts';
+
+export interface LionscopeServerOptions {
+  /** 0 picks a free port (tests). */
+  port: number;
+  /** In-app SDK gateway port (`adb reverse` target); 0 picks a free port. */
+  devicePort: number;
+  deviceLimits?: Partial<DeviceGatewayLimits>;
+  adb: Adb;
+  /** Defaults to LIONSCOPE_DASHBOARD_DIR resolution / dashboard/dist. */
+  dashboardDir?: string;
+  devicePollMs?: number;
+  bufferWindowMs?: number;
+  sessionIntervals?: Partial<CollectorIntervals>;
+  pingIntervalMs?: number;
+  /** Also accept WebSocket connections from the Vite dev server origins. */
+  dev?: boolean;
+}
+
+export interface LionscopeServer {
+  listen(): Promise<AddressInfo>;
+  close(): Promise<void>;
+  readonly address: AddressInfo | null;
+  /** Bound SDK gateway address; null when it could not listen (sessions then run ADB-only). */
+  readonly deviceAddress: AddressInfo | null;
+  readonly manager: SessionManager;
+}
+
+function sendPlain(res: ServerResponse, status: number, body: string): void {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(body);
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EADDRINUSE';
+}
+
+export function createLionscopeServer(options: LionscopeServerOptions): LionscopeServer {
+  const bufferWindowMs = options.bufferWindowMs ?? BUFFER_WINDOW_MS;
+  const serveStatic = createStaticHandler(resolveDashboardDir(options.dashboardDir));
+  let gateway: WsGateway | null = null;
+  let address: AddressInfo | null = null;
+  // Empty until listen() knows the real port (port 0 picks one).
+  let allowedOrigins: ReadonlySet<string> = new Set();
+
+  const manager = new SessionManager({
+    adb: options.adb,
+    broadcast: (message) => gateway?.broadcast(message),
+    devicePollMs: options.devicePollMs,
+    bufferWindowMs,
+    sessionIntervals: options.sessionIntervals,
+    deviceGatewayPort: () => deviceGateway.address?.port ?? null,
+  });
+  const deviceGateway = createDeviceGateway({
+    port: options.devicePort,
+    target: manager,
+    limits: options.deviceLimits,
+  });
+
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    applySecurityHeaders(res);
+    if (!isAllowedHost(req.headers.host)) {
+      sendPlain(res, 403, 'Forbidden\n');
+      return;
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, HEAD');
+      sendPlain(res, 405, 'Method not allowed\n');
+      return;
+    }
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      sendPlain(res, 400, 'Bad request\n');
+      return;
+    }
+    if (pathname === WS_PATH) {
+      sendPlain(res, 426, 'WebSocket upgrade required\n');
+      return;
+    }
+    await serveStatic(req, res, pathname);
+  };
+
+  const server = createServer((req, res) => {
+    handleRequest(req, res).catch((error: unknown) => {
+      log.error('HTTP request failed:', errorMessage(error));
+      if (!res.headersSent) sendPlain(res, 500, 'Internal server error\n');
+      else res.destroy();
+    });
+  });
+
+  gateway = createWsGateway({
+    server,
+    manager,
+    serverVersion: SERVER_VERSION,
+    bufferWindowMs,
+    allowedOrigins: () => allowedOrigins,
+    pingIntervalMs: options.pingIntervalMs,
+  });
+
+  return {
+    manager,
+    get address() {
+      return address;
+    },
+    get deviceAddress() {
+      return deviceGateway.address;
+    },
+    async listen() {
+      const bound = await new Promise<AddressInfo>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(options.port, HOST, () => {
+          server.off('error', reject);
+          resolve(server.address() as AddressInfo);
+        });
+      });
+      address = bound;
+      allowedOrigins = buildAllowedOrigins(bound.port, options.dev ?? false);
+      try {
+        await deviceGateway.listen();
+      } catch (error) {
+        log.warn(`SDK gateway cannot listen on ${HOST}:${options.devicePort}: ${errorMessage(error)}`);
+        // `adb reverse` can target any host port, so a free one does just as well (e.g. 8700 is taken by
+        // another Lionscope). Failing that, the dashboard stays useful without the SDK link.
+        if (isAddressInUse(error)) {
+          try {
+            const fallback = await deviceGateway.listen(0);
+            log.info(`SDK gateway listening on ${HOST}:${fallback.port} instead`);
+          } catch (retryError) {
+            log.warn(`SDK gateway cannot listen at all: ${errorMessage(retryError)}`);
+          }
+        }
+      }
+      manager.startDevicePolling();
+      return bound;
+    },
+    async close() {
+      await manager.close();
+      await deviceGateway.close();
+      await gateway?.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+      address = null;
+    },
+  };
+}

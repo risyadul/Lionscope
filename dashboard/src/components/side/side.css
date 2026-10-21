@@ -1,0 +1,97 @@
+/* Right-hand column: a tab strip over logcat and the screens table. */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.side-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.side-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color var(--dur-fast) linear;
+}
+
+/* Active indicator: a 2px ink rule that scales in from the center. */
+.side-tab::after {
+  position: absolute;
+  right: var(--space-2);
+  bottom: -1px;
+  left: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: '';
+  transform: scaleX(0);
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.side-tab:hover {
+  color: var(--ink);
+}
+
+.side-tab[aria-selected='true'] {
+  color: var(--ink);
+}
+
+.side-tab[aria-selected='true']::after {
+  transform: scaleX(1);
+}
+
+.side-tab:focus-visible {
+  outline-offset: -2px;
+}
+
+.side-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+}
+
+.side-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.side-panel:focus-visible {
+  outline-offset: -2px;
+}
+
+.side-panel[hidden] {
+  display: none;
+}
+
+.side-panel > .logcat {
+  flex: 1 1 auto;
+}

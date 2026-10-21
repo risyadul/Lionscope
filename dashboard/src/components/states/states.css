@@ -1,0 +1,214 @@
+/* Empty states sit on a faint graph-paper grid: the instrument is on, just not measuring. */
+.empty-state {
+  position: relative;
+  max-width: 440px;
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-2);
+  font-size: var(--text-body);
+}
+
+.empty-state::before {
+  position: absolute;
+  inset: -1px auto -1px -1px;
+  width: 3px;
+  border-radius: var(--radius-m) 0 0 var(--radius-m);
+  background: var(--ink);
+  content: '';
+}
+
+.empty-state[data-tone='critical']::before {
+  background: var(--critical);
+}
+
+.empty-state p {
+  margin: 0 0 var(--space-2);
+}
+
+.empty-state .overline {
+  margin-bottom: var(--space-1);
+}
+
+.empty-title {
+  margin: 0 0 var(--space-3);
+  color: var(--ink);
+  font-size: var(--text-title);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.empty-code {
+  margin: var(--space-2) 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+.empty-state code {
+  padding: 1px 4px;
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink);
+}
+
+.empty-steps {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.empty-steps li {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: var(--space-2);
+  counter-increment: step;
+}
+
+.empty-steps li::before {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  content: counter(step, decimal-leading-zero);
+}
+
+.empty-devices {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.empty-devices li {
+  display: grid;
+  gap: 2px;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--jank);
+}
+
+.empty-devices .mono {
+  color: var(--ink);
+  font-size: var(--text-small);
+}
+
+.empty-error {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--log-e);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.timeline-overlay {
+  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+  background-image: radial-gradient(circle, var(--rule-strong) 1px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+
+/* Banners --------------------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: 7px var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: var(--text-small);
+  animation: banner-in var(--dur) var(--ease-out) both;
+}
+
+.banner[data-tone='critical'] {
+  border-bottom-color: color-mix(in srgb, var(--critical) 35%, var(--rule));
+  background: color-mix(in srgb, var(--critical) 7%, var(--surface));
+}
+
+.banner[data-tone='quiet'] {
+  color: var(--ink-2);
+}
+
+.banner code {
+  font-size: var(--text-meta);
+}
+
+.banner-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.banner-hint {
+  color: var(--ink-2);
+}
+
+.banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--critical);
+}
+
+.banner-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+.banner-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.banner-close:hover {
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Crash fallback --------------------------------------------------------------- */
+
+.crash {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-5) var(--space-4);
+}
+
+.crash-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}

@@ -1,0 +1,31 @@
+[versions]
+agp = "8.9.1"
+kotlin = "2.2.0"
+# Compile-only stdlib for the SDK: the host app provides its own (Kotlin 2.0+).
+kotlinStdlib = "2.0.0"
+# Sample app stdlib: AGP 8.9's D8 cannot parse Kotlin 2.2 metadata (warning spam in mergeExtDex).
+kotlinStdlibApp = "2.0.21"
+startup = "1.1.1"
+fragment = "1.4.1"
+appcompat = "1.4.1"
+material = "1.5.0"
+recyclerview = "1.2.1"
+viewpager = "1.0.0"
+junit = "4.13.2"
+
+[libraries]
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlinStdlib" }
+kotlin-stdlib-app = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlinStdlibApp" }
+androidx-startup = { module = "androidx.startup:startup-runtime", version.ref = "startup" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
+androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
+androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
+androidx-viewpager = { module = "androidx.viewpager:viewpager", version.ref = "viewpager" }
+material = { module = "com.google.android.material:material", version.ref = "material" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

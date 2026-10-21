@@ -1,0 +1,116 @@
+import { describe, expect, it } from 'vitest';
+import { createInitialState, type DashboardState } from '../src/lib/store.ts';
+import {
+  hasSeries,
+  isSessionActive,
+  screensEmptyState,
+  timelineNotice,
+  timelineState,
+} from '../src/lib/viewState.ts';
+import { cpu, session, T0 } from './fixtures.ts';
+
+function connected(overrides: Partial<DashboardState> = {}): DashboardState {
+  return {
+    ...createInitialState(),
+    connection: { status: 'open', attempt: 0, retryAt: null, closeReason: null },
+    server: { protocolVersion: 1, serverVersion: '0.1.0' },
+    ...overrides,
+  };
+}
+
+describe('timelineState', () => {
+  it('is disconnected before the server ever answered', () => {
+    expect(timelineState(createInitialState()).kind).toBe('disconnected');
+  });
+
+  it('walks the device states', () => {
+    expect(timelineState(connected()).kind).toBe('loading');
+    expect(timelineState(connected({ devices: [] })).kind).toBe('no-devices');
+    const unauthorized = connected({ devices: [{ serial: 'x', state: 'unauthorized' }] });
+    expect(timelineState(unauthorized)).toEqual({ kind: 'no-ready-device', devices: unauthorized.devices });
+    expect(timelineState(connected({ devices: [{ serial: 'x', state: 'device' }] })).kind).toBe('idle');
+  });
+
+  it('shows adb being unavailable instead of USB-debugging advice', () => {
+    const state = connected({ devices: [], adbUnavailable: 'adb is not available' });
+    expect(timelineState(state)).toEqual({ kind: 'adb-unavailable', message: 'adb is not available' });
+    expect(timelineState({ ...state, devices: [{ serial: 'x', state: 'device' }] }).kind).toBe('idle');
+    expect(timelineNotice({ kind: 'adb-unavailable', message: 'x' })).toMatch(/adb is unavailable/);
+  });
+
+  it('reflects the session', () => {
+    expect(timelineState(connected({ session: session() })).kind).toBe('ready');
+    expect(timelineState(connected({ session: session({ status: 'waiting_for_process' }) }))).toEqual({
+      kind: 'waiting',
+      packageName: 'com.example.shop',
+    });
+    expect(timelineState(connected({ session: session({ status: 'error', error: 'adb died' }) }))).toEqual({
+      kind: 'error',
+      message: 'adb died',
+    });
+    expect(timelineState(connected({ session: session({ status: 'error' }) }))).toMatchObject({
+      kind: 'error',
+    });
+  });
+
+  it('keeps showing the session once the server has answered, even while reconnecting', () => {
+    const state = connected({
+      connection: { status: 'reconnecting', attempt: 1, retryAt: 0, closeReason: null },
+      session: session(),
+    });
+    expect(timelineState(state).kind).toBe('ready');
+  });
+});
+
+describe('notices and helpers', () => {
+  it('produces a notice for states that keep recorded data visible', () => {
+    expect(timelineNotice({ kind: 'idle' })).toMatch(/last recording/);
+    expect(timelineNotice({ kind: 'no-devices' })).toMatch(/No device/);
+    expect(timelineNotice({ kind: 'no-ready-device', devices: [] })).toMatch(/ready/);
+    expect(timelineNotice({ kind: 'waiting', packageName: null })).toMatch(/the app/);
+    expect(timelineNotice({ kind: 'error', message: 'x' })).toBe('Session error: x');
+    expect(timelineNotice({ kind: 'ready' })).toBeNull();
+    expect(timelineNotice({ kind: 'disconnected' })).toBeNull();
+    expect(timelineNotice({ kind: 'loading' })).toBeNull();
+  });
+
+  it('detects active sessions and recorded series', () => {
+    expect(isSessionActive({ session: session() })).toBe(true);
+    expect(isSessionActive({ session: session({ status: 'waiting_for_process' }) })).toBe(true);
+    expect(isSessionActive({ session: session({ status: 'idle' }) })).toBe(false);
+    expect(hasSeries(createInitialState())).toBe(false);
+    expect(hasSeries({ ...createInitialState(), cpu: [cpu(T0)] })).toBe(true);
+  });
+});
+
+describe('screensEmptyState', () => {
+  const base = {
+    hasRows: false,
+    hasAnyBreakdown: false,
+    isSdkConnected: false,
+    sdk: undefined,
+    sdkLinkError: null,
+  };
+  const known = {
+    connected: false,
+    sdkVersion: '0.1.0',
+    processName: 'p',
+    apiLevel: 34,
+    framesActive: false,
+  };
+
+  it('picks the most specific reason, rows first', () => {
+    expect(screensEmptyState({ ...base, hasRows: true })).toBeNull();
+    expect(screensEmptyState({ ...base, hasAnyBreakdown: true })).toEqual({ kind: 'window' });
+    expect(screensEmptyState({ ...base, isSdkConnected: true, sdkLinkError: 'x' })).toEqual({
+      kind: 'waiting',
+    });
+    expect(screensEmptyState({ ...base, sdk: known, sdkLinkError: 'reverse failed' })).toEqual({
+      kind: 'link-failed',
+      message: 'reverse failed',
+    });
+    expect(screensEmptyState({ ...base, sdk: known })).toEqual({ kind: 'disconnected', sdkVersion: '0.1.0' });
+    expect(screensEmptyState({ ...base, sdk: { ...known, sdkVersion: null } })).toEqual({ kind: 'no-sdk' });
+    expect(screensEmptyState(base)).toEqual({ kind: 'no-sdk' });
+  });
+});

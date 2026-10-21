@@ -1,0 +1,37 @@
+Applications Memory Usage (in Kilobytes):
+Uptime: 1783092 Realtime: 1783092
+
+** MEMINFO in pid 6477 [com.google.android.apps.nexuslauncher] **
+                   Pss  Private  Private  SwapPss      Rss     Heap     Heap     Heap
+                 Total    Dirty    Clean    Dirty    Total     Size    Alloc     Free
+                ------   ------   ------   ------   ------   ------   ------   ------
+  Native Heap    11860    11840        0    12770    12592        0        0        0
+  Dalvik Heap     9101     3840     5072       34    10064        0        0        0
+ Dalvik Other     1524     1472       16      112     2272                           
+        Stack     1056     1056        0      304     1056                           
+       Ashmem       78        0        0        0      640                           
+    Other dev      178        0      160        0      528                           
+     .so mmap     4265      560       80      446    32576                           
+    .jar mmap     2954        0      144        0    32288                           
+    .apk mmap     4525        0        0        0     9792                           
+    .ttf mmap       63        0        0        0      336                           
+    .dex mmap      169        0        0        0     1232                           
+    .oat mmap     1124        0        0        0    11168                           
+    .art mmap     4132     1680     1440      626    25104                           
+   Other mmap      157       16       16        0     1120                           
+      Unknown     3827     3696       96      898     4240                           
+        TOTAL    60203    24160     7024    15190   145008        0        0        0
+ 
+ App Summary
+                       Pss(KB)                        Rss(KB)
+                        ------                         ------
+           Java Heap:     6960                          35168
+         Native Heap:    11840                          12592
+                Code:      784                          87440
+               Stack:     1056                           1056
+            Graphics:        0                              0
+       Private Other:    10544
+              System:    29019
+             Unknown:                                    8752
+ 
+           TOTAL PSS:    60203            TOTAL RSS:   145008       TOTAL SWAP PSS:    15190

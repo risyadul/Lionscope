@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Shared by the browser dashboard and the Node server: only APIs both provide (e.g. TextEncoder).
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src", "test"]
+}

@@ -1,0 +1,421 @@
+/* Shared timeline: four lanes stacked on one x axis, separated by hairlines so event
+   markers read as a single line through the whole instrument. */
+
+.timeline {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.timeline-toolbar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 5px var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.timeline-toolbar > .overline {
+  margin-right: auto;
+}
+
+.timeline-lanes {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Screens + breakdown lanes: tighter minimums so six lanes fit a laptop viewport. */
+.timeline-lanes[data-dense] .lane:not(.lane--screens) {
+  min-height: 108px;
+}
+
+.timeline-lanes[data-dense] .lane-plot {
+  min-height: 68px;
+}
+
+.lane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 136px;
+  margin: 0;
+  border-top: 1px solid var(--rule);
+  animation: lane-in 420ms var(--ease-out) both;
+}
+
+.lane:first-child {
+  border-top: 0;
+}
+
+.lane:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+.lane:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+.lane:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+.lane:nth-child(n + 5) {
+  animation-delay: 160ms;
+}
+
+@keyframes lane-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.lane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.lane-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lane-title {
+  margin: 0;
+  font-size: var(--text-small);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.lane-unit {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.lane-hint {
+  display: inline-grid;
+  align-self: center;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--ink-muted);
+  cursor: help;
+}
+
+.lane-hint:hover,
+.lane-hint:focus-visible {
+  color: var(--ink);
+  background: var(--hover-wash);
+}
+
+.lane-toggle {
+  align-self: center;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  transition:
+    background-color var(--dur-fast) linear,
+    color var(--dur-fast) linear;
+}
+
+.lane-toggle:hover {
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+.lane-toggle[aria-pressed='true'] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ink-inverse);
+}
+
+.lane-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.legend-label {
+  color: var(--ink-muted);
+}
+
+.legend-value {
+  min-width: 3.5ch;
+  padding: 0 3px;
+  border-radius: var(--radius-s);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  text-align: right;
+  transition: background-color var(--dur-fast) linear;
+}
+
+.lane-legend[data-at-cursor] .legend-value {
+  background: var(--hover-wash);
+}
+
+/* Legend keys mirror their mark: line for lines, rect for areas, column for bars. */
+.legend-key {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--key, var(--ink));
+}
+
+.legend-key[data-key='thin'] {
+  height: 1px;
+}
+
+.legend-key[data-key='area'] {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.legend-key[data-key='bar'] {
+  width: 4px;
+  height: 10px;
+  border-radius: 2px 2px 0 0;
+}
+
+/* Mirrors SLOW_TINT: the canvas mixes 55% toward the surface. */
+.legend-key[data-tint] {
+  background: color-mix(in srgb, var(--key, var(--ink)) 45%, var(--surface));
+}
+
+.legend-key[data-color='cpu'] {
+  --key: var(--viz-cpu);
+}
+.legend-key[data-color='fps'] {
+  --key: var(--viz-fps);
+}
+.legend-key[data-color='jank'] {
+  --key: var(--jank);
+}
+.legend-key[data-color='frameTime'] {
+  --key: var(--viz-frametime);
+}
+.legend-key[data-color='frameMax'] {
+  --key: var(--viz-framemax);
+}
+.legend-key[data-color='memNative'] {
+  --key: var(--viz-mem-native);
+}
+.legend-key[data-color='memJava'] {
+  --key: var(--viz-mem-java);
+}
+.legend-key[data-color='memGraphics'] {
+  --key: var(--viz-mem-graphics);
+}
+.legend-key[data-color='memCode'] {
+  --key: var(--viz-mem-code);
+}
+.legend-key[data-color='memOther'] {
+  --key: var(--viz-mem-other);
+}
+.legend-key[data-color='memTotal'] {
+  --key: var(--viz-mem-total);
+}
+.legend-key[data-color='ink'] {
+  --key: var(--ink);
+}
+/* Stage hues are shared by legend keys and the screens table's stage bars. */
+[data-color='stageInput'] {
+  --key: var(--viz-stage-input);
+}
+[data-color='stageAnimation'] {
+  --key: var(--viz-stage-animation);
+}
+[data-color='stageLayout'] {
+  --key: var(--viz-stage-layout);
+}
+[data-color='stageDraw'] {
+  --key: var(--viz-stage-draw);
+}
+[data-color='stageSync'] {
+  --key: var(--viz-stage-sync);
+}
+[data-color='stageCommand'] {
+  --key: var(--viz-stage-command);
+}
+[data-color='stageSwap'] {
+  --key: var(--viz-stage-swap);
+}
+[data-color='stageDelay'] {
+  --key: var(--viz-stage-delay);
+}
+[data-color='stageGpu'] {
+  --key: var(--viz-stage-gpu);
+}
+
+/* The dominant stage reads first: ink label and a ruled value. */
+.legend-item[data-emphasis] .legend-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legend-item[data-emphasis] .legend-value {
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+  font-weight: 600;
+}
+
+.legend-item[title] {
+  cursor: help;
+}
+
+/* Where frame data comes from (gfxinfo polling or the in-app SDK). */
+.source-tag {
+  align-self: center;
+  padding: 1px 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.source-tag[data-source='sdk'] {
+  border-color: color-mix(in srgb, var(--good) 45%, var(--rule-strong));
+  background: var(--good-wash);
+  color: var(--ink);
+}
+
+/* Linked but idle: still the SDK's lane, without the "frames flowing" wash. */
+.source-tag[data-idle] {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: help;
+}
+
+/* Plot host: uPlot is absolutely placed so its fixed size never feeds back into layout. */
+.lane-plot {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 92px;
+  overflow: hidden;
+}
+
+.lane-plot > .uplot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.lane-plot .u-hz .u-cursor-x {
+  border-right: 1px solid var(--ink-muted);
+}
+
+.lane-plot .u-cursor-pt {
+  box-shadow: 0 0 0 1px var(--rule-strong);
+}
+
+.lane-probe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  border-left: 1px solid var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) linear;
+}
+
+.lane-probe::before {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface);
+  content: '';
+}
+
+/* Notices and empty states ------------------------------------------------- */
+
+.timeline-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-sunk);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.timeline-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  animation: overlay-in var(--dur) var(--ease-out) both;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 1024px) {
+  .lane {
+    flex: none;
+    height: 210px;
+  }
+}
+
+@media (max-width: 640px) {
+  .lane {
+    height: 184px;
+  }
+
+  .lane-head {
+    padding-inline: var(--space-3);
+  }
+}

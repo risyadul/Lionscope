@@ -1,0 +1,31 @@
+--------- beginning of main
+         1792499202.894  1105  2400 D StatsLog: LAUNCHER_GOOGLE_SEARCH_GMS_PLAY_EMPTY_COMPONENT_NAME
+         1792499202.894  1105  2400 E GmsPlayProvider: Failed to create component
+         1792499202.927  1105  2529 I HWUI    : Davey! duration=1055ms; Flags=0, FrameTimelineVsyncId=10756, IntendedVsync=298380167775, Vsync=298380167775, InputEventId=-296421186, HandleInputStart=298383361099, AnimationStart=298502690933, PerformTraversalsStart=298502691349, DrawStart=298723485558, FrameDeadline=298396834441, FrameStartTime=298383346766, FrameInterval=16666666, WorkloadTarget=16666666, SyncQueued=298773085183, SyncStart=298773156891, IssueDrawCommandsStart=298777309683, SwapBuffers=299145288766, FrameCompleted=299436030017, DequeueBufferDuration=2542, QueueBufferDuration=1048208, GpuCompleted=299436030017, SwapBuffersCompleted=299169452641, DisplayPresentTime=0, CommandSubmissionCompleted=299145288766, 
+         1792499203.012  1105  1105 D TaskViewTouchControllerDeprecated: Not intercepting touch.
+         1792499203.116  1105  1200 I HWUI    : Davey! duration=1271ms; Flags=0, FrameTimelineVsyncId=10763, IntendedVsync=298396834441, Vsync=299463501065, InputEventId=-87600690, HandleInputStart=299479939975, AnimationStart=299479963600, PerformTraversalsStart=299489291850, DrawStart=299605150642, FrameDeadline=299463501065, FrameStartTime=299471433433, FrameInterval=16666666, WorkloadTarget=16666666, SyncQueued=299605447892, SyncStart=299605718892, IssueDrawCommandsStart=299606040183, SwapBuffers=299618275183, FrameCompleted=299668107267, DequeueBufferDuration=2334, QueueBufferDuration=290750, GpuCompleted=299668107267, SwapBuffersCompleted=299619968100, DisplayPresentTime=0, CommandSubmissionCompleted=299618275183, 
+         1792499203.162  1105  1105 W SplitSelectStateCtor: Missing session instanceIds
+         1792499203.162  1105  1105 D StatsLog: LAUNCHER_SPLIT_SELECTION_EXIT_INTERRUPTED
+         1792499203.219  1105  1105 I KeyboardInsetsHandler: shouldKeyboardTransition, status=true toState:Normal StateManager(mLastStableState:Normal, mCurrentStableState:AllApps, mState:AllApps, mRestState:null, isInTransition:false) isImeShown:false isImeShowRequested:false enableKeyboardAlwaysUp:false isUserControlled:true isFromIntentOrA11y:false
+         1792499203.220  1105  1105 I KeyboardInsetAnimation: KeyboardInsetAnimation, toAllApps=false
+         1792499203.227  1105  1105 I KeyboardInsetsHandler: onControllableInsetsChanged
+         1792499203.227  1105  1105 I KeyboardInsetsController: update(target=HIDDEN) state=IDLE
+         1792499203.228  1105  1105 D StateManager: onStateTransitionStart - state: Normal
+         1792499203.419  1105  1105 D StateManager: onStateTransitionStart - state: Normal
+         1792499203.653  1105  1105 D StatsLog: LAUNCHER_ALLAPPS_EXIT
+         1792499203.653  1105  1105 D StateManager: onStateTransitionEnd - state: Normal
+         1792499203.655  1105  1105 D RecentsView: reset - mEnableDrawingLiveTile: false, mRecentsAnimationController: null
+         1792499203.655  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: force: false
+         1792499203.655  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: Not needed.
+         1792499203.655  1105  1105 D StatsLog: LAUNCHER_ALLAPPS_CLOSE_DOWN
+         1792499203.755  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: force: false
+         1792499203.755  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: Not needed.
+         1792499203.872  1105  1105 D TFOManager: playPanelCloseAnimation() duration=200 traceTag=LauncherOverlay-hide isHomeButtonTap=true
+         1792499203.872  1105  1105 D TFOManager: Skipped creating panel close animation because -1 is invisible.
+         1792499203.905  1105  1105 D OverviewCommandHelper: clearing pending commands: []
+         1792499203.944  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: force: false
+         1792499203.944  1105  1105 D ActivityAllAppsContainerView: rebindAdapters: Not needed.
+         1792499204.023  1105  1105 D StatsLog: LAUNCHER_ONRESUME
+         1792499204.285  1105  1105 D InsetsController: hide(ime(), fromIme=false)
+         1792499204.285  1105  1105 I ImeTracker: com.google.android.apps.nexuslauncher:7d66bc2d: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+         1792499204.327  1105  1156 D QuickstepModelDelegate: notifyAppTargetEvent action=1 launchLocation=workspace/0/[-1,-1]/[1,1]

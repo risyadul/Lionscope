@@ -1,0 +1,352 @@
+/* Screens lane: a thin track of labelled bands on the shared x axis. Bands are soft tints of
+   the screen hue with a 2px accent edge; a 2px surface gap separates neighbours. */
+
+.lane.lane--screens {
+  /* Above the next lanes so the hover card can overlap them. */
+  position: relative;
+  z-index: 4;
+  flex: none;
+  height: auto;
+  min-height: 0;
+}
+
+.lane.lane--screens .lane-head {
+  padding-bottom: 2px;
+}
+
+.screen-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.screen-readout-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.screen-readout[data-at-cursor] .legend-value {
+  background: var(--hover-wash);
+}
+
+/* Identity swatch: same hue as the band. */
+.screen-swatch {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--band, var(--ink-muted));
+}
+
+.screen-swatch[data-bg] {
+  background: repeating-linear-gradient(135deg, var(--ink-muted) 0 1px, transparent 1px 3px);
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+}
+
+[data-color='screen1'] {
+  --band: var(--viz-screen-1);
+}
+[data-color='screen2'] {
+  --band: var(--viz-screen-2);
+}
+[data-color='screen3'] {
+  --band: var(--viz-screen-3);
+}
+
+.screen-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-clear-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen-clear svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+.screen-view-link {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  transition:
+    color var(--dur-fast) linear,
+    text-decoration-color var(--dur-fast) linear;
+}
+
+.screen-view-link:hover {
+  color: var(--ink);
+  text-decoration-color: var(--ink);
+}
+
+.screen-view-link svg {
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.screen-view-link:hover svg {
+  transform: translateX(2px);
+}
+
+.screen-track-host {
+  position: relative;
+  height: 30px;
+}
+
+.screen-track {
+  position: absolute;
+  top: 3px;
+  bottom: 5px;
+}
+
+.screen-track::before {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  content: '';
+}
+
+.screen-track-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.screen-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  min-width: 3px;
+  margin: 0;
+  /* Unlabelled bands carry no padding, so a 1 px span stays 1 px (+ its gap) wide. */
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-right: 2px solid var(--surface);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--band, var(--ink-muted)) 17%, var(--surface));
+  background-clip: padding-box;
+  box-shadow: inset 2px 0 0 var(--band, var(--ink-muted));
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) linear,
+    opacity var(--dur-fast) linear;
+}
+
+.screen-band[data-labelled] {
+  padding: 0 6px 0 7px;
+}
+
+/* A flex item only ellipsizes inside its own box: the label clips, the band stays a flex row. */
+.screen-band-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Several quick screen changes merged: a dense neutral hatch, not a screen. */
+.screen-band[data-cluster] {
+  background: repeating-linear-gradient(90deg, var(--ink-muted) 0 1px, transparent 1px 3px);
+  background-clip: padding-box;
+  box-shadow: none;
+  opacity: 0.55;
+}
+
+button.screen-band:hover {
+  background-color: color-mix(in srgb, var(--band) 28%, var(--surface));
+}
+
+button.screen-band:focus-visible {
+  z-index: 2;
+  outline-offset: 0;
+}
+
+/* The current screen keeps its right edge open: it is still on top. */
+.screen-band[data-open] {
+  border-right: 0;
+  border-radius: 2px 0 0 2px;
+}
+
+.screen-band[data-selected] {
+  z-index: 1;
+  background-color: color-mix(in srgb, var(--band) 34%, var(--surface));
+  box-shadow:
+    inset 3px 0 0 var(--band),
+    inset 0 0 0 1px var(--band);
+  font-weight: 600;
+}
+
+.screen-track[data-has-selection] .screen-band:not([data-selected]) {
+  opacity: 0.5;
+}
+
+.screen-track[data-has-selection] .screen-band:not([data-selected]):hover {
+  opacity: 0.85;
+}
+
+/* Background: an explicit hatched gap, not an absent screen. */
+.screen-band[data-bg] {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--rule-strong) 0 1px,
+    color-mix(in srgb, var(--surface-sunk) 70%, var(--surface)) 1px 6px
+  );
+  background-clip: padding-box;
+  box-shadow: none;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.screen-track-cursor,
+.screen-track-probe {
+  position: absolute;
+  top: -3px;
+  bottom: -5px;
+  left: 0;
+  z-index: 3;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.screen-track-cursor {
+  border-left: 1px solid var(--ink-muted);
+}
+
+.screen-track-probe {
+  border-left: 1px solid var(--ink);
+  transition: opacity var(--dur-fast) linear;
+}
+
+/* Hover card ---------------------------------------------------------------- */
+
+.screen-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 20;
+  width: 260px;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: tip-in 140ms var(--ease-out) both;
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -2px);
+  }
+}
+
+.screen-tip p {
+  margin: 0;
+}
+
+.screen-tip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.screen-tip-name {
+  overflow: hidden;
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-tip-kind {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.screen-tip .screen-tip-class {
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.screen-tip .screen-tip-time {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: var(--text-meta);
+}
+
+.screen-tip-time span {
+  color: var(--ink-muted);
+}
+
+@media (forced-colors: active) {
+  .screen-band {
+    border: 1px solid CanvasText;
+  }
+
+  .screen-band[data-selected] {
+    outline: 2px solid Highlight;
+  }
+}

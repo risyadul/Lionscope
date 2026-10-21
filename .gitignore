@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+**/.omc/*
+!**/.omc/skills/
+.vite/
+# Android SDK build
+.gradle/
+**/build/
+local.properties
+.kotlin/
+*.iml
+.idea/

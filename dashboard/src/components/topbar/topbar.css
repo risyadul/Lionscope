@@ -1,0 +1,671 @@
+.topbar {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-5);
+  padding: 10px var(--space-4) 10px;
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--plane);
+}
+
+/* Brand ---------------------------------------------------------------------- */
+
+.topbar-brand {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-self: center;
+  gap: 1px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.brand-mark {
+  flex: none;
+}
+
+.brand-dot {
+  fill: var(--brand);
+}
+
+.brand-word {
+  font-size: var(--text-title);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1;
+}
+
+.brand-word span {
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.topbar-version {
+  padding-left: 30px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  letter-spacing: 0.02em;
+}
+
+/* Controls ------------------------------------------------------------------- */
+
+.topbar-controls {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding-left: var(--space-5);
+  border-left: 1px solid var(--rule-strong);
+}
+
+.field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.field--grow {
+  flex: 1 1 260px;
+  max-width: 440px;
+}
+
+.field-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.select-wrap,
+.combo {
+  position: relative;
+  min-width: 0;
+}
+
+.select-wrap {
+  flex: 1 1 auto;
+}
+
+.select,
+.combo-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-small);
+  text-overflow: ellipsis;
+  transition: border-color var(--dur-fast) linear;
+}
+
+.select {
+  width: 300px;
+  max-width: 100%;
+  appearance: none;
+  cursor: pointer;
+}
+
+.select:hover:not(:disabled),
+.combo-input:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+
+.select:disabled,
+.combo-input:disabled {
+  background: var(--surface-sunk);
+  color: var(--ink-2);
+  cursor: not-allowed;
+}
+
+.combo-input::placeholder {
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+}
+
+.combo[data-open] .combo-input {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--ink-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.combo[data-open] .select-chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.combo-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: max(100%, 380px);
+  max-width: calc(100vw - 32px);
+  max-height: min(420px, 60vh);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  transform-origin: top left;
+  animation: pop-in 160ms var(--ease-out) both;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.99);
+  }
+}
+
+.combo-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.combo-status {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.combo-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.combo-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.combo-option[aria-selected='true'] {
+  background: var(--active-wash);
+}
+
+/* The package currently chosen (distinct from the keyboard-active option). */
+.combo-option[data-current] {
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+
+.combo-option[data-kind='reveal'] {
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.combo-option[data-kind='reveal'] .combo-name::before {
+  margin-right: 6px;
+  color: var(--ink-muted);
+  content: '+';
+}
+
+.combo-note {
+  margin: 0;
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-sunk);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.combo-note--foot {
+  border-top: 1px solid var(--rule);
+  border-bottom: 0;
+}
+
+.combo-kbd {
+  padding: 0 4px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+.combo-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combo-name mark {
+  border-radius: 2px;
+  background: var(--event-wash);
+  color: inherit;
+}
+
+.combo-empty {
+  padding: var(--space-3) var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+}
+
+.pid-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-s);
+  background: var(--good-wash);
+  color: var(--good);
+  font-size: var(--text-overline);
+  font-weight: 600;
+}
+
+.sys-badge {
+  flex: none;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Session -------------------------------------------------------------------- */
+
+.topbar-session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.session-btn {
+  min-width: 84px;
+}
+
+.session-btn--stop {
+  border-color: var(--ink);
+  font-weight: 600;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 360px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.status-dot {
+  position: relative;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+
+.status-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  font-weight: 400;
+}
+
+.status-meta::before {
+  margin-right: 6px;
+  color: var(--rule-strong);
+  content: '·';
+}
+
+.status-error {
+  overflow: hidden;
+  font-family: var(--font-sans);
+  text-overflow: ellipsis;
+}
+
+.status-pill[data-status='running'] {
+  border-color: color-mix(in srgb, var(--good) 45%, var(--rule-strong));
+  color: var(--ink);
+}
+
+.status-pill[data-status='running'] .status-dot {
+  background: var(--good);
+}
+
+.status-pill[data-status='running'] .status-dot::after,
+.status-pill[data-status='waiting'] .status-dot::after {
+  position: absolute;
+  inset: -3px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  content: '';
+  animation: pulse 1.6s var(--ease-out) infinite;
+}
+
+.status-pill[data-status='running'] .status-dot::after {
+  color: var(--good);
+}
+
+.status-pill[data-status='waiting'] {
+  color: var(--ink);
+}
+
+.status-pill[data-status='waiting'] .status-dot {
+  background: var(--ink-2);
+}
+
+.status-pill[data-status='waiting'] .status-dot::after {
+  color: var(--ink-2);
+}
+
+.status-pill[data-status='error'] {
+  border-color: color-mix(in srgb, var(--critical) 50%, var(--rule-strong));
+  background: var(--critical-wash);
+  color: var(--log-e);
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot::after {
+    display: none;
+  }
+}
+
+/* SDK link ----------------------------------------------------------------------- */
+
+.sdk-status {
+  position: relative;
+}
+
+.sdk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sdk-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--ink-muted);
+}
+
+.sdk-pill[data-state='connected'] {
+  color: var(--ink);
+}
+
+.sdk-pill[data-state='connected'] .sdk-dot {
+  background: var(--good);
+}
+
+.sdk-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  font-weight: 400;
+}
+
+.sdk-meta::before {
+  margin: 0 5px;
+  color: var(--rule-strong);
+  content: '·';
+}
+
+.sdk-pill[data-state='disconnected'] .sdk-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-muted);
+}
+
+/* Missing SDK: a dashed outline reads as "not connected, click for how". */
+button.sdk-pill {
+  border-style: dashed;
+  transition:
+    background-color var(--dur-fast) linear,
+    border-color var(--dur-fast) linear;
+}
+
+button.sdk-pill:hover,
+button.sdk-pill[aria-expanded='true'] {
+  border-color: var(--ink-muted);
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+button.sdk-pill .sdk-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-muted);
+}
+
+.sdk-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  /* Wide enough for the Gradle snippet's longest line without scrolling. */
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  padding: var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  transform-origin: top right;
+  animation: pop-in 160ms var(--ease-out) both;
+}
+
+/* On phones the pill starts its own row at the left edge. */
+@media (max-width: 640px) {
+  .sdk-pop {
+    right: auto;
+    left: 0;
+    transform-origin: top left;
+  }
+}
+
+button.sdk-pill[data-state='failed'] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--critical) 50%, var(--rule-strong));
+  background: var(--critical-wash);
+  color: var(--log-e);
+}
+
+button.sdk-pill[data-state='failed'] .sdk-dot {
+  background: var(--critical);
+  box-shadow: none;
+}
+
+.sdk-pop:focus-visible {
+  outline-offset: 0;
+}
+
+.sdk-pop-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--critical);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.sdk-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sdk-pop-title {
+  margin: 0;
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.sdk-pop-close {
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+}
+
+.sdk-pop-text {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+
+.sdk-snippet {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+}
+
+.sdk-snippet pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+}
+
+.sdk-snippet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 4px 4px var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.sdk-copy {
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+/* Server link ------------------------------------------------------------------ */
+
+.topbar-link {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.link-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--good);
+}
+
+.topbar-link:not([data-state='open']) .link-dot {
+  background: var(--critical);
+}
+
+@media (max-width: 1180px) {
+  .topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .topbar-controls {
+    flex-basis: 100%;
+    order: 3;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .field,
+  .field--grow {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .select {
+    width: 100%;
+  }
+
+  .topbar-session {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .status-pill {
+    max-width: 100%;
+  }
+}

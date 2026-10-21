@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Lionscope Sample</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_list">List</string>
+    <string name="tab_pager">Pager</string>
+    <string name="tab_more">More</string>
+    <string name="toggle_alias">Toggle alias</string>
+    <string name="page_format">Page %1$d of a legacy ViewPager (BEHAVIOR_SET_USER_VISIBLE_HINT). Swipe: no lifecycle event fires, Lionscope re-resolves from frames.</string>
+    <string name="home_body">HomeFragment implements ScreenName, so Lionscope reports it as \"home_tab\". The button flips its alias to \"home_tab_alt\" without any lifecycle event.</string>
+    <string name="jank_toggle">Slow onBindViewHolder (jank)</string>
+    <string name="open_detail">Open DetailActivity</string>
+    <string name="show_dialog">Show PromoDialogFragment</string>
+    <string name="more_body">MoreFragment is a child of MoreContainerFragment.</string>
+    <string name="detail_body">DetailActivity reports the alias \"detail_page\".</string>
+    <string name="dialog_title">Promo</string>
+    <string name="dialog_message">PromoDialogFragment is on top while shown.</string>
+    <string name="dialog_dismiss">Dismiss</string>
+    <string name="status_format">Lionscope %1$s · active: %2$s</string>
+    <string name="row_format">Row %1$d</string>
+</resources>

@@ -1,0 +1,6 @@
+# JitPack builds only the published SDK modules (not :sample), from the Gradle build in android-sdk/.
+# Coordinates: com.github.risyadul.Lionscope:lionscope[-noop]:<tag>
+jdk:
+  - openjdk17
+install:
+  - cd android-sdk && ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal

@@ -1,0 +1,180 @@
+/*
+ * Lionscope design tokens — "instrument panel".
+ * Cool graphite planes, hairline rules, IBM Plex Sans for UI, IBM Plex Mono for values.
+ * Brand red is reserved for the logo mark; it never encodes data.
+ * Series hues come from the validated data-viz palette (adjacent CVD ΔE ≥ 8 in both modes).
+ */
+:root {
+  color-scheme: light;
+
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Type scale (px): 10.5 overline · 11.5 meta · 12.5 body-s · 13.5 body · 16 title · 26 readout */
+  --text-overline: 0.65625rem;
+  --text-meta: 0.71875rem;
+  --text-small: 0.78125rem;
+  --text-body: 0.84375rem;
+  --text-title: 1rem;
+  --text-readout: 1.625rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-s: 3px;
+  --radius-m: 5px;
+  --radius-pill: 999px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+
+  /* Planes */
+  --plane: #eceef1;
+  --surface: #fbfbfc;
+  --surface-sunk: #f3f4f6;
+  --surface-raised: #ffffff;
+  --hover-wash: rgba(17, 20, 24, 0.045);
+  --active-wash: rgba(17, 20, 24, 0.08);
+
+  /* Ink (all ≥ 4.5:1 on --surface and --plane) */
+  --ink: #111418;
+  --ink-2: #474e5a;
+  --ink-muted: #5f6673;
+  --ink-inverse: #fbfbfc;
+
+  /* Rules */
+  --rule: #e2e4e8;
+  --rule-strong: #c4c8cf;
+
+  --focus: #2a6fdb;
+  --brand: #d7262f;
+
+  /* Semantic: events (process lifecycle) and jank (frames over budget) */
+  --event: #6250d6;
+  --event-wash: rgba(98, 80, 214, 0.1);
+  --jank: #c26a00;
+  --jank-text: #9a5200;
+  --jank-wash: rgba(194, 106, 0, 0.1);
+  --good: #0b7d32;
+  --good-wash: rgba(11, 125, 50, 0.1);
+  --critical: #c42f2f;
+  --critical-wash: rgba(196, 47, 47, 0.08);
+
+  /* Data series */
+  --viz-cpu: #2a78d6;
+  --viz-fps: #2a78d6;
+  --viz-frametime: #2a78d6;
+  --viz-framemax: #8b919c;
+  --viz-mem-native: #1baf7a;
+  --viz-mem-java: #2a78d6;
+  --viz-mem-graphics: #e87ba4;
+  --viz-mem-code: #008300;
+  --viz-mem-other: #8b919c;
+  --viz-mem-total: #111418;
+  --viz-threshold: #5f6673;
+
+  /* Frame stages: hue = pipeline thread, lightness = step within it (ordinal ramps, validated).
+     UI thread blue (input → draw), RenderThread green (sync → swap), delay recedes, GPU magenta. */
+  --viz-stage-input: #1c5cab;
+  --viz-stage-animation: #2a78d6;
+  --viz-stage-layout: #5598e7;
+  --viz-stage-draw: #86b6ef;
+  --viz-stage-sync: #4fb94a;
+  --viz-stage-command: #2b9927;
+  --viz-stage-swap: #007a00;
+  --viz-stage-delay: #babfc7;
+  --viz-stage-gpu: #e87ba4;
+
+  /* Screens: three categorical hues that validate all-pairs in both modes (never jank amber or
+     event violet). Assigned by a hash of the screen name; the label carries identity. */
+  --viz-screen-1: #2a78d6;
+  --viz-screen-2: #e87ba4;
+  --viz-screen-3: #008300;
+  /* Opacity of the active-screen tint behind every lane. */
+  --viz-screen-wash: 0.06;
+
+  /* Log levels (text, ≥ 4.5:1) */
+  --log-v: #5f6673;
+  --log-d: #3f4752;
+  --log-i: #1f6fbf;
+  --log-w: #8f5a00;
+  --log-e: #c42f2f;
+  --log-f: #a3122b;
+
+  --shadow-pop: 0 1px 0 rgba(17, 20, 24, 0.04), 0 14px 36px -10px rgba(17, 20, 24, 0.22);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --plane: #0b0d10;
+    --surface: #13161b;
+    --surface-sunk: #0f1216;
+    --surface-raised: #1a1e24;
+    --hover-wash: rgba(233, 235, 238, 0.05);
+    --active-wash: rgba(233, 235, 238, 0.09);
+
+    --ink: #e9ebee;
+    --ink-2: #b1b7c1;
+    --ink-muted: #8a919c;
+    --ink-inverse: #0b0d10;
+
+    --rule: #232831;
+    --rule-strong: #343a45;
+
+    --focus: #6b9cf0;
+    --brand: #f0434b;
+
+    --event: #9085e9;
+    --event-wash: rgba(144, 133, 233, 0.14);
+    --jank: #f0a420;
+    --jank-text: #f3b23a;
+    --jank-wash: rgba(240, 164, 32, 0.12);
+    --good: #3cc26a;
+    --good-wash: rgba(60, 194, 106, 0.12);
+    --critical: #f07070;
+    --critical-wash: rgba(240, 112, 112, 0.1);
+
+    --viz-cpu: #3987e5;
+    --viz-fps: #3987e5;
+    --viz-frametime: #3987e5;
+    --viz-framemax: #6f7682;
+    --viz-mem-native: #199e70;
+    --viz-mem-java: #3987e5;
+    --viz-mem-graphics: #d55181;
+    --viz-mem-code: #008300;
+    --viz-mem-other: #6f7682;
+    --viz-mem-total: #e9ebee;
+    --viz-threshold: #8a919c;
+
+    --viz-stage-input: #256abf;
+    --viz-stage-animation: #3987e5;
+    --viz-stage-layout: #6da7ec;
+    --viz-stage-draw: #9ec5f4;
+    --viz-stage-sync: #56c050;
+    --viz-stage-command: #33a02e;
+    --viz-stage-swap: #008000;
+    --viz-stage-delay: #4a505b;
+    --viz-stage-gpu: #d55181;
+
+    --viz-screen-1: #3987e5;
+    --viz-screen-2: #d55181;
+    --viz-screen-3: #008300;
+    --viz-screen-wash: 0.085;
+
+    --log-v: #8a919c;
+    --log-d: #c9ced6;
+    --log-i: #6aa8f0;
+    --log-w: #e8b04a;
+    --log-e: #f07070;
+    --log-f: #ff6b81;
+
+    --shadow-pop: 0 0 0 1px rgba(233, 235, 238, 0.06), 0 18px 40px -12px rgba(0, 0, 0, 0.7);
+  }
+}

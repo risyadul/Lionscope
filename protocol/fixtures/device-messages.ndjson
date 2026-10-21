@@ -1,0 +1,8 @@
+{"type":"hello","protocolVersion":1,"sdkVersion":"0.1.0","packageName":"com.example.shop","processName":"com.example.shop","pid":20340,"apiLevel":35,"deviceWallMs":1792516375000,"refreshRateHz":120}
+{"type":"screen","ts":1792516375100,"screen":{"name":"MainActivity","className":"com.example.shop.ui.MainActivity","kind":"activity"}}
+{"type":"screen","ts":1792516375250,"screen":{"name":"homepage","className":"com.example.shop.ui.home.HomeFragment","kind":"fragment"}}
+{"type":"frames","window":"com.example.shop.ui.MainActivity","intervalMs":8.333,"frames":[{"ts":1792516375300,"totalMs":7.9,"inputMs":0.2,"animationMs":0.4,"layoutMs":1.1,"drawMs":1.6,"syncMs":0.3,"commandMs":1.2,"swapMs":0.5,"delayMs":2.6,"gpuMs":2.1,"deadlineMs":16.6,"firstDraw":false},{"ts":1792516375308,"totalMs":24.5,"inputMs":0.1,"animationMs":0.3,"layoutMs":14.2,"drawMs":5.4,"syncMs":0.6,"commandMs":1.9,"swapMs":0.4,"delayMs":1.6,"gpuMs":null,"deadlineMs":null,"firstDraw":true}]}
+{"type":"screen","ts":1792516376000,"screen":{"name":"BottomSheetPromo","className":"com.example.shop.ui.promo.PromoBottomSheet","kind":"dialog"}}
+{"type":"screen","ts":1792516377000,"screen":null}
+{"type":"heartbeat","ts":1792516380000,"droppedMessages":0}
+{"type":"frames","window":"com.example.shop.ui.promo.PromoBottomSheet","intervalMs":8.333,"frames":[],"droppedFrames":2}
