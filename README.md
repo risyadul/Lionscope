@@ -97,8 +97,9 @@ open and the tab is visible.
 on Android's clipboard when you click or focus the screen, so Android's own long-press **Paste** has it, and
 text copied inside Android lands on your computer's clipboard ("Copied from the emulator"). Cmd/Ctrl+V on the
 screen pastes straight into the focused field. Any Unicode text up to 32 KB works. Reading your clipboard needs
-the browser's clipboard permission (Chrome asks once); Firefox and Safari don't offer it, so there only Cmd/Ctrl+V
-and copying out of Android work. Turn the toggle off and nothing is read from or written to either clipboard
+the browser's clipboard permission (Chrome asks once); Firefox-based browsers (Firefox, Zen) and Safari don't offer it,
+so there press Cmd/Ctrl+V on the screen to send your clipboard (the screen shows that hint); copying out of
+Android works everywhere. Turn the toggle off and nothing is read from or written to either clipboard
 (Cmd/Ctrl+V still pastes, as an explicit action).
 
 Emulators that Lionscope booted can be shut down from the dashboard and are shut down when the server stops;

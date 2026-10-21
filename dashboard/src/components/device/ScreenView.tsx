@@ -3,6 +3,7 @@ import type { ScreenErrorCode, ScreenNavButton, ScreenSize } from '@lionscope/pr
 import { DEFAULT_SCREEN_SIZE, SCREEN_SIZES } from '@lionscope/protocol/wire';
 import { useElementSize } from '../../hooks/useElementSize.ts';
 import { useStoredState } from '../../hooks/useStoredState.ts';
+import { pasteShortcut } from '../../lib/clipboard.ts';
 import { LAYOUT_KEYS } from '../../lib/layoutPrefs.ts';
 import { fitDeviceGlass, mirrorPoint, type FramePoint } from '../../lib/screenInput.ts';
 import type { ScreenConnectionState } from '../../lib/screenSocket.ts';
@@ -129,15 +130,6 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
   useEffect(() => {
     streamEvents.current = { onOpen: onSocketOpen, onClipboard: onRemoteClipboard };
   }, [onSocketOpen, onRemoteClipboard]);
-
-  // Back from another app with the screen still focused: the desktop clipboard may have changed.
-  useEffect(() => {
-    const onWindowFocus = () => {
-      if (document.activeElement === canvasRef.current) pushFromDesktop();
-    };
-    window.addEventListener('focus', onWindowFocus);
-    return () => window.removeEventListener('focus', onWindowFocus);
-  }, [canvasRef, pushFromDesktop]);
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
   const hintId = useId();
@@ -246,6 +238,12 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
       </div>
       <p id={hintId} className="device-hint">
         Click to interact · <kbd>Esc</kbd> = Back · <kbd>Alt</kbd>+drag = pinch
+        {clipboard.isPasteOnly && (
+          <>
+            {' · '}
+            Press <kbd>{pasteShortcut()}</kbd> on the screen to send your clipboard
+          </>
+        )}
       </p>
       <p className="device-paste-note" role="status">
         {pasteNote}

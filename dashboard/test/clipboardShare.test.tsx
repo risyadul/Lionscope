@@ -217,3 +217,156 @@ describe('Android → desktop', () => {
     expect(screen.queryByText('Copied from the emulator')).toBeNull();
   });
 });
+
+describe('Cmd/Ctrl+V on the screen', () => {
+  const paste = (target: Element, text: string) =>
+    fireEvent.paste(target, { clipboardData: { getData: () => text } });
+
+  it('pastes when the event lands on <body> with the screen focused (Firefox)', async () => {
+    renderPanel();
+    const socket = await goLive();
+    act(() => canvas().focus());
+    expect(paste(document.body, 'from firefox')).toBe(false);
+    expect(of(socket, 'paste')).toEqual([{ type: 'paste', text: 'from firefox' }]);
+  });
+
+  it('pastes once when the event targets the screen and bubbles to the document (Chrome)', async () => {
+    renderPanel();
+    const socket = await goLive();
+    act(() => canvas().focus());
+    expect(paste(canvas(), 'from chrome')).toBe(false);
+    expect(of(socket, 'paste')).toEqual([{ type: 'paste', text: 'from chrome' }]);
+  });
+
+  it('leaves pastes alone while anything else has focus', async () => {
+    renderPanel();
+    const socket = await goLive();
+    const input = document.body.appendChild(document.createElement('input'));
+    act(() => input.focus());
+    expect(paste(input, 'for the filter')).toBe(true);
+    act(() => input.blur());
+    expect(paste(document.body, 'nowhere')).toBe(true);
+    expect(of(socket, 'paste')).toHaveLength(0);
+    input.remove();
+  });
+
+  it('keeps one document listener per screen and removes it on unmount', async () => {
+    const add = vi.spyOn(document, 'addEventListener');
+    const remove = vi.spyOn(document, 'removeEventListener');
+    const view = renderPanel();
+    await goLive();
+    const pasteListeners = (spy: typeof add) => spy.mock.calls.filter(([type]) => type === 'paste');
+    expect(pasteListeners(add)).toHaveLength(1);
+    view.unmount();
+    expect(pasteListeners(remove).map(([, listener]) => listener)).toEqual(
+      pasteListeners(add).map(([, listener]) => listener),
+    );
+  });
+});
+
+describe('Paste hint', () => {
+  const hint = () => document.querySelector('.device-hint')?.textContent ?? '';
+  const setPlatform = (platform: string) =>
+    Object.defineProperty(navigator, 'platform', { value: platform, configurable: true });
+  const queryAnswers = (answer: () => Promise<{ state: string }>) =>
+    Object.defineProperty(navigator, 'permissions', { value: { query: vi.fn(answer) }, configurable: true });
+
+  afterEach(() => Reflect.deleteProperty(navigator, 'platform'));
+
+  it('says ⌘V on a Mac where the clipboard can’t be read (Firefox)', async () => {
+    setPlatform('MacIntel');
+    queryAnswers(async () => Promise.reject(new TypeError('clipboard-read')));
+    renderPanel();
+    await settle();
+    expect(hint()).toContain('Press ⌘V on the screen to send your clipboard');
+    expect(hint()).toContain('Click to interact');
+  });
+
+  it('says Ctrl+V elsewhere, and also shows when reading is denied', async () => {
+    setPlatform('Win32');
+    queryAnswers(async () => ({ state: 'denied' }));
+    renderPanel();
+    await settle();
+    expect(hint()).toContain('Press Ctrl+V on the screen to send your clipboard');
+  });
+
+  it('is hidden once reading is granted, and while sharing is off', async () => {
+    renderPanel();
+    await settle();
+    expect(hint()).not.toContain('to send your clipboard');
+
+    cleanup();
+    resetClipboardReadAccess();
+    window.localStorage.setItem(LAYOUT_KEYS.clipboardShare, 'false');
+    queryAnswers(async () => Promise.reject(new TypeError('clipboard-read')));
+    renderPanel();
+    await settle();
+    expect(hint()).not.toContain('to send your clipboard');
+  });
+
+  it('appears after a read is refused', async () => {
+    readText.mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+    renderPanel();
+    await goLive();
+    expect(hint()).not.toContain('to send your clipboard');
+    act(() => canvas().focus());
+    await settle();
+    expect(hint()).toContain('to send your clipboard');
+  });
+});
+
+describe('Back to the window', () => {
+  const comeBack = (event: 'focus' | 'visibilitychange') =>
+    act(() => {
+      if (event === 'focus') window.dispatchEvent(new FocusEvent('focus'));
+      else document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+  it('pushes a changed desktop clipboard without the screen focused, once granted', async () => {
+    renderPanel();
+    const socket = await goLive();
+    desktop = 'copied in another app';
+    comeBack('focus');
+    await settle();
+    comeBack('visibilitychange');
+    await settle();
+    expect(of(socket, 'clipboard')).toEqual([{ type: 'clipboard', text: 'copied in another app' }]);
+
+    desktop = 'copied again';
+    comeBack('visibilitychange');
+    await settle();
+    expect(of(socket, 'clipboard')).toHaveLength(2);
+  });
+
+  it('never reads (so never prompts) unless the permission is already granted', async () => {
+    for (const answer of [
+      async () => ({ state: 'prompt' }),
+      async () => Promise.reject(new TypeError('clipboard-read')),
+    ]) {
+      resetClipboardReadAccess();
+      Object.defineProperty(navigator, 'permissions', {
+        value: { query: vi.fn(answer) },
+        configurable: true,
+      });
+      renderPanel();
+      const socket = await goLive();
+      comeBack('focus');
+      comeBack('visibilitychange');
+      await settle();
+      expect(readText).not.toHaveBeenCalled();
+      expect(of(socket, 'clipboard')).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  it('pushes nothing while sharing is off', async () => {
+    window.localStorage.setItem(LAYOUT_KEYS.clipboardShare, 'false');
+    renderPanel();
+    const socket = await goLive();
+    comeBack('focus');
+    comeBack('visibilitychange');
+    await settle();
+    expect(readText).not.toHaveBeenCalled();
+    expect(of(socket, 'clipboard')).toHaveLength(0);
+  });
+});

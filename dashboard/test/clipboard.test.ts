@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_SCREEN_CLIPBOARD_BYTES } from '@lionscope/protocol/wire';
 import {
   clipboardReadAccess,
+  isClipboardReadGranted,
   limitClipboardText,
+  pasteShortcut,
   readDesktopClipboard,
   resetClipboardReadAccess,
+  resolveClipboardReadAccess,
   writeDesktopClipboard,
   type ClipboardEnv,
 } from '../src/lib/clipboard.ts';
@@ -103,5 +106,58 @@ describe('limitClipboardText', () => {
     expect(new TextEncoder().encode(JSON.stringify(text)).length).toBeLessThanOrEqual(
       MAX_SCREEN_CLIPBOARD_BYTES + 2,
     );
+  });
+});
+
+describe('isClipboardReadGranted', () => {
+  it('is true only for an explicit grant, and never reads', async () => {
+    const { env: e, readText } = env();
+    expect(await isClipboardReadGranted(e)).toBe(true);
+    for (const query of [
+      vi.fn(async () => ({ state: 'prompt' }) as PermissionStatus),
+      vi.fn(async () => Promise.reject(new TypeError('bad name'))),
+    ]) {
+      expect(await isClipboardReadGranted({ ...e, permissions: { query } })).toBe(false);
+    }
+    expect(await isClipboardReadGranted({ ...e, clipboard: undefined })).toBe(false);
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it('is false after a denial without asking again', async () => {
+    const { env: e, readText, query } = env();
+    readText.mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'));
+    await readDesktopClipboard(e);
+    query.mockClear();
+    expect(await isClipboardReadGranted(e)).toBe(false);
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveClipboardReadAccess', () => {
+  it('works the access out without reading', async () => {
+    const { env: e, readText } = env();
+    expect(await resolveClipboardReadAccess(e)).toBe('allowed');
+    expect(readText).not.toHaveBeenCalled();
+    resetClipboardReadAccess();
+    const denied = vi.fn(async () => ({ state: 'denied' }) as PermissionStatus);
+    expect(await resolveClipboardReadAccess({ ...e, permissions: { query: denied } })).toBe('denied');
+  });
+});
+
+describe('pasteShortcut', () => {
+  const nav = (platform: string, uaPlatform?: string) =>
+    ({
+      platform,
+      userAgentData: uaPlatform === undefined ? undefined : { platform: uaPlatform },
+    }) as Pick<Navigator, 'platform'>;
+
+  it('says ⌘V on Apple platforms and Ctrl+V elsewhere', () => {
+    expect(pasteShortcut(nav('MacIntel'))).toBe('⌘V');
+    expect(pasteShortcut(nav('', 'macOS'))).toBe('⌘V');
+    expect(pasteShortcut(nav('iPad'))).toBe('⌘V');
+    expect(pasteShortcut(nav('Win32'))).toBe('Ctrl+V');
+    expect(pasteShortcut(nav('Linux x86_64'))).toBe('Ctrl+V');
+    expect(pasteShortcut(nav('MacIntel', 'Windows'))).toBe('Ctrl+V');
+    expect(pasteShortcut(undefined)).toBe('Ctrl+V');
   });
 });

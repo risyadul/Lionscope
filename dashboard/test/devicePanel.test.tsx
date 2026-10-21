@@ -343,6 +343,7 @@ describe('ScreenView input', () => {
   it('pastes clipboard text as one paste message, Unicode included', async () => {
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     const socket = await goLive();
+    act(() => screenCanvas().focus());
     fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'héllo 😀' } });
     expect(socket.messages().filter((m) => (m as { type: string }).type === 'paste')).toEqual([
       { type: 'paste', text: 'héllo 😀' },
@@ -497,6 +498,7 @@ describe('ScreenView review fixes', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     const socket = await goLive();
+    act(() => screenCanvas().focus());
     fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'x'.repeat(40_000) } });
     expect(screen.getByText(PASTE_TRUNCATED_NOTE)).toBeTruthy();
     const pastes = socket.messages().filter((m) => (m as { type: string }).type === 'paste');

@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ScreenClientMessage } from '@lionscope/protocol/wire';
 import { useStoredState } from '../../hooks/useStoredState.ts';
-import { limitClipboardText, readDesktopClipboard, writeDesktopClipboard } from '../../lib/clipboard.ts';
+import {
+  clipboardReadAccess,
+  isClipboardReadGranted,
+  limitClipboardText,
+  readDesktopClipboard,
+  resolveClipboardReadAccess,
+  writeDesktopClipboard,
+  type ReadAccess,
+} from '../../lib/clipboard.ts';
 import { LAYOUT_KEYS, parseBoolean } from '../../lib/layoutPrefs.ts';
 
 /** How long each toast stays: a manual Copy needs time to be clicked. */
@@ -20,6 +28,8 @@ export interface ClipboardShare {
   setEnabled: (enabled: boolean) => void;
   /** The screen was focused or pressed: push the desktop clipboard to Android if it changed. */
   pushFromDesktop: () => void;
+  /** Sharing is on but the browser won't let the clipboard be read: only Cmd/Ctrl+V sends it. */
+  isPasteOnly: boolean;
   /** A new screen socket opened: the server's sync setting starts over (off). */
   onSocketOpen: () => void;
   /** Text copied inside Android. */
@@ -40,6 +50,7 @@ export function useClipboardShare(
   /** Last text known to be on both sides: not pushed again, and an Android copy isn't echoed back. */
   const lastSynced = useRef<string | null>(null);
   const isReading = useRef(false);
+  const [readAccess, setReadAccess] = useState<ReadAccess>(clipboardReadAccess);
 
   useEffect(() => {
     liveRef.current = isLive;
@@ -56,6 +67,10 @@ export function useClipboardShare(
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (isEnabled) void resolveClipboardReadAccess().then(setReadAccess);
+  }, [isEnabled]);
+
   const onSocketOpen = useCallback(() => {
     send({ type: 'clipboardSync', enabled: enabledRef.current });
   }, [send]);
@@ -65,11 +80,28 @@ export function useClipboardShare(
     isReading.current = true;
     void readDesktopClipboard().then((text) => {
       isReading.current = false;
+      setReadAccess(clipboardReadAccess());
       if (text === null || text === '' || text === lastSynced.current) return;
       if (!enabledRef.current || !liveRef.current) return;
       if (send({ type: 'clipboard', text: limitClipboardText(text).text })) lastSynced.current = text;
     });
   }, [send]);
+
+  // Back from another app: the desktop clipboard may have changed. No gesture here, so never risk a prompt.
+  useEffect(() => {
+    const onReturn = () => {
+      if (document.visibilityState !== 'visible' || !enabledRef.current || !liveRef.current) return;
+      void isClipboardReadGranted().then((isGranted) => {
+        if (isGranted) pushFromDesktop();
+      });
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [pushFromDesktop]);
 
   const onRemoteClipboard = useCallback((text: string) => {
     if (!enabledRef.current) return;
@@ -90,6 +122,7 @@ export function useClipboardShare(
     isEnabled,
     setEnabled,
     pushFromDesktop,
+    isPasteOnly: isEnabled && (readAccess === 'unsupported' || readAccess === 'denied'),
     onSocketOpen,
     onRemoteClipboard,
     toast: isEnabled ? toast : null,

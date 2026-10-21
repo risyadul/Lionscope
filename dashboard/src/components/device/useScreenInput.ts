@@ -3,7 +3,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type ClipboardEvent,
   type KeyboardEvent,
   type PointerEvent,
   type RefObject,
@@ -56,7 +55,6 @@ export interface ScreenInputHandlers {
   onPointerLeave: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLCanvasElement>) => void;
   onKeyUp: (event: KeyboardEvent<HTMLCanvasElement>) => void;
-  onPaste: (event: ClipboardEvent<HTMLCanvasElement>) => void;
   onBlur: () => void;
 }
 
@@ -134,6 +132,24 @@ export function useScreenInput(
     const timer = setTimeout(() => setPasteNote(null), PASTE_NOTE_MS);
     return () => clearTimeout(timer);
   }, [pasteNote]);
+
+  // Firefox fires Cmd/Ctrl+V on <body> even with the canvas focused, Chrome on the canvas (then it bubbles):
+  // one document listener sees both, once, and leaves pastes into other inputs alone.
+  useEffect(() => {
+    if (!isActive) return;
+    const onPaste = (event: ClipboardEvent) => {
+      if (canvasRef.current === null || document.activeElement !== canvasRef.current) return;
+      const raw = event.clipboardData?.getData('text/plain') ?? '';
+      if (raw === '') return;
+      event.preventDefault();
+      // One message: the server puts it on Android's clipboard and presses Paste (Unicode-safe).
+      const { text, isTruncated } = limitClipboardText(raw);
+      setPasteNote(isTruncated ? PASTE_TRUNCATED_NOTE : null);
+      send({ type: 'paste', text });
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [canvasRef, isActive, send]);
 
   // React registers wheel listeners as passive; this one must cancel page scrolling.
   useEffect(() => {
@@ -226,16 +242,6 @@ export function useScreenInput(
       event.preventDefault();
       if (action.msg?.type === 'key') heldKeys.current.delete(action.msg.key);
       if (action.msg) send(action.msg);
-    },
-    onPaste(event) {
-      if (!isActive) return;
-      const raw = event.clipboardData.getData('text/plain');
-      if (raw === '') return;
-      event.preventDefault();
-      // One message: the server puts it on Android's clipboard and presses Paste (Unicode-safe).
-      const { text, isTruncated } = limitClipboardText(raw);
-      setPasteNote(isTruncated ? PASTE_TRUNCATED_NOTE : null);
-      send({ type: 'paste', text });
     },
     onBlur() {
       endAll();

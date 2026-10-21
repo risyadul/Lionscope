@@ -32,21 +32,36 @@ export function resetClipboardReadAccess(): void {
   readAccess = 'unknown';
 }
 
-async function checkReadAccess(env: ClipboardEnv): Promise<ReadAccess> {
-  if (!env.clipboard?.readText || !env.permissions?.query) return 'unsupported';
+/** The `clipboard-read` permission state; null where the API or the permission name is missing. */
+async function readPermission(env: ClipboardEnv): Promise<PermissionState | null> {
+  if (!env.clipboard?.readText || !env.permissions?.query) return null;
   try {
     const status = await env.permissions.query({ name: 'clipboard-read' as PermissionName });
-    return status.state === 'denied' ? 'denied' : 'allowed';
+    return status.state;
   } catch {
     // Firefox and Safari don't know the permission name.
-    return 'unsupported';
+    return null;
   }
+}
+
+/** Whether the clipboard may be read, worked out once without reading it (a permission query never prompts). */
+export async function resolveClipboardReadAccess(env: ClipboardEnv = browserEnv()): Promise<ReadAccess> {
+  if (readAccess === 'unknown') {
+    const state = await readPermission(env);
+    readAccess = state === null ? 'unsupported' : state === 'denied' ? 'denied' : 'allowed';
+  }
+  return readAccess;
+}
+
+/** True only when a read can't show a prompt: for reads that no user gesture asked for. */
+export async function isClipboardReadGranted(env: ClipboardEnv = browserEnv()): Promise<boolean> {
+  if (readAccess === 'unsupported' || readAccess === 'denied') return false;
+  return (await readPermission(env)) === 'granted';
 }
 
 /** The desktop clipboard's text, or null when it can't (or may no longer) be read. Never throws. */
 export async function readDesktopClipboard(env: ClipboardEnv = browserEnv()): Promise<string | null> {
-  if (readAccess === 'unknown') readAccess = await checkReadAccess(env);
-  if (readAccess !== 'allowed' || !env.clipboard) return null;
+  if ((await resolveClipboardReadAccess(env)) !== 'allowed' || !env.clipboard) return null;
   try {
     return await env.clipboard.readText();
   } catch {
@@ -68,6 +83,15 @@ export async function writeDesktopClipboard(
   } catch {
     return false;
   }
+}
+
+/** The paste shortcut as the viewer's keyboard labels it. */
+export function pasteShortcut(
+  nav: Pick<Navigator, 'platform'> | undefined = globalThis.navigator,
+): '⌘V' | 'Ctrl+V' {
+  const uaData = (nav as { userAgentData?: { platform?: string } } | undefined)?.userAgentData;
+  const platform = uaData?.platform || nav?.platform || '';
+  return /^(mac|iphone|ipad|ipod)/i.test(platform) ? '⌘V' : 'Ctrl+V';
 }
 
 /** Bytes a character takes inside a JSON string (escapes included), so the socket frame stays in bounds. */
