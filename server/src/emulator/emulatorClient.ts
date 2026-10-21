@@ -26,8 +26,19 @@ export class EmulatorRpcError extends Error {
   }
 }
 
+/** The emulator refused the token (gRPC UNAUTHENTICATED). */
+export function isAuthError(error: unknown): boolean {
+  return error instanceof EmulatorRpcError && error.code === grpc.status.UNAUTHENTICATED;
+}
+
 export interface FrameStreamHandlers {
   onFrame(frame: ScreenFrame): void;
+  /** The stream ended without cancel(): null when the emulator closed it, else the error. */
+  onEnd(error: EmulatorRpcError | null): void;
+}
+
+export interface ClipboardStreamHandlers {
+  onText(text: string): void;
   /** The stream ended without cancel(): null when the emulator closed it, else the error. */
   onEnd(error: EmulatorRpcError | null): void;
 }
@@ -57,6 +68,13 @@ export interface EmulatorClient {
   getRotationZ(): Promise<number>;
   /** Set z at once (no smooth transition), keeping x and y. */
   setRotationZ(z: number): Promise<void>;
+  /** Put text on Android's clipboard. */
+  setClipboard(text: string): Promise<void>;
+  /**
+   * Android's clipboard as it changes. The emulator sends the current content first, then every change made
+   * in the guest or by another client (never this client's own setClipboard).
+   */
+  streamClipboard(handlers: ClipboardStreamHandlers): { cancel(): void };
   /** Graceful shutdown (saves the Quick Boot snapshot unless the emulator runs with -no-snapshot-save). */
   shutdown(): Promise<void>;
   close(): void;
@@ -88,6 +106,8 @@ interface RawController extends grpc.Client {
   getScreenshot: UnaryMethod<RawImage>;
   getPhysicalModel: UnaryMethod<{ value?: { data?: number[] } }>;
   setPhysicalModel: UnaryMethod<object>;
+  setClipboard: UnaryMethod<object>;
+  streamClipboard(request: object, metadata: grpc.Metadata): grpc.ClientReadableStream<{ text?: string }>;
   setVmState: UnaryMethod<object>;
   streamScreenshot(request: object, metadata: grpc.Metadata): grpc.ClientReadableStream<RawImage>;
   streamInputEvent(
@@ -243,6 +263,29 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
           value: { data: [x, y, z] },
           interpolation: 'STEP',
         });
+      },
+      async setClipboard(text) {
+        await unary('setClipboard', raw.setClipboard, { text });
+      },
+      streamClipboard(handlers) {
+        const stream = raw.streamClipboard({}, metadata());
+        let done = false;
+        const end = (error: EmulatorRpcError | null): void => {
+          if (done) return;
+          done = true;
+          handlers.onEnd(error);
+        };
+        stream.on('data', (clip: { text?: string }) => {
+          if (!done) handlers.onText(clip.text ?? '');
+        });
+        stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamClipboard', error)));
+        stream.on('end', () => end(null));
+        return {
+          cancel() {
+            done = true;
+            stream.cancel();
+          },
+        };
       },
       async shutdown() {
         await unary('setVmState', raw.setVmState, { state: 'SHUTDOWN' });

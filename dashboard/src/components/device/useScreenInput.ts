@@ -9,14 +9,13 @@ import {
   type RefObject,
 } from 'react';
 import type { ScreenClientMessage, ScreenTouchPoint } from '@lionscope/protocol/wire';
+import { limitClipboardText } from '../../lib/clipboard.ts';
 import {
   createTouchSlots,
   createWheelAccumulator,
   keyAction,
-  limitPaste,
   mirrorPoint,
   normalizePoint,
-  textMessages,
   wheelDelta,
   type FramePoint,
 } from '../../lib/screenInput.ts';
@@ -40,11 +39,9 @@ function keyInput(event: KeyboardEvent<HTMLCanvasElement>) {
   return { key, metaKey, ctrlKey, altGraph, isComposing: event.nativeEvent.isComposing };
 }
 
-/** Pasted text goes out one chunk at a time, well under the server's input rate limit. */
-export const PASTE_CHUNK_INTERVAL_MS = 25;
-/** How long the "pasted the first 4 KB" note stays. */
+/** How long the "pasted the first 32 KB" note stays. */
 const PASTE_NOTE_MS = 4000;
-export const PASTE_TRUNCATED_NOTE = 'Pasted the first 4 KB';
+export const PASTE_TRUNCATED_NOTE = 'Pasted the first 32 KB';
 
 function framePoint(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
   return normalizePoint(clientX, clientY, canvas.getBoundingClientRect(), canvas.width, canvas.height);
@@ -67,7 +64,7 @@ export interface ScreenInput {
   handlers: ScreenInputHandlers;
   /** The Alt-pinch anchor while Alt is held over the screen (its mirror is drawn around the centre). */
   pinchHint: FramePoint | null;
-  /** Shown briefly when a paste was cut to MAX_PASTE_BYTES. */
+  /** Shown briefly when a paste was cut to MAX_SCREEN_CLIPBOARD_BYTES. */
   pasteNote: string | null;
 }
 
@@ -90,8 +87,6 @@ export function useScreenInput(
   const frame = useRef<number | null>(null);
   /** Named keys sent down and not yet up: released when input stops, so none stays held on the device. */
   const heldKeys = useRef(new Set<string>());
-  const pasteQueue = useRef<ScreenClientMessage[]>([]);
-  const pasteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pasteNote, setPasteNote] = useState<string | null>(null);
 
   const flush = useCallback(() => {
@@ -126,9 +121,6 @@ export function useScreenInput(
     for (const pointerId of [...gestures.current.keys()]) end(pointerId);
     for (const key of heldKeys.current) send({ type: 'key', key, eventType: 'keyup' });
     heldKeys.current.clear();
-    pasteQueue.current = [];
-    if (pasteTimer.current !== null) clearTimeout(pasteTimer.current);
-    pasteTimer.current = null;
   }, [end, send]);
 
   // A finger or key must never stay down on the device: release everything when input stops or the panel goes.
@@ -142,18 +134,6 @@ export function useScreenInput(
     const timer = setTimeout(() => setPasteNote(null), PASTE_NOTE_MS);
     return () => clearTimeout(timer);
   }, [pasteNote]);
-
-  /** Drains the paste queue: one chunk now, the rest every PASTE_CHUNK_INTERVAL_MS. */
-  const startPasting = useCallback(() => {
-    const step = () => {
-      pasteTimer.current = null;
-      const next = pasteQueue.current.shift();
-      if (next === undefined) return;
-      send(next);
-      if (pasteQueue.current.length > 0) pasteTimer.current = setTimeout(step, PASTE_CHUNK_INTERVAL_MS);
-    };
-    step();
-  }, [send]);
 
   // React registers wheel listeners as passive; this one must cancel page scrolling.
   useEffect(() => {
@@ -252,11 +232,10 @@ export function useScreenInput(
       const raw = event.clipboardData.getData('text/plain');
       if (raw === '') return;
       event.preventDefault();
-      const { text, isTruncated } = limitPaste(raw);
+      // One message: the server puts it on Android's clipboard and presses Paste (Unicode-safe).
+      const { text, isTruncated } = limitClipboardText(raw);
       setPasteNote(isTruncated ? PASTE_TRUNCATED_NOTE : null);
-      const isIdle = pasteQueue.current.length === 0 && pasteTimer.current === null;
-      pasteQueue.current.push(...textMessages(text));
-      if (isIdle) startPasting();
+      send({ type: 'paste', text });
     },
     onBlur() {
       endAll();

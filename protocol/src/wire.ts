@@ -334,8 +334,11 @@ export const MAX_TOUCH_POINTS = 10;
 export const MAX_SCREEN_TEXT_CHARS = 256;
 /** W3C `KeyboardEvent.key` values are short (`a`, `Enter`, `ArrowLeft`, `GoBack`). */
 export const MAX_SCREEN_KEY_CHARS = 32;
-/** Max accepted size of one dashboard → server screen message, in bytes. */
+/** Max accepted size of one dashboard → server screen message, in bytes (`clipboard` / `paste` excepted). */
 export const MAX_SCREEN_CLIENT_MESSAGE_BYTES = 2048;
+/** Clipboard text in either direction, UTF-8 bytes; the socket's frame cap leaves room for the JSON around it. */
+export const MAX_SCREEN_CLIPBOARD_BYTES = 32 * 1024;
+export const MAX_SCREEN_SOCKET_FRAME_BYTES = MAX_SCREEN_CLIPBOARD_BYTES + 1024;
 /** Input messages per second per screen socket before the server drops them (touch moves come at ~60–120/s). */
 export const MAX_SCREEN_INPUT_PER_SECOND = 400;
 
@@ -376,7 +379,12 @@ export type ScreenServerMessage =
       frameWidth: number;
       frameHeight: number;
     }
-  | { type: 'screenError'; code: ScreenErrorCode; message: string };
+  | { type: 'screenError'; code: ScreenErrorCode; message: string }
+  /**
+   * Text copied inside Android, only while the dashboard has `clipboardSync` on. The emulator's initial
+   * clipboard state and echoes of the dashboard's own `clipboard`/`paste` are not forwarded.
+   */
+  | { type: 'clipboard'; text: string };
 
 /**
  * One touch point in FRAME coordinates normalized to 0..1 (0,0 = top-left of the frame as shown, after
@@ -393,7 +401,7 @@ export interface ScreenTouchPoint {
 
 export type ScreenNavButton = 'back' | 'home' | 'recents' | 'power';
 
-/** Text dashboard → server messages on the screen socket (JSON, ≤ MAX_SCREEN_CLIENT_MESSAGE_BYTES). */
+/** Text dashboard → server messages on the screen socket (JSON, ≤ MAX_SCREEN_CLIENT_MESSAGE_BYTES, or ≤ MAX_SCREEN_SOCKET_FRAME_BYTES for `clipboard` / `paste`). */
 export type ScreenClientMessage =
   /** Every point currently changing (move/down/up); 1..MAX_TOUCH_POINTS points. */
   | { type: 'touch'; touches: ScreenTouchPoint[] }
@@ -412,7 +420,16 @@ export type ScreenClientMessage =
   | { type: 'rotate'; direction: 'left' | 'right' }
   | { type: 'setSize'; size: ScreenSize }
   /** Answered with one SCREEN_BINARY_KIND.screenshot message (full resolution, as shown). */
-  | { type: 'screenshot' };
+  | { type: 'screenshot' }
+  /**
+   * Share clipboard on/off for this socket (default off until the dashboard sends it). While off the server
+   * neither forwards Android's clipboard nor accepts `clipboard` messages.
+   */
+  | { type: 'clipboardSync'; enabled: boolean }
+  /** Put desktop text on Android's clipboard (Unicode-safe, ≤ MAX_SCREEN_CLIPBOARD_BYTES); no key is pressed. */
+  | { type: 'clipboard'; text: string }
+  /** Cmd/Ctrl+V on the screen: put the text on Android's clipboard, then press Paste in the focused field. */
+  | { type: 'paste'; text: string };
 
 // ---------------------------------------------------------------------------
 // Server → dashboard

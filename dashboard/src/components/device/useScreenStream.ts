@@ -15,12 +15,19 @@ const FPS_REFRESH_MS = 500;
 
 const CONNECTING: ScreenConnectionState = { status: 'connecting', attempt: 0, error: null };
 
+/** Socket events the panel handles itself (read on each event, so they may change between renders). */
+export interface ScreenStreamEvents {
+  onOpen?: () => void;
+  onClipboard?: (text: string) => void;
+}
+
 interface Input {
   serial: string;
   avdName: string;
   size: ScreenSize;
   /** False while the panel is collapsed or the tab is hidden: no socket, no decoding. */
   isEnabled: boolean;
+  events?: RefObject<ScreenStreamEvents>;
 }
 
 export interface ScreenStream {
@@ -43,7 +50,7 @@ function drawFrame(canvas: HTMLCanvasElement | null, bitmap: ImageBitmap): void 
 }
 
 /** One screen socket per visible panel: frames go straight to the canvas, screenshots to a download. */
-export function useScreenStream({ serial, avdName, size, isEnabled }: Input): ScreenStream {
+export function useScreenStream({ serial, avdName, size, isEnabled, events }: Input): ScreenStream {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const connectionRef = useRef<ScreenConnection | null>(null);
   const sizeRef = useRef(size);
@@ -82,6 +89,8 @@ export function useScreenStream({ serial, avdName, size, isEnabled }: Input): Sc
       },
       onInfo: setInfo,
       onState: setState,
+      onOpen: () => events?.current.onOpen?.(),
+      onClipboard: (text) => events?.current.onClipboard?.(text),
     });
     connectionRef.current = connection;
     const timer = setInterval(() => setFps(meter.fps(performance.now())), FPS_REFRESH_MS);
@@ -94,7 +103,7 @@ export function useScreenStream({ serial, avdName, size, isEnabled }: Input): Sc
       setState(CONNECTING);
       setFps(0);
     };
-  }, [isEnabled, serial, attempt]);
+  }, [isEnabled, serial, attempt, events]);
 
   const send = useCallback((msg: ScreenClientMessage) => connectionRef.current?.send(msg) ?? false, []);
   const retry = useCallback(() => setAttempt((n) => n + 1), []);

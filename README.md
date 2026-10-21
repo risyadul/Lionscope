@@ -88,10 +88,18 @@ The device picker lists every AVD, also the ones that are off. **Boot** starts o
 GPU (`-no-window -gpu host`), as a **Quick boot** (loads the Quick Boot snapshot and saves it on shutdown) or a
 **Cold boot** (`-no-snapshot-load`). Its screen then shows in the Device column, where you use it like the
 emulator window: click and drag to touch, Alt+drag to pinch (two fingers mirrored around the centre), scroll
-with the wheel, type when the screen has focus (Esc is Back, pasting sends the text), and use the toolbar for
+with the wheel, type when the screen has focus (Esc is Back), and use the toolbar for
 Back, Home, Recents, Power, rotation, a full-resolution screenshot and the frame size (360, 540 or 720 px along
 the short edge). Mirroring works with or without a profiling session, and only streams while the column is
 open and the tab is visible.
+
+**Share clipboard** (toolbar, on by default) keeps the clipboards in step: text you copy on your computer is put
+on Android's clipboard when you click or focus the screen, so Android's own long-press **Paste** has it, and
+text copied inside Android lands on your computer's clipboard ("Copied from the emulator"). Cmd/Ctrl+V on the
+screen pastes straight into the focused field. Any Unicode text up to 32 KB works. Reading your clipboard needs
+the browser's clipboard permission (Chrome asks once); Firefox and Safari don't offer it, so there only Cmd/Ctrl+V
+and copying out of Android work. Turn the toggle off and nothing is read from or written to either clipboard
+(Cmd/Ctrl+V still pastes, as an explicit action).
 
 Emulators that Lionscope booted can be shut down from the dashboard and are shut down when the server stops;
 an emulator you started yourself is never shut down by Lionscope, but you can still mirror it.
@@ -275,8 +283,8 @@ protocol version 1 and closes the connection on unknown message types.
   permits network on the main thread.
 - **Emulators only, for the screen.** Mirroring and controlling the screen needs an emulator whose discovery file
   has a gRPC port and token (tested with emulator 36.6); physical devices are not mirrored yet. AVDs have no
-  mouse, so the wheel scrolls with a short touch drag. Text input is reliable for printable ASCII; the emulator
-  may drop other characters. The discovery locations for Linux and Windows follow Android Studio's and have not
+  mouse, so the wheel scrolls with a short touch drag. Typed keys are reliable for printable ASCII (the emulator
+  may drop other characters); use paste for anything else. The discovery locations for Linux and Windows follow Android Studio's and have not
   been tried on those systems yet.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.

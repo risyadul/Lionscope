@@ -8,11 +8,8 @@ import {
   createWheelAccumulator,
   fitSize,
   keyAction,
-  limitPaste,
-  MAX_PASTE_BYTES,
   mirrorPoint,
   normalizePoint,
-  textMessages,
   wheelDelta,
 } from '../src/lib/screenInput.ts';
 
@@ -175,37 +172,11 @@ describe('keyAction', () => {
   });
 });
 
-describe('AltGr and paste limits', () => {
+describe('AltGr', () => {
   it('types AltGr characters (reported as Ctrl+Alt on Windows)', () => {
     expect(keyAction({ key: '@', metaKey: false, ctrlKey: true, altGraph: true }, 'keydown')).toEqual({
       msg: { type: 'text', text: '@' },
     });
     expect(keyAction({ key: '@', metaKey: false, ctrlKey: true, altGraph: false }, 'keydown')).toBeNull();
-  });
-
-  it('cuts pastes to 4 KB of UTF-8 on a code point boundary', () => {
-    expect(limitPaste('hello')).toEqual({ text: 'hello', isTruncated: false });
-    const long = limitPaste('x'.repeat(MAX_PASTE_BYTES + 10));
-    expect(long).toEqual({ text: 'x'.repeat(MAX_PASTE_BYTES), isTruncated: true });
-    // 'é' is 2 bytes, '😀' 4: nothing is split in half.
-    expect(limitPaste('ééé', 5)).toEqual({ text: 'éé', isTruncated: true });
-    expect(limitPaste('a😀', 4)).toEqual({ text: 'a', isTruncated: true });
-    expect(limitPaste('😀', 4)).toEqual({ text: '😀', isTruncated: false });
-  });
-});
-
-describe('textMessages', () => {
-  it('splits pasted text into chunks of whole code points', () => {
-    expect(textMessages('hello', 2)).toEqual([
-      { type: 'text', text: 'he' },
-      { type: 'text', text: 'll' },
-      { type: 'text', text: 'o' },
-    ]);
-    expect(textMessages('😀😀😀', 2)).toEqual([
-      { type: 'text', text: '😀😀' },
-      { type: 'text', text: '😀' },
-    ]);
-    expect(textMessages('')).toEqual([]);
-    expect(textMessages('x'.repeat(600))).toHaveLength(3);
   });
 });

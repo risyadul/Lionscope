@@ -17,7 +17,9 @@ import {
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
+  MAX_SCREEN_SOCKET_FRAME_BYTES,
   MAX_SCREEN_TEXT_CHARS,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
@@ -113,6 +115,14 @@ const TEXT_FORBIDDEN = /[^\P{Cc}\t\n]|\p{Cf}/u;
 const unitInterval = z.number().min(0).max(1);
 const wheelDelta = z.number().min(-MAX_SCREEN_WHEEL_DELTA).max(MAX_SCREEN_WHEEL_DELTA);
 
+/** Clipboard text: any Unicode (newlines and tabs included) up to MAX_SCREEN_CLIPBOARD_BYTES in UTF-8, no NUL. */
+const clipboardText = z
+  .string()
+  .min(1)
+  .max(MAX_SCREEN_CLIPBOARD_BYTES)
+  .refine((text) => !text.includes('\u0000'), 'NUL character')
+  .refine((text) => utf8.encode(text).length <= MAX_SCREEN_CLIPBOARD_BYTES, 'clipboard text too large');
+
 const touchPointSchema = z
   .object({
     id: z
@@ -168,11 +178,24 @@ export const screenClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rotate'), direction: z.enum(['left', 'right']) }).strict(),
   z.object({ type: z.literal('setSize'), size: z.literal(SCREEN_SIZES) }).strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
+  z.object({ type: z.literal('clipboardSync'), enabled: z.boolean() }).strict(),
+  z.object({ type: z.literal('clipboard'), text: clipboardText }).strict(),
+  z.object({ type: z.literal('paste'), text: clipboardText }).strict(),
 ]) satisfies z.ZodType<ScreenClientMessage>;
 
+/** Only these may use the socket's larger frame; every other message keeps MAX_SCREEN_CLIENT_MESSAGE_BYTES. */
+const CLIPBOARD_MESSAGE_TYPES: ReadonlySet<string> = new Set(['clipboard', 'paste']);
+
 export function parseScreenClientMessage(raw: string): ParseResult<ScreenClientMessage> {
-  const json = readJson(raw, MAX_SCREEN_CLIENT_MESSAGE_BYTES);
-  return json.ok ? validate(json.value, screenClientMessageSchema) : json;
+  const json = readJson(raw, MAX_SCREEN_SOCKET_FRAME_BYTES);
+  if (!json.ok) return json;
+  const type: unknown =
+    typeof json.value === 'object' && json.value !== null && Reflect.get(json.value, 'type');
+  const isClipboard = typeof type === 'string' && CLIPBOARD_MESSAGE_TYPES.has(type);
+  if (!isClipboard && utf8.encode(raw).length > MAX_SCREEN_CLIENT_MESSAGE_BYTES) {
+    return { ok: false, error: 'message too large' };
+  }
+  return validate(json.value, screenClientMessageSchema);
 }
 
 // ---------------------------------------------------------------------------

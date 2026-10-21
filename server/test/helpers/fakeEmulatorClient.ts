@@ -1,4 +1,5 @@
 import type {
+  ClipboardStreamHandlers,
   EmulatorClient,
   EmulatorRpcError,
   FrameStreamHandlers,
@@ -105,6 +106,30 @@ export class FakeEmulatorClient implements EmulatorClient {
       end: () => {
         input.ended = true;
         if (this.answersEnd) setTimeout(() => !input.cancelled && onEnd(null), 0);
+      },
+    };
+  }
+
+  /** setClipboard calls, in order; `clipboardFailure` makes them fail. */
+  readonly clipboardSets: string[] = [];
+  clipboardFailure: Error | null = null;
+  readonly clipboardStreams: { handlers: ClipboardStreamHandlers; cancelled: boolean }[] = [];
+
+  get clipboardStream(): (typeof this.clipboardStreams)[number] | undefined {
+    return this.clipboardStreams.at(-1);
+  }
+
+  async setClipboard(text: string): Promise<void> {
+    if (this.clipboardFailure) throw this.clipboardFailure;
+    this.clipboardSets.push(text);
+  }
+
+  streamClipboard(handlers: ClipboardStreamHandlers): { cancel(): void } {
+    const stream = { handlers, cancelled: false };
+    this.clipboardStreams.push(stream);
+    return {
+      cancel: () => {
+        stream.cancelled = true;
       },
     };
   }

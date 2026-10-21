@@ -506,3 +506,28 @@ describe('ScreenSession limits', () => {
     }
   });
 });
+
+describe('ScreenSession clipboard', () => {
+  it('sends Android copies as clipboard messages, and closes the clipboard stream with the session', async () => {
+    const { client, socket, session } = await started();
+    session.handle({ type: 'clipboardSync', enabled: true });
+    client.clipboardStream?.handlers.onText('initial');
+    client.clipboardStream?.handlers.onText('copied');
+    expect(socket.texts).toContainEqual({ type: 'clipboard', text: 'copied' });
+    expect(socket.texts).not.toContainEqual({ type: 'clipboard', text: 'initial' });
+    session.handle({ type: 'paste', text: 'pasted' });
+    await tick();
+    expect(client.clipboardSets).toEqual(['pasted']);
+    expect(client.events.at(-1)).toEqual({ key_event: { eventType: 'keypress', key: 'Paste' } });
+    session.close();
+    expect(client.clipboardStream?.cancelled).toBe(true);
+  });
+
+  it('ends the socket with auth when the clipboard stream is refused', async () => {
+    const { client, socket, session } = await started();
+    session.handle({ type: 'clipboardSync', enabled: true });
+    client.clipboardStream?.handlers.onEnd(new EmulatorRpcError(16, 'streamClipboard failed: no token'));
+    expect(socket.texts.at(-1)).toMatchObject({ type: 'screenError', code: 'auth' });
+    expect(session.isClosed).toBe(true);
+  });
+});

@@ -12,7 +12,9 @@ import {
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
+  MAX_SCREEN_SOCKET_FRAME_BYTES,
   MAX_SCREEN_TEXT_CHARS,
   MAX_SCREEN_WHEEL_DELTA,
   MAX_SDK_FRAMES_PER_BATCH,
@@ -276,6 +278,55 @@ describe('parseScreenClientMessage', () => {
   it('rejects messages over MAX_SCREEN_CLIENT_MESSAGE_BYTES', () => {
     const raw = JSON.stringify({ type: 'text', text: 'é'.repeat(MAX_SCREEN_CLIENT_MESSAGE_BYTES / 2) });
     expect(parseScreenClientMessage(raw)).toEqual({ ok: false, error: 'message too large' });
+  });
+});
+
+describe('screen clipboard messages', () => {
+  const parse = (value: object) => parseScreenClientMessage(JSON.stringify(value));
+
+  it('parses clipboardSync, clipboard and paste with any Unicode, newlines and tabs', () => {
+    for (const message of [
+      { type: 'clipboardSync', enabled: true },
+      { type: 'clipboardSync', enabled: false },
+      { type: 'clipboard', text: 'héllo 👋\n\tworld' },
+      { type: 'paste', text: '日本語\u202e' },
+    ]) {
+      expect(parse(message)).toEqual({ ok: true, value: message });
+    }
+  });
+
+  it('caps clipboard text at MAX_SCREEN_CLIPBOARD_BYTES of UTF-8 and refuses NUL or empty text', () => {
+    expect(parse({ type: 'clipboard', text: 'x'.repeat(MAX_SCREEN_CLIPBOARD_BYTES) }).ok).toBe(true);
+    expect(parse({ type: 'paste', text: 'x'.repeat(MAX_SCREEN_CLIPBOARD_BYTES + 1) }).ok).toBe(false);
+    // 2 bytes each: fits in characters, not in bytes.
+    const wide = 'é'.repeat(MAX_SCREEN_CLIPBOARD_BYTES / 2 + 1);
+    expect(parse({ type: 'clipboard', text: wide })).toEqual({
+      ok: false,
+      error: 'clipboard text too large',
+    });
+    expect(parse({ type: 'clipboard', text: 'a\u0000b' })).toEqual({ ok: false, error: 'NUL character' });
+    expect(parse({ type: 'paste', text: '' }).ok).toBe(false);
+    expect(parse({ type: 'clipboardSync', enabled: 'yes' }).ok).toBe(false);
+    expect(parse({ type: 'clipboard', text: 'a', extra: 1 }).ok).toBe(false);
+  });
+
+  it('allows the larger frame for clipboard and paste only', () => {
+    const big = 'x'.repeat(MAX_SCREEN_CLIENT_MESSAGE_BYTES * 2);
+    expect(parse({ type: 'paste', text: big }).ok).toBe(true);
+    // Too large for its type, whatever the content.
+    expect(parse({ type: 'text', text: 'a', pad: big })).toEqual({ ok: false, error: 'message too large' });
+    expect(parse({ type: 'clipboardSync', enabled: true, pad: big })).toEqual({
+      ok: false,
+      error: 'message too large',
+    });
+    expect(
+      parseScreenClientMessage(
+        JSON.stringify({ type: 'paste', text: 'x'.repeat(MAX_SCREEN_SOCKET_FRAME_BYTES) }),
+      ),
+    ).toEqual({
+      ok: false,
+      error: 'message too large',
+    });
   });
 });
 

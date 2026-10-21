@@ -26,6 +26,9 @@ import "google/protobuf/empty.proto";
 service EmulatorController {
     rpc setPhysicalModel(PhysicalModelValue) returns (google.protobuf.Empty) {}
     rpc getPhysicalModel(PhysicalModelValue) returns (PhysicalModelValue) {}
+    rpc setClipboard(ClipData) returns (google.protobuf.Empty) {}
+    rpc getClipboard(google.protobuf.Empty) returns (ClipData) {}
+    rpc streamClipboard(google.protobuf.Empty) returns (stream ClipData) {}
     rpc streamInputEvent(stream InputEvent) returns (google.protobuf.Empty) {}
     rpc getStatus(google.protobuf.Empty) returns (EmulatorStatus) {}
     rpc getScreenshot(ImageFormat) returns (Image) {}
@@ -98,6 +101,11 @@ message PhysicalModelValue {
     }
 
     Interpolation interpolation = 4;
+}
+
+message ClipData {
+    // UTF-8 Encoded text.
+    string text = 1;
 }
 
 message Touch {

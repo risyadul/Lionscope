@@ -5,7 +5,7 @@ import type { RawData, WebSocket } from 'ws';
 import {
   DEFAULT_SCREEN_SIZE,
   isValidSerial,
-  MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_SOCKET_FRAME_BYTES,
   MAX_SCREEN_INPUT_PER_SECOND,
   parseScreenClientMessage,
   SCREEN_SIZES,
@@ -28,6 +28,8 @@ export const MAX_SCREEN_SOCKETS = 4;
 export const SCREEN_ABUSE_FACTOR = 3;
 /** `rotate` and `setSize` per second (each restarts the screen stream). */
 export const SCREEN_CONTROLS_PER_SECOND = 2;
+/** `clipboardSync`, `clipboard` and `paste` per second. */
+export const SCREEN_CLIPBOARD_PER_SECOND = 5;
 
 export interface ScreenGatewayOptions {
   server: Server;
@@ -65,7 +67,7 @@ function sendError(
 /** `/ws/screen?serial=…&size=…`: mirrors one running emulator per socket. */
 export function createScreenGateway(options: ScreenGatewayOptions): ScreenGateway {
   const { server, emulators } = options;
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_SCREEN_CLIENT_MESSAGE_BYTES });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_SCREEN_SOCKET_FRAME_BYTES });
   const sockets = new Map<WebSocket, ScreenSocketState>();
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -107,6 +109,7 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
       MAX_SCREEN_INPUT_PER_SECOND * SCREEN_ABUSE_FACTOR,
     );
     const controls = new TokenBucket(SCREEN_CONTROLS_PER_SECOND, SCREEN_CONTROLS_PER_SECOND);
+    const clipboard = new TokenBucket(SCREEN_CLIPBOARD_PER_SECOND, SCREEN_CLIPBOARD_PER_SECOND);
     let invalidReported = false;
     ws.on('close', () => {
       sockets.delete(ws);
@@ -128,8 +131,14 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
         return;
       }
       const { type } = parsed.value;
-      // Rotation and size changes restart the stream: they get their own, slower budget.
-      const bucket = type === 'rotate' || type === 'setSize' ? controls : input;
+      // Rotation and size changes restart the stream, clipboard messages carry up to 32 KB: each kind has its
+      // own, slower budget.
+      const bucket =
+        type === 'rotate' || type === 'setSize'
+          ? controls
+          : type === 'clipboard' || type === 'paste' || type === 'clipboardSync'
+            ? clipboard
+            : input;
       if (bucket.take()) session.handle(parsed.value);
     });
     session.start().catch((error: unknown) => log.warn(`Screen of ${serial} failed: ${errorMessage(error)}`));

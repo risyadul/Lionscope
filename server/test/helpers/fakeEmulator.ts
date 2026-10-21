@@ -54,6 +54,10 @@ export class FakeEmulator {
   readonly screenshotRequests: ImageRequest[] = [];
   readonly streams: { request: ImageRequest; call: grpc.ServerWritableStream<ImageRequest, object> }[] = [];
   readonly inputCalls: grpc.ServerReadableStream<object, object>[] = [];
+  /** Android's clipboard, and the open streamClipboard calls (with the peer that opened them). */
+  clipboard = 'initial clip';
+  readonly clipboardSets: string[] = [];
+  readonly clipboardCalls: grpc.ServerWritableStream<object, object>[] = [];
   private server: grpc.Server | null = null;
 
   async start(): Promise<number> {
@@ -91,6 +95,12 @@ export class FakeEmulator {
     for (const { request, call } of this.openStreams) {
       call.write(image({ width: request.width, height: request.height, rotation: this.rotation, ...frame }));
     }
+  }
+
+  /** A copy inside Android: every clipboard stream gets it. */
+  guestCopy(text: string): void {
+    this.clipboard = text;
+    for (const call of this.clipboardCalls) if (!call.cancelled && call.writable) call.write({ text });
   }
 
   private authorized(call: { metadata: grpc.Metadata }): boolean {
@@ -137,6 +147,28 @@ export class FakeEmulator {
           rotation: this.rotation,
         });
       }),
+      setClipboard: (
+        call: grpc.ServerUnaryCall<{ text: string }, object>,
+        callback: grpc.sendUnaryData<object>,
+      ) => {
+        if (!this.authorized(call)) return callback(this.unauthenticated());
+        this.clipboard = call.request.text;
+        this.clipboardSets.push(call.request.text);
+        // Like the emulator: every other client's stream hears of it, the setter's own channel does not.
+        for (const stream of this.clipboardCalls) {
+          if (!stream.cancelled && stream.writable && stream.getPeer() !== call.getPeer()) {
+            stream.write({ text: call.request.text });
+          }
+        }
+        callback(null, {});
+      },
+      getClipboard: unary(() => ({ text: this.clipboard })),
+      streamClipboard: (call: grpc.ServerWritableStream<object, object>) => {
+        if (!this.authorized(call)) return call.emit('error', this.unauthenticated());
+        this.clipboardCalls.push(call);
+        // The current content first.
+        call.write({ text: this.clipboard });
+      },
       getPhysicalModel: unary(() => ({
         target: 'ROTATION',
         value: { data: [this.rotationX, 0, this.rotationZ] },

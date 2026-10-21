@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BootMode } from '@lionscope/protocol/wire';
 import { DevicePanel, PHYSICAL_MIRROR_NOTE } from '../src/components/device/DevicePanel.tsx';
-import { PASTE_CHUNK_INTERVAL_MS, PASTE_TRUNCATED_NOTE } from '../src/components/device/useScreenInput.ts';
+import { PASTE_TRUNCATED_NOTE } from '../src/components/device/useScreenInput.ts';
 import { LAYOUT_KEYS } from '../src/lib/layoutPrefs.ts';
 import type { DeviceTarget, PendingEmulatorAction } from '../src/lib/emulators.ts';
 import {
@@ -340,11 +340,13 @@ describe('ScreenView input', () => {
     ]);
   });
 
-  it('pastes clipboard text as text messages', async () => {
+  it('pastes clipboard text as one paste message, Unicode included', async () => {
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     const socket = await goLive();
-    fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'hello' } });
-    expect(socket.messages()).toEqual([{ type: 'text', text: 'hello' }]);
+    fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'héllo 😀' } });
+    expect(socket.messages().filter((m) => (m as { type: string }).type === 'paste')).toEqual([
+      { type: 'paste', text: 'héllo 😀' },
+    ]);
   });
 
   it('sizes the glass from the stage content box so the whole bezel stays visible', async () => {
@@ -364,6 +366,13 @@ describe('ScreenView input', () => {
     // 700 px minus 2 × (7 px bezel + 4 px ring margin) of height, 540:1212 aspect.
     expect(glass.style.height).toBe('678px');
     expect(glass.style.width).toBe('302px');
+  });
+
+  it('keeps the fps unit in the readout for screen readers (narrow columns hide it visually)', async () => {
+    renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    await goLive();
+    const readout = screen.getByTitle('Frames per second');
+    expect(readout.textContent).toMatch(/^\d+ fps$/);
   });
 
   it('names the screen and tells how to use it', async () => {
@@ -484,23 +493,15 @@ describe('ScreenView review fixes', () => {
     ]);
   });
 
-  it('paces a large paste, cut to 4 KB with a visible note', async () => {
+  it('cuts a large paste to 32 KB in one message, with a visible note', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     const socket = await goLive();
-    fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'x'.repeat(5000) } });
+    fireEvent.paste(screenCanvas(), { clipboardData: { getData: () => 'x'.repeat(40_000) } });
     expect(screen.getByText(PASTE_TRUNCATED_NOTE)).toBeTruthy();
-    expect(socket.messages()).toHaveLength(1);
-    act(() => {
-      vi.advanceTimersByTime(PASTE_CHUNK_INTERVAL_MS);
-    });
-    expect(socket.messages()).toHaveLength(2);
-    act(() => {
-      vi.advanceTimersByTime(PASTE_CHUNK_INTERVAL_MS * 20);
-    });
-    const texts = socket.messages().map((m) => (m as { text: string }).text);
-    expect(texts).toHaveLength(16);
-    expect(texts.join('')).toHaveLength(4096);
+    const pastes = socket.messages().filter((m) => (m as { type: string }).type === 'paste');
+    expect(pastes).toHaveLength(1);
+    expect((pastes[0] as { text: string }).text).toHaveLength(32 * 1024);
     act(() => {
       vi.advanceTimersByTime(5000);
     });

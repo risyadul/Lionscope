@@ -16,6 +16,7 @@ import {
   createScreenGateway,
   MAX_SCREEN_SOCKETS,
   SCREEN_ABUSE_FACTOR,
+  SCREEN_CLIPBOARD_PER_SECOND,
   SCREEN_CONTROLS_PER_SECOND,
 } from '../src/emulator/screenGateway.ts';
 import type { ScreenGateway } from '../src/emulator/screenGateway.ts';
@@ -306,6 +307,65 @@ describe('screen gateway', () => {
     expect(emulator.physicalModelWrites.length - writes).toBeLessThanOrEqual(SCREEN_CONTROLS_PER_SECOND + 1);
     expect(emulator.physicalModelWrites.length - writes).toBeGreaterThan(0);
     expect(client.closeCode).toBeNull();
+  });
+
+  it('shares the clipboard only while sync is on, skipping the initial state and our own echo', async () => {
+    const client = await connect();
+    await waitUntil(() => client.binaries.length >= 1);
+    const clips = () => client.texts.filter((message) => message.type === 'clipboard');
+
+    // Off: nothing forwarded, desktop copies ignored.
+    emulator.guestCopy('copied while off');
+    client.send({ type: 'clipboard', text: 'ignored while off' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clips()).toEqual([]);
+    expect(emulator.clipboardSets).not.toContain('ignored while off');
+
+    client.send({ type: 'clipboardSync', enabled: true });
+    await waitUntil(() => emulator.clipboardCalls.some((call) => !call.cancelled));
+    emulator.guestCopy('héllo from Android 👋');
+    await waitUntil(() => clips().length === 1);
+    expect(clips()).toEqual([{ type: 'clipboard', text: 'héllo from Android 👋' }]);
+
+    client.send({ type: 'clipboard', text: 'from the desktop\nline 2' });
+    await waitUntil(() => emulator.clipboardSets.at(-1) === 'from the desktop\nline 2');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clips()).toHaveLength(1);
+
+    client.send({ type: 'clipboardSync', enabled: false });
+    await waitUntil(() => emulator.clipboardCalls.every((call) => call.cancelled));
+    emulator.guestCopy('after off');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clips()).toHaveLength(1);
+  });
+
+  it('pastes: puts the text (up to 32 KB) on the clipboard, then presses Paste', async () => {
+    const client = await connect();
+    await waitUntil(() => client.binaries.length >= 1);
+    const before = emulator.inputEvents.length;
+    const text = 'é'.repeat(10_000);
+    client.send({ type: 'paste', text });
+    await waitUntil(() => emulator.inputEvents.length === before + 1);
+    expect(emulator.clipboardSets.at(-1)).toBe(text);
+    expect(emulator.inputEvents.at(-1)).toEqual({
+      key_event: expect.objectContaining({ eventType: 'keypress', key: 'Paste' }),
+    });
+    // Other messages keep the small cap.
+    client.send({ type: 'text', text: 'a', pad: 'x'.repeat(4000) });
+    client.send({ type: 'text', text: 'ok' });
+    await waitUntil(() => emulator.inputEvents.length === before + 2);
+    expect(emulator.inputEvents.at(-1)).toEqual({ key_event: expect.objectContaining({ text: 'ok' }) });
+    expect(client.closeCode).toBeNull();
+  });
+
+  it(`limits clipboard messages to ${SCREEN_CLIPBOARD_PER_SECOND} per second`, async () => {
+    const client = await connect();
+    await waitUntil(() => client.binaries.length >= 1);
+    const before = emulator.clipboardSets.length;
+    for (let i = 0; i < 20; i += 1) client.send({ type: 'paste', text: `p${i}` });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(emulator.clipboardSets.length - before).toBeLessThanOrEqual(SCREEN_CLIPBOARD_PER_SECOND + 1);
+    expect(emulator.clipboardSets.length - before).toBeGreaterThan(0);
   });
 
   it(`turns away screen socket number ${MAX_SCREEN_SOCKETS + 1} with busy`, async () => {

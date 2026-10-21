@@ -3,7 +3,7 @@
  * touch slots, the Alt-drag pinch, wheel units and keyboard keys → `ScreenClientMessage`s.
  */
 import type { ScreenClientMessage } from '@lionscope/protocol/wire';
-import { MAX_SCREEN_KEY_CHARS, MAX_SCREEN_TEXT_CHARS, MAX_TOUCH_POINTS } from '@lionscope/protocol/wire';
+import { MAX_SCREEN_KEY_CHARS, MAX_TOUCH_POINTS } from '@lionscope/protocol/wire';
 
 export interface Rect {
   left: number;
@@ -215,31 +215,4 @@ export function keyAction(event: KeyInput, eventType: 'keydown' | 'keyup'): KeyA
     return { msg: { type: 'key', key: event.key, eventType } };
   }
   return null;
-}
-
-/** Pasted text as `text` messages of at most MAX_SCREEN_TEXT_CHARS code points each. */
-export function textMessages(text: string, max = MAX_SCREEN_TEXT_CHARS): ScreenClientMessage[] {
-  const chars = [...text];
-  const messages: ScreenClientMessage[] = [];
-  for (let at = 0; at < chars.length; at += max) {
-    messages.push({ type: 'text', text: chars.slice(at, at + max).join('') });
-  }
-  return messages;
-}
-
-/** Pastes beyond this many UTF-8 bytes are cut (the server rate-limits input; 4 KB is 16 text messages). */
-export const MAX_PASTE_BYTES = 4096;
-
-/** The longest prefix of whole code points within `maxBytes` of UTF-8. */
-export function limitPaste(text: string, maxBytes = MAX_PASTE_BYTES): { text: string; isTruncated: boolean } {
-  let bytes = 0;
-  let end = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
-    if (bytes + size > maxBytes) return { text: text.slice(0, end), isTruncated: true };
-    bytes += size;
-    end += char.length;
-  }
-  return { text, isTruncated: false };
 }

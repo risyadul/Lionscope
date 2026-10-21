@@ -86,3 +86,10 @@ export const CloseIcon = () => (
     <path d="m3 3 8 8m0-8-8 8" />
   </Icon>
 );
+
+export const ClipboardIcon = () => (
+  <Icon>
+    <rect x="3" y="2.5" width="8" height="10" rx="1.5" />
+    <path d="M5.25 2.5V1.75h3.5v.75M5.25 6.5h3.5M5.25 9h2.5" />
+  </Icon>
+);

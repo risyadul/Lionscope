@@ -118,6 +118,7 @@
 /* Screen ------------------------------------------------------------------------ */
 
 .screen-view {
+  container: device-screen / inline-size;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -127,7 +128,8 @@
 .device-toolbar {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
+  /* One row at every column width: narrow columns tighten it (container queries below). */
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
@@ -136,6 +138,7 @@
 }
 
 .device-tool {
+  flex: none;
   width: 28px;
   height: 28px;
   border-color: transparent;
@@ -148,6 +151,7 @@
 }
 
 .device-size {
+  flex: none;
   margin-left: var(--space-1);
 }
 
@@ -157,6 +161,7 @@
 }
 
 .device-fps {
+  flex: none;
   margin-left: auto;
   color: var(--ink-muted);
   font-size: var(--text-meta);
@@ -169,6 +174,49 @@
 
 .device-fps-unit {
   color: var(--ink-muted);
+}
+
+/* Narrow column (up to the 346 px it gets at 1440 px, overlay drawers on phones): smaller tools, tighter
+   gaps, and the "fps" unit kept for screen readers only. */
+@container device-screen (max-width: 360px) {
+  .device-toolbar {
+    gap: 2px;
+    padding-inline: var(--space-2);
+  }
+
+  .device-toolbar .device-tool {
+    width: 26px;
+    height: 26px;
+  }
+
+  .device-size {
+    margin-left: 2px;
+  }
+
+  .device-size > button {
+    min-width: 26px;
+    padding: 0 3px;
+  }
+
+  .device-fps-unit {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+@container device-screen (max-width: 280px) {
+  .device-toolbar .device-tool {
+    width: 24px;
+  }
+
+  .device-size > button {
+    min-width: 24px;
+    padding: 0 2px;
+  }
 }
 
 .device-stage {
@@ -432,4 +480,62 @@
 
 .device-paste-note:empty {
   display: none;
+}
+
+/* Android → desktop clipboard feedback, floating over the bottom of the screen area. */
+.screen-view {
+  position: relative;
+}
+
+.device-toast-region {
+  position: absolute;
+  right: var(--space-3);
+  bottom: 64px;
+  left: var(--space-3);
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.device-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 4px 6px 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  pointer-events: auto;
+  animation: jump-in-toast var(--dur) var(--ease-out) both;
+}
+
+.device-toast:not(:has(button)) {
+  padding-right: var(--space-3);
+}
+
+.device-toast-copy {
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-color: color-mix(in srgb, var(--ink-inverse) 40%, transparent);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+}
+
+.device-toast-copy:hover:not(:disabled) {
+  border-color: var(--ink-inverse);
+  background: color-mix(in srgb, var(--ink-inverse) 14%, transparent);
+}
+
+@keyframes jump-in-toast {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }

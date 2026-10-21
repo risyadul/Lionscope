@@ -8,6 +8,7 @@ export const LAYOUT_KEYS = {
   logcatCollapsed: 'lionscope.layout.logcatCollapsed',
   logcatHeight: 'lionscope.layout.logcatHeight',
   screenSize: 'lionscope.layout.screenSize',
+  clipboardShare: 'lionscope.layout.clipboardShare',
 } as const;
 
 function storage(): Storage | null {

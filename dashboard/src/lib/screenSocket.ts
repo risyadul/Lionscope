@@ -7,6 +7,7 @@ import type {
 } from '@lionscope/protocol/wire';
 import {
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
+  MAX_SCREEN_SOCKET_FRAME_BYTES,
   SCREEN_BINARY_KIND,
   SCREEN_WS_PATH,
 } from '@lionscope/protocol/wire';
@@ -50,6 +51,9 @@ export function parseScreenMessage(raw: unknown): ScreenServerMessage | null {
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
   const type: unknown = (parsed as { type?: unknown }).type;
+  if (type === 'clipboard') {
+    return typeof (parsed as { text?: unknown }).text === 'string' ? (parsed as ScreenServerMessage) : null;
+  }
   return type === 'screenInfo' || type === 'screenError' ? (parsed as ScreenServerMessage) : null;
 }
 
@@ -87,6 +91,10 @@ export interface ScreenConnectionOptions {
   onBinary: (msg: ScreenBinary) => void;
   onInfo: (info: ScreenInfo) => void;
   onState: (state: ScreenConnectionState) => void;
+  /** Every time a socket opens (the server's per-socket settings, like `clipboardSync`, start over). */
+  onOpen?: () => void;
+  /** Text copied inside Android (only sent while `clipboardSync` is on). */
+  onClipboard?: (text: string) => void;
   createSocket?: (url: string) => ScreenSocketLike;
   random?: () => number;
 }
@@ -135,9 +143,10 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
     ws.binaryType = 'arraybuffer';
     socket = ws;
     ws.onopen = () => {
-      if (socket !== ws || heldSize === null) return;
-      ws.send(JSON.stringify(heldSize));
+      if (socket !== ws) return;
+      if (heldSize !== null) ws.send(JSON.stringify(heldSize));
       heldSize = null;
+      options.onOpen?.();
     };
     ws.onmessage = (event) => {
       if (socket !== ws) return;
@@ -152,6 +161,10 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
       if (!msg) return;
       if (msg.type === 'screenInfo') {
         options.onInfo(msg);
+        return;
+      }
+      if (msg.type === 'clipboard') {
+        options.onClipboard?.(msg.text);
         return;
       }
       error = { code: msg.code, message: msg.message };
@@ -186,7 +199,11 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
       }
       if (!socket || socket.readyState !== OPEN) return false;
       const json = JSON.stringify(msg);
-      if (encoder.encode(json).length > MAX_SCREEN_CLIENT_MESSAGE_BYTES) return false;
+      const limit =
+        msg.type === 'clipboard' || msg.type === 'paste'
+          ? MAX_SCREEN_SOCKET_FRAME_BYTES
+          : MAX_SCREEN_CLIENT_MESSAGE_BYTES;
+      if (encoder.encode(json).length > limit) return false;
       socket.send(json);
       return true;
     },

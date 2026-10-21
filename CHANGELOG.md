@@ -16,6 +16,9 @@ All notable changes to Lionscope are documented here. The format is based on
   pinch), wheel scrolling, keyboard and pasted text, Back / Home / Recents / Power, rotation, a full-resolution
   screenshot, and a frame size of 360, 540 or 720 px. It uses the emulator's own gRPC endpoint, so nothing runs
   inside Android and the app's measurements are unaffected; it works with or without a profiling session.
+- Share clipboard (on by default, can be turned off): desktop text goes onto Android's clipboard when you click
+  or focus the emulator's screen (so Android's own Paste has it), text copied in Android lands on the desktop
+  clipboard, and Cmd/Ctrl+V on the screen pastes into the focused field; any Unicode text up to 32 KB.
 - A warning when the selected emulator renders in software (SwiftShader): frame times are then not
   representative.
 

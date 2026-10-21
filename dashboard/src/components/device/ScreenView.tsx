@@ -1,4 +1,4 @@
-import { useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { ScreenErrorCode, ScreenNavButton, ScreenSize } from '@lionscope/protocol/wire';
 import { DEFAULT_SCREEN_SIZE, SCREEN_SIZES } from '@lionscope/protocol/wire';
 import { useElementSize } from '../../hooks/useElementSize.ts';
@@ -10,14 +10,17 @@ import { Segmented } from '../ui/Segmented.tsx';
 import {
   BackIcon,
   CameraIcon,
+  ClipboardIcon,
   HomeIcon,
   PowerIcon,
   RecentsIcon,
   RotateLeftIcon,
   RotateRightIcon,
 } from './icons.tsx';
+import { ClipboardToast } from './ClipboardToast.tsx';
+import { useClipboardShare } from './useClipboardShare.ts';
 import { useScreenInput } from './useScreenInput.ts';
-import { useScreenStream } from './useScreenStream.ts';
+import { useScreenStream, type ScreenStreamEvents } from './useScreenStream.ts';
 
 /** Portrait phone until the first `screenInfo` says otherwise. */
 const DEFAULT_ASPECT = 9 / 20;
@@ -39,15 +42,20 @@ type ToolButtonProps = {
   icon: ReactNode;
   disabled: boolean;
   onClick: () => void;
+  /** A toggle: rendered with `aria-pressed`. */
+  isPressed?: boolean;
+  /** Tooltip, when it should say more than the label. */
+  title?: string;
 };
 
-function ToolButton({ label, icon, disabled, onClick }: ToolButtonProps) {
+function ToolButton({ label, icon, disabled, onClick, isPressed, title }: ToolButtonProps) {
   return (
     <button
       type="button"
       className="btn btn--icon device-tool"
       aria-label={label}
-      title={label}
+      aria-pressed={isPressed}
+      title={title ?? label}
       disabled={disabled}
       onClick={onClick}
     >
@@ -105,14 +113,31 @@ type Props = {
 export function ScreenView({ serial, avdName, label, isVisible }: Props) {
   const [size, setSize] = useStoredState<ScreenSize>(LAYOUT_KEYS.screenSize, parseScreenSize);
   // Destructured: the stream object carries the canvas ref, which render must not read through.
+  const streamEvents = useRef<ScreenStreamEvents>({});
   const { state, info, fps, canvasRef, send, retry } = useScreenStream({
     serial,
     avdName,
     size,
     isEnabled: isVisible,
+    events: streamEvents,
   });
   const isLive = state.status === 'live';
   const { handlers, pinchHint, pasteNote } = useScreenInput(canvasRef, send, isLive);
+  const clipboard = useClipboardShare(send, isLive);
+  const { pushFromDesktop, onSocketOpen, onRemoteClipboard } = clipboard;
+
+  useEffect(() => {
+    streamEvents.current = { onOpen: onSocketOpen, onClipboard: onRemoteClipboard };
+  }, [onSocketOpen, onRemoteClipboard]);
+
+  // Back from another app with the screen still focused: the desktop clipboard may have changed.
+  useEffect(() => {
+    const onWindowFocus = () => {
+      if (document.activeElement === canvasRef.current) pushFromDesktop();
+    };
+    window.addEventListener('focus', onWindowFocus);
+    return () => window.removeEventListener('focus', onWindowFocus);
+  }, [canvasRef, pushFromDesktop]);
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
   const hintId = useId();
@@ -142,6 +167,14 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
           icon={<RotateRightIcon />}
           disabled={!isLive}
           onClick={() => send({ type: 'rotate', direction: 'right' })}
+        />
+        <ToolButton
+          label="Share clipboard"
+          title="Share clipboard with the emulator"
+          icon={<ClipboardIcon />}
+          disabled={false}
+          isPressed={clipboard.isEnabled}
+          onClick={() => clipboard.setEnabled(!clipboard.isEnabled)}
         />
         <ToolButton
           label="Screenshot"
@@ -178,6 +211,11 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
               aria-label={`${label} screen`}
               aria-describedby={hintId}
               {...handlers}
+              onPointerDown={(event) => {
+                handlers.onPointerDown(event);
+                pushFromDesktop();
+              }}
+              onFocus={pushFromDesktop}
             />
             {status !== null && (
               <div className="device-glass-status" data-tone={state.status} role="status">
@@ -212,6 +250,7 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
       <p className="device-paste-note" role="status">
         {pasteNote}
       </p>
+      <ClipboardToast toast={clipboard.toast} onCopy={clipboard.copyManually} />
     </div>
   );
 }

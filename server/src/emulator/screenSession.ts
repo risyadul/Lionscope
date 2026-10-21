@@ -7,7 +7,9 @@ import type {
   ScreenSize,
 } from '@lionscope/protocol';
 import { errorMessage, log } from '../log.ts';
-import { EmulatorRpcError } from './emulatorClient.ts';
+import { ClipboardBridge } from './clipboardBridge.ts';
+import { isAuthError } from './emulatorClient.ts';
+import { WheelDrags } from './wheelDrags.ts';
 import type { EmulatorClient, InputStream, ScreenFrame } from './emulatorClient.ts';
 import {
   frameBox,
@@ -17,12 +19,7 @@ import {
   nextRotationZ,
   rotationForZ,
   touchEvent,
-  touchSlopPx,
-  WHEEL_BATCH_MS,
   WHEEL_FINGER_ID,
-  WHEEL_HOLD_MS,
-  WHEEL_STEP_MS,
-  wheelDrag,
 } from './screenInput.ts';
 import type { DisplaySize, EmulatorInputEvent } from './screenInput.ts';
 
@@ -34,7 +31,6 @@ export interface ScreenSocket {
   terminate(): void;
 }
 
-const UNAUTHENTICATED = 16;
 /** After a rotation, how long (attempts × interval) to wait for the emulator to report the new orientation. */
 export const SETTLE_ATTEMPTS = 20;
 export const SETTLE_INTERVAL_MS = 50;
@@ -52,10 +48,9 @@ export const ENDED_MESSAGE = 'The emulator stopped streaming its screen';
 export const AUTH_MESSAGE = 'The emulator refused the gRPC token';
 
 function failureOf(error: unknown): { code: ScreenErrorCode; message: string } {
-  if (error instanceof EmulatorRpcError && error.code === UNAUTHENTICATED) {
-    return { code: 'auth', message: AUTH_MESSAGE };
-  }
-  return { code: 'ended', message: ENDED_MESSAGE };
+  return isAuthError(error)
+    ? { code: 'auth', message: AUTH_MESSAGE }
+    : { code: 'ended', message: ENDED_MESSAGE };
 }
 
 /**
@@ -77,14 +72,12 @@ export class ScreenSession {
   private inputRetryAt = 0;
   /** Set while close() waits for the lift to reach the emulator. */
   private closeClient: (() => void) | null = null;
+  private readonly clipboard: ClipboardBridge;
   private rotating = false;
   /** Stream frames so far, and the current prime request: see prime(). */
   private streamFrames = 0;
   private lastStreamRotation: ScreenRotation | null = null;
-  /** Wheel input not turned into a drag yet, and whether a drag is running. */
-  private wheel: { x: number; y: number; dx: number; dy: number } | null = null;
-  private wheelScheduled = false;
-  private wheelDragging = false;
+  private readonly wheels: WheelDrags;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private primeRequest = 0;
   private closed = false;
@@ -96,6 +89,24 @@ export class ScreenSession {
     size: ScreenSize,
   ) {
     this.size = size;
+    this.wheels = new WheelDrags({
+      geometry: () => (this.display ? { display: this.display, rotation: this.rotation } : null),
+      isTouching: () => this.fingersDown.size > 0,
+      touch: ({ display, rotation }, point, pressure, droppable) => {
+        if (pressure > 0) this.fingersDown.add(WHEEL_FINGER_ID);
+        else this.fingersDown.delete(WHEEL_FINGER_ID);
+        const event = touchEvent(display, rotation, [{ id: WHEEL_FINGER_ID, ...point, pressure }]);
+        this.sendInput(event, { droppable });
+      },
+      later: (delayMs, action) => this.later(delayMs, action),
+    });
+    this.clipboard = new ClipboardBridge({
+      client,
+      serial,
+      deliver: (text) => this.send(JSON.stringify({ type: 'clipboard', text } satisfies ScreenServerMessage)),
+      pressPaste: () => this.sendInput(keyEvent({ type: 'key', key: 'Paste', eventType: 'keypress' })),
+      onAuthFailure: () => this.fail('auth', AUTH_MESSAGE),
+    });
   }
 
   get isClosed(): boolean {
@@ -128,14 +139,7 @@ export class ScreenSession {
         return;
       }
       case 'wheel':
-        if (!this.display) return;
-        this.wheel = {
-          x: message.x,
-          y: message.y,
-          dx: (this.wheel?.dx ?? 0) + message.dx,
-          dy: (this.wheel?.dy ?? 0) + message.dy,
-        };
-        this.scheduleWheel(WHEEL_BATCH_MS);
+        if (this.display) this.wheels.add(message);
         return;
       case 'key':
       case 'text':
@@ -152,6 +156,11 @@ export class ScreenSession {
         return;
       case 'screenshot':
         void this.screenshot();
+        return;
+      case 'clipboardSync':
+      case 'clipboard':
+      case 'paste':
+        this.clipboard.handle(message);
         return;
     }
   }
@@ -176,6 +185,7 @@ export class ScreenSession {
     if (lifting) this.sendInput(liftEvent(this.fingersDown), { force: true });
     this.fingersDown.clear();
     this.closed = true;
+    this.clipboard.close();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.stream?.cancel();
@@ -306,7 +316,7 @@ export class ScreenSession {
         this.closeClient?.();
         return;
       }
-      if (error instanceof EmulatorRpcError && error.code === UNAUTHENTICATED) {
+      if (isAuthError(error)) {
         this.fail('auth', AUTH_MESSAGE);
       } else if (error) {
         log.warn(`Input stream of ${this.serial} failed: ${error.message}`);
@@ -322,45 +332,6 @@ export class ScreenSession {
       if (!this.closed) action();
     }, delayMs);
     this.timers.add(timer);
-  }
-
-  private scheduleWheel(delayMs: number): void {
-    if (this.wheelScheduled) return;
-    this.wheelScheduled = true;
-    this.later(delayMs, () => {
-      this.wheelScheduled = false;
-      this.flushWheel();
-    });
-  }
-
-  /** Turn the summed wheel input into one touch drag (dropped while the user's fingers are down). */
-  private flushWheel(): void {
-    const display = this.display;
-    const wheel = this.wheel;
-    if (!display || !wheel || this.wheelDragging) return;
-    this.wheel = null;
-    if (this.fingersDown.size > 0) return;
-    const points = wheelDrag(display, this.rotation, wheel, touchSlopPx(display.dpi));
-    if (!points) return;
-    const rotation = this.rotation;
-    const touch = (point: { x: number; y: number }, pressure: number, droppable: boolean): void => {
-      if (pressure > 0) this.fingersDown.add(WHEEL_FINGER_ID);
-      else this.fingersDown.delete(WHEEL_FINGER_ID);
-      this.sendInput(touchEvent(display, rotation, [{ id: WHEEL_FINGER_ID, ...point, pressure }]), {
-        droppable,
-      });
-    };
-    this.wheelDragging = true;
-    points.forEach((point, step) => {
-      if (step === 0) touch(point, 1, false);
-      else this.later(step * WHEEL_STEP_MS, () => touch(point, 1, true));
-    });
-    const last = points[points.length - 1] ?? points[0];
-    this.later((points.length - 1) * WHEEL_STEP_MS + WHEEL_HOLD_MS, () => {
-      if (last) touch(last, 0, false);
-      this.wheelDragging = false;
-      if (this.wheel) this.scheduleWheel(0);
-    });
   }
 
   private async rotate(direction: 'left' | 'right'): Promise<void> {

@@ -29,8 +29,13 @@ export class FakeScreenSocket implements ScreenSocketLike {
   }
 
   /** Parsed JSON messages sent so far. */
-  messages(): unknown[] {
+  allMessages(): unknown[] {
     return this.sent.map((raw) => JSON.parse(raw) as unknown);
+  }
+
+  /** Sent messages without the `clipboardSync` setting every open socket starts with. */
+  messages(): unknown[] {
+    return this.allMessages().filter((msg) => (msg as { type: string }).type !== 'clipboardSync');
   }
 
   send(data: string) {
