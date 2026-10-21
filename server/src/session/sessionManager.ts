@@ -59,6 +59,8 @@ export interface SessionManagerOptions {
    * no `adb reverse` for sessions.
    */
   deviceGatewayPort?: () => number | null;
+  /** Replaces the TCP probe that tells a live server's `adb reverse` mapping from a stale one (tests). */
+  isHostPortLive?: (port: number) => Promise<boolean>;
 }
 
 /** Owns the device list, at most one profiling session, and that session's SDK link. */
@@ -105,6 +107,7 @@ export class SessionManager implements SdkLinkTarget {
       adb: this.adb,
       devicePort: DEVICE_LINK_PORT,
       hostPort: options.deviceGatewayPort ?? (() => null),
+      ...(options.isHostPortLive ? { isHostPortLive: options.isHostPortLive } : {}),
       onOpenFailed: (error) => {
         log.warn(`adb reverse failed, continuing without the SDK link: ${errorMessage(error)}`);
         if (!this.closed && this.linkErrors.shouldReport('reverse')) {

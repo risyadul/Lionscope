@@ -29,7 +29,10 @@ const HELLO: SdkHello = {
 };
 const link: SdkLink = { protocolVersion: 1, close: () => undefined, sendConfig: () => undefined };
 
-function setup(gatewayPort: (() => number | null) | null = () => GATEWAY_PORT) {
+function setup(
+  gatewayPort: (() => number | null) | null = () => GATEWAY_PORT,
+  livePorts: readonly number[] = [],
+) {
   const device = new FakeDevice();
   device.clockSkewMs = -5000;
   let devicesOutput = fixture('adb-devices.txt');
@@ -50,6 +53,7 @@ function setup(gatewayPort: (() => number | null) | null = () => GATEWAY_PORT) {
     adb,
     broadcast: (message) => messages.push(message),
     ...(gatewayPort ? { deviceGatewayPort: gatewayPort } : {}),
+    isHostPortLive: (port) => Promise.resolve(livePorts.includes(port)),
   });
   /** Start a session and let its device probe finish. */
   const start = async (packageName = PKG) => {
@@ -303,6 +307,27 @@ describe('SessionManager SDK link', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(adb.execCalls.filter((args) => args.includes('--list'))).toHaveLength(1);
     await manager.close();
+  });
+
+  it("keeps another live server's tcp:8700 mapping and removes this server's own leftover", async () => {
+    const info = vi.spyOn(log, 'info');
+    const other = setup(() => GATEWAY_PORT, [8700]);
+    other.setReverseList('UsbFfs tcp:8700 tcp:8700\n');
+    await other.manager.refreshDevices();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(other.adb.reverseCalls).toEqual([]);
+    expect(info.mock.calls.some((call) => String(call[0]).includes('another server listens on 8700'))).toBe(
+      true,
+    );
+
+    // A mapping to this server's own gateway port is a leftover even though that port is live (it's ours).
+    const own = setup(() => GATEWAY_PORT, [GATEWAY_PORT]);
+    own.setReverseList(`UsbFfs tcp:8700 tcp:${GATEWAY_PORT}\n`);
+    await own.manager.refreshDevices();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(own.adb.reverseCalls).toEqual([REMOVE]);
+    await other.manager.close();
+    await own.manager.close();
   });
 
   it('leaves other mappings alone and survives a failing listing', async () => {

@@ -1,7 +1,9 @@
+import { createConnection } from 'node:net';
 import type { Adb } from '../adb/adb.ts';
 import { errorMessage, log } from '../log.ts';
 
 const LIST_TIMEOUT_MS = 5000;
+const PROBE_TIMEOUT_MS = 500;
 
 export interface ReverseTunnelOptions {
   adb: Adb;
@@ -11,11 +13,36 @@ export interface ReverseTunnelOptions {
   hostPort: () => number | null;
   /** `adb reverse` failed: the session continues without the SDK link. */
   onOpenFailed: (error: unknown) => void;
+  /** Whether something accepts connections on 127.0.0.1:`port` (tests replace the TCP probe). */
+  isHostPortLive?: (port: number) => Promise<boolean>;
 }
 
-/** True when `adb reverse --list` output (`<transport> tcp:<device> tcp:<host>` lines) maps `devicePort`. */
-export function listsDevicePort(output: string, devicePort: number): boolean {
-  return output.split('\n').some((line) => line.trim().split(/\s+/)[1] === `tcp:${devicePort}`);
+/**
+ * Host port `devicePort` is mapped to in `adb reverse --list` output (`<transport> tcp:<device> tcp:<host>`
+ * lines): null for a non-TCP target, undefined when the device port isn't mapped.
+ */
+export function mappedHostPort(output: string, devicePort: number): number | null | undefined {
+  for (const line of output.split('\n')) {
+    const [, device, host] = line.trim().split(/\s+/);
+    if (device !== `tcp:${devicePort}`) continue;
+    const port = /^tcp:(\d+)$/.exec(host ?? '')?.[1];
+    return port === undefined ? null : Number(port);
+  }
+  return undefined;
+}
+
+/** A TCP connect to 127.0.0.1:`port`: true when something is listening there. */
+export function probeLoopbackPort(port: number, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const done = (live: boolean) => {
+      socket.destroy();
+      resolve(live);
+    };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
 }
 
 /**
@@ -54,7 +81,9 @@ export class ReverseTunnel {
 
   /**
    * Remove mappings of the device port left behind by an earlier run (crash, kill -9) on these devices, so a
-   * stale mapping can't route an SDK to a server that no longer exists. Best effort, logged.
+   * stale mapping can't route an SDK to a server that no longer exists. A mapping to another host port that
+   * still accepts connections belongs to another Lionscope server running next to this one: it is left alone.
+   * Best effort, logged.
    */
   clearStale(serials: readonly string[]): Promise<void> {
     return this.enqueue(async () => {
@@ -64,7 +93,14 @@ export class ReverseTunnel {
           const listing = await this.options.adb.exec(['-s', serial, 'reverse', '--list'], {
             timeoutMs: LIST_TIMEOUT_MS,
           });
-          if (!listsDevicePort(listing, this.options.devicePort)) continue;
+          const target = mappedHostPort(listing, this.options.devicePort);
+          if (target === undefined) continue;
+          if (target !== null && target !== this.options.hostPort() && (await this.isHostPortLive(target))) {
+            log.info(
+              `Left adb reverse tcp:${this.options.devicePort} on ${serial} alone: another server listens on ${target}`,
+            );
+            continue;
+          }
           await this.options.adb.removeReverse(serial, this.options.devicePort);
           log.info(`Removed a stale adb reverse tcp:${this.options.devicePort} on ${serial}`);
         } catch (error) {
@@ -72,6 +108,10 @@ export class ReverseTunnel {
         }
       }
     });
+  }
+
+  private isHostPortLive(port: number): Promise<boolean> {
+    return (this.options.isHostPortLive ?? probeLoopbackPort)(port);
   }
 
   private async removeMapping(): Promise<void> {
