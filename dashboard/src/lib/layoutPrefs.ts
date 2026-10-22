@@ -63,9 +63,12 @@ const UNMEASURED_MAX_HEIGHT = 640;
 /** Arrow keys on the splitter; Page Up / Down step four times as far. */
 export const LOGCAT_KEY_STEP = 24;
 
-/** Keeps the drawer between its minimum and what leaves the timeline its minimum. */
-export function clampDrawerHeight(height: number, columnHeight: number): number {
-  const max = columnHeight > 0 ? columnHeight - TIMELINE_MIN_HEIGHT : UNMEASURED_MAX_HEIGHT;
+/**
+ * Keeps the drawer body between its minimum and what leaves the timeline its minimum. `barHeight` is the
+ * drawer's bar above the body (it wraps to two rows when narrow), which also comes out of the column.
+ */
+export function clampDrawerHeight(height: number, columnHeight: number, barHeight = 0): number {
+  const max = columnHeight > 0 ? columnHeight - TIMELINE_MIN_HEIGHT - barHeight : UNMEASURED_MAX_HEIGHT;
   return Math.round(Math.max(LOGCAT_MIN_HEIGHT, Math.min(height, Math.max(LOGCAT_MIN_HEIGHT, max))));
 }
 
@@ -76,6 +79,6 @@ export function defaultDrawerHeight(columnHeight: number): number {
   return clampDrawerHeight(Math.min(LOGCAT_DEFAULT_MAX, Math.max(LOGCAT_DEFAULT_MIN, share)), columnHeight);
 }
 
-export function drawerMaxHeight(columnHeight: number): number {
-  return clampDrawerHeight(Number.POSITIVE_INFINITY, columnHeight);
+export function drawerMaxHeight(columnHeight: number, barHeight = 0): number {
+  return clampDrawerHeight(Number.POSITIVE_INFINITY, columnHeight, barHeight);
 }

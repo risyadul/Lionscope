@@ -27,7 +27,6 @@ import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
-import { formatInteger } from './lib/format.ts';
 import { inflatesInWindow, inflateByScreen, latestViewTrees } from './lib/layouts.ts';
 import { aggregateScreens, withLayoutStats, withStallCounts } from './lib/screenStats.ts';
 import { countEventsInWindow, findFeedItem, stallsByScreen } from './lib/stalls.ts';
@@ -78,7 +77,7 @@ export function App() {
   const inFlight = useRef<PendingRequest | null>(null);
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
   const now = useNow(windowMs <= 60_000 ? 250 : 1000);
-  const instrumentRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
   const deviceColumn = useDeviceColumn();
 
   const isOpen = state.connection.status === 'open';
@@ -337,56 +336,56 @@ export function App() {
             onShutdown={emulatorActions.shutdown}
           />
         </DeviceColumn>
-        <div ref={instrumentRef} className="instrument">
+        <div className="instrument">
           <StatStrip stats={stats} />
-          <Timeline
-            cpu={series.cpu}
-            memory={series.memory}
-            frames={series.frames}
-            events={series.events}
-            screens={series.screens}
-            breakdown={series.breakdown}
-            stalls={series.stalls}
-            strictMode={series.strictMode}
-            inflates={series.inflates}
-            showScreens={showScreens}
-            showBreakdown={showBreakdown}
-            showMainThread={showMainThread}
-            stallThresholdMs={sdkOptions.stallThresholdMs}
-            isStrictModeOn={isActive && sdkOptions.strictMode}
-            selectedStall={selectedStall}
-            onSelectStall={selectStall}
-            onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
-            onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
-            isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
-            isSdkConnected={isSdkConnected}
-            selectedScreen={selectedScreen}
-            onSelectScreen={setSelectedScreen}
-            onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
-            endTs={endTs}
-            windowMs={windowMs}
-            probeTs={probeTs}
-            cursorX={cursorX}
-            toolbar={
-              <WindowControls
-                windowMs={windowMs}
-                onWindowChange={setWindowMs}
-                isPaused={paused !== null}
-                pausedAt={paused?.at ?? null}
-                onPause={pause}
-                onResume={() => setPaused(null)}
-                cursorX={cursorX}
-              />
-            }
-            overlay={overlay}
-            notice={notice && <p className="timeline-notice">{notice}</p>}
-          />
-          <LogcatDrawer
-            columnRef={instrumentRef}
-            meta={<span className="drawer-meta mono">{formatInteger(state.logs.length)} lines</span>}
-          >
-            <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} isTitleHidden />
-          </LogcatDrawer>
+          {/* What the timeline and the logcat drawer share: the drawer's height is bounded by this box. */}
+          <div ref={chartsRef} className="instrument-charts">
+            <Timeline
+              cpu={series.cpu}
+              memory={series.memory}
+              frames={series.frames}
+              events={series.events}
+              screens={series.screens}
+              breakdown={series.breakdown}
+              stalls={series.stalls}
+              strictMode={series.strictMode}
+              inflates={series.inflates}
+              showScreens={showScreens}
+              showBreakdown={showBreakdown}
+              showMainThread={showMainThread}
+              stallThresholdMs={sdkOptions.stallThresholdMs}
+              isStrictModeOn={isActive && sdkOptions.strictMode}
+              selectedStall={selectedStall}
+              onSelectStall={selectStall}
+              onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
+              onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
+              isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
+              isSdkConnected={isSdkConnected}
+              selectedScreen={selectedScreen}
+              onSelectScreen={setSelectedScreen}
+              onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
+              endTs={endTs}
+              windowMs={windowMs}
+              probeTs={probeTs}
+              cursorX={cursorX}
+              toolbar={
+                <WindowControls
+                  windowMs={windowMs}
+                  onWindowChange={setWindowMs}
+                  isPaused={paused !== null}
+                  pausedAt={paused?.at ?? null}
+                  onPause={pause}
+                  onResume={() => setPaused(null)}
+                  cursorX={cursorX}
+                />
+              }
+              overlay={overlay}
+              notice={notice && <p className="timeline-notice">{notice}</p>}
+            />
+            <LogcatDrawer columnRef={chartsRef}>
+              <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} />
+            </LogcatDrawer>
+          </div>
         </div>
         <SidePanel
           tab={sideTab}

@@ -33,6 +33,14 @@
   background: var(--surface);
 }
 
+.instrument-charts {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .timeline-notice {
   margin: 0;
 }

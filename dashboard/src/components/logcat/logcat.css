@@ -7,52 +7,53 @@
   container: logcat / inline-size;
 }
 
-.logcat-head {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) var(--space-3);
-  border-bottom: 1px solid var(--rule);
+/*
+ * The toolbar: one row, drawn in the drawer's bar (or in a header of its own when the panel stands alone).
+ * When the bar is narrow the search drops to a second row of its own instead of clipping.
+ */
+.logcat-bar,
+.drawer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+  container: logcat-bar / inline-size;
 }
 
-.logcat-title-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+.logcat-bar {
+  padding: 4px var(--space-2) 4px var(--space-4);
+  border-bottom: 1px solid var(--rule);
 }
 
 .logcat-title {
   margin: 0;
-  font-size: var(--text-small);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .logcat-pid {
   color: var(--ink-muted);
   font-size: var(--text-meta);
+  white-space: nowrap;
 }
 
 .logcat-count {
-  margin-left: auto;
-  color: var(--ink-2);
+  min-width: 7ch;
+  color: var(--ink);
   font-size: var(--text-meta);
-}
-
-.logcat-count-unit {
-  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .logcat-clear {
-  align-self: center;
+  flex: none;
   height: 24px;
+  margin-left: auto;
   padding: 0 var(--space-2);
   font-size: var(--text-meta);
-}
-
-.logcat-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* Level chips: the selected minimum and everything more severe stay lit. */
@@ -69,9 +70,10 @@
 .logcat-search {
   position: relative;
   display: flex;
-  flex: 1 1 160px;
+  flex: 1 1 180px;
   align-items: center;
-  min-width: 0;
+  min-width: 140px;
+  max-width: 380px;
   color: var(--ink-muted);
 }
 
@@ -132,12 +134,20 @@
   scrollbar-color: var(--rule-strong) transparent;
 }
 
+/*
+ * Rows: a 2 px rule at the left carries severity (W / E / F only), the level letter sits in a tinted chip
+ * on every row, and the wash behind a warning or error stays faint so a screen of them isn't a red wall.
+ */
 .log-row {
+  --level: var(--log-d);
+  position: relative;
   display: grid;
-  grid-template-columns: 12.5ch 1.5ch minmax(0, 15ch) minmax(0, 1fr);
+  grid-template-columns: 12.5ch 2.4ch minmax(0, 18ch) minmax(0, 1fr);
   column-gap: 1.25ch;
+  align-items: baseline;
   padding: 1px var(--space-4) 1px calc(var(--space-4) - 2px);
   border-left: 2px solid transparent;
+  cursor: default;
 }
 
 .log-row:hover {
@@ -151,13 +161,21 @@
 }
 
 .log-level {
-  font-weight: 600;
+  align-self: start;
+  margin-top: 1px;
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--level) 13%, transparent);
+  color: var(--level);
+  font-size: 0.92em;
+  font-weight: 700;
+  line-height: 1.35;
   text-align: center;
 }
 
 .log-tag {
   overflow: hidden;
   color: var(--ink-2);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -175,38 +193,154 @@
   color: inherit;
 }
 
-.log-row[data-level='V'] .log-level {
-  color: var(--log-v);
+.log-row[data-level='V'] {
+  --level: var(--log-v);
 }
 .log-row[data-level='V'] .log-msg {
   color: var(--ink-2);
 }
-.log-row[data-level='D'] .log-level {
-  color: var(--log-d);
-}
-.log-row[data-level='I'] .log-level {
-  color: var(--log-i);
+.log-row[data-level='I'] {
+  --level: var(--log-i);
 }
 .log-row[data-level='W'] {
+  --level: var(--log-w);
   border-left-color: var(--jank);
-  background: var(--jank-wash);
+  background: color-mix(in srgb, var(--jank) 5%, transparent);
 }
-.log-row[data-level='W'] .log-level {
-  color: var(--log-w);
-}
-.log-row[data-level='E'],
-.log-row[data-level='F'] {
+.log-row[data-level='E'] {
+  --level: var(--log-e);
   border-left-color: var(--critical);
-  background: var(--critical-wash);
+  background: color-mix(in srgb, var(--critical) 5%, transparent);
 }
-.log-row[data-level='E'] .log-level {
-  color: var(--log-e);
+.log-row[data-level='F'] {
+  --level: var(--log-f);
+  border-left-color: var(--critical);
+  background: color-mix(in srgb, var(--critical) 8%, transparent);
 }
 .log-row[data-level='F'] .log-level {
-  color: var(--log-f);
+  background: var(--log-f);
+  color: var(--surface);
 }
 .log-row[data-level='F'] .log-msg {
   font-weight: 500;
+}
+
+.log-row[data-level='W']:hover,
+.log-row[data-level='E']:hover,
+.log-row[data-level='F']:hover {
+  background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+}
+
+.log-row[data-selected] {
+  border-left-color: var(--focus);
+  background: color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+.logcat-list:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* One-line copy: appears over the right edge of the hovered row; the keyboard path is Cmd/Ctrl+C. */
+.log-copy {
+  position: absolute;
+  top: 1px;
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+  color: var(--ink-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) linear;
+}
+
+.log-row:hover .log-copy,
+.log-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.log-copy:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+@media (hover: none) {
+  .log-copy {
+    display: none;
+  }
+}
+
+/* Selection summary and copy confirmation, floating over the bottom of the list. */
+.logcat-selection {
+  position: absolute;
+  bottom: var(--space-3);
+  left: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 4px 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  animation: jump-in-side var(--dur) var(--ease-out) both;
+}
+
+.logcat-selection-copy {
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+  font-weight: 500;
+}
+
+.logcat-selection-copy:hover {
+  background: var(--ink-2);
+}
+
+.logcat-toast-region {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  display: flex;
+  pointer-events: none;
+}
+
+.logcat-toast {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  animation: jump-in-side var(--dur) var(--ease-out) both;
+}
+
+.logcat-toast[data-kind='failed'] {
+  background: var(--critical);
+  color: var(--surface);
+}
+
+@keyframes jump-in-side {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 .logcat-empty {
@@ -266,10 +400,26 @@
   }
 }
 
+/* Narrow bar: the search takes a row of its own below the other controls. */
+@container logcat-bar (max-width: 720px) {
+  .logcat-search {
+    flex-basis: 100%;
+    max-width: none;
+    order: 9;
+  }
+}
+
+/* The pid is also in the top bar; below this the first row needs the room for Clear and the chevron. */
+@container logcat-bar (max-width: 600px) {
+  .logcat-pid {
+    display: none;
+  }
+}
+
 /* Narrow panel: the message gets its own line, indented under the level column. */
 @container logcat (max-width: 560px) {
   .log-row {
-    grid-template-columns: 12.5ch 1.5ch minmax(0, 1fr);
+    grid-template-columns: 12.5ch 2.4ch minmax(0, 1fr);
     padding-block: 2px;
   }
 

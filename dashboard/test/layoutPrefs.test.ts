@@ -72,6 +72,16 @@ describe('clampDrawerHeight', () => {
     expect(drawerMaxHeight(800)).toBe(800 - TIMELINE_MIN_HEIGHT);
   });
 
+  it('takes the bar out of the room, so a two-row bar lowers the maximum', () => {
+    const oneRow = 40;
+    const twoRows = 76;
+    expect(drawerMaxHeight(800, oneRow)).toBe(800 - TIMELINE_MIN_HEIGHT - oneRow);
+    expect(drawerMaxHeight(800, twoRows)).toBe(800 - TIMELINE_MIN_HEIGHT - twoRows);
+    expect(clampDrawerHeight(900, 800, twoRows)).toBe(drawerMaxHeight(800, twoRows));
+    // Drawer total (bar + body) plus the timeline's minimum never exceeds the column.
+    expect(twoRows + drawerMaxHeight(800, twoRows) + TIMELINE_MIN_HEIGHT).toBe(800);
+  });
+
   it('never goes under the minimum in a short column, and has a bound before measuring', () => {
     expect(clampDrawerHeight(300, 250)).toBe(LOGCAT_MIN_HEIGHT);
     expect(drawerMaxHeight(0)).toBe(640);

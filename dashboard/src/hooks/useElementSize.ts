@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 
 export interface ElementSize {
   width: number;
@@ -14,7 +14,9 @@ const MIN_CHANGE_PX = 1;
  */
 export function useElementSize(ref: RefObject<HTMLElement | null>): ElementSize {
   const [size, setSize] = useState<ElementSize>({ width: 0, height: 0 });
-  useLayoutEffect(() => {
+  // A passive effect: refs attach after children's layout effects, so a child measuring its ancestor
+  // (the logcat drawer and the instrument column) would still find the ref empty in a layout effect.
+  useEffect(() => {
     const element = ref.current;
     if (!element) return;
     const observer = new ResizeObserver((entries) => {

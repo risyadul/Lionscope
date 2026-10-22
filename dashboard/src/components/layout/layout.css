@@ -1,4 +1,4 @@
-/* Logcat drawer under the timeline: a hairline splitter with a grip, a slim title bar, then the panel. */
+/* Logcat drawer under the timeline: one draggable toolbar row (grip, count, filters, search), then the panel. */
 
 .logcat-drawer {
   position: relative;
@@ -10,74 +10,94 @@
   background: var(--surface);
 }
 
-/* 9 px hit area straddling the border; the visible grip is a short pill. */
-.drawer-handle {
-  position: absolute;
-  top: -5px;
-  right: 0;
-  left: 0;
-  z-index: 4;
-  height: 9px;
+/*
+ * The whole bar is the resize handle: row-resize over everything that isn't a control, and the top
+ * border lights up on hover and while dragging. The grip carries the splitter semantics and the focus ring.
+ */
+.drawer-bar {
+  position: relative;
+  min-height: 40px;
+  padding: 4px var(--space-2) 4px 0;
   cursor: row-resize;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.drawer-handle::before {
+.drawer-bar :is(button, label, [role='radio']) {
+  cursor: pointer;
+}
+
+.drawer-bar :is(input, select) {
+  cursor: text;
+}
+
+.drawer-bar :is(button:disabled) {
+  cursor: default;
+}
+
+/* The lit border: 2 px over the 1 px rule, so the colour change reads without shifting layout. */
+.drawer-bar::before {
   position: absolute;
-  top: 3px;
-  left: 50%;
-  width: 36px;
+  top: -2px;
+  right: 0;
+  left: 0;
   height: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--rule-strong);
-  content: '';
-  transform: translateX(-50%);
-  transition:
-    background-color var(--dur-fast) linear,
-    transform var(--dur-fast) var(--ease-out);
-}
-
-.drawer-handle:hover::before,
-.drawer-handle:active::before {
-  background: var(--ink-muted);
-  transform: translateX(-50%) scaleX(1.5);
-}
-
-.drawer-handle:focus-visible {
-  outline: none;
-}
-
-.drawer-handle:focus-visible::before {
   background: var(--focus);
-  transform: translateX(-50%) scaleX(1.5);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) linear;
 }
 
-.drawer-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 32px;
-  padding: 2px var(--space-2) 2px var(--space-4);
+.drawer-bar:hover:not(:has(:is(button, input, label, [role='radio']):hover))::before,
+.logcat-drawer[data-dragging] .drawer-bar::before,
+.drawer-bar:has(.drawer-grip:focus-visible)::before {
+  opacity: 1;
 }
 
-.drawer-title {
-  margin: 0;
+.logcat-drawer[data-dragging] {
+  cursor: row-resize;
+}
+
+.logcat-drawer[data-dragging] .drawer-body {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.drawer-grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  align-self: stretch;
+  width: 28px;
+  margin-right: 2px;
   color: var(--ink-muted);
-  font-size: var(--text-overline);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  border-radius: var(--radius-s, 4px);
+  transition: color var(--dur-fast) linear;
 }
 
-.drawer-meta {
-  color: var(--ink-muted);
-  font-size: var(--text-meta);
+.drawer-bar:hover .drawer-grip,
+.logcat-drawer[data-dragging] .drawer-grip {
+  color: var(--ink-2);
+}
+
+.drawer-grip:focus-visible {
+  color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* The panel's toolbar items sit directly in the bar's flex row. */
+.drawer-slot {
+  display: contents;
 }
 
 .drawer-toggle {
   width: 26px;
   height: 26px;
-  margin-left: auto;
+  flex: none;
   border-color: transparent;
   background: transparent;
   color: var(--ink-2);

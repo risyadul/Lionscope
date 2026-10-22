@@ -23,7 +23,7 @@ function Harness() {
   const columnRef = useRef<HTMLDivElement>(null);
   return (
     <div ref={columnRef}>
-      <LogcatDrawer columnRef={columnRef} meta={<span>3 lines</span>}>
+      <LogcatDrawer columnRef={columnRef}>
         <p>log lines</p>
       </LogcatDrawer>
     </div>
@@ -32,6 +32,7 @@ function Harness() {
 
 const splitter = () => screen.getByRole('separator', { name: 'Resize logcat' });
 const value = () => Number(splitter().getAttribute('aria-valuenow'));
+const bar = () => splitter().closest('.drawer-bar') as HTMLElement;
 const body = () => screen.getByText('log lines').parentElement as HTMLElement;
 
 describe('LogcatDrawer', () => {
@@ -87,11 +88,58 @@ describe('LogcatDrawer', () => {
     expect(window.localStorage.getItem(LAYOUT_KEYS.logcatHeight)).toBe(String(LOGCAT_MIN_HEIGHT));
   });
 
+  it('drags from anywhere on the bar, but not from its controls', () => {
+    render(<Harness />);
+    fireEvent.pointerDown(bar(), { pointerId: 1, button: 0, clientY: 500 });
+    fireEvent.pointerMove(bar(), { pointerId: 1, buttons: 1, clientY: 450 });
+    expect(value()).toBe(LOGCAT_DEFAULT_HEIGHT + 50);
+    expect(bar().closest('.logcat-drawer')?.hasAttribute('data-dragging')).toBe(true);
+    fireEvent.pointerUp(bar(), { pointerId: 1, clientY: 450 });
+    expect(bar().closest('.logcat-drawer')?.hasAttribute('data-dragging')).toBe(false);
+
+    const toggle = screen.getByRole('button', { name: 'Hide logcat' });
+    fireEvent.pointerDown(toggle, { pointerId: 2, button: 0, clientY: 500 });
+    fireEvent.pointerMove(bar(), { pointerId: 2, buttons: 1, clientY: 300 });
+    expect(value()).toBe(LOGCAT_DEFAULT_HEIGHT + 50);
+  });
+
+  it('a press without movement neither resizes nor reopens a collapsed drawer', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide logcat' }));
+    fireEvent.pointerDown(bar(), { pointerId: 1, button: 0, clientY: 500 });
+    fireEvent.pointerUp(bar(), { pointerId: 1, clientY: 500 });
+    expect(body().hidden).toBe(true);
+    fireEvent.pointerDown(bar(), { pointerId: 2, button: 0, clientY: 500 });
+    fireEvent.pointerMove(bar(), { pointerId: 2, buttons: 1, clientY: 440 });
+    fireEvent.pointerUp(bar(), { pointerId: 2, clientY: 440 });
+    expect(body().hidden).toBe(false);
+    expect(value()).toBe(LOGCAT_MIN_HEIGHT + 60);
+  });
+
+  it('double-click on the bar toggles maximum height and the previous height', () => {
+    render(<Harness />);
+    fireEvent.doubleClick(bar());
+    const max = Number(splitter().getAttribute('aria-valuemax'));
+    expect(value()).toBe(max);
+    fireEvent.doubleClick(bar());
+    expect(value()).toBe(LOGCAT_DEFAULT_HEIGHT);
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Hide logcat' }));
+    expect(value()).toBe(LOGCAT_DEFAULT_HEIGHT);
+  });
+
+  it('keeps the separator on the grip alone, never on a container of controls', () => {
+    render(<Harness />);
+    expect(splitter().querySelector('button, input')).toBeNull();
+    expect(splitter().tabIndex).toBe(0);
+  });
+
   it('defaults to a quarter of the measured column, and a saved height wins', () => {
     class SizedResizeObserver {
       constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() {
-        const entry = { contentRect: { width: 1000, height: 840 } } as ResizeObserverEntry;
+      observe(target: Element) {
+        // The drawer bar is measured too: give it its one-row height.
+        const height = target.classList.contains('drawer-bar') ? 32 : 840;
+        const entry = { contentRect: { width: 1000, height } } as ResizeObserverEntry;
         this.callback([entry], this as unknown as ResizeObserver);
       }
       unobserve() {}
