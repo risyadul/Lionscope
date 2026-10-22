@@ -143,20 +143,38 @@ describe('Device picker with AVDs', () => {
     expect(sent).toContainEqual({ type: 'bootEmulator', avdName: 'Pixel_9a', mode: 'quick' });
   });
 
-  it('offers Shut down only for emulators Lionscope booted, and not while profiling them', () => {
-    const { sent, push } = setup([hello, devices(EMU_DEVICE), emulators(emulator({ managed: false }))]);
-    expect(screen.queryByRole('button', { name: 'Shut down' })).toBeNull();
-
-    push(emulators(emulator({ managed: true })));
+  it('shuts down an emulator Lionscope booted at once, and asks first for any other', () => {
+    const { sent, push } = setup([hello, devices(EMU_DEVICE), emulators(emulator({ managed: true }))]);
     fireEvent.click(screen.getByRole('button', { name: 'Shut down' }));
     expect(sent).toContainEqual({ type: 'shutdownEmulator', avdName: 'Pixel_9a' });
     expect(screen.getByText('Shutting down…')).toBeTruthy();
 
     // An error answers the request: the button comes back.
     push({ type: 'error', message: 'refused' });
-    expect(screen.getByRole('button', { name: 'Shut down' })).toBeTruthy();
-    push({ type: 'session', session: session() });
-    expect((screen.getByRole('button', { name: 'Shut down' }) as HTMLButtonElement).disabled).toBe(true);
+    push(emulators(emulator({ managed: false })));
+    fireEvent.click(screen.getByRole('button', { name: 'Shut down' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'Shut down Pixel 9a?' });
+    expect(dialog.textContent).toContain('Pixel 9a wasn’t started by Lionscope (for example Android Studio)');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Shut down' }));
+    expect(sent.at(-1)).toEqual({ type: 'shutdownEmulator', avdName: 'Pixel_9a', confirmUnmanaged: true });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByText('Shutting down…')).toBeTruthy();
+  });
+
+  it('can shut down the emulator a session profiles, saying the session stops', () => {
+    const { sent } = setup([
+      hello,
+      devices(EMU_DEVICE),
+      emulators(emulator({ managed: true })),
+      { type: 'session', session: session() },
+    ]);
+    const button = screen.getByRole('button', { name: 'Shut down' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    const dialog = screen.getByRole('alertdialog', { name: 'Shut down Pixel 9a?' });
+    expect(dialog.textContent).toContain('The profiling session on Pixel 9a stops.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Shut down' }));
+    expect(sent.at(-1)).toEqual({ type: 'shutdownEmulator', avdName: 'Pixel_9a' });
   });
 
   it('keeps the AVD selected through shutdown', () => {

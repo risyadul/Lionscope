@@ -326,7 +326,10 @@ export interface EmulatorInfo {
   state: EmulatorState;
   /** adb serial (`emulator-5554`) while it runs; null when off or before adb sees it. */
   serial: string | null;
-  /** Booted by this server: shut down when the server stops, and only these can be shut down from the dashboard. */
+  /**
+   * Booted by this server: shut down when the server stops. Any running emulator can be shut down from the
+   * dashboard; one this server did not boot (Android Studio, a terminal) needs `confirmUnmanaged`.
+   */
   managed: boolean;
   /** gRPC endpoint and token found: the screen can be mirrored and operated. */
   canMirror: boolean;
@@ -534,8 +537,13 @@ export type ClientMessage =
    * unexpectedly (while booting or running) the server sends `error` with code `emulator_exited`.
    */
   | { type: 'bootEmulator'; avdName: string; mode: BootMode }
-  /** Only emulators this server booted (`managed`); others are refused with an `error`. */
-  | { type: 'shutdownEmulator'; avdName: string }
+  /**
+   * Shut down a running emulator, after ending a profiling session on it. One this server did not boot is shut
+   * down only with `confirmUnmanaged: true` (the dashboard asks the user first), otherwise refused with an
+   * `error`. Graceful (gRPC SHUTDOWN, which saves the Quick Boot snapshot unless it was started with
+   * -no-snapshot-save), then `adb emu kill` on its serial as a fallback.
+   */
+  | { type: 'shutdownEmulator'; avdName: string; confirmUnmanaged?: boolean }
   | { type: 'listApps'; serial: string }
   | { type: 'startSession'; serial: string; packageName: string }
   | { type: 'stopSession' }

@@ -22,7 +22,8 @@ export interface EmulatorActions {
   /** Booting / shutting down until the AVD's state changes, an `error` arrives or the request times out. */
   pending: PendingEmulatorAction | null;
   boot: (avdName: string, mode: BootMode) => void;
-  shutdown: (avdName: string) => void;
+  /** `confirmUnmanaged`: the user agreed to shut down an emulator Lionscope didn't boot. */
+  shutdown: (avdName: string, confirmUnmanaged?: boolean) => void;
 }
 
 function stateOf(emulators: readonly EmulatorInfo[] | null, avdName: string): EmulatorState | null {
@@ -57,7 +58,12 @@ export function useEmulatorActions({ send, emulators, errorSeq }: Input): Emulat
     [ask],
   );
   const shutdown = useCallback(
-    (avdName: string) => ask({ type: 'shutdownEmulator', avdName }, avdName, 'shutdown'),
+    (avdName: string, confirmUnmanaged = false) =>
+      ask(
+        { type: 'shutdownEmulator', avdName, ...(confirmUnmanaged && { confirmUnmanaged }) },
+        avdName,
+        'shutdown',
+      ),
     [ask],
   );
   return { pending, boot, shutdown };

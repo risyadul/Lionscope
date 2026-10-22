@@ -222,3 +222,41 @@ describe('WebSocket gateway refreshDevices', () => {
     }
   });
 });
+
+describe('WebSocket gateway shutdownEmulator', () => {
+  it('passes confirmUnmanaged on, false when absent', async () => {
+    const server = createServer();
+    let port = 0;
+    const calls: [string, boolean][] = [];
+    const gateway = createWsGateway({
+      server,
+      manager,
+      emulators: {
+        ...emulators,
+        shutdown: async (avdName, confirmUnmanaged) => {
+          calls.push([avdName, confirmUnmanaged ?? false]);
+        },
+      },
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    try {
+      const client = await Client.open(port);
+      await client.waitFor('snapshot');
+      client.send({ type: 'shutdownEmulator', avdName: 'Pixel_9a' });
+      client.send({ type: 'shutdownEmulator', avdName: 'Tablet', confirmUnmanaged: true });
+      await waitUntil(() => calls.length === 2);
+      expect(calls).toEqual([
+        ['Pixel_9a', false],
+        ['Tablet', true],
+      ]);
+      client.close();
+    } finally {
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});

@@ -50,7 +50,13 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   z
     .object({ type: z.literal('bootEmulator'), avdName: avdNameSchema, mode: z.enum(['quick', 'cold']) })
     .strict(),
-  z.object({ type: z.literal('shutdownEmulator'), avdName: avdNameSchema }).strict(),
+  z
+    .object({
+      type: z.literal('shutdownEmulator'),
+      avdName: avdNameSchema,
+      confirmUnmanaged: z.boolean().optional(),
+    })
+    .strict(),
   z.object({ type: z.literal('listApps'), serial: serialSchema }).strict(),
   z
     .object({ type: z.literal('startSession'), serial: serialSchema, packageName: packageNameSchema })

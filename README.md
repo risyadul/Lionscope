@@ -104,8 +104,10 @@ so there press Cmd/Ctrl+V on the screen to send your clipboard (the screen shows
 Android works everywhere. Turn the toggle off and nothing is read from or written to either clipboard
 (Cmd/Ctrl+V still pastes, as an explicit action).
 
-Emulators that Lionscope booted can be shut down from the dashboard and are shut down when the server stops;
-an emulator you started yourself is never shut down by Lionscope, but you can still mirror it.
+**Shut down emulator** (in the Device column and next to the device picker) closes any running emulator, after
+stopping a profiling session on it. Lionscope asks first when the emulator wasn't booted by Lionscope (for example
+Android Studio) or a session is running. Emulators Lionscope booted are also shut down when the server stops; one
+you started yourself never is.
 
 Lionscope talks to the emulator's own gRPC endpoint, found through the emulator's discovery file
 (`avd/running/pid_<pid>.ini`, which holds its port and access token). Frames are captured by the emulator on
@@ -275,7 +277,8 @@ protocol version 1 and closes the connection on unknown message types.
 - Emulator access tokens are read from the emulator's discovery file and used only by the server; they are
   never logged or sent to the browser. The screen socket (`/ws/screen`) has the same Host/Origin checks, a
   size cap and an input rate limit. AVD names must match `emulator -list-avds` before anything is spawned, and
-  only emulators this server booted can be shut down.
+  an emulator this server didn't boot is shut down only after the user confirms it in the dashboard, and only through
+  its own gRPC endpoint or `adb emu kill` on its serial (never a process signal).
 - For physical devices, the scrcpy server jar is checked against its SHA-256 before every push, the command line
   on the phone is built from fixed presets (no dashboard values reach the device shell), and the phone process
   and adb forward are removed on every exit path. Video and device messages from the phone are size-checked.

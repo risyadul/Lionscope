@@ -281,6 +281,16 @@ describe('SessionManager', () => {
     await manager.close();
   });
 
+  it('stops the session only when it profiles the emulator that is shutting down', async () => {
+    const { manager } = setup();
+    await manager.startSession('emulator-5554', PKG);
+    await manager.stopSessionOn('emulator-5556');
+    expect(manager.getSessionState().status).not.toBe('idle');
+    await manager.stopSessionOn('emulator-5554');
+    expect(manager.getSessionState()).toMatchObject({ status: 'idle', serial: 'emulator-5554' });
+    await manager.close();
+  });
+
   it(`puts the session in error after ${DEVICE_GONE_LISTINGS} successful listings without its device`, async () => {
     const { manager, setDevices, messages } = setup();
     manager.startDevicePolling();

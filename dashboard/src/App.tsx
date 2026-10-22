@@ -86,6 +86,8 @@ export function App() {
   });
   const { serial, emulator } = selection.target;
   const emulatorActions = useEmulatorActions({ send, emulators: state.emulators, errorSeq: state.errorSeq });
+  // Shutting it down stops this session first (the server does; the confirmation says so).
+  const isInSession = isActive && emulator !== null && emulator.serial === state.session.serial;
   const deviceReason = serial === null || isActive ? null : serialUnavailableReason(state.devices, serial);
   const packageName = isActive ? state.session.packageName : (chosenPackage ?? state.session.packageName);
   const apps = state.apps !== null && state.apps.serial === serial ? state.apps.apps : null;
@@ -249,7 +251,7 @@ export function App() {
             emulator={emulator}
             pending={emulatorActions.pending}
             isOffline={!isOpen}
-            isInSession={isActive && emulator !== null && emulator.serial === state.session.serial}
+            isInSession={isInSession}
             onBoot={emulatorActions.boot}
             onShutdown={emulatorActions.shutdown}
           />
@@ -300,7 +302,9 @@ export function App() {
             isOnline={isOpen}
             isVisible={deviceColumn.isVisible}
             pending={emulatorActions.pending}
+            isInSession={isInSession}
             onBoot={emulatorActions.boot}
+            onShutdown={emulatorActions.shutdown}
           />
         </DeviceColumn>
         <div ref={instrumentRef} className="instrument">

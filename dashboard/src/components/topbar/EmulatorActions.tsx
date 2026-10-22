@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { BootMode, EmulatorInfo } from '@lionscope/protocol/wire';
 import { emulatorBusy, emulatorLabel, type PendingEmulatorAction } from '../../lib/emulators.ts';
+import { ConfirmDialog } from '../ui/ConfirmDialog.tsx';
 import { DEVICE_PICKER_ID } from './DevicePicker.tsx';
 
 const BOOT_MODES: readonly { mode: BootMode; label: string; detail: string }[] = [
@@ -117,17 +118,64 @@ function BootMenu({ emulator, disabledReason, onBoot }: BootMenuProps) {
   );
 }
 
+type ShutdownProps = {
+  emulator: EmulatorInfo;
+  /** A profiling session runs on this emulator: it stops first. */
+  isInSession: boolean;
+  onShutdown: (avdName: string, confirmUnmanaged: boolean) => void;
+  /** The button that asks, given its click handler. */
+  renderTrigger: (onClick: () => void) => ReactNode;
+};
+
+/**
+ * Shut down a running emulator. Asks first when Lionscope didn't boot it (the server then needs
+ * `confirmUnmanaged`) or when a profiling session runs on it.
+ */
+export function ShutdownControl({ emulator, isInSession, onShutdown, renderTrigger }: ShutdownProps) {
+  const [isConfirming, setIsConfirming] = useState(false);
+  const label = emulatorLabel(emulator);
+  const shutDown = () => onShutdown(emulator.avdName, !emulator.managed);
+  const ask = () => (emulator.managed && !isInSession ? shutDown() : setIsConfirming(true));
+  // The trigger gives way to "Shutting down…": focus moves to the picker instead of being lost.
+  const confirm = () => {
+    setIsConfirming(false);
+    shutDown();
+    document.getElementById(DEVICE_PICKER_ID)?.focus();
+  };
+  return (
+    <>
+      {renderTrigger(ask)}
+      {isConfirming && (
+        <ConfirmDialog
+          title={`Shut down ${label}?`}
+          confirmLabel="Shut down"
+          onConfirm={confirm}
+          onCancel={() => setIsConfirming(false)}
+        >
+          {!emulator.managed && (
+            <p>
+              {label} wasn’t started by Lionscope (for example Android Studio). Apps running in it are closed.
+            </p>
+          )}
+          {emulator.managed && <p>Apps running in it are closed.</p>}
+          {isInSession && <p>The profiling session on {label} stops.</p>}
+        </ConfirmDialog>
+      )}
+    </>
+  );
+}
+
 type Props = {
   emulator: EmulatorInfo | null;
   pending: PendingEmulatorAction | null;
   isOffline: boolean;
-  /** A session is running on this emulator: it stays up until the session stops. */
+  /** A session is running on this emulator: shutting it down stops the session first. */
   isInSession: boolean;
   onBoot: (avdName: string, mode: BootMode) => void;
-  onShutdown: (avdName: string) => void;
+  onShutdown: (avdName: string, confirmUnmanaged: boolean) => void;
 };
 
-/** Boot an AVD that is off; shut down one this server booted; show progress in between. */
+/** Boot an AVD that is off; shut down one that runs; show progress in between. */
 export function EmulatorActions({ emulator, pending, isOffline, isInSession, onBoot, onShutdown }: Props) {
   if (emulator === null) return null;
   const busy = emulatorBusy(emulator, pending);
@@ -143,17 +191,24 @@ export function EmulatorActions({ emulator, pending, isOffline, isInSession, onB
   if (emulator.state === 'off') {
     return <BootMenu emulator={emulator} disabledReason={offlineReason} onBoot={onBoot} />;
   }
-  if (emulator.state !== 'running' || !emulator.managed) return null;
-  const reason = offlineReason ?? (isInSession ? 'Stop the session to shut the emulator down' : null);
+  if (emulator.state !== 'running') return null;
+  const origin = emulator.managed ? 'booted by Lionscope' : 'not started by Lionscope';
   return (
-    <button
-      type="button"
-      className="btn emu-action"
-      disabled={reason !== null}
-      title={reason ?? `Shut down ${emulatorLabel(emulator)} (booted by Lionscope)`}
-      onClick={() => onShutdown(emulator.avdName)}
-    >
-      Shut down
-    </button>
+    <ShutdownControl
+      emulator={emulator}
+      isInSession={isInSession}
+      onShutdown={onShutdown}
+      renderTrigger={(onClick) => (
+        <button
+          type="button"
+          className="btn emu-action"
+          disabled={offlineReason !== null}
+          title={offlineReason ?? `Shut down ${emulatorLabel(emulator)} (${origin})`}
+          onClick={onClick}
+        >
+          Shut down
+        </button>
+      )}
+    />
   );
 }

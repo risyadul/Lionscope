@@ -12,6 +12,10 @@ All notable changes to Lionscope are documented here. The format is based on
   an emulator's (touch, multi-touch, wheel, keys, Share clipboard, navigation, rotation, screenshot, frame size).
   Lionscope pushes the bundled scrcpy-server v5.0.1 (Apache-2.0, SHA-256 checked) over adb while the column is
   open; the phone's hardware encoder streams H.264 that the browser decodes with WebCodecs. Nothing is installed.
+- **Shut down emulator** in the Device column and next to the picker, for any running emulator: one Lionscope
+  didn't boot (e.g. from Android Studio), or one with a profiling session on it, is shut down after a
+  confirmation; a running session is stopped first. The Android power key's tooltip now says it only turns the
+  screen on/off.
 - A "Mirroring on" band on the timeline while a phone of the current session is mirrored, since its encoder
   adds a little work.
 - Clear messages when a phone refuses injected input (Xiaomi / HyperOS: "USB debugging (Security settings)"),

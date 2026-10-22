@@ -48,13 +48,14 @@ type ToolButtonProps = {
   isPressed?: boolean;
   /** Tooltip, when it should say more than the label. */
   title?: string;
+  className?: string;
 };
 
-function ToolButton({ label, icon, disabled, onClick, isPressed, title }: ToolButtonProps) {
+export function ToolButton({ label, icon, disabled, onClick, isPressed, title, className }: ToolButtonProps) {
   return (
     <button
       type="button"
-      className="btn btn--icon device-tool"
+      className={`btn btn--icon device-tool${className ? ` ${className}` : ''}`}
       aria-label={label}
       aria-pressed={isPressed}
       title={title ?? label}
@@ -156,10 +157,12 @@ type Props = {
   kind: ScreenTargetKind;
   /** Stream only while the panel is on screen and the tab is visible. */
   isVisible: boolean;
+  /** At the far end of the toolbar, apart from the device keys (Shut down for an emulator). */
+  endTool?: ReactNode;
 };
 
 /** The live emulator or device screen in a device frame, with its controls. */
-export function ScreenView({ serial, name, label, kind, isVisible }: Props) {
+export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Props) {
   const [size, setSize] = useStoredState<ScreenSize>(LAYOUT_KEYS.screenSize, parseScreenSize);
   // Destructured: the stream object carries the canvas ref, which render must not read through.
   const streamEvents = useRef<ScreenStreamEvents>({});
@@ -195,6 +198,7 @@ export function ScreenView({ serial, name, label, kind, isVisible }: Props) {
       <div className="device-toolbar" role="group" aria-label={`${label} controls`}>
         <ToolButton
           label="Power"
+          title="Power button (screen on/off)"
           icon={<PowerIcon />}
           disabled={!isLive}
           onClick={() => send({ type: 'nav', button: 'power' })}
@@ -239,6 +243,7 @@ export function ScreenView({ serial, name, label, kind, isVisible }: Props) {
           {isLive ? fps : '–'}
           <span className="device-fps-unit"> fps</span>
         </span>
+        {endTool}
       </div>
 
       <div ref={stageRef} className="device-stage">

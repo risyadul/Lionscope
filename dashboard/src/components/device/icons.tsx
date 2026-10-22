@@ -93,3 +93,11 @@ export const ClipboardIcon = () => (
     <path d="M5.25 2.5V1.75h3.5v.75M5.25 6.5h3.5M5.25 9h2.5" />
   </Icon>
 );
+
+/** Stop (shut the emulator down): a filled square in a ring, unlike the Android power key. */
+export const StopIcon = () => (
+  <Icon>
+    <circle cx="7" cy="7" r="5.25" />
+    <rect x="5" y="5" width="4" height="4" rx="0.5" fill="currentColor" stroke="none" />
+  </Icon>
+);

@@ -243,6 +243,14 @@ export class SessionManager implements SdkLinkTarget {
     });
   }
 
+  /** Stop the session if it profiles `serial` (its emulator is about to shut down). */
+  stopSessionOn(serial: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.session && !this.session.isStopped && this.session.serial === serial)
+        await this.endSession('idle');
+    });
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);

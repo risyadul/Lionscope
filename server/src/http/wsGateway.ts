@@ -183,7 +183,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         await emulators.boot(message.avdName, message.mode);
         return;
       case 'shutdownEmulator':
-        await emulators.shutdown(message.avdName);
+        await emulators.shutdown(message.avdName, message.confirmUnmanaged === true);
         return;
       case 'listApps':
         send(ws, { type: 'apps', serial: message.serial, apps: await manager.listApps(message.serial) });

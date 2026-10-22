@@ -150,6 +150,11 @@
   color: var(--ink);
 }
 
+/* Shut down the emulator: the toolbar's last tool, past the fps readout, apart from the device keys. */
+.device-shutdown:hover:not(:disabled) {
+  color: var(--critical);
+}
+
 .device-size {
   flex: none;
   margin-left: var(--space-1);

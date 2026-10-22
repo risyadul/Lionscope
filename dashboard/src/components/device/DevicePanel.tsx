@@ -8,7 +8,9 @@ import {
   type PendingEmulatorAction,
 } from '../../lib/emulators.ts';
 import { videoUnavailableMessage, webCodecsApi } from '../../lib/videoDecoder.ts';
-import { ScreenView } from './ScreenView.tsx';
+import { ShutdownControl } from '../topbar/EmulatorActions.tsx';
+import { StopIcon } from './icons.tsx';
+import { ScreenView, ToolButton } from './ScreenView.tsx';
 
 type NoteProps = {
   title: string;
@@ -93,7 +95,10 @@ type Props = {
   /** The column is open and the tab visible: the screen may stream. */
   isVisible: boolean;
   pending: PendingEmulatorAction | null;
+  /** A profiling session runs on the selected emulator. */
+  isInSession?: boolean;
   onBoot: (avdName: string, mode: BootMode) => void;
+  onShutdown?: (avdName: string, confirmUnmanaged: boolean) => void;
 };
 
 /** The selected device's live screen, or why there is none. Mirroring doesn't need a profiling session. */
@@ -104,7 +109,9 @@ export function DevicePanel({
   isOnline,
   isVisible,
   pending,
+  isInSession = false,
   onBoot,
+  onShutdown = () => {},
 }: Props) {
   const { serial, emulator } = target;
   if (!isOnline) {
@@ -157,6 +164,14 @@ export function DevicePanel({
   if (emulator.serial === null) {
     return <Note title={`Waiting for adb to see ${label}…`} isBusy />;
   }
+  const shutdown = (renderTrigger: (onClick: () => void) => ReactNode) => (
+    <ShutdownControl
+      emulator={emulator}
+      isInSession={isInSession}
+      onShutdown={onShutdown}
+      renderTrigger={renderTrigger}
+    />
+  );
   if (!emulator.canMirror) {
     return (
       <Note title={`Can’t mirror ${label}`}>
@@ -164,6 +179,13 @@ export function DevicePanel({
           Lionscope found no gRPC endpoint for this emulator. Update the Android Emulator, or boot the AVD
           from Lionscope. Profiling works as usual.
         </p>
+        <div className="device-note-actions">
+          {shutdown((onClick) => (
+            <button type="button" className="btn" onClick={onClick}>
+              Shut down emulator
+            </button>
+          ))}
+        </div>
       </Note>
     );
   }
@@ -175,6 +197,15 @@ export function DevicePanel({
       label={label}
       kind="emulator"
       isVisible={isVisible}
+      endTool={shutdown((onClick) => (
+        <ToolButton
+          label="Shut down emulator"
+          icon={<StopIcon />}
+          disabled={false}
+          onClick={onClick}
+          className="device-shutdown"
+        />
+      ))}
     />
   );
 }

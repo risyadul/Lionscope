@@ -1,0 +1,73 @@
+/* Modal confirmation: above the device drawer (z-index 50) and every popover. */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgba(11, 13, 16, 0.36);
+  animation: confirm-fade var(--dur) var(--ease-out) both;
+}
+
+.confirm-dialog {
+  display: grid;
+  gap: var(--space-3);
+  width: min(420px, 100%);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--critical);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  animation: confirm-rise var(--dur) var(--ease-out) both;
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: 600;
+}
+
+.confirm-body {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-body);
+}
+
+.confirm-body p {
+  margin: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.btn--danger {
+  background: var(--critical);
+  border-color: var(--critical);
+  color: var(--ink-inverse);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--critical) 86%, var(--ink));
+  border-color: color-mix(in srgb, var(--critical) 86%, var(--ink));
+}
+
+@keyframes confirm-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes confirm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}

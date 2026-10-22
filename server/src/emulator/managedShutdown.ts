@@ -35,8 +35,36 @@ export interface ShutdownTools {
 }
 
 /**
- * gRPC SHUTDOWN (snapshot saved on quick boot), else `adb emu kill`, both only to `instance` (the entry's own,
- * found by the caller); else (or without an instance) a signal to the process group this server spawned.
+ * gRPC SHUTDOWN (snapshot saved on quick boot), else `adb emu kill` on its serial, both only to `instance`.
+ * false: neither was accepted.
+ */
+export async function requestShutdown(
+  tools: ShutdownTools,
+  avdName: string,
+  instance: RunningEmulator,
+): Promise<boolean> {
+  if (instance.grpc && tools.createClient) {
+    const client = tools.createClient(instance.grpc);
+    try {
+      await withTimeout(client.shutdown(), SHUTDOWN_STEP_TIMEOUT_MS);
+      log.info(`Shutting down ${avdName}`);
+      return true;
+    } catch (error) {
+      log.warn(`gRPC shutdown of ${avdName} failed: ${errorMessage(error)}`);
+    } finally {
+      client.close();
+    }
+  }
+  if (await emuKill(tools, avdName, instance.serial)) {
+    log.info(`Killed ${avdName} (${instance.serial})`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * requestShutdown to `instance` (the entry's own, found by the caller); else (or without an instance) a signal
+ * to the process group this server spawned.
  */
 export async function stopEmulator(
   tools: ShutdownTools,
@@ -44,27 +72,7 @@ export async function stopEmulator(
   entry: ManagedEmulator,
   instance: RunningEmulator | undefined,
 ): Promise<void> {
-  if (instance?.grpc && tools.createClient) {
-    const client = tools.createClient(instance.grpc);
-    try {
-      await withTimeout(client.shutdown(), SHUTDOWN_STEP_TIMEOUT_MS);
-      log.info(`Shutting down ${avdName}`);
-      return;
-    } catch (error) {
-      log.warn(`gRPC shutdown of ${avdName} failed: ${errorMessage(error)}`);
-    } finally {
-      client.close();
-    }
-  }
-  if (instance) {
-    try {
-      await tools.adb.exec(['-s', entry.serial, 'emu', 'kill'], { timeoutMs: SHUTDOWN_STEP_TIMEOUT_MS });
-      log.info(`Killed ${avdName} (${entry.serial})`);
-      return;
-    } catch (error) {
-      log.warn(`adb emu kill of ${avdName} failed: ${errorMessage(error)}`);
-    }
-  }
+  if (instance && (await requestShutdown(tools, avdName, instance))) return;
   if (!entry.exited) entry.process.kill('SIGTERM');
 }
 
@@ -82,16 +90,22 @@ export async function forceEmulator(
   entry.escalation = null;
   if (!instance && entry.exited) return false;
   log.warn(`${avdName} did not shut down: killing it`);
-  if (instance) {
-    try {
-      await tools.adb.exec(['-s', entry.serial, 'emu', 'kill'], { timeoutMs: SHUTDOWN_STEP_TIMEOUT_MS });
-      await waitUntil(() => entry.exited, SHUTDOWN_STEP_TIMEOUT_MS);
-    } catch (error) {
-      log.warn(`adb emu kill of ${avdName} failed: ${errorMessage(error)}`);
-    }
+  if (instance && (await emuKill(tools, avdName, entry.serial))) {
+    await waitUntil(() => entry.exited, SHUTDOWN_STEP_TIMEOUT_MS);
   }
   if (!entry.exited) entry.process.kill('SIGKILL');
   return true;
+}
+
+/** `adb -s <serial> emu kill`; false (logged) when the console did not take it. */
+export async function emuKill(tools: ShutdownTools, avdName: string, serial: string): Promise<boolean> {
+  try {
+    await tools.adb.exec(['-s', serial, 'emu', 'kill'], { timeoutMs: SHUTDOWN_STEP_TIMEOUT_MS });
+    return true;
+  } catch (error) {
+    log.warn(`adb emu kill of ${avdName} failed: ${errorMessage(error)}`);
+    return false;
+  }
 }
 
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

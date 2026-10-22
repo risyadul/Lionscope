@@ -10,12 +10,19 @@ import type { EmulatorHost } from '../src/emulator/emulatorHost.ts';
 import { chooseScreenBackend, SCREEN_INPUT_FAILED_MESSAGE } from '../src/emulator/screenGateway.ts';
 import { DeviceScreenSession } from '../src/scrcpy/deviceScreenSession.ts';
 import { injectKeycode, injectTouch, KEY_ACTION, MOTION_ACTION, resetVideo } from '../src/scrcpy/protocol.ts';
+import { AKEYCODE } from '../src/scrcpy/keycodes.ts';
 import { LIST_LEFTOVERS_COMMAND } from '../src/scrcpy/scrcpyServer.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { FakeScrcpyAdb, FakeScrcpyDevice, PHYSICAL_SERIAL } from './helpers/fakeScrcpy.ts';
 
 const PKG = 'com.example.app';
+/**
+ * Every wait is on its condition (socket events, else polled); this is only the give-up point. A real scrcpy
+ * launch (push, forward, two sockets) shares the CPU with the whole suite, so it gets plenty of headroom.
+ */
+const WAIT_MS = 15_000;
+const TEST_TIMEOUT_MS = 30_000;
 
 class Client {
   readonly texts: Record<string, unknown>[] = [];
@@ -35,9 +42,36 @@ class Client {
   send(message: unknown): void {
     this.ws.send(JSON.stringify(message));
   }
+
+  /** Resolves once `condition` holds: checked now and after every message and the close (no polling). */
+  waitFor(condition: () => boolean, what: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const onEvent = (): void => {
+        if (!condition()) return;
+        stop();
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        stop();
+        reject(new Error(`timed out after ${WAIT_MS} ms waiting for ${what}`));
+      }, WAIT_MS);
+      const stop = (): void => {
+        clearTimeout(timer);
+        this.ws.off('message', onEvent);
+        this.ws.off('close', onEvent);
+      };
+      // Registered after the constructor's listeners, so texts, videos and closed are up to date here.
+      this.ws.on('message', onEvent);
+      this.ws.on('close', onEvent);
+      onEvent();
+    });
+  }
 }
 
-describe('screen gateway with a physical device (fake scrcpy device)', () => {
+/** Device- and server-side state has no event to wait on: polled until it holds. */
+const eventually = (device: FakeScrcpyDevice, condition: () => boolean) => device.waitFor(condition, WAIT_MS);
+
+describe('screen gateway with a physical device (fake scrcpy device)', { timeout: TEST_TIMEOUT_MS }, () => {
   const device = new FakeScrcpyDevice();
   const adb = new FakeScrcpyAdb(device);
   let dir: string;
@@ -57,6 +91,9 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
     });
     return client;
   };
+  /** The control socket got the RESET_VIDEO that opens a stream (control bytes add up over the tests). */
+  const streamOpened = (start: number) =>
+    eventually(device, () => device.controlBytes.subarray(start).equals(resetVideo()));
 
   beforeAll(async () => {
     await device.start();
@@ -75,15 +112,15 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
     };
     server = createLionscopeServer({ port: 0, devicePort: 0, adb, emulatorHost: host });
     port = (await server.listen()).port;
-    await device.waitFor(() => server.manager.getDevices().length === 1);
-  });
+    await eventually(device, () => server.manager.getDevices().length === 1);
+  }, TEST_TIMEOUT_MS);
 
   afterEach(async () => {
     for (const client of clients.splice(0)) client.ws.close();
-    await device.waitFor(() => adb.liveServers.length === 0);
+    await eventually(device, () => adb.liveServers.length === 0);
     adb.deviceState = 'device';
     await server.manager.refreshDevices();
-  });
+  }, TEST_TIMEOUT_MS);
 
   afterAll(async () => {
     await server.close();
@@ -93,8 +130,10 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
 
   it('mirrors through scrcpy and records a mirroring span while the session device is mirrored', async () => {
     await server.manager.startSession(PHYSICAL_SERIAL, PKG);
+    const start = device.controlBytes.length;
     const client = await connect();
-    await device.waitFor(() => client.videos.length === 2 && device.control !== null);
+    await client.waitFor(() => client.videos.length === 2, 'the first two video packets');
+    await streamOpened(start);
     expect(client.texts[0]).toMatchObject({
       type: 'screenInfo',
       codec: 'h264',
@@ -106,7 +145,7 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
     ]);
     const before = device.controlBytes.length;
     client.send({ type: 'touch', touches: [{ id: 0, x: 0, y: 1, pressure: 1 }] });
-    await device.waitFor(() => device.controlBytes.length === before + 32);
+    await eventually(device, () => device.controlBytes.length === before + 32);
     expect(device.controlBytes.subarray(before)).toEqual(
       injectTouch({
         action: MOTION_ACTION.down,
@@ -116,22 +155,28 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
       }),
     );
     client.ws.close();
-    await device.waitFor(() => server.manager.getSnapshot().mirror?.[0]?.end !== null);
-    await device.waitFor(() => adb.liveServers.length === 0);
+    await eventually(device, () => server.manager.getSnapshot().mirror?.[0]?.end !== null);
+    await eventually(device, () => adb.liveServers.length === 0);
     await server.manager.stopSession();
   });
 
   it('rate-limits keyFrame requests on their own budget, without starving input', async () => {
+    const start = device.controlBytes.length;
     const client = await connect();
-    await device.waitFor(() => client.videos.length === 2 && device.controlBytes.length >= 1);
+    await client.waitFor(() => client.videos.length === 2, 'the first two video packets');
+    await streamOpened(start);
     const before = device.controlBytes.length;
     for (let i = 0; i < 50; i += 1) client.send({ type: 'keyFrame' });
     client.send({ type: 'nav', button: 'home' });
-    await device.waitFor(() => device.controlBytes.length >= before + 28);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // A sentinel after them on the same socket: once its key is in, everything sent before it has arrived.
+    client.send({ type: 'nav', button: 'recents' });
+    const keys = (keycode: number) =>
+      Buffer.concat([injectKeycode(KEY_ACTION.down, keycode), injectKeycode(KEY_ACTION.up, keycode)]);
+    const sentinel = keys(AKEYCODE.APP_SWITCH);
+    await eventually(device, () => device.controlBytes.subarray(-sentinel.length).equals(sentinel));
     // One RESET_VIDEO at most (the bucket admits 3, the session sends one per second), and the key still goes out.
     expect(device.controlBytes.subarray(before)).toEqual(
-      Buffer.concat([resetVideo(), injectKeycode(KEY_ACTION.down, 3), injectKeycode(KEY_ACTION.up, 3)]),
+      Buffer.concat([resetVideo(), keys(AKEYCODE.HOME), sentinel]),
     );
     expect(client.closed).toBe(false);
   });
@@ -141,36 +186,36 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
       throw new RangeError('boom');
     });
     const client = await connect();
-    await device.waitFor(() => client.videos.length === 2);
+    await client.waitFor(() => client.videos.length === 2, 'the first two video packets');
     client.send({ type: 'nav', button: 'home' });
-    await device.waitFor(() => client.closed);
+    await client.waitFor(() => client.closed, 'the socket to close');
     expect(client.texts.at(-1)).toEqual({
       type: 'screenError',
       code: 'ended',
       message: SCREEN_INPUT_FAILED_MESSAGE,
     });
-    await device.waitFor(() => adb.liveServers.length === 0);
+    await eventually(device, () => adb.liveServers.length === 0);
     handle.mockRestore();
     const next = await connect();
-    await device.waitFor(() => next.videos.length === 2);
+    await next.waitFor(() => next.videos.length === 2, 'the first two video packets');
   });
 
   it('refuses devices that are not ready and serials that are not connected', async () => {
     adb.deviceState = 'unauthorized';
     await server.manager.refreshDevices();
     const unauthorized = await connect();
-    await device.waitFor(() => unauthorized.closed);
+    await unauthorized.waitFor(() => unauthorized.closed, 'the refusal');
     expect(unauthorized.texts).toEqual([
       { type: 'screenError', code: 'not_emulator', message: `${PHYSICAL_SERIAL} is unauthorized` },
     ]);
     const unknown = await connect('FAKEPHYS0002');
-    await device.waitFor(() => unknown.closed);
+    await unknown.waitFor(() => unknown.closed, 'the refusal');
     expect(unknown.texts).toEqual([
       { type: 'screenError', code: 'not_emulator', message: 'FAKEPHYS0002 is not connected' },
     ]);
     // An emulator serial never goes to scrcpy.
     const emulator = await connect('emulator-5554');
-    await device.waitFor(() => emulator.closed);
+    await emulator.waitFor(() => emulator.closed, 'the refusal');
     expect(emulator.texts[0]).toMatchObject({
       code: 'not_emulator',
       message: 'emulator-5554 is not a running emulator',
@@ -179,7 +224,7 @@ describe('screen gateway with a physical device (fake scrcpy device)', () => {
   });
 });
 
-describe('server lifecycle with a physical device', () => {
+describe('server lifecycle with a physical device', { timeout: TEST_TIMEOUT_MS }, () => {
   it('cleans up scrcpy leftovers on start, and closes promptly even during a stuck push', async () => {
     const device = new FakeScrcpyDevice();
     await device.start();
@@ -200,7 +245,7 @@ describe('server lifecycle with a physical device', () => {
     };
     const server = createLionscopeServer({ port: 0, devicePort: 0, adb, emulatorHost: host });
     const { port } = await server.listen();
-    await device.waitFor(() => adb.calls.some((args) => args[3] === LIST_LEFTOVERS_COMMAND));
+    await eventually(device, () => adb.calls.some((args) => args[3] === LIST_LEFTOVERS_COMMAND));
     expect(adb.calls.filter((args) => args[3] === LIST_LEFTOVERS_COMMAND).map((args) => args[1])).toEqual([
       PHYSICAL_SERIAL,
     ]);
@@ -210,7 +255,7 @@ describe('server lifecycle with a physical device', () => {
       origin: `http://localhost:${port}`,
     });
     ws.on('error', () => undefined);
-    await device.waitFor(() => adb.pushes.length === 1);
+    await eventually(device, () => adb.pushes.length === 1);
     const started = Date.now();
     await server.close();
     expect(Date.now() - started).toBeLessThan(2000);

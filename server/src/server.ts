@@ -76,6 +76,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     host: emulatorHost,
     broadcast: (message) => gateway?.broadcast(message),
     pollMs: options.emulatorPollMs,
+    stopSessionOn: (serial) => manager.stopSessionOn(serial),
   });
   const manager = new SessionManager({
     adb: options.adb,

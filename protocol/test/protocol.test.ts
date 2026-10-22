@@ -176,6 +176,12 @@ describe('emulator messages', () => {
       ok: true,
       value: { type: 'shutdownEmulator', avdName: 'Pixel_9a' },
     });
+    expect(
+      parseClientMessage('{"type":"shutdownEmulator","avdName":"Pixel_9a","confirmUnmanaged":true}'),
+    ).toEqual({
+      ok: true,
+      value: { type: 'shutdownEmulator', avdName: 'Pixel_9a', confirmUnmanaged: true },
+    });
   });
 
   it('rejects an invalid AVD name, an unknown boot mode and extra fields', () => {
@@ -185,6 +191,9 @@ describe('emulator messages', () => {
     expect(boot({ avdName: 'Pixel_9a' }).ok).toBe(false);
     expect(boot({ avdName: 'Pixel_9a', mode: 'quick', args: ['-wipe-data'] }).ok).toBe(false);
     expect(parseClientMessage('{"type":"shutdownEmulator","avdName":"$(id)"}').ok).toBe(false);
+    const shutdown = (value: object) =>
+      parseClientMessage(JSON.stringify({ type: 'shutdownEmulator', ...value }));
+    expect(shutdown({ avdName: 'Pixel_9a', confirmUnmanaged: 'yes' }).ok).toBe(false);
     expect(boot({ avdName: '-no-snapshot-save', mode: 'quick' })).toEqual({
       ok: false,
       error: 'invalid AVD name',

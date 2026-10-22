@@ -9,9 +9,11 @@ import { readRunningEmulators } from './discovery.ts';
 import type { GrpcEndpoint } from './discovery.ts';
 import type { EmulatorHost } from './emulatorHost.ts';
 import { InstanceProbe } from './instanceProbe.ts';
+import { OperationQueue } from './operationQueue.ts';
 import { forceEmulator, SHUTDOWN_GRACE_MS, stopEmulator, withTimeout } from './managedShutdown.ts';
 import type { ManagedEmulator, ShutdownTools } from './managedShutdown.ts';
 import type { RunningEmulator } from './instanceProbe.ts';
+import { notStartedHere, unmanagedInstance, UnmanagedShutdowns } from './unmanagedShutdown.ts';
 
 /** Discovery is re-read this often while an emulator boots or shuts down. */
 export const EMULATOR_POLL_MS = 1000;
@@ -20,8 +22,6 @@ export const NO_EMULATOR_MESSAGE =
 /** On close, in-flight boots and shutdowns get this long before the managed emulators are stopped anyway. */
 export const CLOSE_OPERATIONS_WAIT_MS = 1000;
 const EMULATOR_SERIAL = /^emulator-\d{1,5}$/;
-/** Boots and shutdowns waiting or running at once; more are refused as busy. */
-export const MAX_QUEUED_OPERATIONS = 4;
 
 export type MirrorTarget =
   { ok: true; endpoint: GrpcEndpoint } | { ok: false; code: ScreenErrorCode; message: string };
@@ -36,9 +36,14 @@ export interface EmulatorManagerOptions {
   platform?: NodeJS.Platform;
   shutdownGraceMs?: number;
   now?: () => number;
+  /** Ends a profiling session on `serial` (if any) before its emulator is shut down. */
+  stopSessionOn?: (serial: string) => Promise<void>;
 }
 
-/** Boots AVDs headless, tracks every AVD's state, and shuts down (only) the emulators it booted. */
+/**
+ * Boots AVDs headless and tracks every AVD's state. Shuts down the emulators it booted (also when the server
+ * stops) and, only when confirmed, one it did not boot.
+ */
 export class EmulatorManager {
   private readonly adb: Adb;
   private readonly host: EmulatorHost;
@@ -47,14 +52,13 @@ export class EmulatorManager {
   private readonly shutdownGraceMs: number;
   private readonly matchPid: boolean;
   private readonly catalog: AvdCatalog;
-  /** AVDs with a boot or shutdown queued or running, and how many operations there are. */
-  private readonly pendingAvds = new Set<string>();
-  private queuedOperations = 0;
   private running: RunningEmulator[] = [];
   private devices: DeviceInfo[] = [];
   private readonly managed = new Map<string, ManagedEmulator>();
   private readonly probe: InstanceProbe;
   private readonly shutdownTools: ShutdownTools;
+  private readonly unmanaged: UnmanagedShutdowns;
+  private readonly stopSessionOn: (serial: string) => Promise<void>;
   private readonly avdNames: AvdNameLookup;
   private readonly listeners = new Set<() => void>();
   private emulators: EmulatorInfo[] = [];
@@ -63,7 +67,7 @@ export class EmulatorManager {
   private pollAgain = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
-  private operations: Promise<unknown> = Promise.resolve();
+  private readonly operations = new OperationQueue(() => this.closed);
 
   constructor(options: EmulatorManagerOptions) {
     this.adb = options.adb;
@@ -76,6 +80,13 @@ export class EmulatorManager {
     this.probe = new InstanceProbe(options.adb, options.host.createClient, options.now);
     this.avdNames = new AvdNameLookup(options.adb, options.now);
     this.shutdownTools = { adb: options.adb, createClient: options.host.createClient };
+    this.unmanaged = new UnmanagedShutdowns({
+      tools: this.shutdownTools,
+      graceMs: this.shutdownGraceMs,
+      broadcast: options.broadcast,
+      onForced: () => void this.poll(),
+    });
+    this.stopSessionOn = options.stopSessionOn ?? (async () => undefined);
   }
 
   getEmulators(): EmulatorInfo[] {
@@ -115,7 +126,7 @@ export class EmulatorManager {
   }
 
   boot(avdName: string, mode: BootMode): Promise<void> {
-    return this.enqueue(avdName, async () => {
+    return this.operations.run(avdName, async () => {
       if (!this.host.emulatorPath) throw new PublicError(NO_EMULATOR_MESSAGE);
       if (!isValidAvdName(avdName)) throw new PublicError('invalid AVD name');
       await this.catalog.refresh();
@@ -160,18 +171,14 @@ export class EmulatorManager {
     });
   }
 
-  shutdown(avdName: string): Promise<void> {
-    return this.enqueue(avdName, async () => {
+  /** A profiling session on the emulator is stopped first. One this server did not boot needs `confirmUnmanaged`. */
+  shutdown(avdName: string, confirmUnmanaged = false): Promise<void> {
+    return this.operations.run(avdName, async () => {
       const entry = this.managed.get(avdName);
-      if (!entry) {
-        const serial = this.instanceOf(avdName)?.serial;
-        const how = serial ? `run adb -s ${serial} emu kill, or close it` : 'close it';
-        throw new PublicError(
-          `${avdName} was not started by Lionscope: ${how} where it was started (e.g. Android Studio)`,
-        );
-      }
+      if (!entry) return this.shutdownUnmanaged(avdName, confirmUnmanaged);
       // Asked again while it is shutting down: force it now.
       if (entry.shuttingDown) return this.force(avdName, entry);
+      await this.stopSessionOn(entry.serial);
       entry.shuttingDown = true;
       this.publish();
       await this.stop(avdName, entry);
@@ -186,8 +193,9 @@ export class EmulatorManager {
     this.closed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
+    this.unmanaged.close();
     // A hung boot or shutdown must not use up the server's exit deadline (main.ts).
-    await withTimeout(this.operations, CLOSE_OPERATIONS_WAIT_MS).catch(() => undefined);
+    await withTimeout(this.operations.settled, CLOSE_OPERATIONS_WAIT_MS).catch(() => undefined);
     for (const entry of this.managed.values()) if (entry.escalation) clearTimeout(entry.escalation);
     await Promise.all(
       [...this.managed].map(([avdName, entry]) => {
@@ -198,6 +206,22 @@ export class EmulatorManager {
       }),
     );
     this.probe.close();
+  }
+
+  /** Only the AVD's single, identified instance (unmanagedInstance); asked again, it is killed over its console. */
+  private async shutdownUnmanaged(avdName: string, confirmed: boolean): Promise<void> {
+    if (!confirmed) throw notStartedHere(avdName, this.instanceOf(avdName)?.serial);
+    await this.poll();
+    if (this.unmanaged.has(avdName)) return this.unmanaged.force(avdName);
+    const instance = unmanagedInstance(avdName, this.running, (serial) => this.isAdbReady(serial));
+    await this.stopSessionOn(instance.serial);
+    this.unmanaged.track(avdName, instance);
+    this.publish();
+    try {
+      await this.unmanaged.request(avdName, instance);
+    } finally {
+      await this.poll();
+    }
   }
 
   private stop(avdName: string, entry: ManagedEmulator): Promise<void> {
@@ -302,6 +326,7 @@ export class EmulatorManager {
     const running = [...discovered, ...extra];
     await this.probe.update(running, (serial) => this.isAdbReady(serial));
     this.running = running.filter((emulator) => !this.probe.isStale(emulator));
+    this.unmanaged.retain(this.running);
     for (const [avdName, entry] of this.managed) {
       if (!entry.exited || this.isRunning(avdName)) continue;
       if (entry.escalation) clearTimeout(entry.escalation);
@@ -352,6 +377,7 @@ export class EmulatorManager {
       this.catalog.list.find((avd) => avd.name === avdName)?.displayName ?? emulator?.displayName ?? null;
     let state: EmulatorInfo['state'] = 'off';
     if (entry?.shuttingDown && (emulator || !entry.exited)) state = 'shutting_down';
+    else if (emulator && !entry && this.unmanaged.isShuttingDown(avdName, emulator)) state = 'shutting_down';
     else if (emulator) state = this.probe.isBooted(emulator) ? 'running' : 'booting';
     else if (entry && !entry.exited) state = 'booting';
     return {
@@ -363,30 +389,5 @@ export class EmulatorManager {
       canMirror: Boolean(emulator?.grpc && this.host.createClient),
       renderer: emulator ? this.probe.rendererOf(emulator) : 'unknown',
     };
-  }
-
-  /**
-   * One boot or shutdown at a time, in order. Refused while one for the same AVD is pending or the queue is
-   * full; operations still queued when the server closes do not start.
-   */
-  private enqueue<T>(avdName: string, operation: () => Promise<T>): Promise<T> {
-    if (this.pendingAvds.has(avdName)) {
-      return Promise.reject(new PublicError(`${avdName} is busy: a boot or shutdown is still in progress`));
-    }
-    if (this.queuedOperations >= MAX_QUEUED_OPERATIONS) {
-      return Promise.reject(new PublicError('Emulator operations are busy: try again in a moment'));
-    }
-    this.pendingAvds.add(avdName);
-    this.queuedOperations += 1;
-    const run = (): Promise<T> => {
-      if (this.closed) return Promise.reject(new PublicError('server is shutting down'));
-      return operation();
-    };
-    const result = this.operations.then(run, run).finally(() => {
-      this.pendingAvds.delete(avdName);
-      this.queuedOperations -= 1;
-    });
-    this.operations = result.catch(() => undefined);
-    return result;
   }
 }
