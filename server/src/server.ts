@@ -146,7 +146,6 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     devices: {
       adb: options.adb,
       devices: () => manager.getDevices(),
-      onMirroring: (serial, open) => manager.setMirroring(serial, open),
       ...(options.scrcpyJarPath ? { jarPath: options.scrcpyJarPath } : {}),
     },
     allowedOrigins: () => allowedOrigins,

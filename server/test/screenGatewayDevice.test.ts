@@ -128,7 +128,7 @@ describe('screen gateway with a physical device (fake scrcpy device)', { timeout
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('mirrors through scrcpy and records a mirroring span while the session device is mirrored', async () => {
+  it('mirrors through scrcpy and injects input', async () => {
     await server.manager.startSession(PHYSICAL_SERIAL, PKG);
     const start = device.controlBytes.length;
     const client = await connect();
@@ -140,9 +140,6 @@ describe('screen gateway with a physical device (fake scrcpy device)', { timeout
       frameWidth: 540,
       frameHeight: 1200,
     });
-    expect(server.manager.getSnapshot().mirror).toEqual([
-      { serial: PHYSICAL_SERIAL, start: expect.any(Number), end: null },
-    ]);
     const before = device.controlBytes.length;
     client.send({ type: 'touch', touches: [{ id: 0, x: 0, y: 1, pressure: 1 }] });
     await eventually(device, () => device.controlBytes.length === before + 32);
@@ -155,7 +152,6 @@ describe('screen gateway with a physical device (fake scrcpy device)', { timeout
       }),
     );
     client.ws.close();
-    await eventually(device, () => server.manager.getSnapshot().mirror?.[0]?.end !== null);
     await eventually(device, () => adb.liveServers.length === 0);
     await server.manager.stopSession();
   });

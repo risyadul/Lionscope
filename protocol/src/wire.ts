@@ -264,16 +264,6 @@ export interface StrictModeSample {
   screen: string | null;
 }
 
-/**
- * While a physical device's screen is mirrored (its hardware video encoder is busy), for the timeline's
- * "Mirroring on" band. Emulator mirroring costs the guest nothing and records no span. `end` null = still on.
- */
-export interface MirrorSpan {
-  serial: string;
-  start: number;
-  end: number | null;
-}
-
 export interface Snapshot {
   cpu: CpuSample[];
   memory: MemorySample[];
@@ -286,8 +276,6 @@ export interface Snapshot {
   /** Phase 3 streams, optional like the Phase 2 ones. */
   stalls?: StallSample[];
   strictMode?: StrictModeSample[];
-  /** 0.3.1: mirroring spans on the session's device. */
-  mirror?: MirrorSpan[];
 }
 
 // ---------------------------------------------------------------------------
@@ -504,8 +492,6 @@ export type ServerMessage =
   | { type: 'breakdown'; sample: FrameBreakdownSample }
   | { type: 'stall'; sample: StallSample }
   | { type: 'strictmode'; sample: StrictModeSample }
-  /** Mirroring span update: replace the span with the same `start`, else append (like `screen`). */
-  | { type: 'mirror'; span: MirrorSpan }
   | { type: 'error'; message: string; code?: string };
 
 export type ServerMessageType = ServerMessage['type'];

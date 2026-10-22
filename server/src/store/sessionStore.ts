@@ -4,7 +4,6 @@ import type {
   FrameSample,
   LogEntry,
   MemorySample,
-  MirrorSpan,
   ScreenRef,
   ScreenSpan,
   ServerMessage,
@@ -40,9 +39,6 @@ interface StreamSpec<S extends SampleStream> {
 
 const MAX_SAMPLES = 5000;
 const MAX_SCREEN_SPANS = 2000;
-/** Mirroring spans: a few per session, capped in count and serialised size like the other droppable streams. */
-const MAX_MIRROR_SPANS = 1000;
-export const MAX_MIRROR_STREAM_BYTES = 128 * 1024;
 /**
  * Stalls / StrictMode violations: rare, but each carries a stack of up to MAX_STACK_FRAMES frames. Sized as
  * serialised (they arrive at a low rate), so each stream stays well within a client's send buffer in a snapshot.
@@ -105,18 +101,12 @@ interface ScreenEntry {
   span: ScreenSpan;
 }
 
-/** Mirroring spans, likewise pruned by their end. */
-interface MirrorEntry {
-  ts: number;
-  span: MirrorSpan;
-}
-
 type Buffers = { [S in SampleStream]: TimeWindowBuffer<StreamItems[S]> };
 type Arrays = { [S in SampleStream]: StreamItems[S][] };
 
 export function emptySnapshot(): Required<Snapshot> {
   const streams = Object.fromEntries(SAMPLE_STREAMS.map((stream) => [stream, []])) as unknown as Arrays;
-  return { ...streams, screens: [], mirror: [] };
+  return { ...streams, screens: [] };
 }
 
 export interface SessionStoreOptions {
@@ -133,7 +123,6 @@ export interface SessionStoreOptions {
 export class SessionStore {
   private readonly buffers: Buffers;
   private readonly screens: TimeWindowBuffer<ScreenEntry>;
-  private readonly mirrors: TimeWindowBuffer<MirrorEntry>;
 
   constructor(private readonly options: SessionStoreOptions) {
     const buffer = <S extends SampleStream>(stream: S): TimeWindowBuffer<StreamItems[S]> =>
@@ -149,10 +138,6 @@ export class SessionStore {
       strictMode: buffer('strictMode'),
     };
     this.screens = new TimeWindowBuffer(options.windowMs, MAX_SCREEN_SPANS);
-    this.mirrors = new TimeWindowBuffer(options.windowMs, MAX_MIRROR_SPANS, {
-      maxBytes: MAX_MIRROR_STREAM_BYTES,
-      sizeOf: (entry) => Buffer.byteLength(JSON.stringify(entry.span)),
-    });
   }
 
   append<S extends SampleStream>(stream: S, ...items: StreamItems[S][]): void {
@@ -197,24 +182,6 @@ export class SessionStore {
     if (closed) this.options.emit({ type: 'screen', span: closed });
   }
 
-  /** A mirroring span of `serial` from `start` on; a no-op while one is open. */
-  openMirror(serial: string, start: number): void {
-    const previous = this.mirrors.last()?.span;
-    if (previous?.end === null) return;
-    const span: MirrorSpan = { serial, start: Math.max(start, previous?.end ?? start), end: null };
-    this.mirrors.push({ ts: span.start, span });
-    this.options.emit({ type: 'mirror', span });
-  }
-
-  /** End the open mirroring span at `end`, announced as a `mirror` message with the same `start`. */
-  closeMirror(end: number): void {
-    const last = this.mirrors.last()?.span;
-    if (!last || last.end !== null) return;
-    const closed: MirrorSpan = { ...last, end: Math.max(end, last.start) };
-    this.mirrors.replaceLast({ ts: closed.end ?? closed.start, span: closed });
-    this.options.emit({ type: 'mirror', span: closed });
-  }
-
   /** `ScreenRef.name` on top at `ts`, or null (no span, background, or after the last span closed). */
   topScreenAt(ts: number): string | null {
     const span = this.screens.findLast((entry) => entry.span.start <= ts)?.span;
@@ -232,11 +199,7 @@ export class SessionStore {
       .toArray()
       .map((entry) => entry.span)
       .filter((span) => (span.end ?? Infinity) >= cutoff);
-    const mirror = this.mirrors
-      .toArray()
-      .map((entry) => entry.span)
-      .filter((span) => (span.end ?? Infinity) >= cutoff);
-    return { ...streams, screens, mirror };
+    return { ...streams, screens };
   }
 
   /** Returns the span it closed, or null when none was open. */

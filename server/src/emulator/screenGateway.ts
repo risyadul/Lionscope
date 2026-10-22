@@ -48,8 +48,6 @@ export interface DeviceMirroringOptions {
   adb: Adb;
   /** The last adb device listing. */
   devices: () => readonly DeviceInfo[];
-  /** A device's mirror came up (true) or went down (false): the session's mirroring spans. */
-  onMirroring?: (serial: string, open: boolean) => void;
   /** Defaults to the vendored scrcpy-server (resolveScrcpyJar). */
   jarPath?: string;
 }
@@ -175,14 +173,13 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
       if (!options.createClient) return sendError(ws, 'unavailable', 'Emulator mirroring is not available');
       session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size);
     } else {
-      const { adb, onMirroring } = backend.mirroring;
+      const { adb } = backend.mirroring;
       session = new DeviceScreenSession({
         socket: ws,
         adb,
         serial,
         size,
         jarPath,
-        onMirroring: (open) => onMirroring?.(serial, open),
       });
     }
     const state: ScreenSocketState = { session, alive: true, isEmulator: backend.kind === 'emulator' };

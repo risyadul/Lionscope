@@ -6,7 +6,6 @@ import type {
   FrameBreakdownSample,
   FrameSample,
   MemorySample,
-  MirrorSpan,
   ScreenSpan,
   SdkStatus,
   StallSample,
@@ -210,10 +209,9 @@ export interface PausedView {
   breakdown: readonly FrameBreakdownSample[];
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
-  mirror: readonly MirrorSpan[];
 }
 
 export function captureView(state: DashboardState, at: number): PausedView {
-  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode, mirror } = state;
-  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode, mirror };
+  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode } = state;
+  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode };
 }

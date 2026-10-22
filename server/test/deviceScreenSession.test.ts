@@ -58,7 +58,6 @@ describe('DeviceScreenSession', () => {
   let device: FakeScrcpyDevice;
   let adb: FakeScrcpyAdb;
   let socket: FakeScreenSocket;
-  let mirroring: boolean[];
   const sessions: DeviceScreenSession[] = [];
 
   const create = (size: ScreenSize = 540) => {
@@ -68,7 +67,6 @@ describe('DeviceScreenSession', () => {
       serial: PHYSICAL_SERIAL,
       size,
       jarPath: JAR,
-      onMirroring: (open) => mirroring.push(open),
     });
     sessions.push(session);
     return session;
@@ -95,7 +93,6 @@ describe('DeviceScreenSession', () => {
     await device.start();
     adb = new FakeScrcpyAdb(device);
     socket = new FakeScreenSocket();
-    mirroring = [];
   });
 
   afterEach(async () => {
@@ -123,7 +120,6 @@ describe('DeviceScreenSession', () => {
       [SCREEN_VIDEO_FLAG.config, 0, 'config'],
       [SCREEN_VIDEO_FLAG.key, 1000, 'key'],
     ]);
-    expect(mirroring).toEqual([true]);
     // The device turns: a new session packet, so a new screenInfo (rotation from the video vs display shape).
     device.video?.write(
       Buffer.concat([sessionPacket(1200, 540), mediaPacket({ pts: 2000, data: Buffer.from('d') })]),
@@ -195,7 +191,6 @@ describe('DeviceScreenSession', () => {
     device.video?.write(mediaPacket({ config: true, data: Buffer.from('c') }));
     await device.waitFor(() => socket.terminated);
     expect(session.isClosed).toBe(true);
-    expect(mirroring).toEqual([true, false]);
   });
 
   it('injects touches in the current video frame, multi-touch, with lifts on close', async () => {
@@ -247,7 +242,6 @@ describe('DeviceScreenSession', () => {
       injectTouch({ action: MOTION_ACTION.up, pointerId: 0n, position: at(135, 900), pressure: 0 }),
     );
     expect(adb.liveServers).toEqual([]);
-    expect(mirroring).toEqual([true, false]);
   });
 
   it('turns wheel, key, text, nav and rotate messages into scrcpy messages', async () => {
@@ -426,7 +420,6 @@ describe('DeviceScreenSession', () => {
     await expect(session.close()).resolves.toBeUndefined();
     expect(write).toHaveBeenCalled();
     expect(adb.liveServers).toEqual([]);
-    expect(mirroring).toEqual([true, false]);
   });
 
   it('ends the session when the device stops reading its input', async () => {
@@ -482,7 +475,6 @@ describe('DeviceScreenSession', () => {
       code: 'mirror_failed',
       message: 'Could not copy the mirroring server (scrcpy) to the device',
     });
-    expect(mirroring).toEqual([]);
   });
 
   it('restarts the server with the new max_size on setSize, lifting fingers first', async () => {
@@ -513,7 +505,6 @@ describe('DeviceScreenSession', () => {
     expect(adb.servers[1]?.args).toContain('max_size=800');
     expect(socket.texts.at(-1)).toMatchObject({ frameWidth: 360, frameHeight: 800 });
     await device.waitFor(() => videoMessages(socket).length === 3);
-    expect(mirroring).toEqual([true]);
   });
 
   it('answers screenshot with the screencap PNG, one at a time', async () => {
@@ -553,7 +544,6 @@ describe('DeviceScreenSession', () => {
     session.handle({ type: 'nav', button: 'home' });
     session.fail('ended', 'late');
     expect(socket.texts).toEqual([]);
-    expect(mirroring).toEqual([true, false]);
   });
 
   it('closes during start without leaving a server behind', async () => {
@@ -565,6 +555,5 @@ describe('DeviceScreenSession', () => {
     await starting;
     expect(adb.liveServers).toEqual([]);
     expect(socket.texts).toEqual([]);
-    expect(mirroring).toEqual([]);
   });
 });

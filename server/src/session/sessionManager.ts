@@ -87,8 +87,6 @@ export class SessionManager implements SdkLinkTarget {
   private adbErrorReported = false;
   private refreshInFlight: Promise<DeviceInfo[]> | null = null;
   private readonly appsInFlight = new Map<string, Promise<AppInfo[]>>();
-  /** Open scrcpy mirrors per physical device (several screen sockets may mirror one device). */
-  private readonly mirrored = new Map<string, number>();
   private session: ProfilingSession | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
@@ -129,20 +127,6 @@ export class SessionManager implements SdkLinkTarget {
 
   getSnapshot(): Snapshot {
     return this.session?.snapshot() ?? emptySnapshot();
-  }
-
-  /**
-   * A screen socket started (`open`) or stopped mirroring a physical device. While at least one mirror of the
-   * session's device is open, the session records a mirroring span.
-   */
-  setMirroring(serial: string, open: boolean): void {
-    const count = (this.mirrored.get(serial) ?? 0) + (open ? 1 : -1);
-    if (count > 0) this.mirrored.set(serial, count);
-    else this.mirrored.delete(serial);
-    const session = this.session;
-    if (!session || session.isStopped || session.serial !== serial) return;
-    if (count > 0) session.mirrorOn();
-    else session.mirrorOff();
   }
 
   /**
@@ -228,7 +212,6 @@ export class SessionManager implements SdkLinkTarget {
       this.session = session;
       this.broadcast({ type: 'session', session: session.state });
       this.broadcast({ type: 'snapshot', snapshot: emptySnapshot() });
-      if (this.mirrored.has(serial)) session.mirrorOn();
       log.info(`Profiling ${packageName} on ${serial}`);
       // Not awaited: the first device round-trips must not hold up a following stop/start request.
       session.start().catch((error: unknown) => log.error('session start failed:', errorMessage(error)));

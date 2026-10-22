@@ -94,7 +94,6 @@ describe('parseServerMessage', () => {
       breakdown: true,
       stall: true,
       strictmode: true,
-      mirror: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

@@ -129,8 +129,7 @@ phone's screen stays on while it is mirrored (scrcpy's `stay_awake`); the previo
 The phone's hardware encoder sends H.264 video that the browser decodes with WebCodecs (Chrome, Firefox 130+,
 Safari 16.4+; the dashboard must be opened on `localhost`).
 
-The encoder does add a little work on the phone, so while a phone of the current session is mirrored the timeline
-shows a **Mirroring on** band: numbers inside it include that small cost. Close the Device column for the
+The phone's hardware encoder does add a little work while it is mirrored, so close the Device column for the
 cleanest measurements.
 
 On Xiaomi / HyperOS (and some other OEM builds) the phone refuses injected input until **USB debugging (Security

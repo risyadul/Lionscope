@@ -16,8 +16,6 @@ All notable changes to Lionscope are documented here. The format is based on
   didn't boot (e.g. from Android Studio), or one with a profiling session on it, is shut down after a
   confirmation; a running session is stopped first. The Android power key's tooltip now says it only turns the
   screen on/off.
-- A "Mirroring on" band on the timeline while a phone of the current session is mirrored, since its encoder
-  adds a little work.
 - Clear messages when a phone refuses injected input (Xiaomi / HyperOS: "USB debugging (Security settings)"),
   when the mirroring server can't start, and when the browser can't decode H.264.
 

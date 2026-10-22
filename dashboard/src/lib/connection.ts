@@ -22,7 +22,6 @@ const SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<ServerMessa
   'breakdown',
   'stall',
   'strictmode',
-  'mirror',
   'error',
 ]);
 

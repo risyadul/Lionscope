@@ -6,7 +6,6 @@ import { App } from '../src/App.tsx';
 import { ServicesContext, type DashboardServices } from '../src/app/services.ts';
 import { DEVICE_OVERLAY_QUERY } from '../src/hooks/useDeviceColumn.ts';
 import { EMULATOR_REQUEST_TIMEOUT_MS } from '../src/hooks/useEmulatorActions.ts';
-import { MIRROR_HINT, MIRROR_LEGEND_LABEL } from '../src/components/timeline/MirrorLane.tsx';
 import { LAYOUT_KEYS } from '../src/lib/layoutPrefs.ts';
 import { createSignal } from '../src/lib/signal.ts';
 import { createStore, type ConnectionState } from '../src/lib/store.ts';
@@ -324,15 +323,5 @@ describe('Physical devices (0.3.1)', () => {
     setup([hello, devices(PHONE)]);
     expect(FakeScreenSocket.latest().url).toContain('serial=R58M123ABC');
     expect(within(deviceColumn()).getByLabelText('SM S918B screen')).toBeTruthy();
-  });
-
-  it('marks mirroring spans on the timeline with an explained "Mirroring on" lane', () => {
-    const { push } = setup([hello, devices(PHONE)]);
-    expect(screen.queryByText(MIRROR_LEGEND_LABEL)).toBeNull();
-    push({ type: 'mirror', span: { serial: 'R58M123ABC', start: Date.now() - 5000, end: null } });
-    const lane = screen.getByRole('figure', { name: 'Mirroring' });
-    expect(within(lane).getByText(MIRROR_LEGEND_LABEL)).toBeTruthy();
-    expect(within(lane).getByRole('note').getAttribute('aria-label')).toBe(MIRROR_HINT);
-    expect(within(lane).getByRole('img').getAttribute('aria-label')).toContain('video encoder was busy');
   });
 });

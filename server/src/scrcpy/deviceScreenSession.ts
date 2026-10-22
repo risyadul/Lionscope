@@ -70,8 +70,6 @@ export interface DeviceScreenSessionOptions {
   size: ScreenSize;
   /** The vendored scrcpy-server (resolveScrcpyJar). */
   jarPath: string;
-  /** The mirror came up (true, once) and went down for good (false, once if it came up): mirroring spans. */
-  onMirroring?: (open: boolean) => void;
 }
 
 /**
@@ -107,7 +105,6 @@ export class DeviceScreenSession {
   private stderrWindow = '';
   private inputDenied = false;
   private screenshotPending = false;
-  private mirroring = false;
   private closed = false;
   private closing: Promise<void> = Promise.resolve();
 
@@ -221,10 +218,6 @@ export class DeviceScreenSession {
     const server = this.server;
     this.server = null;
     this.control = null;
-    if (this.mirroring) {
-      this.mirroring = false;
-      this.options.onMirroring?.(false);
-    }
     this.closing = server ? server.stop() : Promise.resolve();
     return this.closing;
   }
@@ -266,10 +259,6 @@ export class DeviceScreenSession {
       return;
     }
     this.attach(connection, server, generation);
-    if (!this.mirroring) {
-      this.mirroring = true;
-      this.options.onMirroring?.(true);
-    }
   }
 
   /** A new size: lift fingers, stop the server, start one with the new max_size. */
