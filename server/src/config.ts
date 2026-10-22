@@ -27,6 +27,8 @@ export interface LionscopeConfig {
   adb: string | undefined;
   /** `--dev` flag or LIONSCOPE_DEV=1: also accept WebSocket connections from the Vite dev server. */
   dev: boolean;
+  /** `--allow-device-control`: AI agents may take screenshots, tap, type and boot / shut down emulators. */
+  allowDeviceControl: boolean;
 }
 
 const PORT_PATTERN = /^\d{1,5}$/;
@@ -49,14 +51,26 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 export const USAGE = `Usage: lionscope [options]
+       lionscope mcp [options]
+       lionscope query <tool> [--<arg> <value> ...] [--json '<arguments>'] [--port <port>]
 
-Starts the Lionscope server, which serves the dashboard at http://localhost:<port>.
+Starts the Lionscope server, which serves the dashboard at http://localhost:<port>, an MCP endpoint for
+AI agents at http://localhost:<port>/mcp and a JSON tool API for \`lionscope query\`.
 Everything listens on 127.0.0.1 only.
+
+Commands:
+  mcp                   MCP server on stdin/stdout for AI agents: uses the Lionscope server running on
+                        --port, or starts one in this process (the dashboard stays at http://localhost:<port>)
+  query <tool>          Run one agent tool against the running server and print its JSON result
+                        (\`lionscope query --list\` lists the tools)
 
 Options:
   --port <port>         Dashboard port (LIONSCOPE_PORT, default ${DEFAULT_DASHBOARD_PORT})
   --device-port <port>  In-app SDK gateway port (LIONSCOPE_DEVICE_PORT, default ${DEVICE_LINK_PORT})
   --adb <path>          adb binary (LIONSCOPE_ADB; default: $ANDROID_HOME, the usual SDK location, then PATH)
+  --allow-device-control
+                        Let AI agents operate devices: screenshots, taps, swipes, text, keys, launching
+                        apps, booting and shutting down emulators (off by default)
   -h, --help            Show this help
   -v, --version         Print the version
 `;
@@ -72,6 +86,7 @@ export interface CliArgs {
   port: string | undefined;
   devicePort: string | undefined;
   adb: string | undefined;
+  allowDeviceControl: boolean;
 }
 
 function argsError(detail: string, cause?: unknown): Error {
@@ -96,6 +111,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         port: { type: 'string' },
         'device-port': { type: 'string' },
         adb: { type: 'string' },
+        'allow-device-control': { type: 'boolean' },
       },
     });
   } catch (error) {
@@ -118,6 +134,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     port: values.port,
     devicePort: values['device-port'],
     adb: nonEmpty(values.adb?.trim()),
+    allowDeviceControl: values['allow-device-control'] === true,
   };
 }
 
@@ -142,6 +159,7 @@ export function loadConfig(
     dashboardDir: nonEmpty(env.LIONSCOPE_DASHBOARD_DIR),
     adb: args.adb,
     dev: env.LIONSCOPE_DEV === '1' || args.dev,
+    allowDeviceControl: args.allowDeviceControl,
   };
 }
 

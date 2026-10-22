@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SCREEN_WS_PATH, WS_PATH } from '@lionscope/protocol';
 import type { Adb } from './adb/adb.ts';
+import { createAgentHttp } from './agent/http.ts';
+import type { AgentContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
@@ -39,6 +41,8 @@ export interface LionscopeServerOptions {
   emulatorPollMs?: number;
   /** scrcpy-server for physical devices; defaults to the vendored one (tests pass a fixture). */
   scrcpyJarPath?: string;
+  /** --allow-device-control: the agent endpoints list and run the device-control tools. */
+  allowDeviceControl?: boolean;
 }
 
 export interface LionscopeServer {
@@ -49,6 +53,8 @@ export interface LionscopeServer {
   readonly deviceAddress: AddressInfo | null;
   readonly manager: SessionManager;
   readonly emulators: EmulatorManager;
+  /** What the agent tools run against (`lionscope mcp` calls them in-process). */
+  readonly agent: Omit<AgentContext, 'deviceControl'>;
 }
 
 function sendPlain(res: ServerResponse, status: number, body: string): void {
@@ -96,15 +102,29 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     limits: options.deviceLimits,
   });
 
+  const agent: Omit<AgentContext, 'deviceControl'> = {
+    sessions: manager,
+    emulators,
+    adb: options.adb,
+    serverVersion: SERVER_VERSION,
+    bufferWindowMs,
+    dashboardUrl: () => (address ? `http://localhost:${address.port}` : null),
+    sdkGatewayPort: () => deviceGateway.address?.port ?? null,
+    now: Date.now,
+    screenshots: new Map(),
+    uiDumps: new Map(),
+    deviceCalls: new Map(),
+  };
+  const agentHttp = createAgentHttp({
+    ctx: agent,
+    deviceControl: options.allowDeviceControl ?? false,
+    port: () => address?.port ?? null,
+  });
+
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     applySecurityHeaders(res);
     if (!isAllowedHost(req.headers.host)) {
       sendPlain(res, 403, 'Forbidden\n');
-      return;
-    }
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.setHeader('Allow', 'GET, HEAD');
-      sendPlain(res, 405, 'Method not allowed\n');
       return;
     }
     let pathname: string;
@@ -112,6 +132,15 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     } catch {
       sendPlain(res, 400, 'Bad request\n');
+      return;
+    }
+    if (agentHttp.handles(pathname)) {
+      await agentHttp.handle(req, res, pathname);
+      return;
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, HEAD');
+      sendPlain(res, 405, 'Method not allowed\n');
       return;
     }
     if (pathname === WS_PATH || pathname === SCREEN_WS_PATH) {
@@ -155,6 +184,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   return {
     manager,
     emulators,
+    agent,
     get address() {
       return address;
     },
@@ -201,7 +231,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     },
     async close() {
       // In parallel: device screens (scrcpy cleanup), the session, and the emulators this server booted.
-      await Promise.all([screenGateway.close(), manager.close(), emulators.close()]);
+      await Promise.all([screenGateway.close(), manager.close(), emulators.close(), agentHttp.close()]);
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

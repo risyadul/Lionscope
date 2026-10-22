@@ -6,6 +6,43 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- AI agents can use Lionscope (README: "Use with AI agents"): one tool layer in the server, served three ways.
+  - **MCP over stdio**: `lionscope mcp` attaches to the Lionscope server running on `--port` or, when none
+    answers, starts one in its own process (dashboard still at http://localhost:8701) that stops when the MCP
+    client disconnects; if the server it uses stops, the next call starts one. Works with Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf and Claude Desktop.
+  - **Streamable HTTP MCP** at `http://localhost:8701/mcp` on the running server.
+  - **`lionscope query <tool>`** for agents with only a shell: prints the tool's JSON result
+    (`lionscope query stalls`, `lionscope query logcat --level E --limit 50`); `--list` prints every tool and
+    its input schema.
+- Read tools: `status`, `list_apps`, `get_summary`, `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`,
+  `get_view_tree`, `search_logcat`. Session tools: `start_session`, `stop_session`, `set_sdk_options`. They
+  compute the same numbers as the dashboard: the Screens, Stalls, Layouts and Logcat figures and the stat strip
+  now come from one shared, dependency-free module (`@lionscope/protocol/insights`). Results that carry
+  strings from the app (log lines, screen, layout and class names, stacks) are marked as untrusted data.
+- Device-control tools, off unless Lionscope (or `lionscope mcp`) runs with `--allow-device-control`:
+  `screenshot` (scaled to 720 px on the short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and
+  editing keys only; no power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator`. They use adb
+  (`screencap`, `input`, `am start`) and the dashboard's emulator manager; at most two run at once per device.
+- Element-based device control (same opt-in): `get_ui_tree` lists the screen's elements from `uiautomator dump`
+  (text, content description, resource id, hint, bounds in device and screenshot pixels, flags; password text is
+  never returned), `tap_element` taps the exact center of an element found by text, id or description (an
+  ambiguous selector returns the candidates instead of tapping), `wait_for` waits for an element to appear or
+  go away, `scroll_to` scrolls until an element is visible, and `type_text` can tap a field before typing. The
+  dump is parsed by a strict, size-capped parser that never resolves entities.
+
+### Security
+
+- `/mcp` and `/api/agent/*` answer only a Host naming the server on loopback at its own port. `/mcp` refuses any
+  `Origin` other than the dashboard's and the JSON tool API any `Origin` at all; the JSON tool API also requires
+  `Content-Type: application/json` and an `X-Lionscope-Agent: 1` header, so a web page cannot call it without a
+  CORS preflight, which is never approved. Text typed with `type_text` never reaches an error or a log line
+  (adb errors no longer repeat the command line).
+  Device control over HTTP MCP follows the server's flag only; the opt-in of `lionscope mcp` applies to its own
+  client. It is an autonomy guard for AI agents, not a security boundary: local processes are trusted (as with
+  adb), browsers are not.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

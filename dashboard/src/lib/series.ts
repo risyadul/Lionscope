@@ -11,6 +11,7 @@ import type {
   FrameStage,
   MemorySample,
 } from '@lionscope/protocol/wire';
+import { slowCountOf } from '@lionscope/protocol/insights';
 import { kbToMb } from './format.ts';
 import { STACK_ORDER } from './stages.ts';
 
@@ -123,13 +124,7 @@ export function buildMemoryData(samples: readonly MemorySample[]): MemoryData {
   return { data: drawn, raw: rawColumns };
 }
 
-/**
- * Frames slower than one vsync. Samples from servers that predate `slowCount` only carry
- * `jankCount`, which then meant the same thing.
- */
-export function slowCountOf(s: FrameSample): number {
-  return (s as Partial<FrameSample>).slowCount ?? s.jankCount;
-}
+export { slowCountOf };
 
 /** Scales a per-sample frame count to frames per second, using the same elapsed time as `fps`. */
 function perSecond(count: number, s: FrameSample): number {

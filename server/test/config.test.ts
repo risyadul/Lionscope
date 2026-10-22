@@ -12,6 +12,7 @@ describe('config', () => {
       dashboardDir: undefined,
       adb: undefined,
       dev: false,
+      allowDeviceControl: false,
     });
   });
 
@@ -28,6 +29,7 @@ describe('config', () => {
       dashboardDir: '/d',
       adb: undefined,
       dev: false,
+      allowDeviceControl: false,
     });
     expect(parsePort(' ')).toBe(8701);
     expect(() => loadConfig({ LIONSCOPE_DEVICE_PORT: '70000' }, NO_ARGS)).toThrow(/LIONSCOPE_DEVICE_PORT/);
@@ -37,6 +39,11 @@ describe('config', () => {
     expect(loadConfig({}, parseCliArgs(['--dev'])).dev).toBe(true);
     expect(loadConfig({ LIONSCOPE_DEV: '1' }, NO_ARGS).dev).toBe(true);
     expect(loadConfig({ LIONSCOPE_DEV: 'true' }, NO_ARGS).dev).toBe(false);
+  });
+
+  it('enables device control for AI agents only with --allow-device-control', () => {
+    expect(loadConfig({}, parseCliArgs(['--allow-device-control'])).allowDeviceControl).toBe(true);
+    expect(USAGE).toContain('--allow-device-control');
   });
 
   it.each(['0', '8701', '65535', '00080'])('accepts port %j', (raw) => {
@@ -68,10 +75,29 @@ describe('command-line flags', () => {
       port: undefined,
       devicePort: undefined,
       adb: undefined,
+      allowDeviceControl: false,
     });
     expect(
-      parseCliArgs(['--port', '9000', '--device-port=9001', '--adb', '/opt/adb', '--dev', '-h', '-v']),
-    ).toEqual({ help: true, version: true, dev: true, port: '9000', devicePort: '9001', adb: '/opt/adb' });
+      parseCliArgs([
+        '--port',
+        '9000',
+        '--device-port=9001',
+        '--adb',
+        '/opt/adb',
+        '--dev',
+        '--allow-device-control',
+        '-h',
+        '-v',
+      ]),
+    ).toEqual({
+      help: true,
+      version: true,
+      dev: true,
+      port: '9000',
+      devicePort: '9001',
+      adb: '/opt/adb',
+      allowDeviceControl: true,
+    });
     expect(parseCliArgs(['--help']).help).toBe(true);
     expect(parseCliArgs(['--version']).version).toBe(true);
   });

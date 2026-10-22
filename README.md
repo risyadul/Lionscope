@@ -218,7 +218,8 @@ From source instead (the npm package may lag the latest git tag):
 `git clone https://github.com/risyadul/Lionscope.git && cd Lionscope && npm install && npm run lionscope`.
 
 Pick the device, pick the app, press **Start**. Nothing needs to be installed on the device for the ADB-only
-mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`); the
+mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`, `--allow-device-control`)
+and the `mcp` and `query` commands for [AI agents](#use-with-ai-agents); the
 [`lionscope`](https://www.npmjs.com/package/lionscope) package is a single bundled file plus the built
 dashboard, with no runtime dependencies.
 
@@ -282,6 +283,173 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.0"
   starved while the app is busy); a bounded outbound queue drops the oldest messages instead of growing; SDK errors are contained and
   never reach the app's crash handler.
 
+## Use with AI agents
+
+AI coding agents (Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Claude Desktop, …) can read what
+Lionscope records and run profiling sessions: "profile the shop app on the emulator, then tell me which screen
+janks most and which line blocks the main thread". They get the same numbers the dashboard shows (the Screens,
+Stalls, Layouts and Logcat figures come from one shared module), and the dashboard stays open next to them.
+
+Three ways in, one set of tools:
+
+- **MCP over stdio**: `npx -y lionscope mcp`. It uses the Lionscope server already running on `--port` (default
+  8701), or starts one in its own process when none is running: the dashboard is then at
+  http://localhost:8701 until the agent disconnects. If the server it uses stops, its next tool call starts one
+  (or attaches to whichever another client started). Logs go to stderr.
+- **MCP over HTTP** (Streamable HTTP): `http://localhost:8701/mcp` on a running server (`npx lionscope`), for
+  clients that are not web pages: a request with an `Origin` other than the dashboard's is refused. Desktop
+  harnesses connect from a Node process and send none (VS Code's and Cursor's MCP clients run in their Node extension hosts);
+  browser-based clients (VS Code for the Web, an MCP inspector page) can't use it, so give them the stdio
+  command.
+- **Shell**: `npx lionscope query <tool>` prints a tool's JSON result, for agents that can only run commands.
+
+| Tools                      | What they do                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                            |
+| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                     |
+| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator` |
+
+### Setup
+
+Each harness starts `npx -y lionscope mcp` itself; add `--allow-device-control` to its arguments to let it
+[operate the device](#letting-an-agent-operate-the-device). The HTTP variants talk to a server you started
+with `npx lionscope`. Formats as documented by each tool in October 2026.
+
+**Claude Code** ([docs](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add lionscope -- npx -y lionscope mcp
+# or, against a running server:
+claude mcp add --transport http lionscope http://localhost:8701/mcp
+```
+
+Add `--scope project` to share it through the project's `.mcp.json`, or `--scope user` for every project.
+
+**Cursor** ([docs](https://cursor.com/docs/context/mcp)): `.cursor/mcp.json` in the project, or
+`~/.cursor/mcp.json` for every project.
+
+```json
+{
+  "mcpServers": {
+    "lionscope": { "type": "stdio", "command": "npx", "args": ["-y", "lionscope", "mcp"] }
+  }
+}
+```
+
+HTTP: `"lionscope": { "url": "http://localhost:8701/mcp" }`.
+
+**VS Code** (GitHub Copilot agent mode, [docs](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)):
+`.vscode/mcp.json` in the workspace; note the top-level key is `servers`.
+
+```json
+{
+  "servers": {
+    "lionscope": { "type": "stdio", "command": "npx", "args": ["-y", "lionscope", "mcp"] }
+  }
+}
+```
+
+HTTP: `"lionscope": { "type": "http", "url": "http://localhost:8701/mcp" }`. Or from a terminal:
+`code --add-mcp '{"name":"lionscope","type":"stdio","command":"npx","args":["-y","lionscope","mcp"]}'`.
+
+**Codex** ([docs](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)): `~/.codex/config.toml`, or
+`codex mcp add lionscope -- npx -y lionscope mcp`.
+
+```toml
+[mcp_servers.lionscope]
+command = "npx"
+args = ["-y", "lionscope", "mcp"]
+```
+
+HTTP: `url = "http://localhost:8701/mcp"` in place of `command` and `args`.
+
+**Gemini CLI** ([docs](https://geminicli.com/docs/tools/mcp-server/)): `.gemini/settings.json` in the project,
+or `~/.gemini/settings.json`.
+
+```json
+{
+  "mcpServers": {
+    "lionscope": { "command": "npx", "args": ["-y", "lionscope", "mcp"] }
+  }
+}
+```
+
+HTTP: `"lionscope": { "httpUrl": "http://localhost:8701/mcp" }` as documented (newer releases also accept
+`"url": "http://localhost:8701/mcp", "type": "http"`, which `gemini mcp add --transport http` writes). To add it
+from a terminal: `gemini mcp add -s user lionscope npx -- -y lionscope mcp` (the `--` keeps `-y` for npx).
+
+**Windsurf** (renamed Devin Desktop in June 2026, [docs](https://docs.devin.ai/desktop/cascade/mcp)):
+`~/.config/devin/mcp_config.json` on macOS and Linux, `%APPDATA%\devin\mcp_config.json` on Windows (projects
+can also use `.devin/mcp_config.json`), with the same `mcpServers` entry as Gemini CLI above. HTTP:
+`"lionscope": { "serverUrl": "http://localhost:8701/mcp" }` for the Cascade agent,
+`"lionscope": { "url": "http://localhost:8701/mcp" }` for the Devin Local agent.
+
+**Claude Desktop** ([docs](https://modelcontextprotocol.io/docs/develop/connect-local-servers)): Settings →
+Developer → Edit Config opens `claude_desktop_config.json` (`~/Library/Application Support/Claude/` on macOS,
+`%APPDATA%\Claude\` on Windows); add the same `mcpServers` entry as Gemini CLI above and restart Claude Desktop.
+Use the stdio entry: Claude Desktop's custom connectors reach remote servers from Anthropic's side, so they can't
+reach `localhost`.
+
+**Any other MCP client**: run `npx -y lionscope mcp` as a stdio server, or connect to
+`http://localhost:8701/mcp` (Streamable HTTP, no authentication, loopback only).
+
+### Letting an agent operate the device
+
+Device tools are off by default: an agent can read data and start or stop sessions, but not touch the screen.
+Turn them on with `--allow-device-control`, either for one MCP client (`npx -y lionscope mcp
+--allow-device-control`, e.g. `claude mcp add lionscope -- npx -y lionscope mcp --allow-device-control`) or for
+the whole server (`npx lionscope --allow-device-control`, which also enables them on `/mcp`). They run through
+adb (`screencap`, `uiautomator`, `input`, `monkey`) on emulators and physical devices alike, so they can do anything you could
+do with the device in your hand: keep them off while a phone with personal data is connected. Emulators this
+server did not boot are shut down only with `confirm: true`.
+
+Two ways to aim:
+
+- **By element** (precise): `get_ui_tree` reads the screen's accessibility tree (`uiautomator dump`), and
+  `tap_element { text: "Checkout" }`, `wait_for { text: "Order placed" }` and `scroll_to { id: "row_title",
+text: "Row 40" }` find elements by visible text or content description, resource id (`login_button`) or
+  description, and tap the exact center of the element. A selector that matches several elements taps nothing
+  and returns the candidates; `nth` picks one. `type_text { text, field: { id: "email" } }` taps the field
+  first. Password fields never return their text.
+- **By coordinates**: `screenshot`, then `tap` / `swipe` in the screenshot's pixels. Use it where the tree
+  can't see: Jetpack Compose elements get a resource id only with `Modifier.testTag` plus
+  `testTagsAsResourceId = true` (otherwise use their text or content description), and WebView, canvas, game
+  or video content may be missing from the tree.
+
+`uiautomator dump` takes a second or two and needs the screen to be idle; on a screen that keeps animating it
+fails (after retries) and the error suggests the screenshot route. Coordinates follow the device's current
+rotation (from `wm size` and the display rotation, never from a dialog's window): a screenshot taken before the
+screen rotated is refused instead of tapping the wrong spot, so take a new one. `type_text` takes printable
+ASCII and can't type the sequence `%s` (adb's own escape for a space). `launch_app` starts the launcher activity
+with `am start -W` and returns Android's launch time. At most two device actions run at once per device; more
+get a busy answer.
+
+### From the shell
+
+```bash
+npx lionscope query --list                       # every tool, its description and input schema
+npx lionscope query status
+npx lionscope query summary --window 5m
+npx lionscope query stalls --include-stacks
+npx lionscope query logcat --level E --limit 50
+npx lionscope query start-session --serial emulator-5554 --package-name com.example.shop
+npx lionscope query screenshot --allow-device-control --out screen.png
+```
+
+Arguments are `--name value` flags (kebab or camel case) or `--json '{"window":"5m"}'`; short names work
+without the `get_` / `search_` prefix. The result is JSON on stdout; on failure the exit code is 1 and stdout
+holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` to pick it).
+
+### Safety notes
+
+- Everything stays on this machine: the endpoints listen on 127.0.0.1 and refuse requests a web page could make
+  (see [Security model](#security-model)).
+- Log lines, tags, screen, layout and class names and stack frames come from the app being profiled. Tool
+  results mark them as untrusted data, and agents should treat them as such: a log line is never an
+  instruction.
+- `--allow-device-control` keeps an AI from operating a device unasked; it is not a security boundary, since
+  any local process can already use adb.
+
 ## Architecture
 
 ```
@@ -299,13 +467,13 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.0"
  phone ◀── adb forward ── scrcpy-server (H.264 + control) ───── server/ scrcpy session + /ws/screen
 ```
 
-| Directory      | What it is                                                                                                                       |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol/`    | The wire contract shared by server and dashboard: types (`wire.ts`), zod validation (`index.ts`), golden SDK lines (`fixtures/`) |
-| `server/`      | Node.js + TypeScript: adb collectors and parsers, session store (10-minute ring buffers), WebSocket gateway, SDK gateway         |
-| `dashboard/`   | Vite + React + uPlot single-page app, served by the server                                                                       |
-| `android-sdk/` | Gradle build: `:lionscope` (debug SDK), `:lionscope-noop` (release no-op), `:sample` (demo app)                                  |
-| `cli/`         | The `lionscope` npm package: the server bundled with esbuild into `dist/lionscope.mjs`, plus the built dashboard                 |
+| Directory      | What it is                                                                                                                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `protocol/`    | The wire contract shared by server and dashboard: types (`wire.ts`), zod validation (`index.ts`), golden SDK lines (`fixtures/`), and `insights/`: the dashboard's figures (screens, stalls, layouts, logcat filter) as pure functions the agent tools reuse |
+| `server/`      | Node.js + TypeScript: adb collectors and parsers, session store (10-minute ring buffers), WebSocket gateway, SDK gateway, and `agent/`: the AI agent tools behind `/mcp`, `/api/agent` and `lionscope mcp` / `query`                                         |
+| `dashboard/`   | Vite + React + uPlot single-page app, served by the server                                                                                                                                                                                                   |
+| `android-sdk/` | Gradle build: `:lionscope` (debug SDK), `:lionscope-noop` (release no-op), `:sample` (demo app)                                                                                                                                                              |
+| `cli/`         | The `lionscope` npm package: the server bundled with esbuild into `dist/lionscope.mjs`, plus the built dashboard                                                                                                                                             |
 
 The SDK talks to the server over plain TCP with one JSON object per line rather than WebSocket: apps with
 `usesCleartextTraffic=false` (or a network security config without localhost) would block `ws://localhost`,
@@ -324,6 +492,13 @@ protocol version 1 and closes the connection on unknown message types.
 
 - The server listens on `127.0.0.1` only. WebSocket upgrades are accepted only from a loopback Host/Origin
   (blocks cross-site WebSocket hijacking and DNS rebinding). Every dashboard message is validated.
+- The AI agent endpoints (`/mcp`, `/api/agent/<tool>`) refuse a Host other than `localhost` / `127.0.0.1` at
+  the server's own port (DNS rebinding). `/mcp` refuses any `Origin` other than the dashboard's, and the JSON
+  tool API refuses any `Origin` at all (CSRF); it also needs `Content-Type: application/json` and
+  `X-Lionscope-Agent: 1`, which a web page can only send after a CORS preflight that the server never approves.
+  Typed text never appears in errors or logs. Device-control tools exist only with
+  `--allow-device-control`; that flag keeps an AI from operating your phone unasked, it is not a security
+  boundary (any local process can already run adb). App data in tool results is marked as untrusted.
 - Device serials and package names are checked against strict patterns and passed to `adb` as argument arrays,
   never through a host shell.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
@@ -390,12 +565,13 @@ protocol version 1 and closes the connection on unknown message types.
 
 ## Configuration
 
-| Flag                   | Env var                   | Default | Purpose                                              |
-| ---------------------- | ------------------------- | ------- | ---------------------------------------------------- |
-| `--port <port>`        | `LIONSCOPE_PORT`          | `8701`  | Dashboard HTTP + WebSocket port                      |
-| `--device-port <port>` | `LIONSCOPE_DEVICE_PORT`   | `8700`  | SDK gateway (TCP, NDJSON); reached via `adb reverse` |
-| `--adb <path>`         | `LIONSCOPE_ADB`           | auto    | Path to the `adb` binary                             |
-|                        | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                             |
+| Flag                     | Env var                   | Default | Purpose                                                                               |
+| ------------------------ | ------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `--port <port>`          | `LIONSCOPE_PORT`          | `8701`  | Dashboard HTTP + WebSocket port                                                       |
+| `--device-port <port>`   | `LIONSCOPE_DEVICE_PORT`   | `8700`  | SDK gateway (TCP, NDJSON); reached via `adb reverse`                                  |
+| `--adb <path>`           | `LIONSCOPE_ADB`           | auto    | Path to the `adb` binary                                                              |
+| `--allow-device-control` |                           | off     | AI agents may take screenshots, tap, type, launch apps and boot / shut down emulators |
+|                          | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                                                              |
 
 Flags win over environment variables. Without `LIONSCOPE_DASHBOARD_DIR`, the server serves the dashboard that
 ships next to it in the npm package, or `dashboard/dist` in a clone. There is no option to listen on anything

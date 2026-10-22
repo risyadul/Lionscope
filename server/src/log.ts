@@ -1,13 +1,21 @@
 /** Tiny prefixed logger. Set LIONSCOPE_LOG=silent to mute (used by the test suite). */
 const PREFIX = '[lionscope]';
+let infoToStderr = false;
 
 function isSilent(): boolean {
   return process.env.LIONSCOPE_LOG === 'silent';
 }
 
+/** `lionscope mcp`: stdout carries the MCP protocol, so info lines go to stderr like the rest. */
+export function logInfoToStderr(): void {
+  infoToStderr = true;
+}
+
 export const log = {
   info(...args: unknown[]): void {
-    if (!isSilent()) console.info(PREFIX, ...args);
+    if (isSilent()) return;
+    if (infoToStderr) console.error(PREFIX, ...args);
+    else console.info(PREFIX, ...args);
   },
   warn(...args: unknown[]): void {
     if (!isSilent()) console.warn(PREFIX, ...args);

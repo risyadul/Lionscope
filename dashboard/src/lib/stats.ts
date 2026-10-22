@@ -1,9 +1,11 @@
 /** Live readouts for the stat strip, derived from the newest samples. */
 import type { CpuSample, FrameSample, MemorySample } from '@lionscope/protocol/wire';
+import { aggregateFrames, FRAMES_STALE_MS, type FrameAggregate } from '@lionscope/protocol/insights';
 import { kbToMb } from './format.ts';
-import { frameFeed, isFrameIntervalAssumed, latestFrameInterval, slowCountOf } from './series.ts';
+import { frameFeed, isFrameIntervalAssumed, latestFrameInterval } from './series.ts';
 
-export const JANK_WINDOW_MS = 30_000;
+export { aggregateFrames, JANK_WINDOW_MS, percentile } from '@lionscope/protocol/insights';
+export type { FrameAggregate } from '@lionscope/protocol/insights';
 /** A jank share at or above this (percent) is flagged, in the stat strip and the screens table. */
 export const JANK_FLAG_PERCENT = 1;
 
@@ -21,7 +23,7 @@ export const SDK_FRAMES_HINT =
 const STALE_AFTER_MS: Readonly<Record<'cpu' | 'memory' | 'frames', number>> = {
   cpu: 5_000,
   memory: 10_000,
-  frames: 5_000,
+  frames: FRAMES_STALE_MS,
 };
 
 export interface LiveStats {
@@ -61,42 +63,6 @@ function fresh<T extends { ts: number }>(samples: readonly T[], now: number, sta
   const last = samples[samples.length - 1];
   if (last === undefined || now - last.ts > staleAfter) return null;
   return last;
-}
-
-/** Nearest-rank percentile (p in 0–100). Returns null for an empty input. */
-export function percentile(values: readonly number[], p: number): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const rank = Math.ceil((Math.min(100, Math.max(0, p)) / 100) * sorted.length);
-  return sorted[Math.max(0, rank - 1)] ?? null;
-}
-
-export interface FrameAggregate {
-  jankFrames: number;
-  slowFrames: number;
-  renderedFrames: number;
-  p90Ms: number | null;
-}
-
-/**
- * Jank and p90 over the 30 s ending at the newest frame sample. Depends on `frames` only,
- * so callers can memoize it instead of re-sorting durations on every clock tick.
- */
-export function aggregateFrames(frames: readonly FrameSample[]): FrameAggregate {
-  let jankFrames = 0;
-  let slowFrames = 0;
-  let renderedFrames = 0;
-  const durations: number[] = [];
-  const since = (frames[frames.length - 1]?.ts ?? 0) - JANK_WINDOW_MS;
-  for (let i = frames.length - 1; i >= 0; i--) {
-    const sample = frames[i];
-    if (sample === undefined || sample.ts < since) break;
-    jankFrames += sample.jankCount;
-    slowFrames += Math.max(slowCountOf(sample), sample.jankCount);
-    renderedFrames += sample.frameCount;
-    for (const d of sample.durationsMs) durations.push(d);
-  }
-  return { jankFrames, slowFrames, renderedFrames, p90Ms: percentile(durations, 90) };
 }
 
 const NO_FRAMES: FrameAggregate = { jankFrames: 0, slowFrames: 0, renderedFrames: 0, p90Ms: null };

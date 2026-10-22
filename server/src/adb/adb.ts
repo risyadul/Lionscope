@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import type { ExecFileException } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 /** The subset of ChildProcess the server relies on (lets tests pass in fakes). */
@@ -35,6 +36,18 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
 const REVERSE_TIMEOUT_MS = 5000;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 
+/** Typed text can be a password: `input text …` never reaches an error message or a log line. */
+export function describeArgs(args: readonly string[]): string {
+  return args.map((arg) => (/^input text\b/.test(arg) ? 'input text <redacted>' : arg)).join(' ');
+}
+
+/** stderr, else why the process ended; never Node's message, which repeats the whole command line. */
+function failureDetail(error: ExecFileException, stderr: string): string {
+  if (stderr.trim() !== '') return stderr.trim();
+  if (error.killed) return 'timed out';
+  return typeof error.code === 'number' ? `exit code ${error.code}` : (error.code ?? 'failed');
+}
+
 export function createAdb(adbPath: string): Adb {
   const exec: Adb['exec'] = (args, options = {}) =>
     new Promise((resolve, reject) => {
@@ -49,8 +62,7 @@ export function createAdb(adbPath: string): Adb {
         },
         (error, stdout, stderr) => {
           if (error) {
-            const detail = stderr.trim() || error.message;
-            reject(new Error(`adb ${args.join(' ')} failed: ${detail}`));
+            reject(new Error(`adb ${describeArgs(args)} failed: ${failureDetail(error, stderr)}`));
             return;
           }
           resolve(stdout);
@@ -111,16 +123,19 @@ export function execBinary(adb: Adb, args: readonly string[], options: ExecBinar
     const maybeDone = () => {
       if (!ended || exitCode === undefined) return;
       if (exitCode === 0) finish(null);
-      else finish(new Error(`adb ${args.join(' ')} failed: ${stderr.trim() || `exit code ${exitCode}`}`));
+      else finish(new Error(`adb ${describeArgs(args)} failed: ${stderr.trim() || `exit code ${exitCode}`}`));
     };
-    const timer = setTimeout(() => finish(new Error(`adb ${args.join(' ')} timed out`)), options.timeoutMs);
-    const onAbort = () => finish(new Error(`adb ${args.join(' ')} aborted`));
+    const timer = setTimeout(
+      () => finish(new Error(`adb ${describeArgs(args)} timed out`)),
+      options.timeoutMs,
+    );
+    const onAbort = () => finish(new Error(`adb ${describeArgs(args)} aborted`));
     if (options.signal?.aborted) onAbort();
     options.signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout?.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > options.maxBytes)
-        finish(new Error(`adb ${args.join(' ')}: output over ${options.maxBytes} bytes`));
+        finish(new Error(`adb ${describeArgs(args)}: output over ${options.maxBytes} bytes`));
       else chunks.push(chunk);
     });
     child.stdout?.on('end', () => {

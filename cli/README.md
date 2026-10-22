@@ -19,9 +19,17 @@ Options:
   --port <port>         Dashboard port (LIONSCOPE_PORT, default 8701)
   --device-port <port>  In-app SDK gateway port (LIONSCOPE_DEVICE_PORT, default 8700)
   --adb <path>          adb binary (LIONSCOPE_ADB; default: $ANDROID_HOME, the usual SDK location, then PATH)
+  --allow-device-control
+                        Let AI agents operate devices: screenshots, taps, swipes, text, keys, launching
+                        apps, booting and shutting down emulators (off by default)
   -h, --help            Show this help
   -v, --version         Print the version
 ```
+
+AI agents: `npx -y lionscope mcp` is an MCP server on stdio (it uses the running Lionscope server, or starts
+one), the running server also serves MCP at `http://localhost:8701/mcp`, and `npx lionscope query <tool>`
+prints a tool's JSON result for shell-only agents (`npx lionscope query --list`). For example, in Claude Code:
+`claude mcp add lionscope -- npx -y lionscope mcp`. Setup for other editors and agents is in the main README.
 
 Nothing needs to be installed on the device. For screen names and per-frame `FrameMetrics`, add the optional
 debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.0"` from JitPack).

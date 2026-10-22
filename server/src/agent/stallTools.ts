@@ -1,0 +1,135 @@
+/** `get_stalls` and `get_strictmode`: main-thread blocks and StrictMode violations, by culprit line. */
+import { z } from 'zod';
+import type { StallSample } from '@lionscope/protocol';
+import {
+  aggregateOffenders,
+  culpritFrame,
+  culpritKey,
+  groupStrictMode,
+  stallInWindow,
+  summarizeWindow,
+} from '@lionscope/protocol/insights';
+import { defineTool, READ_ONLY, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
+import {
+  culpritView,
+  iso,
+  round,
+  stackLines,
+  timeWindow,
+  truncate,
+  windowInput,
+  windowView,
+} from './views.ts';
+
+const MAX_ROWS = 20;
+const limitInput = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_ROWS)
+  .default(10)
+  .describe(`Most rows returned (1-${MAX_ROWS}).`);
+
+/** The newest stall of each culprit line in the window, for its stack. */
+function newestByCulprit(
+  stalls: readonly StallSample[],
+  fromTs: number,
+  toTs: number,
+): Map<string, StallSample> {
+  const newest = new Map<string, StallSample>();
+  for (const stall of stalls) {
+    if (stall.debugger || !stallInWindow(stall, fromTs, toTs)) continue;
+    const key = culpritKey(culpritFrame(stall.frames));
+    const previous = newest.get(key);
+    if (!previous || stall.ts >= previous.ts) newest.set(key, stall);
+  }
+  return newest;
+}
+
+export const stallsTool = defineTool({
+  name: 'get_stalls',
+  title: 'Main-thread stalls',
+  description: `Main-thread blocks the in-app SDK watchdog caught (each at least the stall threshold, default 150 ms) in the window, as the dashboard's Stalls tab ranks them: offenders grouped by culprit line (the innermost app frame, else the innermost library frame), worst total blocked time first, with count, total/max ms and the screens they blocked; plus the newest stall events. Stalls with a debugger attached are counted apart (likely breakpoints). Pass includeStacks for each offender's newest stack, framework frames collapsed. ${UNTRUSTED_DESCRIPTION}`,
+  access: 'read',
+  input: z.object({
+    window: windowInput,
+    limit: limitInput,
+    includeStacks: z.boolean().default(false).describe('Add the newest stack of each offender.'),
+  }),
+  annotations: READ_ONLY,
+  async run({ window: label, limit, includeStacks }, ctx) {
+    const snapshot = ctx.sessions.getSnapshot();
+    const window = timeWindow(ctx, snapshot, label);
+    const { fromTs, toTs } = window;
+    const stalls = snapshot.stalls ?? [];
+    const summary = summarizeWindow(stalls, [], fromTs, toTs);
+    const newest = includeStacks ? newestByCulprit(stalls, fromTs, toTs) : null;
+    const offenders = aggregateOffenders(stalls, fromTs, toTs).slice(0, limit);
+    const events = stalls
+      .filter((stall) => stallInWindow(stall, fromTs, toTs))
+      .slice(-limit)
+      .reverse();
+    return {
+      data: {
+        untrusted: UNTRUSTED_NOTE,
+        window: windowView(window),
+        stallThresholdMs: ctx.sessions.getSessionState().sdk?.options?.stallThresholdMs ?? null,
+        count: summary.count,
+        blockedMs: round(summary.totalMs, 0),
+        worstMs: round(summary.worstMs, 0),
+        debuggerStalls: summary.debuggerCount,
+        offenders: offenders.map((offender) => {
+          const stack = newest?.get(offender.key)?.frames;
+          return {
+            ...culpritView(offender.frame === null ? [] : [offender.frame]),
+            count: offender.count,
+            totalMs: round(offender.totalMs, 0),
+            maxMs: round(offender.maxMs, 0),
+            screens: offender.screens,
+            lastAt: iso(offender.lastTs),
+            ...(stack ? { stack: stackLines(stack) } : {}),
+          };
+        }),
+        recentStalls: events.map((stall) => ({
+          at: iso(stall.ts),
+          durationMs: round(stall.durationMs, 0),
+          screen: stall.screen,
+          debugger: stall.debugger,
+          ...culpritView(stall.frames),
+        })),
+      },
+    };
+  },
+});
+
+export const strictModeTool = defineTool({
+  name: 'get_strictmode',
+  title: 'StrictMode violations',
+  description: `StrictMode violations (disk/network on the main thread, leaked closeables, …) the in-app SDK reported in the window, grouped by violation class and culprit line, most occurrences first: violation, policy (thread/vm), culprit, occurrences, screens, the newest message and stack (framework frames collapsed). StrictMode reporting is off by default; turn it on with set_sdk_options { strictMode: true }. ${UNTRUSTED_DESCRIPTION}`,
+  access: 'read',
+  input: z.object({ window: windowInput, limit: limitInput }),
+  annotations: READ_ONLY,
+  async run({ window: label, limit }, ctx) {
+    const snapshot = ctx.sessions.getSnapshot();
+    const window = timeWindow(ctx, snapshot, label);
+    const groups = groupStrictMode(snapshot.strictMode ?? [], window.fromTs, window.toTs);
+    return {
+      data: {
+        untrusted: UNTRUSTED_NOTE,
+        window: windowView(window),
+        strictModeOn: ctx.sessions.getSessionState().sdk?.options?.strictMode ?? null,
+        total: groups.length,
+        violations: groups.slice(0, limit).map((group) => ({
+          violation: group.violation,
+          policy: group.policy,
+          ...culpritView(group.latest.frames),
+          occurrences: group.occurrences,
+          screens: group.screens,
+          lastAt: iso(group.lastTs),
+          message: group.latest.message === null ? null : truncate(group.latest.message),
+          stack: stackLines(group.latest.frames),
+        })),
+      },
+    };
+  },
+});
