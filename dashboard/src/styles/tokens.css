@@ -109,6 +109,9 @@
   --viz-stall-3: #89142a;
   --viz-stall-debug: #8b919c;
   --viz-strictmode: #00a396;
+  /* Layout inflation: a gold rail mark under the stall baseline, and the meter / rule in the Layouts and
+     Screens tables. Never crimson (stalls), amber-orange (jank) or violet (events). */
+  --viz-inflate: #b88a00;
   --stall-wash: rgba(186, 40, 64, 0.08);
 
   /* Log levels (text, ≥ 4.5:1) */
@@ -187,6 +190,7 @@
     --viz-stall-3: #f08e8e;
     --viz-stall-debug: #6f7682;
     --viz-strictmode: #20a89b;
+    --viz-inflate: #d9a824;
     --stall-wash: rgba(214, 78, 87, 0.12);
 
     --log-v: #8a919c;

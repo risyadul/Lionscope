@@ -83,3 +83,11 @@ export function formatBlockMs(ms: number | null | undefined): string {
   if (ms < 9995) return `${(ms / 1000).toFixed(2)} s`;
   return `${(ms / 1000).toFixed(1)} s`;
 }
+
+/** Layout inflation time: `0.42`, `3.10`, `38.0`, `128`; small ones keep digits so they stay comparable. */
+export function formatInflateMs(ms: number | null | undefined): string {
+  if (!isFiniteNumber(ms) || ms < 0) return EMPTY;
+  if (ms < 10) return ms.toFixed(2);
+  if (ms < 100) return ms.toFixed(1);
+  return Math.round(ms).toLocaleString('en-US');
+}

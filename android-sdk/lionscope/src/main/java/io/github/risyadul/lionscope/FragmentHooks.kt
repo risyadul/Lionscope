@@ -1,6 +1,8 @@
 package io.github.risyadul.lionscope
 
 import android.app.Activity
+import android.os.Bundle
+import android.view.View
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
@@ -31,10 +33,13 @@ internal class FragmentHooks(private val tracker: ScreenTracker) : FragmentManag
         return true
     }
 
+    override fun onFragmentViewCreated(fm: FragmentManager, f: Fragment, v: View, savedInstanceState: Bundle?) =
+        tracker.onFragmentViewCreated(f, f.activity, v)
+
     override fun onFragmentStarted(fm: FragmentManager, f: Fragment) = guarded {
         if (f is DialogFragment && f.showsDialog) {
             val window = f.dialog?.window ?: return@guarded
-            tracker.onDialogShown(f, window, f.javaClass.name)
+            tracker.onDialogShown(f, f.activity, window, f.javaClass.name)
         }
     }
 
@@ -51,7 +56,10 @@ internal class FragmentHooks(private val tracker: ScreenTracker) : FragmentManag
         tracker.onFragmentGone(f)
     }
 
-    override fun onFragmentViewDestroyed(fm: FragmentManager, f: Fragment) = tracker.onFragmentGone(f)
+    override fun onFragmentViewDestroyed(fm: FragmentManager, f: Fragment) {
+        tracker.onFragmentViewDestroyed(f)
+        tracker.onFragmentGone(f)
+    }
 
     override fun onFragmentDestroyed(fm: FragmentManager, f: Fragment) = tracker.onFragmentGone(f)
 

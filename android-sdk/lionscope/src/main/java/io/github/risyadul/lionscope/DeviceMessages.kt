@@ -19,6 +19,11 @@ internal object DeviceMessages {
     private const val MAX_SAMPLES = 10_000
     private const val MAX_COUNT = 1_000_000
     private const val NATIVE_LINE = -2
+    /** v3 text fields (layout, label, screen, window, class names, ids). */
+    private const val MAX_V3_TEXT_LENGTH = 200
+    private const val MAX_INFLATE_MS = 60_000.0
+    /** View tree path class / id names: shorter than other v3 text, so 64 nodes stay far below the line limit. */
+    private const val MAX_PATH_TEXT_LENGTH = 80
 
     fun hello(
         packageName: String,
@@ -120,6 +125,97 @@ internal object DeviceMessages {
             .name("screen").value(WireText.clean(screen, MAX_SCREEN_LENGTH))
             .endObject().toString()
     }
+
+    /** v3. [label] is only sent when [layout] is null (then it is required). */
+    fun inflate(
+        ts: Long,
+        layout: String?,
+        label: String?,
+        library: Boolean,
+        nested: Boolean,
+        screen: String?,
+        count: Int,
+        totalMs: Double,
+        maxMs: Double,
+        views: Int,
+    ): String {
+        val layoutName = WireText.clean(layout, MAX_V3_TEXT_LENGTH)
+        return JsonWriter().beginObject()
+            .name("type").value("inflate")
+            .name("ts").value(ts)
+            .name("layout").value(layoutName)
+            .name("label").value(if (layoutName == null) WireText.required(label, MAX_V3_TEXT_LENGTH) else null)
+            .name("library").value(library)
+            .name("nested").value(nested)
+            .name("screen").value(WireText.clean(screen, MAX_V3_TEXT_LENGTH))
+            .name("count").value(count.coerceIn(1, MAX_COUNT))
+            .name("totalMs").value(clampMs(totalMs, MAX_INFLATE_MS))
+            .name("maxMs").value(clampMs(maxMs, MAX_INFLATE_MS))
+            .name("views").value(views.coerceIn(0, MAX_COUNT))
+            .endObject().toString()
+    }
+
+    /**
+     * v3. At most [MAX_VIEW_PATH_NODES] path nodes (the deepest ones) and [MAX_VIEW_TREE_CLASSES] classes. While the
+     * line is longer than [maxLineBytes] the root-end half of the path is dropped, keeping the deepest nodes. With
+     * path names capped at [MAX_PATH_TEXT_LENGTH] a line stays under [MAX_DEVICE_LINE_BYTES] (~55 KB worst case),
+     * so this only guards against future fields.
+     */
+    fun viewTree(
+        ts: Long,
+        screen: String?,
+        window: String,
+        views: Int,
+        viewGroups: Int,
+        maxDepth: Int,
+        deepestPath: List<ViewPathNode>,
+        topClasses: List<ClassCount>,
+        maxLineBytes: Int = MAX_DEVICE_LINE_BYTES,
+    ): String {
+        var path = deepestPath.takeLast(MAX_VIEW_PATH_NODES)
+        while (true) {
+            val line = viewTreeLine(ts, screen, window, views, viewGroups, maxDepth, path, topClasses)
+            if (path.isEmpty() || StackFrames.utf8Length(line) <= maxLineBytes) return line
+            path = path.takeLast(path.size / 2)
+        }
+    }
+
+    private fun viewTreeLine(
+        ts: Long,
+        screen: String?,
+        window: String,
+        views: Int,
+        viewGroups: Int,
+        maxDepth: Int,
+        deepestPath: List<ViewPathNode>,
+        topClasses: List<ClassCount>,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("viewtree")
+            .name("ts").value(ts)
+            .name("screen").value(WireText.clean(screen, MAX_V3_TEXT_LENGTH))
+            .name("window").value(WireText.required(window, MAX_V3_TEXT_LENGTH))
+            .name("views").value(views.coerceIn(0, MAX_COUNT))
+            .name("viewGroups").value(viewGroups.coerceIn(0, MAX_COUNT))
+            .name("maxDepth").value(maxDepth.coerceIn(0, MAX_COUNT))
+            .name("deepestPath").beginArray()
+        for (node in deepestPath) {
+            json.beginObject()
+                .name("className").value(WireText.required(node.className, MAX_PATH_TEXT_LENGTH))
+                .name("id").value(WireText.clean(node.id, MAX_PATH_TEXT_LENGTH))
+                .endObject()
+        }
+        json.endArray().name("topClasses").beginArray()
+        for (entry in topClasses.take(MAX_VIEW_TREE_CLASSES)) {
+            json.beginObject()
+                .name("className").value(WireText.required(entry.className, MAX_V3_TEXT_LENGTH))
+                .name("count").value(entry.count.coerceIn(1, MAX_COUNT))
+                .endObject()
+        }
+        return json.endArray().endObject().toString()
+    }
+
+    private fun clampMs(value: Double, max: Double): Double = if (value.isNaN()) 0.0 else value.coerceIn(0.0, max)
 
     /** An alias that cleans to nothing falls back to the simple class name. */
     private fun screenName(screen: ScreenRef): String = WireText.clean(screen.name, MAX_SCREEN_NAME_LENGTH)

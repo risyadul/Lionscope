@@ -289,7 +289,7 @@ describe('device gateway', () => {
     v2.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
     await v2.waitFor((message) => message.type === 'config');
     // Key order of the options object must not leak into the line.
-    target.links.at(-1)?.sendConfig({ strictMode: true, stallThresholdMs: 1000 });
+    target.links.at(-1)?.sendConfig({ strictMode: true, inflateTracking: false, stallThresholdMs: 1000 });
     await v2.waitFor((message) => message.type === 'config' && message.strictMode);
     const lines = [...client.rawLines, ...refused.rawLines, ...v2.rawLines];
     expect(lines).toEqual([
@@ -297,8 +297,8 @@ describe('device gateway', () => {
       '{"type":"bye","reason":"no_session"}',
       '{"type":"bye","reason":"protocol_error"}',
       '{"type":"welcome","protocolVersion":2}',
-      '{"type":"config","stallThresholdMs":150,"strictMode":false}',
-      '{"type":"config","stallThresholdMs":1000,"strictMode":true}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true}',
+      '{"type":"config","stallThresholdMs":1000,"strictMode":true,"inflateTracking":false}',
     ]);
     for (const line of lines) {
       expect(line.startsWith('{"type":')).toBe(true);
@@ -315,11 +315,16 @@ describe('device gateway', () => {
     await client.waitFor((message) => message.type === 'config');
     expect(client.received).toEqual([
       { type: 'welcome', protocolVersion: 2 },
-      { type: 'config', stallThresholdMs: 150, strictMode: false },
+      { type: 'config', stallThresholdMs: 150, strictMode: false, inflateTracking: true },
     ]);
-    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true });
+    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true, inflateTracking: true });
     await client.waitFor((message) => message.type === 'config' && message.strictMode);
-    expect(client.received.at(-1)).toEqual({ type: 'config', stallThresholdMs: 500, strictMode: true });
+    expect(client.received.at(-1)).toEqual({
+      type: 'config',
+      stallThresholdMs: 500,
+      strictMode: true,
+      inflateTracking: true,
+    });
 
     target.links[0]?.close('no_session');
     target.links[0]?.sendConfig(DEFAULT_SDK_OPTIONS); // closing: nothing more is sent
@@ -331,7 +336,7 @@ describe('device gateway', () => {
     const port = await start();
     target.configOnAttach = true;
     const client = await linked(port);
-    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true });
+    target.links[0]?.sendConfig({ stallThresholdMs: 500, strictMode: true, inflateTracking: true });
     client.send(HEARTBEAT);
     await waitUntil(() => target.messages.length === 1);
     expect(client.received).toEqual([{ type: 'welcome', protocolVersion: 1 }]);
@@ -476,6 +481,42 @@ describe('device gateway', () => {
     expect(target.messages).toHaveLength(6);
     expect(client.received.at(-1)).toEqual({ type: 'bye', reason: 'protocol_error' });
     await waitUntil(() => target.closes === 1);
+  });
+
+  it('drops diagnostic lines over the line budget instead of closing the link', async () => {
+    const port = await start({ lineBurst: 200, linesPerSecond: 100 });
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: 3 });
+    await client.waitFor((message) => message.type === 'welcome');
+    const inflate = {
+      type: 'inflate',
+      ts: 1_792_516_375_260,
+      layout: 'fragment_home',
+      label: null,
+      library: false,
+      nested: false,
+      screen: null,
+      count: 1,
+      totalMs: 1,
+      maxMs: 1,
+      views: 3,
+    };
+    for (let i = 0; i < 300; i += 1) client.send(inflate);
+    // The hello took one token: 199 inflates fit, the other 101 are shed.
+    await waitUntil(() => target.messages.length === 199);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(target.messages).toHaveLength(199);
+    expect(client.isClosed).toBe(false);
+    expect(client.received.map((message) => message.type)).toEqual(['welcome']);
+  });
+
+  it('still closes on a flood of non-diagnostic lines', async () => {
+    const port = await start({ lineBurst: 20, linesPerSecond: 1 });
+    const client = await linked(port);
+    for (let i = 0; i < 300; i += 1) client.send(HEARTBEAT);
+    await client.closed;
+    expect(target.messages.length).toBeLessThanOrEqual(19);
+    expect(client.received.at(-1)).toEqual({ type: 'bye', reason: 'protocol_error' });
   });
 
   it('limits hellos gateway-wide, so reconnecting does not reset the rate limit', async () => {

@@ -29,7 +29,10 @@ class DeviceMessagesTest {
     @Test
     fun goldenFixtureCoversEveryMessageType() {
         val types = goldenLines.map { (TestJson.parse(it) as Map<*, *>)["type"] }.toSet()
-        assertEquals(setOf("hello", "screen", "frames", "heartbeat", "stall", "strictmode"), types)
+        assertEquals(
+            setOf("hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree"),
+            types,
+        )
     }
 
     @Test
@@ -56,9 +59,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionTwo() {
-        assertEquals(2, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V2, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionThree() {
+        assertEquals(3, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V3, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -194,6 +197,129 @@ class DeviceMessagesTest {
             .forEach(::assertServerAccepts)
     }
 
+    /** The server's v3 rules: strings ≤ 200, counts ≤ 1e6, ms ≤ 60 000, path ≤ 64 nodes, classes ≤ 10. */
+    private fun assertServerAcceptsV3(line: String) {
+        val message = TestJson.parse(line) as Map<*, *>
+        val badChars = Regex("[\\p{Cc}\\p{Cf}]")
+        fun text(value: Any?, nullable: Boolean) {
+            if (value == null) {
+                assertTrue("null text in $line", nullable)
+                return
+            }
+            value as String
+            assertTrue(value.isNotEmpty() && value.length <= 200 && value.trim() == value)
+            assertFalse(badChars.containsMatchIn(value))
+        }
+        fun count(value: Any?, min: Double = 0.0) = assertTrue("$value in $line", (value as Double) in min..1e6)
+        text(message["screen"], nullable = true)
+        when (message["type"]) {
+            "inflate" -> {
+                text(message["layout"], nullable = true)
+                text(message["label"], nullable = message["layout"] != null)
+                if (message["layout"] != null) assertEquals(null, message["label"])
+                assertTrue(message["library"] is Boolean && message["nested"] is Boolean)
+                count(message["count"], min = 1.0)
+                count(message["views"])
+                assertTrue((message["totalMs"] as Double) in 0.0..60_000.0)
+                assertTrue((message["maxMs"] as Double) in 0.0..60_000.0)
+            }
+            "viewtree" -> {
+                text(message["window"], nullable = false)
+                count(message["views"])
+                count(message["viewGroups"])
+                count(message["maxDepth"])
+                val path = (message["deepestPath"] as List<*>).map { it as Map<*, *> }
+                assertTrue(path.size <= MAX_VIEW_PATH_NODES)
+                path.forEach {
+                    text(it["className"], nullable = false)
+                    text(it["id"], nullable = true)
+                }
+                val classes = (message["topClasses"] as List<*>).map { it as Map<*, *> }
+                assertTrue(classes.size <= MAX_VIEW_TREE_CLASSES)
+                classes.forEach {
+                    text(it["className"], nullable = false)
+                    count(it["count"], min = 1.0)
+                }
+            }
+            else -> error("not a v3 message: $line")
+        }
+    }
+
+    @Test
+    fun goldenV3LinesMeetTheServerRules() {
+        goldenLines.filter { (TestJson.parse(it) as Map<*, *>)["type"] in setOf("inflate", "viewtree") }
+            .forEach(::assertServerAcceptsV3)
+    }
+
+    @Test
+    fun v3EncodersCleanTextAndClampNumbers() {
+        val named = DeviceMessages.inflate(1, "fragment_home", "ignored", false, false, "\u200Ehome\n", 0, 70_000.0, -1.0, -5)
+        assertServerAcceptsV3(named)
+        val namedJson = TestJson.parse(named) as Map<*, *>
+        assertEquals(null, namedJson["label"]) // A label is only sent without a layout name.
+        assertEquals("home", namedJson["screen"])
+        assertEquals(listOf(1.0, 60_000.0, 0.0, 0.0), listOf("count", "totalMs", "maxMs", "views").map { namedJson[it] })
+
+        val unnamed = TestJson.parse(DeviceMessages.inflate(1, "\n", null, false, true, null, 2, 1.0, 1.0, 1)) as Map<*, *>
+        assertEquals(null, unnamed["layout"])
+        assertEquals("?", unnamed["label"]) // Required when the layout is unknown.
+        assertEquals(true, unnamed["nested"])
+        assertEquals(listOf("library", "nested", "screen"), unnamed.keys.toList().subList(4, 7))
+        assertServerAcceptsV3(DeviceMessages.inflate(1, "l".repeat(300), null, true, false, "s".repeat(300), 5_000_000, 1.0, 1.0, 9_000_000))
+
+        val tree = DeviceMessages.viewTree(
+            ts = 1,
+            screen = null,
+            window = "\n",
+            views = 2_000_000,
+            viewGroups = -1,
+            maxDepth = 70,
+            deepestPath = List(70) { ViewPathNode(if (it == 69) "Leaf" else "Group$it", if (it == 69) "\u200E" else null) },
+            topClasses = List(12) { ClassCount("C$it", 12 - it) },
+        )
+        assertServerAcceptsV3(tree)
+        val treeJson = TestJson.parse(tree) as Map<*, *>
+        assertEquals("?", treeJson["window"])
+        val path = (treeJson["deepestPath"] as List<*>).map { it as Map<*, *> }
+        assertEquals(MAX_VIEW_PATH_NODES, path.size)
+        assertEquals("Group6", path.first()["className"]) // Cut at the root end.
+        assertEquals(mapOf("className" to "Leaf", "id" to null), path.last())
+    }
+
+    @Test
+    fun viewTreePathNamesAreCappedSoLongCjkNamesStillFitOneLine() {
+        val cjk = "视图".repeat(100) // 200 chars, 3 UTF-8 bytes each.
+        val line = DeviceMessages.viewTree(
+            ts = 1,
+            screen = cjk,
+            window = cjk,
+            views = 1,
+            viewGroups = 1,
+            maxDepth = 64,
+            deepestPath = List(64) { ViewPathNode(cjk + it, cjk) },
+            topClasses = List(10) { ClassCount(cjk + it, 1) },
+        )
+        assertTrue(line.toByteArray(Charsets.UTF_8).size <= MAX_DEVICE_LINE_BYTES)
+        assertServerAcceptsV3(line)
+        val path = ((TestJson.parse(line) as Map<*, *>)["deepestPath"] as List<*>).map { it as Map<*, *> }
+        assertEquals(64, path.size)
+        assertTrue(path.all { (it["className"] as String).length <= 80 && (it["id"] as String).length <= 80 })
+    }
+
+    @Test
+    fun anOversizedViewTreeDropsRootEndPathNodesUntilItFits() {
+        val cjk = "视图".repeat(40)
+        val path = List(64) { ViewPathNode("N$it$cjk", cjk) }
+        val full = DeviceMessages.viewTree(1, null, "MainActivity", 1, 1, 64, path, emptyList())
+        assertTrue(full.toByteArray(Charsets.UTF_8).size > 8 * 1024)
+        val line = DeviceMessages.viewTree(1, null, "MainActivity", 1, 1, 64, path, emptyList(), maxLineBytes = 8 * 1024)
+        assertTrue(line.toByteArray(Charsets.UTF_8).size <= 8 * 1024)
+        val sent = ((TestJson.parse(line) as Map<*, *>)["deepestPath"] as List<*>).map { (it as Map<*, *>)["className"] as String }
+        assertTrue(sent.size in 1 until 64)
+        assertTrue(sent.last().startsWith("N63")) // The deepest nodes are kept.
+        assertEquals((64 - sent.size until 64).map { "N$it" }, sent.map { it.takeWhile { c -> c.code < 128 } })
+    }
+
     @Test
     fun zeroDroppedFramesIsOmitted() {
         val json = TestJson.parse(DeviceMessages.frames("w", 16.667, emptyList(), droppedFrames = 0)) as Map<*, *>
@@ -236,6 +362,34 @@ class DeviceMessagesTest {
             frames = message.stackFrames(),
             count = message.num("count").toInt(),
             screen = message["screen"] as String?,
+        )
+        "inflate" -> DeviceMessages.inflate(
+            ts = message.num("ts").toLong(),
+            layout = message["layout"] as String?,
+            label = message["label"] as String?,
+            library = message["library"] as Boolean,
+            nested = message["nested"] as Boolean,
+            screen = message["screen"] as String?,
+            count = message.num("count").toInt(),
+            totalMs = message.num("totalMs"),
+            maxMs = message.num("maxMs"),
+            views = message.num("views").toInt(),
+        )
+        "viewtree" -> DeviceMessages.viewTree(
+            ts = message.num("ts").toLong(),
+            screen = message["screen"] as String?,
+            window = message.str("window"),
+            views = message.num("views").toInt(),
+            viewGroups = message.num("viewGroups").toInt(),
+            maxDepth = message.num("maxDepth").toInt(),
+            deepestPath = (message["deepestPath"] as List<*>).map {
+                val node = it as Map<*, *>
+                ViewPathNode(node.str("className"), node["id"] as String?)
+            },
+            topClasses = (message["topClasses"] as List<*>).map {
+                val entry = it as Map<*, *>
+                ClassCount(entry.str("className"), entry.num("count").toInt())
+            },
         )
         else -> error("Unknown type in golden line: $message")
     }

@@ -11,6 +11,8 @@ type Props = {
   /** A change was sent and the server hasn't answered yet. */
   isPending: boolean;
   onChange: (patch: Partial<SdkOptions>) => void;
+  /** Why the inflation switch alone is inert (a link below protocol v3); null when it can be used. */
+  inflateBlocker?: string | null;
 };
 
 const THRESHOLD_OPTIONS: readonly SegmentedOption<number>[] = STALL_THRESHOLDS_MS.map((ms) => ({
@@ -24,9 +26,15 @@ export const SENDING_TEXT = 'Sending to the app…';
 const STRICT_MODE_TITLE =
   'Adds disk, network, slow-call and leaked-closeable detection to the app’s StrictMode policies (API 28+) and reports violations here. The app’s own policies are restored when it is turned off.';
 
+const INFLATE_TITLE =
+  'Times every XML layout the app inflates on the main thread (Android 10+) and shows them in the Layouts tab. Turning it off stops recording, and screens opened afterwards get no hook; screens opened while it was on keep theirs.';
+
+export const INFLATE_UPDATE_HINT = 'Update the app’s Lionscope SDK to 0.4.0 for layout timing';
+
 /** Watchdog threshold and StrictMode switch; they reconfigure the SDK in the running app. */
-export function StallControls({ options, blocker, isPending, onChange }: Props) {
+export function StallControls({ options, blocker, isPending, onChange, inflateBlocker = null }: Props) {
   const blockerId = useId();
+  const inflateBlockerId = useId();
   const isDisabled = blocker !== null;
   const isSending = !isDisabled && isPending;
   return (
@@ -61,6 +69,26 @@ export function StallControls({ options, blocker, isPending, onChange }: Props) 
         </span>
         StrictMode
       </button>
+      <button
+        type="button"
+        role="switch"
+        className="switch"
+        aria-checked={options.inflateTracking}
+        disabled={isDisabled || inflateBlocker !== null}
+        aria-describedby={inflateBlocker !== null && !isDisabled ? inflateBlockerId : undefined}
+        title={INFLATE_TITLE}
+        onClick={() => onChange({ inflateTracking: !options.inflateTracking })}
+      >
+        <span className="switch-track" aria-hidden="true">
+          <span className="switch-thumb" />
+        </span>
+        Inflation tracking
+      </button>
+      {!isDisabled && inflateBlocker !== null && (
+        <p id={inflateBlockerId} className="stall-blocker">
+          {inflateBlocker}
+        </p>
+      )}
       {isDisabled && (
         <p id={blockerId} className="stall-blocker">
           {blocker}

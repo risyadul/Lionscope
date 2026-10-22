@@ -9,6 +9,7 @@ import type {
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
+  InflateSample,
   LogEntry,
   MemorySample,
   ScreenSpan,
@@ -18,6 +19,7 @@ import type {
   StallSample,
   StrictModeSample,
   TimelineEvent,
+  ViewTreeSample,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 
@@ -81,9 +83,13 @@ export interface DashboardState {
   stalls: StallSample[];
   /** Coalesced StrictMode violations, ascending by `ts`. */
   strictMode: StrictModeSample[];
+  /** Coalesced layout inflations (0.4.0), ascending by `ts` (the start of each window's slowest). */
+  inflates: InflateSample[];
+  /** One view-tree snapshot per screen visit (0.4.0), ascending by `ts`. */
+  viewTrees: ViewTreeSample[];
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
-   * StrictMode); the pruning reference.
+   * StrictMode / inflations / view trees); the pruning reference.
    * Logs never advance it: they carry the device clock, which can jump.
    */
   latestTs: number;
@@ -109,6 +115,9 @@ export const MAX_SCREEN_SPANS = 2000;
 /** Caps on the stall / StrictMode buffers (the oldest go first); the server's byte limits are tighter. */
 export const MAX_STALLS = 2000;
 export const MAX_STRICT_MODE = 2000;
+/** Inflations are coalesced per (layout, screen, second), so a busy list fills this faster than stalls do. */
+export const MAX_INFLATES = 5000;
+export const MAX_VIEW_TREES = 500;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -140,6 +149,8 @@ export function createInitialState(): DashboardState {
     breakdown: [],
     stalls: [],
     strictMode: [],
+    inflates: [],
+    viewTrees: [],
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -326,6 +337,8 @@ function pruneAll(state: DashboardState): DashboardState {
   const breakdown = pruneBefore(state.breakdown, cutoff);
   const stalls = pruneStallsBefore(state.stalls, cutoff);
   const strictMode = pruneBefore(state.strictMode, cutoff);
+  const inflates = pruneBefore(state.inflates, cutoff);
+  const viewTrees = pruneBefore(state.viewTrees, cutoff);
   if (
     cpu === state.cpu &&
     memory === state.memory &&
@@ -335,11 +348,26 @@ function pruneAll(state: DashboardState): DashboardState {
     screens === state.screens &&
     breakdown === state.breakdown &&
     stalls === state.stalls &&
-    strictMode === state.strictMode
+    strictMode === state.strictMode &&
+    inflates === state.inflates &&
+    viewTrees === state.viewTrees
   ) {
     return state;
   }
-  return { ...state, cpu, memory, frames, logs, events, screens, breakdown, stalls, strictMode };
+  return {
+    ...state,
+    cpu,
+    memory,
+    frames,
+    logs,
+    events,
+    screens,
+    breakdown,
+    stalls,
+    strictMode,
+    inflates,
+    viewTrees,
+  };
 }
 
 function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): DashboardState {
@@ -352,6 +380,9 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
     byTs((snapshot.strictMode ?? []).filter((v) => v.ts <= horizon)),
     MAX_STRICT_MODE,
   );
+  // Older servers omit the 0.4.0 streams.
+  const inflates = capTail(byTs((snapshot.inflates ?? []).filter((i) => i.ts <= horizon)), MAX_INFLATES);
+  const viewTrees = capTail(byTs((snapshot.viewTrees ?? []).filter((v) => v.ts <= horizon)), MAX_VIEW_TREES);
   const next: DashboardState = {
     ...state,
     cpu: byTs(snapshot.cpu),
@@ -363,9 +394,21 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
     breakdown,
     stalls,
     strictMode,
+    inflates,
+    viewTrees,
     nextLogSeq: state.nextLogSeq + logs.length,
     latestTs: Math.max(
-      maxTs(snapshot.cpu, snapshot.memory, snapshot.frames, snapshot.events, breakdown, stalls, strictMode),
+      maxTs(
+        snapshot.cpu,
+        snapshot.memory,
+        snapshot.frames,
+        snapshot.events,
+        breakdown,
+        stalls,
+        strictMode,
+        inflates,
+        viewTrees,
+      ),
       maxSpanTs(screens),
     ),
   };
@@ -395,6 +438,8 @@ function resetTimeline(state: DashboardState, ts: number): DashboardState {
     breakdown: [],
     stalls: [],
     strictMode: [],
+    inflates: [],
+    viewTrees: [],
     latestTs: ts,
   };
 }
@@ -446,6 +491,19 @@ function applyStrictMode(state: DashboardState, sample: StrictModeSample, now: n
   if (sample.ts > now + FUTURE_SLACK_MS) return state;
   const strictMode = insertByTs(state.strictMode, sample, MAX_STRICT_MODE, false);
   return pruneAll({ ...state, strictMode, latestTs: advance(state, sample.ts) });
+}
+
+/** Inflations and view trees are reported after the fact like stalls: slotted by time, bogus futures dropped. */
+function applyInflate(state: DashboardState, sample: InflateSample, now: number): DashboardState {
+  if (sample.ts > now + FUTURE_SLACK_MS) return state;
+  const inflates = insertByTs(state.inflates, sample, MAX_INFLATES, false);
+  return pruneAll({ ...state, inflates, latestTs: advance(state, sample.ts) });
+}
+
+function applyViewTree(state: DashboardState, sample: ViewTreeSample, now: number): DashboardState {
+  if (sample.ts > now + FUTURE_SLACK_MS) return state;
+  const viewTrees = insertByTs(state.viewTrees, sample, MAX_VIEW_TREES, false);
+  return pruneAll({ ...state, viewTrees, latestTs: advance(state, sample.ts) });
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +571,10 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return applyStall(state, msg.sample, now);
     case 'strictmode':
       return applyStrictMode(state, msg.sample, now);
+    case 'inflate':
+      return applyInflate(state, msg.sample, now);
+    case 'viewtree':
+      return applyViewTree(state, msg.sample, now);
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

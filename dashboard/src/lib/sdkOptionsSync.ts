@@ -44,6 +44,10 @@ export function changedFields(patch: Partial<SdkOptions>, current: SdkOptions): 
   if (patch.strictMode !== undefined && patch.strictMode !== current.strictMode) {
     changed.strictMode = patch.strictMode;
   }
+  // Absent on older servers: read as on.
+  if (patch.inflateTracking !== undefined && patch.inflateTracking !== (current.inflateTracking ?? true)) {
+    changed.inflateTracking = patch.inflateTracking;
+  }
   return Object.keys(changed).length === 0 ? null : changed;
 }
 

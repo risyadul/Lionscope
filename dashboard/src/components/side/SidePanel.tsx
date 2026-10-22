@@ -2,11 +2,12 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'screens' | 'stalls';
+export type SideTab = 'screens' | 'stalls' | 'layouts';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'screens', label: 'Screens' },
   { id: 'stalls', label: 'Stalls' },
+  { id: 'layouts', label: 'Layouts' },
 ];
 
 type Props = {
@@ -16,14 +17,26 @@ type Props = {
   screenCount: number;
   /** Stalls in the visible window, shown on its tab. */
   stallCount: number;
+  /** Layouts in the visible window, shown on its tab. */
+  layoutCount: number;
   screens: ReactNode;
   stalls: ReactNode;
+  layouts: ReactNode;
 };
 
 /** The right-hand column: the per-screen table and stalls share it as tabs (both stay mounted). */
-export function SidePanel({ tab, onTabChange, screenCount, stallCount, screens, stalls }: Props) {
-  const counts: Record<SideTab, number> = { screens: screenCount, stalls: stallCount };
-  const panels: Record<SideTab, ReactNode> = { screens, stalls };
+export function SidePanel({
+  tab,
+  onTabChange,
+  screenCount,
+  stallCount,
+  layoutCount,
+  screens,
+  stalls,
+  layouts,
+}: Props) {
+  const counts: Record<SideTab, number> = { screens: screenCount, stalls: stallCount, layouts: layoutCount };
+  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts };
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -41,7 +54,7 @@ export function SidePanel({ tab, onTabChange, screenCount, stallCount, screens, 
   };
 
   return (
-    <aside className="side" aria-label="Screens and stalls">
+    <aside className="side" aria-label="Screens, stalls and layouts">
       <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button

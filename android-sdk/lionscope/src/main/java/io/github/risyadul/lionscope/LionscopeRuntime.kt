@@ -57,10 +57,18 @@ internal object LionscopeRuntime {
         } else {
             null
         }
+        val layouts = try {
+            layouts(app, deviceLink, main, ownership) { screens.currentScreenName }
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            Log.w(LOG_TAG, "Lionscope layouts disabled: $t")
+            null
+        }
         screens = ScreenTracker(
             deviceLink,
             main,
             dialogWindows = frames,
+            layoutEvents = layouts,
             periodicFallback = frames == null,
             ownership = ownership,
         )
@@ -75,6 +83,7 @@ internal object LionscopeRuntime {
         app.registerActivityLifecycleCallbacks(screens)
         frames?.let(app::registerActivityLifecycleCallbacks)
         diagnostics?.let(app::registerActivityLifecycleCallbacks)
+        layouts?.let(app::registerActivityLifecycleCallbacks)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.
         deviceLink.start()
         Lionscope.installed = true
@@ -101,6 +110,27 @@ internal object LionscopeRuntime {
             null
         }
         return DiagnosticsController(link, main, watchdog, strictMode)
+    }
+
+    /**
+     * View trees on every API level; inflation timing (API 29+, where the inflater factory can be set early) unless
+     * the app opted out in its manifest.
+     */
+    private fun layouts(
+        app: Application,
+        link: DeviceLink,
+        main: MainScheduler,
+        ownership: AppOwnership,
+        screenName: () -> String?,
+    ): LayoutsTracker {
+        val reporter = InflateReporter(link, main)
+        val tracer = if (Build.VERSION.SDK_INT >= 29 && InflateOptOut.allows(app)) {
+            val handler = Handler(Looper.getMainLooper())
+            InflateTracer(reporter, screenName, ownership, postAtFrontOfQueue = { handler.postAtFrontOfQueue(it) })
+        } else {
+            null
+        }
+        return LayoutsTracker(link, main, reporter, tracer, ViewTreeSnapshotter(link, screenName))
     }
 
     private fun defaultRefreshRate(context: Context): Double {

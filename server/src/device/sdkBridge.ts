@@ -1,5 +1,5 @@
 import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
-import type { SdkFrame, SdkOptions, SdkStatus } from '@lionscope/protocol';
+import type { DeviceMessageType, SdkFrame, SdkOptions, SdkStatus } from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { SdkFrameAggregator } from '../metrics/sdkFrames.ts';
@@ -39,7 +39,7 @@ export const INVALID_DIAGNOSTIC_MESSAGE = 'SDK sent an invalid diagnostic; ignor
 /** Option changes are pushed to the SDK this long after the last one (a dashboard may send several at once). */
 export const CONFIG_DEBOUNCE_MS = 150;
 export const SDK_EVENT_CLOCK_MESSAGE =
-  'SDK stalls / StrictMode violations dropped: the device clock does not match the laptop clock';
+  'SDK events (stalls, StrictMode, layouts) dropped: the device clock does not match the laptop clock';
 
 export const DISCONNECTED_SDK: SdkStatus = {
   connected: false,
@@ -113,11 +113,13 @@ export class SdkBridge {
     const options: SdkOptions = {
       stallThresholdMs: changes.stallThresholdMs ?? previous.stallThresholdMs,
       strictMode: changes.strictMode ?? previous.strictMode,
+      inflateTracking: changes.inflateTracking ?? previous.inflateTracking,
     };
     this.update({ options });
     if (
       options.stallThresholdMs === previous.stallThresholdMs &&
-      options.strictMode === previous.strictMode
+      options.strictMode === previous.strictMode &&
+      options.inflateTracking === previous.inflateTracking
     ) {
       return;
     }
@@ -239,7 +241,7 @@ export class SdkBridge {
         }
         return;
       case 'stall': {
-        const ts = this.eventTime(message.ts, message.durationMs);
+        const ts = this.eventTime('stall', message.ts, message.durationMs);
         if (ts === null) return;
         const { durationMs, frames, samples, truncated, debugger: debuggerAttached } = message;
         this.options.store.append('stalls', {
@@ -254,7 +256,7 @@ export class SdkBridge {
         return;
       }
       case 'strictmode': {
-        const ts = this.eventTime(message.ts, 0);
+        const ts = this.eventTime('strictmode', message.ts, 0);
         if (ts === null) return;
         const { policy, violation, count, frames } = message;
         this.options.store.append('strictMode', {
@@ -268,6 +270,40 @@ export class SdkBridge {
         });
         return;
       }
+      case 'inflate': {
+        const ts = this.eventTime('inflate', message.ts, message.maxMs);
+        if (ts === null) return;
+        const { layout, label, library, nested, count, totalMs, maxMs, views } = message;
+        this.options.store.append('inflates', {
+          ts,
+          layout,
+          label,
+          library,
+          nested,
+          screen: this.screenAt(ts, message.screen),
+          count,
+          totalMs,
+          maxMs,
+          views,
+        });
+        return;
+      }
+      case 'viewtree': {
+        const ts = this.eventTime('viewtree', message.ts, 0);
+        if (ts === null) return;
+        const { window, views, viewGroups, maxDepth, deepestPath, topClasses } = message;
+        this.options.store.append('viewTrees', {
+          ts,
+          screen: this.screenAt(ts, message.screen),
+          window,
+          views,
+          viewGroups,
+          maxDepth,
+          deepestPath,
+          topClasses,
+        });
+        return;
+      }
     }
   }
 
@@ -276,7 +312,7 @@ export class SdkBridge {
    * ended before the session started (dropped quietly). One that straddles the session start begins at it, like
    * screen spans; its duration is kept.
    */
-  private eventTime(deviceTs: number, durationMs: number): number | null {
+  private eventTime(type: DeviceMessageType, deviceTs: number, durationMs: number): number | null {
     const now = this.options.now();
     const ts = this.toLaptop(deviceTs);
     const lead = ts - (now + MAX_EVENT_LEAD_MS);
@@ -288,7 +324,7 @@ export class SdkBridge {
     if (this.refusals.shouldReport('event-clock')) {
       const skew = lead > 0 ? `${Math.round(lead)} ms ahead of` : `${Math.round(-age)} ms behind`;
       log.warn(
-        `${this.options.logPrefix} dropped an SDK stall/StrictMode event ${skew} the accepted window ` +
+        `${this.options.logPrefix} dropped an SDK ${type} event ${skew} the accepted window ` +
           `(clock offset ${this.options.clockOffsetMs()} ms)`,
       );
     }

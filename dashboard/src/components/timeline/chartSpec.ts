@@ -143,8 +143,13 @@ export const BREAKDOWN_SPEC: ChartSpec = {
   yTick: (v) => `${formatTick(v)}`,
 };
 
-/** Height of the StrictMode rail under the stall baseline, CSS px. */
-export const STALL_RAIL_PX = 14;
+/**
+ * Height of the rail under the stall baseline, CSS px: slow layout inflations on its upper row, StrictMode
+ * violations on its lower one.
+ */
+export const STALL_RAIL_PX = 22;
+/** Height of the rail's inflation row (from the baseline down), CSS px. */
+export const INFLATE_ROW_PX = 11;
 const FALLBACK_PLOT_HEIGHT_PX = 72;
 
 /** `250`, `500`, `1s`, `1.5s`: the lane's subtitle carries the unit. */

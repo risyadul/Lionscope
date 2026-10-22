@@ -5,14 +5,16 @@ import type {
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
+  InflateSample,
   MemorySample,
   ScreenSpan,
   SdkStatus,
   StallSample,
   StrictModeSample,
   TimelineEvent,
+  ViewTreeSample,
 } from '@lionscope/protocol/wire';
-import { DEVICE_PROTOCOL_V2, isValidPackageName } from '@lionscope/protocol/wire';
+import { DEVICE_PROTOCOL_V2, DEVICE_PROTOCOL_V3, isValidPackageName } from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
 import type { DashboardState } from './store.ts';
 
@@ -168,6 +170,62 @@ export function stallsEmptyState(input: StallsEmptyInput): StallsEmpty | null {
   return { kind: 'waiting', thresholdMs: input.thresholdMs };
 }
 
+/** The live SDK link speaks protocol v3 (inflation timing, view trees, the inflateTracking option). */
+export function isLayoutCapable(sdk: SdkStatus | undefined): boolean {
+  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V3;
+}
+
+/** XML layout inflation is measured through a LayoutInflater API that exists from Android 10. */
+export const MIN_INFLATE_API_LEVEL = 29;
+
+/** Why the Layouts tab has nothing to list. */
+export type LayoutsEmpty =
+  /** Inflations are buffered, just not in the visible window. */
+  | { kind: 'window' }
+  | { kind: 'no-session' }
+  | { kind: 'no-sdk' }
+  | { kind: 'disconnected'; sdkVersion: string }
+  | { kind: 'link-failed'; message: string }
+  /** The link negotiated below protocol v3: the app's SDK predates layout timing. */
+  | { kind: 'old-sdk'; sdkVersion: string | null }
+  | { kind: 'old-server' }
+  /** Android below 10: nothing is measured (view trees still are). */
+  | { kind: 'api-level'; apiLevel: number }
+  /** Inflation tracking is turned off in the SDK options. */
+  | { kind: 'off' }
+  | { kind: 'waiting' };
+
+export interface LayoutsEmptyInput {
+  hasItems: boolean;
+  /** Any inflation in the buffer (not just the window). */
+  hasAnyData: boolean;
+  isSessionActive: boolean;
+  sdk: SdkStatus | undefined;
+  sdkLinkError: string | null;
+  isTrackingOn: boolean;
+}
+
+/** Picks the Layouts tab empty state, most specific first; null when there are items. */
+export function layoutsEmptyState(input: LayoutsEmptyInput): LayoutsEmpty | null {
+  if (input.hasItems) return null;
+  if (input.hasAnyData) return { kind: 'window' };
+  if (!input.isSessionActive) return { kind: 'no-session' };
+  const { sdk } = input;
+  if (sdk === undefined) return { kind: 'old-server' };
+  if (!sdk.connected) {
+    if (input.sdkLinkError !== null) return { kind: 'link-failed', message: input.sdkLinkError };
+    return sdk.sdkVersion === null
+      ? { kind: 'no-sdk' }
+      : { kind: 'disconnected', sdkVersion: sdk.sdkVersion };
+  }
+  if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
+  if (!isLayoutCapable(sdk)) return { kind: 'old-sdk', sdkVersion: sdk.sdkVersion };
+  if (sdk.apiLevel !== null && sdk.apiLevel < MIN_INFLATE_API_LEVEL) {
+    return { kind: 'api-level', apiLevel: sdk.apiLevel };
+  }
+  return input.isTrackingOn ? { kind: 'waiting' } : { kind: 'off' };
+}
+
 export interface StartHintInput {
   isOpen: boolean;
   serial: string | null;
@@ -209,9 +267,11 @@ export interface PausedView {
   breakdown: readonly FrameBreakdownSample[];
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
+  inflates: readonly InflateSample[];
+  viewTrees: readonly ViewTreeSample[];
 }
 
 export function captureView(state: DashboardState, at: number): PausedView {
-  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode } = state;
-  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode };
+  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode, inflates, viewTrees } = state;
+  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode, inflates, viewTrees };
 }

@@ -11,7 +11,7 @@ import {
   type OptionsSync,
 } from '../src/lib/sdkOptionsSync.ts';
 
-const SERVER: SdkOptions = { stallThresholdMs: 150, strictMode: false };
+const SERVER: SdkOptions = { stallThresholdMs: 150, strictMode: false, inflateTracking: true };
 const at = (sessionSeq: number, errorSeq = 0, now = 1000) => ({ sessionSeq, errorSeq, now });
 
 describe('changedFields', () => {
@@ -39,7 +39,7 @@ describe('requestOptions', () => {
     const third = requestOptions(second.sync, { strictMode: true }, SERVER, at(1, 0, 1200));
     expect([second.send, third.send]).toEqual([null, null]);
     expect(third.sync.queued).toEqual({ stallThresholdMs: 250, strictMode: true });
-    expect(shownOptions(third.sync, SERVER)).toEqual({ stallThresholdMs: 250, strictMode: true });
+    expect(shownOptions(third.sync, SERVER)).toEqual({ ...SERVER, stallThresholdMs: 250, strictMode: true });
     expect(third.sync.since).toBe(1200);
     // Re-requesting what is already shown (pending) is a no-op too.
     expect(requestOptions(third.sync, { strictMode: true }, SERVER, at(1)).sync).toBe(third.sync);
@@ -56,15 +56,15 @@ describe('settleOptions', () => {
   });
 
   it('the answer releases the queued patch, minus what the server already has', () => {
-    const step = settleOptions(queued, { stallThresholdMs: 500, strictMode: false }, at(2, 0, 1300));
+    const step = settleOptions(queued, { ...SERVER, stallThresholdMs: 500 }, at(2, 0, 1300));
     expect(step.send).toEqual({ strictMode: true });
     expect(step.sync.inFlight).toEqual({ sessionSeq: 2, errorSeq: 0 });
     expect(step.sync.queued).toBeNull();
     expect(isSyncPending(step.sync)).toBe(true);
     // Its own answer matches everything requested: done.
-    expect(settleOptions(step.sync, { stallThresholdMs: 500, strictMode: true }, at(3, 0, 1400)).sync).toBe(
-      IDLE_SYNC,
-    );
+    expect(
+      settleOptions(step.sync, { ...SERVER, stallThresholdMs: 500, strictMode: true }, at(3, 0, 1400)).sync,
+    ).toBe(IDLE_SYNC);
   });
 
   it('an unrelated session that does not match keeps the requested values shown', () => {
@@ -77,7 +77,7 @@ describe('settleOptions', () => {
   });
 
   it('a queued patch the server already reflects is not sent', () => {
-    const step = settleOptions(queued, { stallThresholdMs: 150, strictMode: true }, at(2, 0, 1300));
+    const step = settleOptions(queued, { ...SERVER, strictMode: true }, at(2, 0, 1300));
     expect(step.send).toBeNull();
     expect(step.sync.inFlight).toBeNull();
   });

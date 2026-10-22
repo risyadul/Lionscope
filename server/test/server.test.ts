@@ -388,7 +388,11 @@ describe('Lionscope server', () => {
       a.send({ type: 'setSdkOptions', stallThresholdMs: 500, strictMode: true });
       const updated = (m: { session: SessionState }) => m.session.sdk?.options?.strictMode === true;
       const [mine, theirs] = await Promise.all([a.next('session', updated), b.waitFor('session', updated)]);
-      expect(mine.session.sdk?.options).toEqual({ stallThresholdMs: 500, strictMode: true });
+      expect(mine.session.sdk?.options).toEqual({
+        stallThresholdMs: 500,
+        strictMode: true,
+        inflateTracking: true,
+      });
       expect(theirs.session).toEqual(mine.session);
       expect(running.session).toMatchObject({ serial: 'emulator-5554', packageName: PKG, pid: 1105 });
       const [cpu, memory, frames] = await Promise.all([

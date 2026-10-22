@@ -1,0 +1,276 @@
+/* Layouts tab: heaviest layouts first, dense mono figures, a total-time meter per row. The shared
+   `.sort-btn`, `.switch` and `.btn` rules come from the Screens and Stalls styles (both always mounted). */
+
+.layouts {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  container: layouts / inline-size;
+}
+
+.layouts-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.layouts-scope {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.layouts-hidden {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--rule);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  line-height: 15px;
+}
+
+.layouts-off-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.layouts-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Table ------------------------------------------------------------------------ */
+
+.layouts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.layouts-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: right;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.layouts-table thead th[data-col='name'] {
+  text-align: left;
+}
+
+.layouts-table tbody tr {
+  border-bottom: 1px solid var(--rule);
+  transition: background-color var(--dur-fast) linear;
+}
+
+.layouts-table tbody tr:hover {
+  background: var(--hover-wash);
+}
+
+.layouts-table tbody th,
+.layouts-table td {
+  padding: 7px var(--space-2);
+  font-weight: 400;
+  text-align: right;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.layouts-table td.mono {
+  font-size: var(--text-meta);
+}
+
+.layouts-table tbody th {
+  max-width: 0;
+  width: 42%;
+  padding-left: var(--space-4);
+  text-align: left;
+}
+
+.layouts-table td:last-child {
+  padding-right: var(--space-4);
+}
+
+th[data-col='name'] .sort-btn {
+  padding-left: var(--space-4);
+}
+
+.layout-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.layout-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+/* A fallback `Button:12` label: the name was not resolved, so it reads as a hint, not an identifier. */
+.layout-name[data-label] {
+  color: var(--ink-2);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.layout-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  line-height: 15px;
+}
+
+.layout-screens {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  text-overflow: ellipsis;
+}
+
+/* Total time: the number in ink, a meter in the inflate hue scaled to the heaviest row. */
+td[data-col='totalMs'] {
+  min-width: 64px;
+}
+
+.layout-meter {
+  display: block;
+  height: 3px;
+  margin-top: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--rule);
+}
+
+.layout-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--viz-inflate);
+  transform-origin: left;
+  transition: transform var(--dur) var(--ease-out);
+}
+
+/* A slow inflation (the ones the Main thread lane marks): ink figure over an inflate-colored rule. */
+.inflate-max[data-slow] {
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--viz-inflate);
+}
+
+.layouts-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.layouts-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.layouts-off-note .layouts-link {
+  margin-left: var(--space-2);
+}
+
+/* Empty state ---------------------------------------------------------------------- */
+
+.layouts-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  max-width: 560px;
+  padding: var(--space-5) var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.layouts-empty p {
+  margin: 0;
+}
+
+.layouts-empty-title {
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.layouts-empty[data-tone='critical'] .layouts-empty-title {
+  color: var(--log-e);
+}
+
+.layouts-empty-detail {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--critical);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.layouts-empty .layouts-empty-note {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.layouts-empty-action {
+  justify-self: start;
+  margin-top: var(--space-1);
+}
+
+.layouts-snippet {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+}

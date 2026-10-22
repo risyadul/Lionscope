@@ -67,7 +67,7 @@ internal object StackFrames {
         )
     }
 
-    private fun utf8Length(value: String): Int {
+    fun utf8Length(value: String): Int {
         var bytes = 0
         var i = 0
         while (i < value.length) {

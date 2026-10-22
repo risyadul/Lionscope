@@ -12,6 +12,8 @@ import type {
   StackFrame,
   StallSample,
   StrictModeSample,
+  InflateSample,
+  ViewTreeSample,
 } from '@lionscope/protocol/wire';
 
 export const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
@@ -178,5 +180,47 @@ export const SDK_V2: SdkStatus = {
   apiLevel: 34,
   framesActive: true,
   protocolVersion: 2,
-  options: { stallThresholdMs: 150, strictMode: false },
+  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true },
 };
+
+/** A live protocol-v3 SDK link on Android 14 with the default options. */
+export const SDK_V3: SdkStatus = {
+  ...SDK_V2,
+  sdkVersion: '0.4.0',
+  protocolVersion: 3,
+  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true },
+};
+
+export function inflate(ts: number, overrides: Partial<InflateSample> = {}): InflateSample {
+  return {
+    ts,
+    layout: 'fragment_home',
+    label: null,
+    library: false,
+    nested: false,
+    screen: 'homepage',
+    count: 1,
+    totalMs: 6,
+    maxMs: 6,
+    views: 24,
+    ...overrides,
+  };
+}
+
+export function viewTree(ts: number, overrides: Partial<ViewTreeSample> = {}): ViewTreeSample {
+  return {
+    ts,
+    screen: 'homepage',
+    window: 'MainActivity',
+    views: 142,
+    viewGroups: 31,
+    maxDepth: 14,
+    deepestPath: [
+      { className: 'DecorView', id: null },
+      { className: 'ConstraintLayout', id: 'content' },
+      { className: 'TextView', id: 'title' },
+    ],
+    topClasses: [{ className: 'TextView', count: 40 }],
+    ...overrides,
+  };
+}

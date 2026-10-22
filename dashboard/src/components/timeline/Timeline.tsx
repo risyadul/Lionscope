@@ -4,6 +4,7 @@ import type {
   FrameBreakdownSample,
   FrameSample,
   FrameSource,
+  InflateSample,
   MemorySample,
   ScreenSpan,
   StallSample,
@@ -162,6 +163,7 @@ type Props = {
   breakdown: readonly FrameBreakdownSample[];
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
+  inflates: readonly InflateSample[];
   /** Show the Screens lane (an SDK is connected or spans were recorded). */
   showScreens: boolean;
   /**
@@ -178,6 +180,9 @@ type Props = {
   onSelectStall: (key: string) => void;
   /** Reveals the Stalls tab; offered while it is hidden. */
   onViewStalls?: () => void;
+  /** Opens the Layouts tab (a click on an inflation marker). */
+  onViewLayouts?: () => void;
+  isInflateTrackingOn: boolean;
   /** The in-app SDK is linked: it owns frame accounting, idle or not. */
   isSdkConnected: boolean;
   selectedScreen: string | null;
@@ -204,6 +209,7 @@ export function Timeline({
   breakdown,
   stalls,
   strictMode,
+  inflates,
   showScreens,
   showBreakdown,
   showMainThread,
@@ -212,6 +218,8 @@ export function Timeline({
   selectedStall,
   onSelectStall,
   onViewStalls,
+  onViewLayouts,
+  isInflateTrackingOn,
   isSdkConnected,
   selectedScreen,
   onSelectScreen,
@@ -347,6 +355,7 @@ export function Timeline({
           <MainThreadLane
             stalls={stalls}
             strictMode={strictMode}
+            inflates={inflates}
             fromTs={startTs}
             toTs={endTs}
             thresholdMs={stallThresholdMs}
@@ -354,6 +363,8 @@ export function Timeline({
             selectedKey={selectedStall}
             onSelect={onSelectStall}
             onViewList={onViewStalls}
+            onViewLayouts={onViewLayouts}
+            isInflateTrackingOn={isInflateTrackingOn}
             showTimeAxis={!showBreakdown}
             weight={0.95}
             {...shared}

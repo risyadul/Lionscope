@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -156,10 +156,20 @@ export interface SdkOptions {
   stallThresholdMs: number;
   /** StrictMode thread/VM violation reporting (off by default; it changes the app's StrictMode policies). */
   strictMode: boolean;
+  /**
+   * Layout inflation timing (0.4.0, on by default; Android 10+ only). Turning it off stops recording; the SDK's
+   * LayoutInflater factory stays installed on Activities created while it was on (it can't be removed).
+   * Absent on older servers / SDK links below device protocol 3 (read as true).
+   */
+  inflateTracking: boolean;
 }
 
 export const STALL_THRESHOLDS_MS = [100, 150, 250, 500, 1000] as const;
-export const DEFAULT_SDK_OPTIONS: SdkOptions = { stallThresholdMs: 150, strictMode: false };
+export const DEFAULT_SDK_OPTIONS: SdkOptions = {
+  stallThresholdMs: 150,
+  strictMode: false,
+  inflateTracking: true,
+};
 
 export interface SessionState {
   status: SessionStatus;
@@ -264,6 +274,71 @@ export interface StrictModeSample {
   screen: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Layouts (0.4.0): XML inflation timing and view trees, measured by the SDK
+// ---------------------------------------------------------------------------
+
+/**
+ * Layout inflations coalesced per (layout, screen, nested) over one SDK flush window (usually ≤ 1 s; windows held
+ * at cold start or deferred by the SDK's line budget can span up to 10 s), laptop clock. One inflation = one
+ * `LayoutInflater.inflate` of `layout` on the main thread, measured from the first view's creation to the end of
+ * the last one (a lower bound: parser setup is not included). A layout inflated inside another one's inflation
+ * (an `<include>`, or a compound view's own layout) is reported with `nested: true`; its time and views are also
+ * part of the enclosing layout's, so per-screen totals add up `nested: false` samples only.
+ */
+export interface InflateSample {
+  /** Start of the slowest inflation in the window (timeline markers use `ts` + `maxMs`). */
+  ts: number;
+  /** Layout resource entry name, e.g. `fragment_home`; null when the SDK could not resolve it. */
+  layout: string | null;
+  /** Fallback label when `layout` is null: `<FirstViewSimpleClassName>:<xml line>` (ASCII), else null. */
+  label: string | null;
+  /** The layout comes from a library or the framework (`android:` package or a known library prefix like `abc_`). */
+  library: boolean;
+  /** Inflated inside another layout's inflation (its time and views are already counted in that one). */
+  nested: boolean;
+  /** Screen whose view was being created when the layout was inflated, else the top screen; null = unknown. */
+  screen: string | null;
+  /** Inflations of this layout in the window. */
+  count: number;
+  totalMs: number;
+  maxMs: number;
+  /** Views created by the slowest inflation (including views of nested includes). */
+  views: number;
+}
+
+/** Inflations at least this long are drawn as markers on the Main thread lane. */
+export const SLOW_INFLATE_MS = 16;
+
+/** One step of `ViewTreeSample.deepestPath`, root first. */
+export interface ViewPathNode {
+  /** Simple class name, e.g. `ConstraintLayout`. */
+  className: string;
+  /** View id entry name (`R.id` name without package), null when the view has no id. */
+  id: string | null;
+}
+
+export const MAX_VIEW_PATH_NODES = 64;
+export const MAX_VIEW_TREE_CLASSES = 10;
+
+/** Snapshot of a screen's view hierarchy, taken once per screen visit after its first frame (laptop clock). */
+export interface ViewTreeSample {
+  ts: number;
+  /** Screen on top when the snapshot was taken. */
+  screen: string | null;
+  /** Window it was taken from: the Activity's simple class name, or `Dialog · <name>` for dialog windows. */
+  window: string;
+  /** All views in the window's hierarchy, ViewGroups included. */
+  views: number;
+  viewGroups: number;
+  /** Depth of the deepest view (the decor view = 1). */
+  maxDepth: number;
+  /** The path to the deepest view, root first, at most MAX_VIEW_PATH_NODES (cut at the root end). */
+  deepestPath: ViewPathNode[];
+  /** Most frequent view classes, at most MAX_VIEW_TREE_CLASSES, most frequent first. */
+  topClasses: { className: string; count: number }[];
+}
+
 export interface Snapshot {
   cpu: CpuSample[];
   memory: MemorySample[];
@@ -276,6 +351,9 @@ export interface Snapshot {
   /** Phase 3 streams, optional like the Phase 2 ones. */
   stalls?: StallSample[];
   strictMode?: StrictModeSample[];
+  /** 0.4.0 streams, optional like the Phase 2 ones. */
+  inflates?: InflateSample[];
+  viewTrees?: ViewTreeSample[];
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +570,8 @@ export type ServerMessage =
   | { type: 'breakdown'; sample: FrameBreakdownSample }
   | { type: 'stall'; sample: StallSample }
   | { type: 'strictmode'; sample: StrictModeSample }
+  | { type: 'inflate'; sample: InflateSample }
+  | { type: 'viewtree'; sample: ViewTreeSample }
   | { type: 'error'; message: string; code?: string };
 
 export type ServerMessageType = ServerMessage['type'];
@@ -534,7 +614,7 @@ export type ClientMessage =
   | { type: 'startSession'; serial: string; packageName: string }
   | { type: 'stopSession' }
   /** Change SDK options for the current session (partial). The server answers with an updated `session`. */
-  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean };
+  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean; inflateTracking?: boolean };
 
 /** Max accepted size of a dashboard → server frame, in bytes. */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -555,14 +635,16 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 2;
+export const DEVICE_PROTOCOL_VERSION = 3;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
  * v2 adds SDK → server `stall` and `strictmode`, and server → SDK `config`. Neither side sends a v2 type on a
  * link negotiated at 1.
+ * v3 adds SDK → server `inflate` and `viewtree`, and the `config.inflateTracking` field (a v2 SDK ignores it).
  */
 export const DEVICE_PROTOCOL_V2 = 2;
+export const DEVICE_PROTOCOL_V3 = 3;
 /**
  * Highest `hello.protocolVersion` the server accepts (and negotiates down). It bounds the field to a plausible
  * range: anything above is garbage, not a future SDK.
@@ -640,6 +722,32 @@ export type DeviceMessage =
       frames: StackFrame[];
       count: number;
       screen: string | null;
+    }
+  /** v3. Coalesced layout inflations per (layout, screen, nested), at most one per key per flush window. */
+  | {
+      type: 'inflate';
+      ts: number;
+      layout: string | null;
+      label: string | null;
+      library: boolean;
+      nested: boolean;
+      screen: string | null;
+      count: number;
+      totalMs: number;
+      maxMs: number;
+      views: number;
+    }
+  /** v3. A screen's view hierarchy, once per screen visit after its first frame. */
+  | {
+      type: 'viewtree';
+      ts: number;
+      screen: string | null;
+      window: string;
+      views: number;
+      viewGroups: number;
+      maxDepth: number;
+      deepestPath: ViewPathNode[];
+      topClasses: { className: string; count: number }[];
     };
 
 export type DeviceMessageType = DeviceMessage['type'];
@@ -654,4 +762,4 @@ export type GatewayMessage =
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
-  | { type: 'config'; stallThresholdMs: number; strictMode: boolean };
+  | { type: 'config'; stallThresholdMs: number; strictMode: boolean; inflateTracking: boolean };

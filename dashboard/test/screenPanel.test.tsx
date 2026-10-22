@@ -31,6 +31,10 @@ function row(name: string, jankPercent: number): ScreenRow {
     dominant: { stage: 'gpu', ms: 14 },
     stallCount: 0,
     stallMs: 0,
+    inflateMs: 0,
+    inflateCount: 0,
+    slowestInflate: null,
+    viewTree: null,
   };
 }
 

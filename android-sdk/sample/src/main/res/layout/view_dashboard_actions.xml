@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A <merge> include: its buttons land directly in the card's action row. -->
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <Button
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/card_action_details" />
+
+    <Button
+        style="?attr/borderlessButtonStyle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/card_action_share" />
+</merge>

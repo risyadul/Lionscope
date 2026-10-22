@@ -41,4 +41,7 @@ internal interface LinkPort {
      * current connection negotiated v2, checked again when it is written. [sizeHint] ≈ its encoded length.
      */
     fun sendV2(sizeHint: Int, encode: () -> String?)
+
+    /** [sendV2] for v3 messages: dropped unless the connection negotiated v3. */
+    fun sendV3(sizeHint: Int, encode: () -> String?)
 }

@@ -395,11 +395,14 @@ describe('SDK review round 1', () => {
     expect(screen.queryByRole('tab', { name: 'Logcat' })).toBeNull();
     const screensTab = screen.getByRole('tab', { name: /Screens/ });
     expect(screensTab.getAttribute('aria-selected')).toBe('true');
+    const layoutsTab = screen.getByRole('tab', { name: /Layouts/ });
     fireEvent.keyDown(screensTab, { key: 'End' });
-    expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
-    fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'ArrowRight' });
+    expect(layoutsTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(layoutsTab, { key: 'ArrowRight' });
     expect(screensTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(screensTab, { key: 'ArrowLeft' });
+    expect(layoutsTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(layoutsTab, { key: 'ArrowLeft' });
     expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(screen.getByRole('tab', { name: /Stalls/ }), { key: 'Home' });
     expect(screensTab.getAttribute('aria-selected')).toBe('true');

@@ -30,7 +30,7 @@ class JankListFragment : Fragment(R.layout.fragment_list) {
         var slowBind = false
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RowHolder =
-            RowHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false) as TextView)
+            RowHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false))
 
         override fun onBindViewHolder(holder: RowHolder, position: Int) {
             if (slowBind) busyWait(SLOW_BIND_MS)
@@ -47,7 +47,9 @@ class JankListFragment : Fragment(R.layout.fragment_list) {
         }
     }
 
-    private class RowHolder(val text: TextView) : RecyclerView.ViewHolder(text)
+    private class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val text: TextView = view.findViewById(R.id.row_title)
+    }
 
     private companion object {
         const val ROW_COUNT = 1_000

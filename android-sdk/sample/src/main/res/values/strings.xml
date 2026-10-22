@@ -13,6 +13,9 @@
     <string name="jank_toggle">Slow onBindViewHolder (jank)</string>
     <string name="open_detail">Open DetailActivity</string>
     <string name="show_dialog">Show PromoDialogFragment</string>
+    <string name="inflate_off_main">Inflate off the main thread</string>
+    <string name="off_main_async">AsyncLayoutInflater: %1$s</string>
+    <string name="off_main_worker">Worker thread (Activity inflater clone): %1$s</string>
     <string name="more_body">MoreFragment is a child of MoreContainerFragment.</string>
     <string name="detail_body">DetailActivity reports the alias \"detail_page\".</string>
     <string name="dialog_title">Promo</string>
@@ -20,4 +23,17 @@
     <string name="dialog_dismiss">Dismiss</string>
     <string name="status_format">Lionscope %1$s · active: %2$s</string>
     <string name="row_format">Row %1$d</string>
+    <string name="row_subtitle">Several views per row: watch item_row in the Layouts tab</string>
+    <string name="row_badge">New</string>
+    <string name="home_dashboard">Dashboard (deliberately heavy: nested cards through include and merge)</string>
+    <string name="card_title">Weekly summary</string>
+    <string name="card_subtitle">Six cards, each about twenty views</string>
+    <string name="card_value_1">128</string>
+    <string name="card_label_1">Orders</string>
+    <string name="card_value_2">3.4k</string>
+    <string name="card_label_2">Visits</string>
+    <string name="card_value_3">97%</string>
+    <string name="card_label_3">Uptime</string>
+    <string name="card_action_details">Details</string>
+    <string name="card_action_share">Share</string>
 </resources>

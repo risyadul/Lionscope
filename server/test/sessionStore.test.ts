@@ -7,6 +7,7 @@ import type {
   StrictModeSample,
 } from '@lionscope/protocol';
 import { describe, expect, it } from 'vitest';
+import { MAX_CLIENT_BUFFERED_BYTES } from '../src/http/wsGateway.ts';
 import {
   emptySnapshot,
   MAX_EVENT_STREAM_BYTES,
@@ -31,6 +32,101 @@ function setup(windowMs = 10_000, start = 100_000) {
 }
 
 describe('SessionStore', () => {
+  it('keeps the worst-case snapshot below the ws client buffer limit with every stream full', () => {
+    const { store } = setup(3_600_000, 1_000_000);
+    const frame: StackFrame = {
+      className: 'c'.repeat(200),
+      method: 'm'.repeat(200),
+      file: 'f'.repeat(128),
+      line: 1,
+      inApp: true,
+    };
+    const frames = Array.from({ length: MAX_STACK_FRAMES }, () => frame);
+    const fill = (count: number, make: (ts: number) => void) => {
+      for (let i = 0; i < count; i += 1) make(900_000 + i);
+    };
+    fill(6000, (ts) => store.append('cpu', { ts, percent: 100, percentSingleCore: 400, threads: 999 }));
+    fill(6000, (ts) =>
+      store.append('memory', {
+        ts,
+        totalPssKb: 9e9,
+        javaHeapKb: 9e9,
+        nativeHeapKb: 9e9,
+        codeKb: 9e9,
+        stackKb: 9e9,
+        graphicsKb: 9e9,
+        privateOtherKb: 9e9,
+        systemKb: 9e9,
+      }),
+    );
+    fill(6000, (ts) => store.append('events', { ts, kind: 'process_start', pid: 999_999 }));
+    fill(6000, (ts) =>
+      store.append('logs', {
+        ts,
+        pid: 99_999,
+        tid: 99_999,
+        level: 'I',
+        tag: 't'.repeat(64),
+        message: 'm'.repeat(4000),
+      }),
+    );
+    fill(3000, (ts) =>
+      store.append('stalls', {
+        ts,
+        durationMs: 60_000,
+        frames,
+        samples: 1,
+        truncated: true,
+        screen: 's'.repeat(200),
+        debugger: true,
+      }),
+    );
+    fill(3000, (ts) =>
+      store.append('strictMode', {
+        ts,
+        policy: 'thread',
+        violation: 'v'.repeat(128),
+        message: 'm'.repeat(256),
+        frames,
+        count: 1,
+        screen: 's'.repeat(200),
+      }),
+    );
+    fill(3000, (ts) =>
+      store.append('inflates', {
+        ts,
+        layout: 'l'.repeat(200),
+        label: null,
+        library: false,
+        nested: false,
+        screen: 's'.repeat(200),
+        count: 1,
+        totalMs: 1,
+        maxMs: 1,
+        views: 1,
+      }),
+    );
+    const path = Array.from({ length: 64 }, () => ({ className: 'c'.repeat(200), id: 'i'.repeat(200) }));
+    fill(1000, (ts) =>
+      store.append('viewTrees', {
+        ts,
+        screen: 's'.repeat(200),
+        window: 'w'.repeat(200),
+        views: 1,
+        viewGroups: 1,
+        maxDepth: 64,
+        deepestPath: path,
+        topClasses: [],
+      }),
+    );
+    const snapshot = store.snapshot();
+    expect(snapshot.inflates.length).toBeGreaterThan(0);
+    expect(snapshot.viewTrees.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify({ type: 'snapshot', snapshot }))).toBeLessThan(
+      MAX_CLIENT_BUFFERED_BYTES,
+    );
+  });
+
   it('has an empty snapshot with every stream, including the Phase 2 and 3 ones', () => {
     expect(emptySnapshot()).toEqual({
       cpu: [],
@@ -41,6 +137,8 @@ describe('SessionStore', () => {
       breakdown: [],
       stalls: [],
       strictMode: [],
+      inflates: [],
+      viewTrees: [],
       screens: [],
     });
     expect(setup().store.snapshot()).toEqual(emptySnapshot());

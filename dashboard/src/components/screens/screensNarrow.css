@@ -65,3 +65,49 @@
     left: calc(var(--space-3) + 16px);
   }
 }
+
+/* With the Inflate and Views columns (`data-layouts`) the table has two more figures to fit: slow goes
+   first, then p90, then (folded under the screen name) Views, and below a phone-width panel Frames. */
+@container screens (max-width: 760px) {
+  .screens-table[data-layouts] [data-col='slowPercent'] {
+    display: none;
+  }
+}
+
+@container screens (max-width: 640px) {
+  .screens-table[data-layouts] [data-col='typicalP90Ms'] {
+    display: none;
+  }
+}
+
+/* Views joins the line under the name, after the dominant stage. */
+.dominant-views {
+  display: none;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+@container screens (max-width: 540px) {
+  .screens-table[data-layouts] [data-col='views'] {
+    display: none;
+  }
+
+  .screens-table[data-layouts] .dominant-views {
+    display: inline;
+  }
+
+  .screens-table[data-layouts] td[data-col='dominant'] {
+    white-space: nowrap;
+  }
+
+  .screens-table[data-layouts] .dominant-views {
+    margin-left: var(--space-2);
+  }
+}
+
+@container screens (max-width: 430px) {
+  .screens-table[data-layouts] [data-col='frames'],
+  .screens-table[data-layouts] .dominant-depth {
+    display: none;
+  }
+}

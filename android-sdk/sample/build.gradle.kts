@@ -49,6 +49,7 @@ dependencies {
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.recyclerview)
     implementation(libs.androidx.viewpager)
+    implementation(libs.androidx.asynclayoutinflater)
     implementation(libs.material)
 
     debugImplementation(project(":lionscope"))

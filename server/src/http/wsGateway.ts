@@ -195,9 +195,9 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         send(ws, { type: 'session', session: await manager.stopSession() });
         return;
       case 'setSdkOptions': {
-        const { stallThresholdMs, strictMode } = message;
+        const { stallThresholdMs, strictMode, inflateTracking } = message;
         // Answered by the `session` broadcast that carries the new options.
-        if (!manager.setSdkOptions({ stallThresholdMs, strictMode })) {
+        if (!manager.setSdkOptions({ stallThresholdMs, strictMode, inflateTracking })) {
           send(ws, { type: 'error', code: 'no_session', message: NO_SESSION_MESSAGE });
         }
         return;

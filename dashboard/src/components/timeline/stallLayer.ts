@@ -1,5 +1,7 @@
 /** Canvas marks for the Main thread lane: one bar per stall, StrictMode diamonds on the rail below. */
 import uPlot from 'uplot';
+import type { InflateSample } from '@lionscope/protocol/wire';
+import { inflateKey } from '../../lib/layouts.ts';
 import { MIN_BAR_PX, stallColor, type FeedItem } from '../../lib/stalls.ts';
 import { mixHex, type ChartTheme } from '../../lib/theme.ts';
 import { drawClipCaret, type MarkLayer } from './uplotOptions.ts';
@@ -13,6 +15,9 @@ export interface StallLayerInput {
   violations: readonly ViolationItem[];
   selectedKey: string | null;
   hoveredKey: string | null;
+  /** Slow layout inflations (`maxMs` ≥ SLOW_INFLATE_MS), ascending by `ts`. */
+  inflates: readonly InflateSample[];
+  hoveredInflateKey: string | null;
 }
 
 /** Debugger stalls: a washed-out gray with 45° hatching, so a breakpoint never reads as app work. */
@@ -20,6 +25,10 @@ const DEBUG_FILL_MIX = 0.55;
 const HATCH_SPACING_PX = 4;
 const BAR_RADIUS_PX = 2;
 const DIAMOND_RADIUS_PX = 4;
+/** Inflation pills: a thin bar just under the baseline, drawn at least this wide. */
+const INFLATE_PILL_PX = 5;
+const INFLATE_PILL_OFFSET_PX = 3;
+const INFLATE_MIN_WIDTH_PX = 4;
 
 interface Box {
   x: number;
@@ -145,13 +154,14 @@ function drawGuide(ctx: CanvasRenderingContext2D, box: Box, top: number, color: 
   ctx.restore();
 }
 
-function drawViolations(u: uPlot, input: StallLayerInput, theme: ChartTheme, base: number): void {
+function drawViolations(u: uPlot, input: StallLayerInput, theme: ChartTheme): void {
   const { ctx, bbox } = u;
   const c = theme.colors;
   const px = uPlot.pxRatio;
   const bottom = bbox.top + bbox.height;
-  const y = Math.round(base + (bottom - base) / 2);
   const r = DIAMOND_RADIUS_PX * px;
+  // The lower row of the rail, under the inflation pills.
+  const y = Math.round(bottom - r - 3 * px);
   const marked: { x: number; isSelected: boolean }[] = [];
   ctx.lineWidth = 2 * px;
   ctx.strokeStyle = c.surface;
@@ -173,6 +183,37 @@ function drawViolations(u: uPlot, input: StallLayerInput, theme: ChartTheme, bas
   }
 }
 
+/** Slow inflations: gold pills spanning start..start+duration, on the rail row right under the baseline. */
+function drawInflates(u: uPlot, input: StallLayerInput, theme: ChartTheme, base: number): void {
+  const { ctx, bbox } = u;
+  const c = theme.colors;
+  const px = uPlot.pxRatio;
+  const right = bbox.left + bbox.width;
+  const top = base + Math.round(INFLATE_PILL_OFFSET_PX * px);
+  const height = Math.round(INFLATE_PILL_PX * px);
+  const minWidth = Math.round(INFLATE_MIN_WIDTH_PX * px);
+  const gap = Math.max(1, Math.round(px));
+  let prevRight = -Infinity;
+  let hovered: Box | null = null;
+  ctx.fillStyle = c.inflate;
+  for (const item of input.inflates) {
+    const x0 = Math.round(u.valToPos(item.ts / 1000, 'x', true));
+    const x1 = Math.round(u.valToPos((item.ts + item.maxMs) / 1000, 'x', true));
+    const width = Math.max(minWidth, x1 - x0);
+    if (x0 + width < bbox.left || x0 > right) continue;
+    // Touching pills keep a surface gap between them instead of merging into one bar.
+    const x = x0 <= prevRight ? x0 + gap : x0;
+    const box: Box = { x, top, width: Math.max(px, x0 + width - x), height };
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') ctx.roundRect(box.x, box.top, box.width, box.height, 2 * px);
+    else ctx.rect(box.x, box.top, box.width, box.height);
+    ctx.fill();
+    prevRight = x0 + width;
+    if (inflateKey(item) === input.hoveredInflateKey) hovered = box;
+  }
+  if (hovered !== null) outline(ctx, hovered, c.ink2, px, c.surface);
+}
+
 export function createStallLayer(input: StallLayerInput): MarkLayer {
   return {
     draw(u, theme) {
@@ -183,7 +224,8 @@ export function createStallLayer(input: StallLayerInput): MarkLayer {
       ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
       ctx.clip();
       drawStalls(u, input, theme, base);
-      drawViolations(u, input, theme, base);
+      drawInflates(u, input, theme, base);
+      drawViolations(u, input, theme);
       ctx.restore();
     },
   };

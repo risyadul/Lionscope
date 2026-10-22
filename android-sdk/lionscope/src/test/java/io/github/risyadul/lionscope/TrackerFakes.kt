@@ -36,6 +36,7 @@ internal class FakeLink : LinkPort {
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
     val v2Lines = ArrayList<String>()
+    val v3Lines = ArrayList<String>()
     var failure: Throwable? = null
 
     override var isWelcomed = false
@@ -64,6 +65,11 @@ internal class FakeLink : LinkPort {
     /** Encodes right away, as the link thread would. */
     override fun sendV2(sizeHint: Int, encode: () -> String?) {
         encode()?.let { v2Lines += it }
+    }
+
+    /** Encodes right away, as the link thread would. */
+    override fun sendV3(sizeHint: Int, encode: () -> String?) {
+        encode()?.let { v3Lines += it }
     }
 
     fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION) {

@@ -89,11 +89,11 @@ describe('ProfilingSession SDK options', () => {
     session.attachSdk(HELLO_V2, pending); // its PID check takes a second
 
     session.setSdkOptions({ strictMode: true });
-    const strict = { stallThresholdMs: 150, strictMode: true };
+    const strict = { stallThresholdMs: 150, strictMode: true, inflateTracking: true };
     expect(session.state.sdk?.options).toEqual(strict);
     expect(ofType('session').at(-1)?.session.sdk?.options).toEqual(strict);
     session.setSdkOptions({ stallThresholdMs: 500, strictMode: undefined });
-    const latest = { stallThresholdMs: 500, strictMode: true };
+    const latest = { stallThresholdMs: 500, strictMode: true, inflateTracking: true };
     expect(session.state.sdk?.options).toEqual(latest);
     await vi.advanceTimersByTimeAsync(CONFIG_DEBOUNCE_MS - 1);
     expect(live.link.configs).toEqual([DEFAULT_SDK_OPTIONS]);
@@ -121,7 +121,11 @@ describe('ProfilingSession SDK options', () => {
     expect(next.link.configs).toEqual([latest]);
     const count = ofType('session').length;
     session.setSdkOptions({ stallThresholdMs: 1000 });
-    expect(session.state.sdk?.options).toEqual({ stallThresholdMs: 500, strictMode: false });
+    expect(session.state.sdk?.options).toEqual({
+      stallThresholdMs: 500,
+      strictMode: false,
+      inflateTracking: true,
+    });
     expect(ofType('session')).toHaveLength(count);
   });
 
@@ -245,14 +249,14 @@ describe('ProfilingSession stalls and StrictMode', () => {
       { type: 'error', code: 'collector_error', message: SDK_EVENT_CLOCK_MESSAGE },
     ]);
     const lines = () =>
-      warn.mock.calls.map((call) => String(call[0])).filter((text) => text.includes('stall/StrictMode'));
+      warn.mock.calls.map((call) => String(call[0])).filter((text) => text.includes('dropped an SDK'));
     expect(lines()).toHaveLength(1);
-    expect(lines()[0]).toContain('dropped an SDK stall/StrictMode event 1000 ms behind the accepted window');
+    expect(lines()[0]).toContain('dropped an SDK stall event 1000 ms behind the accepted window');
     expect(lines()[0]).toContain('clock offset 5000 ms');
 
     await vi.advanceTimersByTimeAsync(ERROR_REPORT_TTL_MS);
     handler.onMessage(strictMode(-2500));
-    expect(lines().at(-1)).toContain('500 ms ahead of the accepted window');
+    expect(lines().at(-1)).toContain('dropped an SDK strictmode event 500 ms ahead of the accepted window');
     session.stop();
   });
 

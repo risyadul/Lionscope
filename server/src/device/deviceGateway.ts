@@ -82,6 +82,7 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   let ignoredMessages = 0;
   let unnegotiatedMessages = 0;
   let invalidDiagnostics = 0;
+  let shedDiagnostics = 0;
 
   const warn = (reason: string): void => {
     if (warnings.shouldReport(reason)) log.warn(`Device gateway: closed a connection (${reason})`);
@@ -108,6 +109,14 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
     if (!warnings.shouldReport('invalid diagnostic')) return;
     log.warn(
       `Device gateway: dropped an invalid SDK ${type} message (${error.slice(0, 200)}), ${invalidDiagnostics} so far`,
+    );
+  };
+
+  const shedDiagnostic = (type: string): void => {
+    shedDiagnostics += 1;
+    if (!warnings.shouldReport('shed diagnostic')) return;
+    log.warn(
+      `Device gateway: dropped an SDK ${type} message over the line rate limit, ${shedDiagnostics} so far`,
     );
   };
 
@@ -140,6 +149,7 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
       ignore,
       skipUnnegotiated,
       dropDiagnostic,
+      shedDiagnostic,
       admit,
     });
   });
@@ -175,7 +185,24 @@ function gatewayLine(message: GatewayMessage): string {
 }
 
 function configMessage(options: SdkOptions): GatewayMessage {
-  return { type: 'config', stallThresholdMs: options.stallThresholdMs, strictMode: options.strictMode };
+  return {
+    type: 'config',
+    stallThresholdMs: options.stallThresholdMs,
+    strictMode: options.strictMode,
+    inflateTracking: options.inflateTracking,
+  };
+}
+
+const DIAGNOSTIC_TYPES: ReadonlySet<string> = new Set(['stall', 'strictmode', 'inflate', 'viewtree']);
+const TYPE_PREFIX = '{"type":"';
+const MAX_PEEKED_TYPE_LENGTH = 16;
+
+/** The `type` of a line without parsing it: the SDK writes it first. Null when the line does not start so. */
+function peekType(line: string): string | null {
+  if (!line.startsWith(TYPE_PREFIX)) return null;
+  const end = line.indexOf('"', TYPE_PREFIX.length);
+  if (end === -1 || end - TYPE_PREFIX.length > MAX_PEEKED_TYPE_LENGTH) return null;
+  return line.slice(TYPE_PREFIX.length, end);
 }
 
 function endSocket(socket: Socket, message?: GatewayMessage): void {
@@ -195,12 +222,14 @@ interface ConnectionContext {
   skipUnnegotiated: (type: string, since: number, negotiated: number) => void;
   /** A diagnostic (`stall` / `strictmode`) failed validation (dropped, counted; the link stays up). */
   dropDiagnostic: (type: string, error: string) => void;
+  /** A diagnostic line over the connection's line budget was dropped (counted; the link stays up). */
+  shedDiagnostic: (type: string) => void;
   /** A valid hello arrived: move the socket to the link pool, or say why not. */
   admit: () => ByeReason | null;
 }
 
 function serveConnection(socket: Socket, context: ConnectionContext): void {
-  const { target, limits, warn, ignore, skipUnnegotiated, dropDiagnostic } = context;
+  const { target, limits, warn, ignore, skipUnnegotiated, dropDiagnostic, shedDiagnostic } = context;
   const bucket = new TokenBucket(limits.lineBurst, limits.linesPerSecond, context.now);
   let partial: Buffer[] = [];
   let partialBytes = 0;
@@ -260,11 +289,16 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   };
 
   const onLine = (raw: string): void => {
-    if (!bucket.take()) {
-      warn('rate limit');
-      return close('protocol_error');
-    }
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (!bucket.take()) {
+      // Diagnostics are droppable: an over-budget one is counted, not fatal. Anything else closes the link.
+      const type = handler ? peekType(line) : null;
+      if (type === null || !DIAGNOSTIC_TYPES.has(type)) {
+        warn('rate limit');
+        return close('protocol_error');
+      }
+      return shedDiagnostic(type);
+    }
     if (!handler) return onHello(line);
     const parsed = parseDeviceMessage(line, protocolVersion);
     if (!parsed.ok && parsed.unknownType !== undefined) return ignore(parsed.unknownType);

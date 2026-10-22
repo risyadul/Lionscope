@@ -1,0 +1,42 @@
+/* Layouts table in a narrow side panel (container `layouts`, declared in layouts.css). Loaded after it:
+   the screen-count column goes first (the names are under each layout), then mean, then views. */
+
+@container layouts (max-width: 600px) {
+  .layouts-table [data-col='screenCount'] {
+    display: none;
+  }
+
+  .layouts-table td[data-col='views'] {
+    padding-right: var(--space-4);
+  }
+}
+
+@container layouts (max-width: 500px) {
+  .layouts-table [data-col='meanMs'] {
+    display: none;
+  }
+}
+
+@container layouts (max-width: 420px) {
+  .layouts-table [data-col='views'] {
+    display: none;
+  }
+
+  .layouts-table td[data-col='maxMs'] {
+    padding-right: var(--space-4);
+  }
+}
+
+/* Phone-width panel: tighter gutters buy the layout name a few more characters. */
+@container layouts (max-width: 340px) {
+  .layouts-table tbody th,
+  .layouts-table td,
+  .layouts-table .sort-btn {
+    padding-inline: 5px;
+  }
+
+  .layouts-table tbody th[data-col='name'],
+  .layouts-table th[data-col='name'] .sort-btn {
+    padding-left: var(--space-3);
+  }
+}

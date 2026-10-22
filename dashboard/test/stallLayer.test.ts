@@ -84,7 +84,14 @@ describe('createStallLayer', () => {
 
   it('paints each stall in its severity color, debugger stalls washed gray, violations as teal', () => {
     const { ctx, fills } = recordingContext();
-    createStallLayer({ stalls, violations, selectedKey: null, hoveredKey: null }).draw(plot(ctx), theme);
+    createStallLayer({
+      stalls,
+      violations,
+      selectedKey: null,
+      hoveredKey: null,
+      inflates: [],
+      hoveredInflateKey: null,
+    }).draw(plot(ctx), theme);
     const bars = fills.filter(
       (f) => f.kind === 'path' && f.style !== FALLBACK_COLORS.strictMode && f.style !== FALLBACK_COLORS.ink,
     );
@@ -106,10 +113,14 @@ describe('createStallLayer', () => {
       [],
       window,
     ).reverse() as StallItem[];
-    createStallLayer({ stalls: close, violations: [], selectedKey: null, hoveredKey: null }).draw(
-      plot(ctx),
-      theme,
-    );
+    createStallLayer({
+      stalls: close,
+      violations: [],
+      selectedKey: null,
+      hoveredKey: null,
+      inflates: [],
+      hoveredInflateKey: null,
+    }).draw(plot(ctx), theme);
     expect(
       fills.filter((f) => f.kind === 'rect' && f.style === FALLBACK_COLORS.surface).map((f) => f.x),
     ).toEqual([130]);
@@ -119,7 +130,14 @@ describe('createStallLayer', () => {
     const { ctx, outlines } = recordingContext();
     const selectedKey = stalls[1]!.key;
     const hoveredKey = stalls[0]!.key;
-    createStallLayer({ stalls, violations, selectedKey, hoveredKey }).draw(plot(ctx), theme);
+    createStallLayer({
+      stalls,
+      violations,
+      selectedKey,
+      hoveredKey,
+      inflates: [],
+      hoveredInflateKey: null,
+    }).draw(plot(ctx), theme);
     // Each ring is a surface halo, then the colored stroke.
     expect(outlines.map((o) => o.style)).toEqual([
       FALLBACK_COLORS.surface,

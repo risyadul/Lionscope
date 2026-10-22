@@ -33,6 +33,14 @@
   transform: rotate(45deg);
 }
 
+/* A slow layout inflation: a short gold bar, like the pill on the lane's rail. */
+.stall-glyph[data-kind='inflate'] {
+  width: 11px;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--viz-inflate);
+}
+
 /* Debugger attached: washed gray with 45° hatching, as on the canvas. */
 .stall-glyph[data-kind='debugger'],
 .stall-glyph[data-color='stallDebug'] {

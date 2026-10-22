@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_V3,
   isValidAvdName,
   isValidPackageName,
   isValidProcessName,
@@ -19,6 +20,8 @@ import {
   MAX_SCREEN_WHEEL_DELTA,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
+  MAX_VIEW_PATH_NODES,
+  MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
   MIN_DEVICE_PROTOCOL_VERSION,
   parseClientMessage,
@@ -106,7 +109,11 @@ describe('parseClientMessage', () => {
       ok: true,
       value: { type: 'setSdkOptions', strictMode: true },
     });
-    expect(parse({ stallThresholdMs: 500, strictMode: false }).ok).toBe(true);
+    expect(parse({ inflateTracking: false })).toEqual({
+      ok: true,
+      value: { type: 'setSdkOptions', inflateTracking: false },
+    });
+    expect(parse({ stallThresholdMs: 500, strictMode: false, inflateTracking: true }).ok).toBe(true);
   });
 
   it('rejects setSdkOptions without options, with an unlisted threshold or with extra fields', () => {
@@ -116,6 +123,8 @@ describe('parseClientMessage', () => {
       expect(parse({ stallThresholdMs }).ok).toBe(false);
     }
     expect(parse({ strictMode: 'yes' }).ok).toBe(false);
+    expect(parse({ inflateTracking: 'no' }).ok).toBe(false);
+    expect(parse({ inflateTracking: 1 }).ok).toBe(false);
     expect(parse({ strictMode: true, extra: 1 }).ok).toBe(false);
   });
 
@@ -391,13 +400,13 @@ describe('parseDeviceMessage', () => {
   };
 
   it('parses every golden fixture line to exactly its JSON value', () => {
-    expect(GOLDEN_LINES.length).toBeGreaterThanOrEqual(7);
+    expect(GOLDEN_LINES.length).toBeGreaterThanOrEqual(10);
     for (const line of GOLDEN_LINES) {
       expect(parseDeviceMessage(line)).toEqual({ ok: true, value: JSON.parse(line) });
     }
     const types = GOLDEN_LINES.map((line) => (JSON.parse(line) as DeviceMessage).type);
     expect(new Set(types)).toEqual(
-      new Set(['hello', 'screen', 'frames', 'heartbeat', 'stall', 'strictmode']),
+      new Set(['hello', 'screen', 'frames', 'heartbeat', 'stall', 'strictmode', 'inflate', 'viewtree']),
     );
   });
 
@@ -716,6 +725,119 @@ describe('parseDeviceMessage', () => {
       expect(parsed({ message: 'm'.repeat(256) })).not.toBeNull();
       expect(parsed({ message: 'm'.repeat(257) })).toBeNull();
       expect(parsed({ violation: 'v'.repeat(129) })).toBeNull();
+    });
+  });
+
+  describe('v3 inflate and viewtree', () => {
+    const inflate = {
+      type: 'inflate',
+      ts: 1792516375260,
+      layout: 'fragment_home',
+      label: null,
+      library: false,
+      nested: false,
+      screen: 'homepage',
+      count: 1,
+      totalMs: 18.4,
+      maxMs: 18.4,
+      views: 42,
+    };
+    const viewtree = {
+      type: 'viewtree',
+      ts: 1792516375400,
+      screen: null,
+      window: 'MainActivity',
+      views: 137,
+      viewGroups: 41,
+      maxDepth: 14,
+      deepestPath: [
+        { className: 'DecorView', id: null },
+        { className: 'FrameLayout', id: 'content' },
+      ],
+      topClasses: [{ className: 'MaterialTextView', count: 38 }],
+    };
+    const error = (value: object) => errorOf(JSON.stringify(value));
+
+    it('parses both, stripping unknown fields at every level', () => {
+      expect(parseDeviceMessage(JSON.stringify(inflate))).toEqual({ ok: true, value: inflate });
+      expect(parseDeviceMessage(JSON.stringify(viewtree))).toEqual({ ok: true, value: viewtree });
+      const extended = {
+        ...viewtree,
+        cpu: 1,
+        deepestPath: [{ className: 'DecorView', id: null, extra: true }],
+      };
+      expect(parseDeviceMessage(JSON.stringify(extended))).toEqual({
+        ok: true,
+        value: { ...viewtree, deepestPath: [{ className: 'DecorView', id: null }] },
+      });
+    });
+
+    it('flags them as unnegotiated below v3, without validating them', () => {
+      for (const message of [inflate, viewtree, { type: 'viewtree' }]) {
+        for (const version of [MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_V2]) {
+          expect(parseDeviceMessage(JSON.stringify(message), version)).toEqual({
+            ok: false,
+            error: `${message.type} needs protocol version 3`,
+            unnegotiated: { type: message.type, since: DEVICE_PROTOCOL_V3 },
+          });
+        }
+      }
+      expect(parseDeviceMessage(JSON.stringify(inflate), DEVICE_PROTOCOL_V3).ok).toBe(true);
+    });
+
+    it('flags invalid ones as skippable diagnostics', () => {
+      for (const message of [{ ...inflate, count: 0 }, { type: 'viewtree' }]) {
+        expect(parseDeviceMessage(JSON.stringify(message), DEVICE_PROTOCOL_V3)).toMatchObject({
+          ok: false,
+          invalidDiagnostic: message.type,
+        });
+      }
+    });
+
+    it('bounds inflate numbers and strings', () => {
+      expect(error({ ...inflate, layout: null, label: 'LinearLayout:7' })).toBeNull();
+      expect(error({ ...inflate, layout: 'l'.repeat(200) })).toBeNull();
+      expect(error({ ...inflate, layout: 'l'.repeat(201) })).not.toBeNull();
+      expect(error({ ...inflate, layout: 'bad\nname' })).toContain('control or format');
+      expect(error({ ...inflate, screen: 's'.repeat(201) })).not.toBeNull();
+      expect(error({ ...inflate, count: 1_000_000 })).toBeNull();
+      for (const bad of [{ count: 0 }, { count: 1_000_001 }, { count: 1.5 }]) {
+        expect(error({ ...inflate, ...bad })).not.toBeNull();
+      }
+      expect(error({ ...inflate, totalMs: 60_000, maxMs: 0, views: 0 })).toBeNull();
+      for (const bad of [
+        { totalMs: 60_001 },
+        { maxMs: -1 },
+        { maxMs: null },
+        { views: -1 },
+        { views: 1.5 },
+      ]) {
+        expect(error({ ...inflate, ...bad })).not.toBeNull();
+      }
+      expect(error({ ...inflate, library: 'no' })).not.toBeNull();
+      expect(error({ ...inflate, nested: true })).toBeNull();
+      expect(error({ ...inflate, nested: 1 })).not.toBeNull();
+      const { nested: _nested, ...withoutNested } = inflate;
+      expect(error(withoutNested)).not.toBeNull();
+      expect(error({ ...inflate, ts: 0 })).not.toBeNull();
+    });
+
+    it('bounds the view tree path, classes and counts', () => {
+      const node = { className: 'View', id: null };
+      const path = (count: number) => Array.from({ length: count }, () => node);
+      expect(error({ ...viewtree, deepestPath: path(MAX_VIEW_PATH_NODES) })).toBeNull();
+      expect(error({ ...viewtree, deepestPath: path(MAX_VIEW_PATH_NODES + 1) })).not.toBeNull();
+      const classes = (count: number) =>
+        Array.from({ length: count }, () => ({ className: 'View', count: 1 }));
+      expect(error({ ...viewtree, topClasses: classes(MAX_VIEW_TREE_CLASSES) })).toBeNull();
+      expect(error({ ...viewtree, topClasses: classes(MAX_VIEW_TREE_CLASSES + 1) })).not.toBeNull();
+      expect(error({ ...viewtree, topClasses: [{ className: 'View', count: 0 }] })).not.toBeNull();
+      expect(error({ ...viewtree, deepestPath: [{ className: 'x'.repeat(201), id: null }] })).not.toBeNull();
+      expect(error({ ...viewtree, deepestPath: [{ className: 'View', id: '' }] })).not.toBeNull();
+      expect(error({ ...viewtree, window: '' })).not.toBeNull();
+      for (const bad of [{ views: -1 }, { viewGroups: 1_000_001 }, { maxDepth: 1.5 }]) {
+        expect(error({ ...viewtree, ...bad })).not.toBeNull();
+      }
     });
   });
 

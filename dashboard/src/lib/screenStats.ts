@@ -1,6 +1,7 @@
 /** Per-screen aggregation of SDK frame breakdown samples for the screens table. */
-import type { FrameBreakdownSample, FrameStage } from '@lionscope/protocol/wire';
+import type { FrameBreakdownSample, FrameStage, ViewTreeSample } from '@lionscope/protocol/wire';
 import { FRAME_STAGES } from '@lionscope/protocol/wire';
+import type { ScreenInflate } from './layouts.ts';
 
 export interface StageShare {
   stage: FrameStage;
@@ -30,9 +31,16 @@ export interface ScreenRow {
   /** Main-thread stalls on this screen in the window (debugger stalls excluded); 0 until attached. */
   stallCount: number;
   stallMs: number;
+  /** Layout inflation on this screen in the window (0 / null until attached). */
+  inflateMs: number;
+  inflateCount: number;
+  slowestInflate: { name: string; ms: number } | null;
+  /** The screen's latest view tree; null when none was taken. */
+  viewTree: ViewTreeSample | null;
 }
 
-export type ScreenSortKey = 'name' | 'frames' | 'jankPercent' | 'slowPercent' | 'typicalP90Ms' | 'stallCount';
+export type ScreenSortKey =
+  'name' | 'frames' | 'jankPercent' | 'slowPercent' | 'typicalP90Ms' | 'stallCount' | 'inflateMs' | 'views';
 
 /** Buckets with fewer frames than this say little about a p90 and are left out of the typical one. */
 export const MIN_P90_BUCKET_FRAMES = 3;
@@ -123,6 +131,10 @@ export function aggregateScreens(
       dominant: dominantStage(stageMs),
       stallCount: 0,
       stallMs: 0,
+      inflateMs: 0,
+      inflateCount: 0,
+      slowestInflate: null,
+      viewTree: null,
     };
   });
 }
@@ -138,10 +150,37 @@ export function withStallCounts(
   });
 }
 
+/** Copies of `rows` carrying each screen's inflation totals and latest view tree. */
+export function withLayoutStats(
+  rows: readonly ScreenRow[],
+  inflates: ReadonlyMap<string, ScreenInflate>,
+  viewTrees: ReadonlyMap<string, ViewTreeSample>,
+): ScreenRow[] {
+  return rows.map((row) => {
+    if (row.name === null) return row;
+    const inflate = inflates.get(row.name);
+    return {
+      ...row,
+      inflateMs: inflate?.totalMs ?? 0,
+      inflateCount: inflate?.count ?? 0,
+      slowestInflate: inflate?.slowest ?? null,
+      viewTree: viewTrees.get(row.name) ?? null,
+    };
+  });
+}
+
 function compareRows(a: ScreenRow, b: ScreenRow, key: ScreenSortKey, sign: number): number {
   if (key === 'name') return sign * (a.name ?? '').localeCompare(b.name ?? '');
   // Equal counts rank by blocked time.
   if (key === 'stallCount') return sign * (a.stallCount - b.stallCount || a.stallMs - b.stallMs);
+  if (key === 'inflateMs') return sign * (a.inflateMs - b.inflateMs);
+  // Screens without a view tree sort last in either direction.
+  if (key === 'views') {
+    const aViews = a.viewTree?.views ?? null;
+    const bViews = b.viewTree?.views ?? null;
+    if (aViews === null || bViews === null) return aViews === bViews ? 0 : aViews === null ? 1 : -1;
+    return sign * (aViews - bViews);
+  }
   const av = a[key];
   const bv = b[key];
   // Rows without a value sort last in either direction.

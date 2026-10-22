@@ -8,10 +8,12 @@ import { LogcatDrawer } from './components/layout/LogcatDrawer.tsx';
 import { LogcatPanel } from './components/logcat/LogcatPanel.tsx';
 import { ScreenPanel } from './components/screens/ScreenPanel.tsx';
 import { SidePanel, type SideTab } from './components/side/SidePanel.tsx';
+import { LayoutsPanel } from './components/layouts/LayoutsPanel.tsx';
 import { StallsPanel } from './components/stalls/StallsPanel.tsx';
 import { StatStrip } from './components/stats/StatStrip.tsx';
 import { WindowControls } from './components/stats/WindowControls.tsx';
 import { ConnectionBanner, ErrorBanner, SoftwareRendererBanner } from './components/states/Banners.tsx';
+import { INFLATE_UPDATE_HINT } from './components/stalls/StallControls.tsx';
 import { EmptyState } from './components/states/EmptyState.tsx';
 import { Timeline } from './components/timeline/Timeline.tsx';
 import { EmulatorActions } from './components/topbar/EmulatorActions.tsx';
@@ -26,15 +28,18 @@ import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
 import { formatInteger } from './lib/format.ts';
-import { aggregateScreens, withStallCounts } from './lib/screenStats.ts';
+import { inflatesInWindow, inflateByScreen, latestViewTrees } from './lib/layouts.ts';
+import { aggregateScreens, withLayoutStats, withStallCounts } from './lib/screenStats.ts';
 import { countEventsInWindow, findFeedItem, stallsByScreen } from './lib/stalls.ts';
 import { aggregateFrames, computeStats } from './lib/stats.ts';
 import { isProtocolMismatch } from './lib/store.ts';
 import {
   captureView,
   hasSeries,
+  isLayoutCapable,
   isSessionActive,
   isStallCapable,
+  layoutsEmptyState,
   screensEmptyState,
   sdkOptionsBlocker,
   stallsEmptyState,
@@ -145,13 +150,19 @@ export function App() {
   // Selecting a screen never switches the side panel's tab; "View in Screens" does.
   const viewScreens = useCallback(() => setSideTab('screens'), []);
   const viewStalls = useCallback(() => setSideTab('stalls'), []);
+  const viewLayouts = useCallback(() => setSideTab('layouts'), []);
   const selectStall = useCallback((key: string) => {
     setSelectedStall(key);
     setSideTab('stalls');
   }, []);
 
   const sdk = state.session.sdk;
-  const sdkOptions = sdk?.options ?? DEFAULT_SDK_OPTIONS;
+  // Servers older than 0.4.0 send options without `inflateTracking`: read as on.
+  const serverOptions = sdk?.options;
+  const sdkOptions = useMemo<SdkOptions>(
+    () => (serverOptions === undefined ? DEFAULT_SDK_OPTIONS : { ...DEFAULT_SDK_OPTIONS, ...serverOptions }),
+    [serverOptions],
+  );
   const optionsControl = useSdkOptions({
     send,
     options: sdkOptions,
@@ -187,11 +198,15 @@ export function App() {
   const startTs = endTs - windowMs;
   const screenRows = useMemo(
     () =>
-      withStallCounts(
-        aggregateScreens(series.breakdown, startTs, endTs),
-        stallsByScreen(series.stalls, startTs, endTs),
+      withLayoutStats(
+        withStallCounts(
+          aggregateScreens(series.breakdown, startTs, endTs),
+          stallsByScreen(series.stalls, startTs, endTs),
+        ),
+        inflateByScreen(series.inflates, startTs, endTs),
+        latestViewTrees(series.viewTrees, endTs),
       ),
-    [series.breakdown, series.stalls, startTs, endTs],
+    [series.breakdown, series.stalls, series.inflates, series.viewTrees, startTs, endTs],
   );
   const hasStallData = series.stalls.length > 0 || series.strictMode.length > 0;
   const isStallDetailOpen =
@@ -204,7 +219,23 @@ export function App() {
     else setSelectedScreen(null);
   };
   useEscape(isStallDetailOpen || selectedScreen !== null, handleEscape);
-  const showMainThread = (isActive && isStallCapable(sdk)) || hasStallData;
+  const hasInflateData = series.inflates.length > 0;
+  const showMainThread = (isActive && isStallCapable(sdk)) || hasStallData || hasInflateData;
+  const showLayouts = (isActive && isLayoutCapable(sdk)) || hasInflateData || series.viewTrees.length > 0;
+  const layoutTabCount = useMemo(
+    () =>
+      new Set(inflatesInWindow(series.inflates, startTs, endTs, false).map((s) => s.layout ?? s.label)).size,
+    [series.inflates, startTs, endTs],
+  );
+  const layoutsEmpty = layoutsEmptyState({
+    hasItems: inflatesInWindow(series.inflates, startTs, endTs).length > 0,
+    hasAnyData: hasInflateData,
+    isSessionActive: isActive,
+    sdk,
+    sdkLinkError: state.sdkLinkError,
+    isTrackingOn: sdkOptions.inflateTracking,
+  });
+  const inflateBlocker = optionsBlocker === null && !isLayoutCapable(sdk) ? INFLATE_UPDATE_HINT : null;
   const stallTabCount = countEventsInWindow(series.stalls, series.strictMode, startTs, endTs);
   const stallsEmpty = stallsEmptyState({
     hasItems: stallTabCount > 0,
@@ -317,6 +348,7 @@ export function App() {
             breakdown={series.breakdown}
             stalls={series.stalls}
             strictMode={series.strictMode}
+            inflates={series.inflates}
             showScreens={showScreens}
             showBreakdown={showBreakdown}
             showMainThread={showMainThread}
@@ -325,6 +357,8 @@ export function App() {
             selectedStall={selectedStall}
             onSelectStall={selectStall}
             onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
+            onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
+            isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
             isSdkConnected={isSdkConnected}
             selectedScreen={selectedScreen}
             onSelectScreen={setSelectedScreen}
@@ -359,6 +393,7 @@ export function App() {
           onTabChange={setSideTab}
           screenCount={screenRows.length}
           stallCount={stallTabCount}
+          layoutCount={layoutTabCount}
           screens={
             <ScreenPanel
               rows={screenRows}
@@ -366,6 +401,7 @@ export function App() {
               selected={selectedScreen}
               onSelect={setSelectedScreen}
               showStalls={showMainThread}
+              showLayouts={showLayouts}
             />
           }
           stalls={
@@ -379,8 +415,23 @@ export function App() {
               optionsBlocker={optionsBlocker}
               isOptionsPending={optionsControl.isPending}
               onOptionsChange={changeOptions}
+              inflateBlocker={inflateBlocker}
               selectedKey={selectedStall}
               onSelect={setSelectedStall}
+            />
+          }
+          layouts={
+            <LayoutsPanel
+              inflates={series.inflates}
+              fromTs={startTs}
+              toTs={endTs}
+              empty={layoutsEmpty}
+              isTrackingOff={isActive && isLayoutCapable(sdk) && !sdkOptions.inflateTracking}
+              onEnableTracking={
+                optionsBlocker === null && isLayoutCapable(sdk)
+                  ? () => changeOptions({ inflateTracking: true })
+                  : undefined
+              }
             />
           }
         />

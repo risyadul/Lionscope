@@ -248,6 +248,13 @@ td[data-col='jankPercent'] {
   box-shadow: inset 0 -2px 0 var(--viz-stall-2);
 }
 
+/* A screen whose layouts hit the slow-inflate mark: ink figure over an inflate-colored rule. */
+.inflate-total[data-flag] {
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--viz-inflate);
+}
+
 td[data-col='dominant'] {
   padding-right: var(--space-4);
   text-align: left;

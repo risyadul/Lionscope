@@ -261,6 +261,15 @@ class DeviceLinkTest {
         assertEquals("{\"type\":\"custom\"}", DeviceLink.encode("{\"type\":\"custom\"}", negotiatedVersion = 1))
     }
 
+    @Test
+    fun aV3ItemIsEncodedOnlyOnAV3Connection() {
+        val item = DeviceLink.V2Item(16, DEVICE_PROTOCOL_V3) { "{\"type\":\"inflate\"}" }
+        assertNull(DeviceLink.encode(item, negotiatedVersion = null))
+        assertNull(DeviceLink.encode(item, negotiatedVersion = 1))
+        assertNull(DeviceLink.encode(item, negotiatedVersion = 2))
+        assertEquals("{\"type\":\"inflate\"}", DeviceLink.encode(item, negotiatedVersion = 3))
+    }
+
     @Test(timeout = 20_000)
     fun reconnectsAfterTheServerDisappears() {
         val first = localServer()

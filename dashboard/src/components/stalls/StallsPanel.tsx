@@ -30,6 +30,7 @@ type Props = {
   optionsBlocker: string | null;
   isOptionsPending: boolean;
   onOptionsChange: (patch: Partial<SdkOptions>) => void;
+  inflateBlocker: string | null;
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
 };
@@ -127,6 +128,7 @@ export function StallsPanel({
   optionsBlocker,
   isOptionsPending,
   onOptionsChange,
+  inflateBlocker,
   selectedKey,
   onSelect,
 }: Props) {
@@ -181,6 +183,7 @@ export function StallsPanel({
           blocker={optionsBlocker}
           isPending={isOptionsPending}
           onChange={onOptionsChange}
+          inflateBlocker={inflateBlocker}
         />
       </header>
       <div ref={bodyRef} className="stalls-body" tabIndex={-1}>

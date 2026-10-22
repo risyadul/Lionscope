@@ -27,7 +27,7 @@ janky list first.</sub>
 The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session; the
 emulator's screen on the left; stacked timeline charts in the middle that share one time axis (last 1, 5 or 10
 minutes) and can be paused, with the app's logcat in a resizable drawer below them; and, with the SDK, the
-Screens and Stalls tabs on the right. Below 1280 px the screen opens as a drawer from the top bar.
+Screens, Stalls and Layouts tabs on the right. Below 1280 px the screen opens as a drawer from the top bar.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
@@ -47,6 +47,8 @@ With the SDK installed in the app's debug build, the dashboard also shows:
 | Per-screen table (frames, jank %, p90, top stage) | the above, grouped by screen                                |
 | Main thread lane (one bar per stall)              | Main-thread watchdog; StrictMode violations as ticks        |
 | Stalls tab (offenders, events, stack detail)      | Sampled main-thread stacks; StrictMode violations (opt-in)  |
+| Layouts tab, Inflate column, gold lane markers    | XML layout inflation timing (Android 10+)                   |
+| Views column (count and depth per screen)         | View hierarchy snapshot after a screen's first frame        |
 
 While SDK frames flow, `gfxinfo` polling pauses (no double observation, no `reset` clash); it resumes 3 s after
 they stop. The dashboard shows whether the SDK is connected (and its version), or how to add it.
@@ -83,6 +85,55 @@ policies when you turn it off or the link closes. It refuses to touch a policy t
 or dropbox penalty, or that looks like it has the app's own `penaltyListener`, and it never re-arms a
 death-on-network penalty; the Stalls tab then says nothing was added. Violations are coalesced to one per second
 per stack, and at most 10 per second overall.
+
+### Layouts: what inflating XML costs
+
+With the SDK (0.4.0+ SDK and server), the **Layouts** tab lists the XML layouts the app inflates on the main
+thread through an `AppCompatActivity`'s inflater: how often, total, mean and slowest time, the views created by
+the slowest inflation, and the screens it ran on. It is sorted by total time; click a column to sort by it. Layouts that come from the Android framework or
+libraries (`abc_`, `mtrl_`, `design_`, …) are hidden until you switch on **Show library layouts**. A layout the
+SDK cannot name is shown by its first view and XML line (`Button:12`, in italics). A layout inflated inside
+another one (an `<include>`, or a compound view's own layout) gets its own row, marked **nested**, because that
+is its own cost; but its time is already part of the layout around it, so the row is not extra time. The
+Screens tab's **Inflate** column counts each inflation once, nested ones left out, and the gold lane markers
+only show top-level inflations. The Screens tab gets an
+**Inflate** column (inflation time on that screen, the slowest layout in the tooltip) and a **Views** column
+(views and depth from the screen's latest view tree, the deepest path in the tooltip). Inflations of 16 ms or
+more also appear as gold bars on the rail under the Main thread lane's baseline; hover one for the layout, its
+time, its views and the screen, click it to open the Layouts tab.
+
+How it is measured: the SDK installs a `LayoutInflater.Factory2` on each Activity before it is created and
+times view creation from the first view of a layout to the last, then hands the work on (AppCompat's view
+substitution, `MaterialButton` and friends, is untouched). No Gradle plugin and no app changes. Read the figures
+as a **lower bound**: parser setup is not included, and a debuggable build is slower than release.
+What is **not** measured: inflation through the application context or in a `Service`, on a background thread,
+in Activities created while tracking was off, in Activities that already had a `LayoutInflater` factory, and
+in screens that are not `AppCompatActivity` (plain `Activity` and `ComponentActivity` screens; their view trees
+are still taken). Layout measuring needs
+**Android 10 (API 29)+**; below that the tab says so and nothing is installed. Inflation tracking is on by
+default and has a switch next to StrictMode in the Stalls tab. Turning it off stops recording, and screens
+opened afterwards get no factory at all (also across reconnects, until a session turns it back on); screens
+opened while it was on keep theirs.
+
+**If your app sets its own factory.** The SDK only installs its factory when the Activity's inflater has none.
+If the app (or a library) later calls `LayoutInflater.setFactory2` on that same inflater, for example in
+`onCreate` after `super.onCreate`, Android throws `A factory has already been set on this LayoutInflater`. The
+dashboard switch can't help there, because the first Activity is created before the SDK hears from the server.
+Turn inflation measuring off for the app in its debug manifest instead (view trees keep working):
+
+```xml
+<!-- src/debug/AndroidManifest.xml -->
+<application>
+    <meta-data android:name="io.github.risyadul.lionscope.inflateTracking" android:value="false" />
+</application>
+```
+
+And please open an issue with the stack trace.
+
+**View trees.** Once per screen visit, after its first frame and when the main thread is idle, the SDK walks
+the window's view hierarchy (iteratively, capped at 20,000 views) and reports the number of views and view
+groups, the depth, the path to the deepest view and the most common view classes. This works on every API level
+the SDK supports, including those below Android 10.
 
 ### Operating the emulator from the dashboard
 
@@ -312,6 +363,9 @@ protocol version 1 and closes the connection on unknown message types.
   policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
   by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
   permits network on the main thread.
+- **Layout times are a lower bound.** Parser setup is not measured, nested `<include>`s are counted in their
+  parent and also on their own, and only inflation on the main thread through the Activity's inflater is seen:
+  layouts inflated on a background thread, from an application-context inflater or by Compose are not.
 - **Screen mirroring.** Emulators need a discovery file with a gRPC port and token (tested with emulator 36.6).
   AVDs have no mouse, so the wheel scrolls with a short touch drag, and typed keys are reliable for printable
   ASCII (the emulator may drop other characters); use paste for anything else. Physical devices need a browser

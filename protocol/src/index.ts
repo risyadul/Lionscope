@@ -11,6 +11,7 @@ import { z } from 'zod';
 import {
   AVD_NAME_PATTERN,
   DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
@@ -23,6 +24,8 @@ import {
   MAX_SCREEN_TEXT_CHARS,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
+  MAX_VIEW_PATH_NODES,
+  MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
   MIN_DEVICE_PROTOCOL_VERSION,
   PACKAGE_NAME_PATTERN,
@@ -67,10 +70,14 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       type: z.literal('setSdkOptions'),
       stallThresholdMs: z.literal(STALL_THRESHOLDS_MS).optional(),
       strictMode: z.boolean().optional(),
+      inflateTracking: z.boolean().optional(),
     })
     .strict()
     .refine(
-      (message) => message.stallThresholdMs !== undefined || message.strictMode !== undefined,
+      (message) =>
+        message.stallThresholdMs !== undefined ||
+        message.strictMode !== undefined ||
+        message.inflateTracking !== undefined,
       'no SDK option given',
     ),
 ]) satisfies z.ZodType<ClientMessage>;
@@ -277,6 +284,18 @@ export const MAX_STRICT_MODE_COUNT = 1_000_000;
 const CONTROL_OR_FORMAT_RUNS = /[\p{Cc}\p{Cf}]+/gu;
 const sanitized = (value: string): string => value.replace(CONTROL_OR_FORMAT_RUNS, ' ').trim();
 
+/** Bounds of the 0.4.0 layout messages: counts and times are far above anything a window can hold. */
+export const MAX_INFLATE_COUNT = 1_000_000;
+export const MAX_INFLATE_MS = 60_000;
+export const MAX_VIEW_COUNT = 1_000_000;
+const MAX_LAYOUT_TEXT_LENGTH = 200;
+const layoutText = textOf(MAX_LAYOUT_TEXT_LENGTH);
+
+const viewPathNodeSchema = z.object({ className: layoutText, id: layoutText.nullable() }).strip();
+const viewClassCountSchema = z
+  .object({ className: layoutText, count: z.number().int().min(1).max(MAX_VIEW_COUNT) })
+  .strip();
+
 const stackFrameSchema = z
   .object({
     className: text,
@@ -349,13 +368,46 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       screen: text.nullable(),
     })
     .strip(),
+  z
+    .object({
+      type: z.literal('inflate'),
+      ts: epochMs,
+      layout: layoutText.nullable(),
+      label: layoutText.nullable(),
+      library: z.boolean(),
+      nested: z.boolean(),
+      screen: layoutText.nullable(),
+      count: z.number().int().min(1).max(MAX_INFLATE_COUNT),
+      totalMs: z.number().nonnegative().max(MAX_INFLATE_MS),
+      maxMs: z.number().nonnegative().max(MAX_INFLATE_MS),
+      views: z.number().int().nonnegative().max(MAX_VIEW_COUNT),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('viewtree'),
+      ts: epochMs,
+      screen: layoutText.nullable(),
+      window: layoutText,
+      views: z.number().int().nonnegative().max(MAX_VIEW_COUNT),
+      viewGroups: z.number().int().nonnegative().max(MAX_VIEW_COUNT),
+      maxDepth: z.number().int().nonnegative().max(MAX_VIEW_COUNT),
+      deepestPath: z.array(viewPathNodeSchema).max(MAX_VIEW_PATH_NODES),
+      topClasses: z.array(viewClassCountSchema).max(MAX_VIEW_TREE_CLASSES),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
- * Diagnostics (v2): a line of these types that fails validation is dropped by the caller (`invalidDiagnostic`),
+ * Diagnostics (v2, v3 `inflate` / `viewtree`): a line of these types that fails validation is dropped by the caller (`invalidDiagnostic`),
  * not fatal to the link like a bad v1 message.
  */
-const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set(['stall', 'strictmode']);
+const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
+  'stall',
+  'strictmode',
+  'inflate',
+  'viewtree',
+]);
 
 /**
  * Exhaustive over DeviceMessageType: a new message type must be listed here, with the device protocol version
@@ -368,13 +420,15 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   heartbeat: MIN_DEVICE_PROTOCOL_VERSION,
   stall: DEVICE_PROTOCOL_V2,
   strictmode: DEVICE_PROTOCOL_V2,
+  inflate: DEVICE_PROTOCOL_V3,
+  viewtree: DEVICE_PROTOCOL_V3,
 };
 
 /**
  * Flags of a failed parse; at most one is set:
  * - `unknownType`: a JSON object whose string `type` this build does not know (a newer SDK): skippable.
  * - `unnegotiated`: a known type introduced after the link's negotiated protocol version (`since`): skippable.
- * - `invalidDiagnostic`: a diagnostic (`stall` / `strictmode`) with invalid fields: skippable.
+ * - `invalidDiagnostic`: a diagnostic (`stall` / `strictmode` / `inflate` / `viewtree`) with invalid fields: skippable.
  * - `unsupportedVersion`: a `hello` whose numeric `protocolVersion` is out of range.
  * Anything else that fails (bad JSON, another known type with invalid fields) is a plain error.
  */

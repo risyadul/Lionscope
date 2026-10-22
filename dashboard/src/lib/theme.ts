@@ -40,6 +40,7 @@ export const CHART_COLOR_TOKENS = {
   stall3: '--viz-stall-3',
   stallDebug: '--viz-stall-debug',
   strictMode: '--viz-strictmode',
+  inflate: '--viz-inflate',
 } as const;
 
 export type ChartColor = keyof typeof CHART_COLOR_TOKENS;
@@ -90,6 +91,7 @@ export const FALLBACK_COLORS: ChartColors = {
   stall3: '#89142a',
   stallDebug: '#8b919c',
   strictMode: '#00a396',
+  inflate: '#b88a00',
 };
 
 const FALLBACK_SCREEN_WASH = 0.06;

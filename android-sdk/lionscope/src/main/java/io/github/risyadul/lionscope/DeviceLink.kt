@@ -63,7 +63,13 @@ internal class DeviceLink(
     }
 
     override fun sendV2(sizeHint: Int, encode: () -> String?) {
-        if (isConnected && speaksV2()) queue.offer(V2Item(sizeHint, encode))
+        if (isConnected && speaksV2()) queue.offer(V2Item(sizeHint, encode = encode))
+    }
+
+    override fun sendV3(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && speaks(negotiatedVersion, DEVICE_PROTOCOL_V3)) {
+            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V3, encode))
+        }
     }
 
     /** Records the top screen (re-sent after every reconnect); encoding happens on the link thread. */
@@ -245,8 +251,11 @@ internal class DeviceLink(
     /** A screen change waiting to be encoded on the link thread. */
     private class ScreenEvent(val ts: Long, val screen: ScreenRef?)
 
-    /** A v2-only message, encoded on the link thread only if the connection it ends up on negotiated v2. */
-    internal class V2Item(val sizeHint: Int, val encode: () -> String?)
+    /**
+     * A message of v2 or later ([minVersion]), encoded on the link thread only if the connection it ends up on
+     * negotiated at least [minVersion].
+     */
+    internal class V2Item(val sizeHint: Int, val minVersion: Int = DEVICE_PROTOCOL_V2, val encode: () -> String?)
 
     internal companion object {
         const val CONNECT_TIMEOUT_MS = 1_000
@@ -261,16 +270,18 @@ internal class DeviceLink(
             else -> SCREEN_SIZE_HINT
         }
 
-        fun speaksV2(negotiatedVersion: Int?): Boolean = (negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V2
+        fun speaksV2(negotiatedVersion: Int?): Boolean = speaks(negotiatedVersion, DEVICE_PROTOCOL_V2)
+
+        fun speaks(negotiatedVersion: Int?, version: Int): Boolean = (negotiatedVersion ?: 0) >= version
 
         /**
          * The line to write for a queued [item], or null. A v2 item can have been queued for an earlier connection
-         * (the offer raced a reconnect); on a connection negotiated at v1, or not welcomed yet, it is dropped here.
-         * A failing v2 encoder drops that one message, never the connection.
+         * (the offer raced a reconnect); on a connection negotiated below its version, or not welcomed yet, it is
+         * dropped here. A failing v2 encoder drops that one message, never the connection.
          */
         fun encode(item: Any, negotiatedVersion: Int?): String? = when (item) {
             is ScreenEvent -> DeviceMessages.screen(item.ts, item.screen)
-            is V2Item -> if (speaksV2(negotiatedVersion)) encodeContained(item) else null
+            is V2Item -> if (speaks(negotiatedVersion, item.minVersion)) encodeContained(item) else null
             else -> item.toString()
         }
 

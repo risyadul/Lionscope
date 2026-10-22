@@ -6,6 +6,38 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Layout inflation timing (SDK, Android 10+, `AppCompatActivity` screens only; plain `Activity` and
+  `ComponentActivity` screens are not timed). The SDK installs a `LayoutInflater.Factory2` on each Activity
+  before it is created (only when the Activity has none) and times view creation per XML layout, handing views
+  on to AppCompat, so `MaterialButton` and the other substitutions are unchanged. Layouts inflated inside another
+  one (`nested`) are also reported on their own, but per-screen totals count each inflation once; layouts are attributed to the Activity, Fragment or dialog whose
+  view was being built. No Gradle plugin and no app changes. On by default; turn it off from the dashboard, or
+  for the whole app with the `io.github.risyadul.lionscope.inflateTracking` meta-data set to `false` in the
+  debug manifest (for apps that set their own `LayoutInflater` factory; see the README).
+- View trees (SDK, all Android versions): once per screen visit, after its first frame and on main-thread idle,
+  the SDK counts the window's views and finds its depth, the deepest path and the most common view classes.
+- **Layouts** tab: the XML layouts the app inflates on the main thread, with count, total, mean and slowest
+  time, views of the slowest inflation and the screens it ran on. Nested layouts (`<include>`s) get their own
+  row, marked "nested": their time is already part of the layout around them. Sortable; library and framework layouts are hidden until
+  "Show library layouts" is on. The tab explains when the device is older than Android 10, the SDK or server
+  is too old, or tracking is off.
+- Screens tab: **Inflate** (inflation time per screen, slowest layout in the tooltip) and **Views** (view count
+  and depth from the latest view tree, deepest path in the tooltip) columns; in a narrow panel Views folds into
+  the line under the screen name. Inflate counts each inflation once (nested ones are left out).
+- Main thread lane: gold bars on the rail under the baseline for layout inflations of 16 ms or more, with a
+  tooltip (layout, time, views, screen); a click opens the Layouts tab.
+- "Inflation tracking" switch next to StrictMode in the Stalls tab.
+- Sample app: a heavier Home screen (nested cards with includes and a `<merge>`) and an off-main-thread inflate
+  button.
+
+### Changed
+
+- Device protocol 3 (`inflate`, `viewtree`, `config.inflateTracking`) and dashboard protocol 3. 0.2.x and 0.3.x
+  SDKs keep working with this server (they negotiate 2 and send nothing new), and a 0.4.0 SDK works with older
+  servers.
+
 ## [0.3.1] - 2026-10-22
 
 ### Added

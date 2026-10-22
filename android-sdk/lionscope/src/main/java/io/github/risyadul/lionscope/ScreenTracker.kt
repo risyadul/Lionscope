@@ -3,6 +3,7 @@ package io.github.risyadul.lionscope
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import android.view.View
 import android.view.Window
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -10,6 +11,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal interface DialogWindows {
     fun onDialogShown(key: Any, window: Window, name: String)
     fun onDialogHidden(key: Any)
+}
+
+/** Fragment, dialog and screen events for layout inflation and view trees (main thread). */
+internal interface LayoutEvents {
+    fun onFragmentViewCreated(fragment: Any, activity: Any?, view: View)
+    fun onFragmentViewDestroyed(fragment: Any)
+    fun onDialogShown(fragment: Any, activity: Any?, window: Window, name: String)
+    fun onDialogHidden(fragment: Any)
+
+    /** The reported top screen changed; [target] is the Activity / Fragment it was resolved from. */
+    fun onScreenChanged(screen: ScreenRef?, target: Any?)
 }
 
 /**
@@ -22,6 +34,7 @@ internal class ScreenTracker(
     private val link: LinkPort,
     private val main: MainScheduler,
     private val dialogWindows: DialogWindows? = null,
+    private val layoutEvents: LayoutEvents? = null,
     private val periodicFallback: Boolean = false,
     hooksFactory: (ScreenTracker) -> FragmentHooks? = ::createFragmentHooks,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -98,11 +111,21 @@ internal class ScreenTracker(
 
     fun onFragmentGone(fragment: Any) = track { resolver.fragmentGone(fragment) }
 
-    fun onDialogShown(fragment: Any, window: Window, name: String) = guarded {
+    fun onDialogShown(fragment: Any, activity: Any?, window: Window, name: String) = guarded {
         dialogWindows?.onDialogShown(fragment, window, name)
+        layoutEvents?.onDialogShown(fragment, activity, window, name)
     }
 
-    fun onDialogHidden(fragment: Any) = guarded { dialogWindows?.onDialogHidden(fragment) }
+    fun onDialogHidden(fragment: Any) = guarded {
+        dialogWindows?.onDialogHidden(fragment)
+        layoutEvents?.onDialogHidden(fragment)
+    }
+
+    fun onFragmentViewCreated(fragment: Any, activity: Any?, view: View) = guarded {
+        layoutEvents?.onFragmentViewCreated(fragment, activity, view)
+    }
+
+    fun onFragmentViewDestroyed(fragment: Any) = guarded { layoutEvents?.onFragmentViewDestroyed(fragment) }
 
     private inline fun track(update: () -> Unit) = guarded {
         update()
@@ -118,10 +141,15 @@ internal class ScreenTracker(
     private fun emit() {
         emitPending.set(false)
         topActivityClassName = resolver.topActivity?.javaClass?.name
-        val screen = resolver.resolve(isShown, describe)
+        var target: Any? = null
+        val screen = resolver.resolve(isShown, describe = { picked, kind ->
+            target = picked
+            describe(picked, kind)
+        })
         if (screen == lastScreen) return
         lastScreen = screen
         link.onScreen(clock(), screen)
+        layoutEvents?.onScreenChanged(screen, target)
     }
 
     /** Below API 24 there are no frames to drive re-resolution: poll once a second while it can matter. */

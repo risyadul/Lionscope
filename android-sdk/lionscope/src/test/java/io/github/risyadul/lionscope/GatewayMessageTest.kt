@@ -98,6 +98,23 @@ class GatewayMessageTest {
     }
 
     @Test
+    fun configInflateTrackingIsOnUnlessALiteralFalse() {
+        fun tracking(raw: String?): Boolean {
+            val field = if (raw == null) "" else ",\"inflateTracking\":$raw"
+            return config("{\"type\":\"config\",\"stallThresholdMs\":150,\"strictMode\":false$field}").inflateTracking
+        }
+        assertFalse(tracking("false"))
+        assertFalse(tracking(" false "))
+        assertTrue(tracking(null)) // A v2 server never sends it.
+        assertTrue(tracking("true"))
+        assertTrue(tracking("\"false\""))
+        assertTrue(tracking("0"))
+        assertTrue(tracking("falsey"))
+        assertEquals(SdkOptions(250, true, false), config("{\"type\":\"config\",\"inflateTracking\":false,\"strictMode\":true,\"stallThresholdMs\":250}"))
+        assertTrue(SdkOptions.DEFAULT.inflateTracking)
+    }
+
+    @Test
     fun ignoresUnknownAndMalformedLines() {
         assertNull(GatewayMessage.parse("{\"type\":\"ping\"}"))
         assertNull(GatewayMessage.parse("{\"type\":\"configure\",\"protocolVersion\":2,\"sampleRate\":10}"))

@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { StallSample, StrictModeSample, TimelineEvent } from '@lionscope/protocol/wire';
-import { formatBlockMs, formatClockShort, formatInteger } from '../../lib/format.ts';
+import type { InflateSample, StallSample, StrictModeSample, TimelineEvent } from '@lionscope/protocol/wire';
+import { SLOW_INFLATE_MS } from '@lionscope/protocol/wire';
+import { formatBlockMs, formatClockShort, formatInflateMs, formatInteger } from '../../lib/format.ts';
+import { hitTestInflates, inflateKey, layoutName, slowInflates } from '../../lib/layouts.ts';
 import type { Signal } from '../../lib/signal.ts';
 import {
   buildFeed,
@@ -16,7 +18,7 @@ import {
   type StallSeverity,
 } from '../../lib/stalls.ts';
 import type { ChartTheme } from '../../lib/theme.ts';
-import { STALL_RAIL_PX, STALL_SPEC, type Threshold } from './chartSpec.ts';
+import { INFLATE_ROW_PX, STALL_RAIL_PX, STALL_SPEC, type Threshold } from './chartSpec.ts';
 import { createStallLayer, type StallItem, type ViolationItem } from './stallLayer.ts';
 import { TimelineChart, type PlotPointer } from './TimelineChart.tsx';
 import { Y_AXIS_WIDTH, type Backdrop } from './uplotOptions.ts';
@@ -28,11 +30,12 @@ const SEVERITIES: readonly StallSeverity[] = [1, 2, 3];
 const SEVERITY_KEYS: Record<StallSeverity, string> = { 1: '<500', 2: '500+', 3: '1 s+' };
 
 const LANE_HINT =
-  'Bars: main-thread blocks caught by the SDK watchdog, drawn at their start; height and color show how long the thread was blocked (the scale stops at 2 s, longer bars get a caret). Hatched gray: a debugger was attached, so it is probably a breakpoint. Teal diamonds under the baseline: StrictMode violations. Click a mark for its stack.';
+  'Bars: main-thread blocks caught by the SDK watchdog, drawn at their start; height and color show how long the thread was blocked (the scale stops at 2 s, longer bars get a caret). Hatched gray: a debugger was attached, so it is probably a breakpoint. Teal diamonds on the rail under the baseline: StrictMode violations. Gold bars on the rail above them: layout inflations of 16 ms or more, drawn over their duration. Click a stall for its stack, a layout for the Layouts tab.';
 
 type Props = {
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
+  inflates: readonly InflateSample[];
   /** Visible window, epoch ms. */
   fromTs: number;
   toTs: number;
@@ -43,6 +46,10 @@ type Props = {
   onSelect: (key: string) => void;
   /** Reveals the Stalls tab; offered while it is not on screen. */
   onViewList?: () => void;
+  /** Opens the Layouts tab; a click on an inflation marker asks for it. */
+  onViewLayouts?: () => void;
+  /** Inflation tracking is on for the live session (keeps the legend entry while no slow one was seen). */
+  isInflateTrackingOn: boolean;
   theme: ChartTheme;
   xMin: number;
   xMax: number;
@@ -59,6 +66,26 @@ interface Hover {
   key: string;
   /** Plot width (CSS px) when the pointer found the mark, to re-anchor it as the window moves. */
   plotWidth: number;
+}
+
+function InflateTip({ item }: { item: InflateSample }) {
+  const where = [item.screen ?? 'no screen', formatClockShort(item.ts)].join(' · ');
+  return (
+    <>
+      <p className="stall-tip-title">
+        <span className="stall-glyph" data-kind="inflate" aria-hidden="true" />
+        <span className="stall-tip-name mono">{formatInflateMs(item.maxMs)} ms</span>
+        <span className="stall-tip-kind">layout inflated</span>
+      </p>
+      <p className="stall-tip-line mono">{layoutName(item)}</p>
+      <p className="stall-tip-method mono">
+        {formatInteger(item.views)} views
+        {item.count > 1 &&
+          ` · slowest of ${formatInteger(item.count)} (${formatInflateMs(item.totalMs)} ms total)`}
+      </p>
+      <p className="stall-tip-meta mono">{where}</p>
+    </>
+  );
 }
 
 function StallTip({ item }: { item: FeedItem }) {
@@ -114,6 +141,7 @@ function StallTip({ item }: { item: FeedItem }) {
 export function MainThreadLane({
   stalls,
   strictMode,
+  inflates,
   fromTs,
   toTs,
   thresholdMs,
@@ -121,6 +149,8 @@ export function MainThreadLane({
   selectedKey,
   onSelect,
   onViewList,
+  onViewLayouts,
+  isInflateTrackingOn,
   theme,
   xMin,
   xMax,
@@ -132,6 +162,7 @@ export function MainThreadLane({
   weight,
 }: Props) {
   const [hover, setHover] = useState<Hover | null>(null);
+  const [inflateHover, setInflateHover] = useState<Hover | null>(null);
 
   const feed = useMemo(
     () => buildFeed(stalls, strictMode, { fromTs, toTs, filter: 'all', culprit: null }),
@@ -144,6 +175,8 @@ export function MainThreadLane({
       violationItems: ascending.filter((item): item is ViolationItem => item.kind === 'strictmode'),
     };
   }, [feed]);
+  const slow = useMemo(() => slowInflates(inflates, fromTs, toTs), [inflates, fromTs, toTs]);
+  const worstInflateMs = useMemo(() => Math.max(0, ...slow.map((s) => s.maxMs)), [slow]);
   const summary = useMemo(
     () => summarizeWindow(stalls, strictMode, fromTs, toTs),
     [stalls, strictMode, fromTs, toTs],
@@ -156,9 +189,20 @@ export function MainThreadLane({
   // A hovered mark that was pruned or replaced by a resync drops its tooltip.
   const hovered = hover === null ? null : (feed.find((item) => item.key === hover.key) ?? null);
   const hoveredKey = hovered?.key ?? null;
+  const hoveredInflate =
+    inflateHover === null ? null : (slow.find((item) => inflateKey(item) === inflateHover.key) ?? null);
+  const hoveredInflateKey = hoveredInflate === null ? null : inflateKey(hoveredInflate);
   const marks = useMemo(
-    () => createStallLayer({ stalls: stallItems, violations: violationItems, selectedKey, hoveredKey }),
-    [stallItems, violationItems, selectedKey, hoveredKey],
+    () =>
+      createStallLayer({
+        stalls: stallItems,
+        violations: violationItems,
+        selectedKey,
+        hoveredKey,
+        inflates: slow,
+        hoveredInflateKey,
+      }),
+    [stallItems, violationItems, selectedKey, hoveredKey, slow, hoveredInflateKey],
   );
 
   const handleCursor = useCallback((_idx: number | null, x: number | null) => cursorX.set(x), [cursorX]);
@@ -166,20 +210,38 @@ export function MainThreadLane({
     (pointer: PlotPointer | null) => {
       if (pointer === null) {
         setHover(null);
+        setInflateHover(null);
         return;
       }
-      const isOverRail = pointer.top >= pointer.plotHeight - STALL_RAIL_PX - 2;
-      const hit = hitTestMarks(feed, { ts: pointer.ts, pxPerMs: pointer.pxPerMs, isOverRail });
+      const railTop = pointer.plotHeight - STALL_RAIL_PX;
+      const isOverRail = pointer.top >= railTop - 2;
+      // The rail's upper row belongs to layout inflations; the lower one to StrictMode.
+      const isOverInflateRow = pointer.top >= railTop - 2 && pointer.top < railTop + INFLATE_ROW_PX;
+      const inflateHit = isOverInflateRow
+        ? hitTestInflates(slow, { ts: pointer.ts, pxPerMs: pointer.pxPerMs })
+        : null;
+      const hit = inflateHit
+        ? null
+        : hitTestMarks(feed, { ts: pointer.ts, pxPerMs: pointer.pxPerMs, isOverRail });
       if (pointer.kind === 'click') {
-        if (hit) onSelect(hit.key);
+        if (inflateHit) onViewLayouts?.();
+        else if (hit) onSelect(hit.key);
         return;
       }
       const plotWidth = pointer.pxPerMs * (xMax - xMin) * 1000;
       setHover((current) =>
         hit === null ? null : current?.key === hit.key ? current : { key: hit.key, plotWidth },
       );
+      const inflateKeyHit = inflateHit === null ? null : inflateKey(inflateHit);
+      setInflateHover((current) =>
+        inflateKeyHit === null
+          ? null
+          : current?.key === inflateKeyHit
+            ? current
+            : { key: inflateKeyHit, plotWidth },
+      );
     },
-    [feed, onSelect, xMin, xMax],
+    [feed, slow, onSelect, onViewLayouts, xMin, xMax],
   );
 
   // Anchored to the mark's start, kept inside the plot.
@@ -190,8 +252,18 @@ export function MainThreadLane({
           Math.max(((hovered.ts / 1000 - xMin) / (xMax - xMin)) * hover.plotWidth, TIP_HALF_WIDTH),
           Math.max(TIP_HALF_WIDTH, hover.plotWidth - TIP_HALF_WIDTH),
         ) + Y_AXIS_WIDTH;
+  const inflateTipLeft =
+    inflateHover === null || hoveredInflate === null
+      ? 0
+      : Math.min(
+          Math.max(
+            ((hoveredInflate.ts / 1000 - xMin) / (xMax - xMin)) * inflateHover.plotWidth,
+            TIP_HALF_WIDTH,
+          ),
+          Math.max(TIP_HALF_WIDTH, inflateHover.plotWidth - TIP_HALF_WIDTH),
+        ) + Y_AXIS_WIDTH;
   const worstSeverity = summary.worstMs > 0 ? stallSeverity(summary.worstMs) : null;
-  const hasMarks = stallItems.length > 0 || violationItems.length > 0;
+  const hasMarks = stallItems.length > 0 || violationItems.length > 0 || slow.length > 0;
 
   return (
     <figure
@@ -276,6 +348,19 @@ export function MainThreadLane({
               )}
             </li>
           )}
+          {(isInflateTrackingOn || slow.length > 0) && (
+            <li
+              className="legend-item"
+              title={`Layout inflations of ${SLOW_INFLATE_MS} ms or more, drawn as gold bars on the rail under the baseline`}
+            >
+              <span className="stall-glyph" data-kind="inflate" aria-hidden="true" />
+              <span className="legend-label">Inflate</span>
+              <span className="legend-value mono">{formatInteger(slow.length)}</span>
+              {slow.length > 0 && (
+                <span className="legend-label mono">max {formatInflateMs(worstInflateMs)} ms</span>
+              )}
+            </li>
+          )}
           {summary.debuggerCount > 0 && (
             <li className="legend-item" title="Stalls while a debugger was attached (likely breakpoints)">
               <span className="stall-glyph" data-kind="debugger" aria-hidden="true" />
@@ -285,7 +370,7 @@ export function MainThreadLane({
           )}
         </ul>
       </figcaption>
-      <div className="stall-plot" data-hit={hovered !== null || undefined}>
+      <div className="stall-plot" data-hit={hovered !== null || hoveredInflate !== null || undefined}>
         <TimelineChart
           spec={STALL_SPEC}
           theme={theme}
@@ -306,6 +391,12 @@ export function MainThreadLane({
           <p className="stall-plot-empty">
             No main-thread blocks ≥ {formatBlockMs(thresholdMs)} in this window
           </p>
+        )}
+        {hoveredInflate && (
+          <div className="stall-tip" style={{ left: `${Math.round(inflateTipLeft)}px` }} aria-hidden="true">
+            <InflateTip item={hoveredInflate} />
+            <p className="stall-tip-hint">Click to open the Layouts tab</p>
+          </div>
         )}
         {hovered && (
           <div className="stall-tip" style={{ left: `${Math.round(tipLeft)}px` }} aria-hidden="true">

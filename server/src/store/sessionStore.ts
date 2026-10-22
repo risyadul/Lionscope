@@ -2,6 +2,7 @@ import type {
   CpuSample,
   FrameBreakdownSample,
   FrameSample,
+  InflateSample,
   LogEntry,
   MemorySample,
   ScreenRef,
@@ -11,6 +12,7 @@ import type {
   StallSample,
   StrictModeSample,
   TimelineEvent,
+  ViewTreeSample,
 } from '@lionscope/protocol';
 import { TimeWindowBuffer } from './timeWindowBuffer.ts';
 import type { ByteLimit } from './timeWindowBuffer.ts';
@@ -25,6 +27,8 @@ export interface StreamItems {
   breakdown: FrameBreakdownSample;
   stalls: StallSample;
   strictMode: StrictModeSample;
+  inflates: InflateSample;
+  viewTrees: ViewTreeSample;
 }
 export type SampleStream = keyof StreamItems;
 
@@ -44,11 +48,19 @@ const MAX_SCREEN_SPANS = 2000;
  * serialised (they arrive at a low rate), so each stream stays well within a client's send buffer in a snapshot.
  */
 const MAX_EVENTS = 2000;
+/** View trees come once per screen visit; each is up to ~64 path nodes plus 10 classes. */
+const MAX_VIEW_TREES = 500;
 export const MAX_EVENT_STREAM_BYTES = 2 * 1024 * 1024;
+/** Layout streams are bulkier per second than stalls but less valuable per item: a smaller cap each. */
+export const MAX_LAYOUT_STREAM_BYTES = 1024 * 1024;
+/** Inflations arrive at 10-30 lines/s, so a 10 min window needs more than MAX_EVENTS (rows are ~200 B). */
+const MAX_INFLATES = 5000;
 const eventLimit = {
   maxBytes: MAX_EVENT_STREAM_BYTES,
   sizeOf: (item: object) => Buffer.byteLength(JSON.stringify(item)),
 };
+
+const layoutLimit = { ...eventLimit, maxBytes: MAX_LAYOUT_STREAM_BYTES };
 
 const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
   cpu: { maxItems: MAX_SAMPLES, toMessages: (items) => items.map((sample) => ({ type: 'cpu', sample })) },
@@ -85,6 +97,16 @@ const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
     maxItems: MAX_EVENTS,
     byteLimit: eventLimit,
     toMessages: (items) => items.map((sample) => ({ type: 'strictmode', sample })),
+  },
+  inflates: {
+    maxItems: MAX_INFLATES,
+    byteLimit: layoutLimit,
+    toMessages: (items) => items.map((sample) => ({ type: 'inflate', sample })),
+  },
+  viewTrees: {
+    maxItems: MAX_VIEW_TREES,
+    byteLimit: layoutLimit,
+    toMessages: (items) => items.map((sample) => ({ type: 'viewtree', sample })),
   },
 };
 
@@ -136,6 +158,8 @@ export class SessionStore {
       breakdown: buffer('breakdown'),
       stalls: buffer('stalls'),
       strictMode: buffer('strictMode'),
+      inflates: buffer('inflates'),
+      viewTrees: buffer('viewTrees'),
     };
     this.screens = new TimeWindowBuffer(options.windowMs, MAX_SCREEN_SPANS);
   }

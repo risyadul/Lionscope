@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { FrameStage } from '@lionscope/protocol/wire';
-import { formatBlockMs, formatFixed, formatInteger } from '../../lib/format.ts';
+import { SLOW_INFLATE_MS } from '@lionscope/protocol/wire';
+import { formatBlockMs, formatFixed, formatInflateMs, formatInteger } from '../../lib/format.ts';
+import { pathLabel } from '../../lib/layouts.ts';
 import { screenColor } from '../../lib/screens.ts';
 import {
   sortScreenRows,
@@ -28,6 +30,8 @@ type Props = {
   onSelect: (name: string | null) => void;
   /** Show the Stalls column (a v2 SDK is linked or stalls were recorded). */
   showStalls?: boolean;
+  /** Show the Inflate and Views columns (a v3 SDK is linked or layout data was recorded). */
+  showLayouts?: boolean;
 };
 
 interface Column {
@@ -59,6 +63,45 @@ const STALLS_COLUMN: Column = {
     'Main-thread stalls on this screen in the window and the time they blocked it (debugger stalls excluded)',
   firstDirection: 'desc',
 };
+
+const INFLATE_COLUMN: Column = {
+  key: 'inflateMs',
+  label: 'Inflate',
+  title:
+    'Main-thread time spent inflating XML layouts on this screen in the window, and how many inflations. A lower bound; the slowest layout is in the cell’s tooltip.',
+  firstDirection: 'desc',
+};
+
+const VIEWS_COLUMN: Column = {
+  key: 'views',
+  label: 'Views',
+  title: 'Views in the screen’s latest view tree, and its depth. The deepest path is in the cell’s tooltip.',
+  firstDirection: 'desc',
+};
+
+function inflateTitle(row: ScreenRow): string | undefined {
+  if (row.slowestInflate === null) return undefined;
+  const { name, ms } = row.slowestInflate;
+  return `Slowest: ${name}, ${formatInflateMs(ms)} ms\n${formatInteger(row.inflateCount)} ${row.inflateCount === 1 ? 'inflation' : 'inflations'}, each counted once, layouts inside another layout included in it (a lower bound)`;
+}
+
+function viewsTitle(row: ScreenRow): string | undefined {
+  const tree = row.viewTree;
+  if (tree === null) return undefined;
+  const lines = [
+    `${tree.window}: ${formatInteger(tree.views)} views, ${formatInteger(tree.viewGroups)} view groups, depth ${tree.maxDepth}`,
+    `Deepest: ${pathLabel(tree)}`,
+  ];
+  if (tree.topClasses.length > 0) {
+    lines.push(
+      `Most common: ${tree.topClasses
+        .slice(0, 3)
+        .map((c) => `${c.className} ×${formatInteger(c.count)}`)
+        .join(', ')}`,
+    );
+  }
+  return lines.join('\n');
+}
 
 function EmptyPanel({ empty }: { empty: ScreenPanelEmpty }) {
   if (empty.kind === 'link-failed') {
@@ -161,10 +204,21 @@ function stageSummary(row: ScreenRow, stages: readonly FrameStage[]): string {
   return stages.map((stage) => `${STAGE_LABELS[stage]} ${formatFixed(row.stageMs[stage], 2)} ms`).join(', ');
 }
 
-export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = false }: Props) {
+export function ScreenPanel({
+  rows,
+  empty,
+  selected,
+  onSelect,
+  showStalls = false,
+  showLayouts = false,
+}: Props) {
   const [sortKey, setSortKey] = useState<ScreenSortKey>('jankPercent');
   const [direction, setDirection] = useState<SortDirection>('desc');
-  const columns = showStalls ? [...COLUMNS, STALLS_COLUMN] : COLUMNS;
+  const columns = [
+    ...COLUMNS,
+    ...(showStalls ? [STALLS_COLUMN] : []),
+    ...(showLayouts ? [INFLATE_COLUMN, VIEWS_COLUMN] : []),
+  ];
 
   const sorted = sortScreenRows(rows, sortKey, direction);
   const shown = selected === null ? sorted : sorted.filter((row) => row.name === selected);
@@ -206,7 +260,7 @@ export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = fals
           <EmptyPanel empty={empty} />
         ) : (
           <>
-            <table className="screens-table">
+            <table className="screens-table" data-layouts={showLayouts || undefined}>
               <thead>
                 <tr>
                   {columns.map((column) => (
@@ -317,6 +371,39 @@ export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = fals
                           )}
                         </td>
                       )}
+                      {showLayouts && (
+                        <>
+                          <td data-col="inflateMs" className="mono" title={inflateTitle(row)}>
+                            {row.inflateCount > 0 ? (
+                              <>
+                                <span
+                                  className="inflate-total"
+                                  data-flag={(row.slowestInflate?.ms ?? 0) >= SLOW_INFLATE_MS || undefined}
+                                >
+                                  {formatInflateMs(row.inflateMs)}
+                                </span>
+                                <span className="stall-blocked">
+                                  <span className="sr-only">, </span>×{formatInteger(row.inflateCount)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="stall-count">—</span>
+                            )}
+                          </td>
+                          <td data-col="views" className="mono" title={viewsTitle(row)}>
+                            {row.viewTree !== null ? (
+                              <>
+                                {formatInteger(row.viewTree.views)}
+                                <span className="stall-blocked">
+                                  <span className="sr-only">, </span>depth {row.viewTree.maxDepth}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="stall-count">—</span>
+                            )}
+                          </td>
+                        </>
+                      )}
                       <td data-col="dominant" role="cell">
                         {row.dominant ? (
                           <span className="dominant" title={STAGE_LABELS[row.dominant.stage]}>
@@ -331,6 +418,13 @@ export function ScreenPanel({ rows, empty, selected, onSelect, showStalls = fals
                           </span>
                         ) : (
                           '—'
+                        )}
+                        {showLayouts && row.viewTree !== null && (
+                          // Narrow panels fold the Views column into this second line (screensNarrow.css).
+                          <span className="dominant-views mono" title={viewsTitle(row)}>
+                            {formatInteger(row.viewTree.views)} views
+                            <span className="dominant-depth"> · depth {row.viewTree.maxDepth}</span>
+                          </span>
                         )}
                       </td>
                     </tr>

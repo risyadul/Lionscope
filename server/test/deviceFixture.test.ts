@@ -195,7 +195,7 @@ describe('golden device messages through the gateway', () => {
     await client.waitFor((message) => message.type === 'config');
     expect(client.rawLines.slice(0, 2)).toEqual([
       '{"type":"welcome","protocolVersion":2}',
-      '{"type":"config","stallThresholdMs":150,"strictMode":false}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true}',
     ]);
     await waitUntil(() => ofType('strictmode').length > 0);
     expect(manager.getSessionState().sdk).toMatchObject({ connected: true, protocolVersion: 2 });
@@ -216,11 +216,68 @@ describe('golden device messages through the gateway', () => {
     // Options changed from the dashboard reach the live link.
     manager.setSdkOptions({ strictMode: true });
     await client.waitFor((message) => message.type === 'config' && message.strictMode);
-    expect(client.rawLines.at(-1)).toBe('{"type":"config","stallThresholdMs":150,"strictMode":true}');
+    expect(client.rawLines.at(-1)).toBe(
+      '{"type":"config","stallThresholdMs":150,"strictMode":true,"inflateTracking":true}',
+    );
     client.close();
   });
 
-  it('ignores the v2 golden lines on a v1 link', async () => {
+  it('on a v3 link: inflations and view trees on the laptop clock, ignored on a v2 link', async () => {
+    const { manager, port, ofType } = await startSession();
+    const [inflateLine, labelLine, treeLine] = GOLDEN.slice(-3).map(
+      (line) => JSON.parse(line) as DeviceMessage,
+    );
+    const v3 = await DeviceClient.open(port);
+    v3.send({ ...HELLO, protocolVersion: 3 });
+    for (const line of GOLDEN.slice(1)) v3.send(line);
+    await waitUntil(() => ofType('viewtree').length > 0);
+    const { type: _i, ...inflate } = inflateLine as Extract<DeviceMessage, { type: 'inflate' }>;
+    const { type: _l, ...label } = labelLine as Extract<DeviceMessage, { type: 'inflate' }>;
+    const { type: _t, ...tree } = treeLine as Extract<DeviceMessage, { type: 'viewtree' }>;
+    expect(ofType('inflate').map((message) => message.sample)).toEqual([
+      { ...inflate, ts: laptop(inflate.ts) },
+      { ...label, ts: laptop(label.ts) },
+    ]);
+    expect(ofType('viewtree').map((message) => message.sample)).toEqual([{ ...tree, ts: laptop(tree.ts) }]);
+    expect(manager.getSnapshot()).toMatchObject({
+      inflates: ofType('inflate').map((message) => message.sample),
+      viewTrees: [ofType('viewtree')[0]?.sample],
+    });
+    expect(v3.rawLines[0]).toBe('{"type":"welcome","protocolVersion":3}');
+    expect(v3.rawLines[1]).toBe(
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true}',
+    );
+
+    // Options round trip: the dashboard's toggle reaches the link and the session state.
+    manager.setSdkOptions({ inflateTracking: false });
+    await v3.waitFor((message) => message.type === 'config' && !message.inflateTracking);
+    expect(v3.rawLines.at(-1)).toBe(
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":false}',
+    );
+    expect(manager.getSessionState().sdk?.options).toEqual({
+      stallThresholdMs: 150,
+      strictMode: false,
+      inflateTracking: false,
+    });
+    v3.close();
+  });
+
+  it('ignores the v3 golden lines on a v2 link', async () => {
+    const { manager, port, ofType } = await startSession();
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 2 });
+    for (const line of GOLDEN.slice(1)) client.send(line);
+    const done = { name: 'done', className: 'com.example.shop.ui.DoneActivity', kind: 'activity' } as const;
+    client.send({ type: 'screen', ts: DEVICE_START_MS, screen: done });
+    await waitUntil(() => ofType('screen').some((message) => message.span.screen?.name === 'done'));
+    expect(ofType('inflate')).toEqual([]);
+    expect(ofType('viewtree')).toEqual([]);
+    expect(manager.getSnapshot()).toMatchObject({ inflates: [], viewTrees: [] });
+    expect(manager.getSessionState().sdk?.connected).toBe(true);
+    client.close();
+  });
+
+  it('ignores the v2 and v3 golden lines on a v1 link', async () => {
     const { manager, port, ofType } = await startSession();
     const client = await DeviceClient.open(port);
     for (const line of GOLDEN) client.send(line);
@@ -231,6 +288,8 @@ describe('golden device messages through the gateway', () => {
     expect(client.rawLines).toEqual(['{"type":"welcome","protocolVersion":1}']);
     expect(ofType('stall')).toEqual([]);
     expect(ofType('strictmode')).toEqual([]);
+    expect(ofType('inflate')).toEqual([]);
+    expect(ofType('viewtree')).toEqual([]);
     expect(manager.getSessionState().sdk?.connected).toBe(true);
     client.close();
   });
