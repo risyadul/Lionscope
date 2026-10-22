@@ -283,7 +283,7 @@ export interface Snapshot {
 //
 // The server talks to each emulator over its own gRPC endpoint (EmulatorController), found through the
 // emulator's discovery file (`pid_<pid>.ini`: `port.serial`, `grpc.port`, `grpc.token`). The token never
-// leaves the server. Physical devices are not mirrored in 0.3.0.
+// leaves the server. Physical devices (0.3.1) are mirrored through scrcpy-server instead (`server/src/scrcpy`).
 // ---------------------------------------------------------------------------
 
 /**

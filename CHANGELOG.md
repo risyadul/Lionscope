@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-22
+
 ### Added
 
 - Physical devices in the Device column: pick a phone connected over USB and see and operate its screen like
@@ -18,6 +20,12 @@ All notable changes to Lionscope are documented here. The format is based on
   screen on/off.
 - Clear messages when a phone refuses injected input (Xiaomi / HyperOS: "USB debugging (Security settings)"),
   when the mirroring server can't start, and when the browser can't decode H.264.
+
+### Fixed
+
+- The top bar no longer switches between one and two rows as the session status changes (PID, elapsed time,
+  frames from SDK), which made the device screen shrink and grow. From 1280 px up it is one fixed-height row;
+  when space is short, secondary status details collapse and stay available in the tooltips.
 
 ## [0.3.0] - 2026-10-22
 
@@ -130,7 +138,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.3.1...HEAD
+[0.3.1]: https://github.com/risyadul/Lionscope/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/risyadul/Lionscope/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/risyadul/Lionscope/compare/0.1.0...0.1.1

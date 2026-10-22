@@ -1,6 +1,6 @@
 {
   "name": "@lionscope/server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
   "dependencies": {
     "@grpc/grpc-js": "1.14.6",
     "@grpc/proto-loader": "0.8.1",
-    "@lionscope/protocol": "0.3.0",
+    "@lionscope/protocol": "0.3.1",
     "tsx": "^4.23.15",
     "ws": "^8.22.0",
     "zod": "^4.6.7"

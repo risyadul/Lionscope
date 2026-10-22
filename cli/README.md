@@ -24,7 +24,7 @@ Options:
 ```
 
 Nothing needs to be installed on the device. For screen names and per-frame `FrameMetrics`, add the optional
-debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.3.0"` from JitPack).
+debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.3.1"` from JitPack).
 
 Documentation, the SDK and the source: <https://github.com/risyadul/Lionscope>. Licensed under the
 [Apache License 2.0](LICENSE); bundled third-party licenses are in `dist/THIRD_PARTY_NOTICES.txt`.
