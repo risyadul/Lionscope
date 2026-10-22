@@ -8,11 +8,11 @@ import type { SdkStatus as SdkState } from '@lionscope/protocol/wire';
 export const SDK_GRADLE_SNIPPET = `// settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.3.1"`;
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.0"`;
 
 /** Projects that centralise repositories (FAIL_ON_PROJECT_REPOS) can't declare them per module. */
 export const SDK_SETTINGS_NOTE =
-  'If the project uses dependencyResolutionManagement, put the maven block in settings.gradle instead. Apps that call the Lionscope API explicitly also add releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.3.1".';
+  'If the project uses dependencyResolutionManagement, put the maven block in settings.gradle instead. Apps that call the Lionscope API explicitly also add releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.0".';
 
 type CopyState = 'idle' | 'copied' | 'failed';
 

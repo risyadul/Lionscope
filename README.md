@@ -26,8 +26,10 @@ janky list first.</sub>
 
 The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session; the
 emulator's screen on the left; stacked timeline charts in the middle that share one time axis (last 1, 5 or 10
-minutes) and can be paused, with the app's logcat in a resizable drawer below them; and, with the SDK, the
-Screens, Stalls and Layouts tabs on the right. Below 1280 px the screen opens as a drawer from the top bar.
+minutes) and can be paused, with the app's logcat in a drawer below them (drag its bar to resize it,
+double-click the bar to maximise it; click, shift-click or Cmd/Ctrl-click lines and press Cmd/Ctrl+C to copy
+them); and, with the SDK, the Screens, Stalls and Layouts tabs on the right. Below 1280 px the screen opens as a
+drawer from the top bar.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
@@ -90,17 +92,24 @@ per stack, and at most 10 per second overall.
 
 With the SDK (0.4.0+ SDK and server), the **Layouts** tab lists the XML layouts the app inflates on the main
 thread through an `AppCompatActivity`'s inflater: how often, total, mean and slowest time, the views created by
-the slowest inflation, and the screens it ran on. It is sorted by total time; click a column to sort by it. Layouts that come from the Android framework or
-libraries (`abc_`, `mtrl_`, `design_`, …) are hidden until you switch on **Show library layouts**. A layout the
-SDK cannot name is shown by its first view and XML line (`Button:12`, in italics). A layout inflated inside
-another one (an `<include>`, or a compound view's own layout) gets its own row, marked **nested**, because that
-is its own cost; but its time is already part of the layout around it, so the row is not extra time. The
-Screens tab's **Inflate** column counts each inflation once, nested ones left out, and the gold lane markers
-only show top-level inflations. The Screens tab gets an
-**Inflate** column (inflation time on that screen, the slowest layout in the tooltip) and a **Views** column
-(views and depth from the screen's latest view tree, the deepest path in the tooltip). Inflations of 16 ms or
-more also appear as gold bars on the rail under the Main thread lane's baseline; hover one for the layout, its
-time, its views and the screen, click it to open the Layouts tab.
+the slowest inflation, and the screens it ran on. It is sorted by total time; click a column to sort by it.
+Layouts that come from the Android framework or libraries (`abc_`, `mtrl_`, `design_`, …) are hidden until you
+switch on **Show library layouts**. A layout the SDK cannot name is shown by its first view and XML line
+(`Button:12`, in italics). A layout inflated inside another one (an `<include>`, or a compound view's own
+layout) gets its own row, marked **nested**, because that is its own cost; but its time is already part of the
+layout around it, so the row is not extra time.
+
+<img width="363" alt="Layouts tab: the sample's layouts sorted by total inflation time, fragment_home first, its included dashboard cards marked nested, and item_row inflated 28 times on the list screen" src="docs/images/dashboard-layouts.png">
+
+<sub>The Layouts tab after opening the sample's screens: `fragment_home` is the slowest single inflation, its
+included cards (`view_dashboard_card`, nested) make up most of it, and `item_row` adds up over 28 RecyclerView
+rows.</sub>
+
+The Screens tab gets an **Inflate** column (inflation time on that screen, each inflation counted once and nested
+ones left out, the slowest layout in the tooltip) and a **Views** column (views and depth from the screen's
+latest view tree, the deepest path in the tooltip). Top-level inflations of 16 ms or more also appear as gold
+bars on the rail under the Main thread lane's baseline; hover one for the layout, its time, its views and the
+screen, click it to open the Layouts tab.
 
 How it is measured: the SDK installs a `LayoutInflater.Factory2` on each Activity before it is created and
 times view creation from the first view of a layout to the last, then hands the work on (AppCompat's view
@@ -222,7 +231,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.3.1"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -255,7 +264,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.3.1"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -414,7 +423,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.3.1`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.4.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

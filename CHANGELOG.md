@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-22
+
 ### Added
 
 - Layout inflation timing (SDK, Android 10+, `AppCompatActivity` screens only; plain `Activity` and
@@ -32,11 +34,24 @@ All notable changes to Lionscope are documented here. The format is based on
 - Sample app: a heavier Home screen (nested cards with includes and a `<merge>`) and an off-main-thread inflate
   button.
 
+- Logcat: copy lines. Click a line to select it (shift-click for a range, Cmd/Ctrl-click to add or remove,
+  Cmd/Ctrl+A for all) and press Cmd/Ctrl+C, or use the copy button on a line; lines are copied as
+  `HH:MM:SS.mmm L Tag: message`.
+
 ### Changed
 
+- Logcat drawer: one toolbar row instead of three (grip, pid, "matched of buffered" line count, level chips,
+  search, Clear, collapse), so many more lines fit. The whole bar is the resize handle: drag anywhere but its
+  controls, double-click it to toggle the maximum height; the grip keeps the keyboard splitter. Warning and
+  error lines get a left rule and a light wash instead of a full tint.
 - Device protocol 3 (`inflate`, `viewtree`, `config.inflateTracking`) and dashboard protocol 3. 0.2.x and 0.3.x
   SDKs keep working with this server (they negotiate 2 and send nothing new), and a 0.4.0 SDK works with older
   servers.
+
+### Fixed
+
+- The logcat drawer's size limits: the column was never measured, so the default and maximum heights were
+  fixed numbers, and a maximised drawer could slide under the timeline toolbar.
 
 ## [0.3.1] - 2026-10-22
 
@@ -170,7 +185,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.3.1...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/risyadul/Lionscope/compare/0.3.1...0.4.0
 [0.3.1]: https://github.com/risyadul/Lionscope/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/risyadul/Lionscope/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0

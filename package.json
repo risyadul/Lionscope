@@ -1,6 +1,6 @@
 {
   "name": "lionscope-workspace",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Lionscope — lightweight Android profiler with a web dashboard",
   "license": "Apache-2.0",
