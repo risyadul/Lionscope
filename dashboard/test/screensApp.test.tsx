@@ -111,7 +111,7 @@ describe('SDK status', () => {
       .getByText('connected', { exact: false, selector: '.sdk-meta' })
       .closest('.sdk-pill') as HTMLElement;
     expect(pill.textContent).toBe('SDK v0.1.0 connected frames from SDK');
-    expect(pill.title).toBe('com.example.shop · API 34');
+    expect(pill.title).toBe('SDK v0.1.0 · connected · frames from SDK · com.example.shop · API 34');
   });
 
   it('explains how to add the SDK; Escape closes the hint', () => {

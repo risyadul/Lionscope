@@ -156,16 +156,23 @@ export function SdkStatus({ sdk, linkError, isSessionActive }: Props) {
   if (!isSessionActive || sdk === undefined) return null;
 
   if (sdk.connected) {
-    const detail = [sdk.processName, sdk.apiLevel === null ? null : `API ${sdk.apiLevel}`]
-      .filter((part) => part !== null)
+    // Everything after "SDK" collapses on narrow top bars; the tooltip and screen readers keep it all.
+    const title = [
+      sdk.sdkVersion && `SDK v${sdk.sdkVersion}`,
+      'connected',
+      sdk.framesActive && 'frames from SDK',
+      sdk.processName,
+      sdk.apiLevel === null ? null : `API ${sdk.apiLevel}`,
+    ]
+      .filter(Boolean)
       .join(' · ');
     return (
-      <span className="sdk-pill" data-state="connected" title={detail || undefined}>
+      <span className="sdk-pill" data-state="connected" title={title}>
         <span className="sdk-dot" aria-hidden="true" />
-        <span>
-          SDK{sdk.sdkVersion && <span className="mono"> v{sdk.sdkVersion}</span>}
-          <span className="sdk-meta"> connected</span>
-          {sdk.framesActive && <span className="sdk-meta"> frames from SDK</span>}
+        <span className="sdk-label">
+          SDK{sdk.sdkVersion && <span className="sdk-version mono"> v{sdk.sdkVersion}</span>}
+          <span className="sdk-meta sdk-connected"> connected</span>
+          {sdk.framesActive && <span className="sdk-meta sdk-frames"> frames from SDK</span>}
         </span>
       </span>
     );
@@ -177,11 +184,11 @@ export function SdkStatus({ sdk, linkError, isSessionActive }: Props) {
       <span
         className="sdk-pill"
         data-state="disconnected"
-        title="The app’s SDK link closed. It reconnects with backoff while the app is running."
+        title={`SDK v${sdk.sdkVersion} · disconnected. The app’s SDK link closed. It reconnects with backoff while the app is running.`}
       >
         <span className="sdk-dot" aria-hidden="true" />
-        <span>
-          SDK<span className="mono"> v{sdk.sdkVersion}</span>
+        <span className="sdk-label">
+          SDK<span className="sdk-version mono"> v{sdk.sdkVersion}</span>
           <span className="sdk-meta"> disconnected</span>
         </span>
       </span>
@@ -201,7 +208,7 @@ export function SdkStatus({ sdk, linkError, isSessionActive }: Props) {
         onClick={() => setIsOpen((open) => !open)}
       >
         <span className="sdk-dot" aria-hidden="true" />
-        {isFailed ? 'SDK link failed' : 'No SDK'}
+        <span className="sdk-label">{isFailed ? 'SDK link failed' : 'No SDK'}</span>
         {INFO_ICON}
       </button>
       {isOpen && (

@@ -1,9 +1,13 @@
+/* One row at a fixed height (two fixed rows below 1280 px): status text never wraps, it collapses. */
 .topbar {
   position: relative;
   z-index: 10;
   display: flex;
+  flex: none;
+  flex-wrap: nowrap;
   align-items: flex-end;
   gap: var(--space-5);
+  block-size: var(--topbar-h);
   padding: 10px var(--space-4) 10px;
   border-bottom: 1px solid var(--rule-strong);
   background: var(--plane);
@@ -58,7 +62,7 @@
 .topbar-controls {
   display: flex;
   flex: 1 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-end;
   gap: var(--space-2) var(--space-3);
   min-width: 0;
@@ -72,8 +76,10 @@
   min-width: 0;
 }
 
+/* The app field and the session cluster split the room by ratio, never by their content. */
 .field--grow {
-  flex: 1 1 260px;
+  flex: 1 1 0;
+  min-width: 12rem;
   max-width: 440px;
 }
 
@@ -305,15 +311,20 @@
 
 /* Session -------------------------------------------------------------------- */
 
+/* Its width comes from the bar alone (contained), and the pills inside collapse to fit it. */
 .topbar-session {
   display: flex;
+  flex: 2 1 0;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  container: session / inline-size;
 }
 
+/* Fits "Stopping…", so the pills don't shift while a request is in flight. */
 .session-btn {
-  min-width: 84px;
+  flex: none;
+  min-width: 108px;
 }
 
 .session-btn--stop {
@@ -323,6 +334,7 @@
 
 .status-pill {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -357,6 +369,20 @@
   margin-right: 6px;
   color: var(--rule-strong);
   content: '·';
+}
+
+/* Last resort when even the collapsed pills don't fit: the label ellipsizes, the time stays. */
+.status-label,
+.sdk-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Room for "10 h 59 m", so the ticking time never nudges the SDK pill. */
+.status-elapsed {
+  flex: none;
+  min-width: calc(10ch + 6px);
 }
 
 .status-error {
@@ -425,13 +451,19 @@
 
 /* SDK link ----------------------------------------------------------------------- */
 
+/* The SDK pill gives way (ellipsis) long before the session state does. */
 .sdk-status {
   position: relative;
+  display: flex;
+  flex: 0 1000 auto;
+  min-width: 0;
 }
 
 .sdk-pill {
   display: inline-flex;
+  flex: 0 1000 auto;
   align-items: center;
+  min-width: 0;
   gap: 6px;
   height: 26px;
   padding: 0 10px;
@@ -517,8 +549,12 @@ button.sdk-pill .sdk-dot {
   animation: pop-in 160ms var(--ease-out) both;
 }
 
-/* On phones the pill starts its own row at the left edge. */
+/* On phones the session cluster has its own row: the popover spans it from the left edge. */
 @media (max-width: 640px) {
+  .sdk-status {
+    position: static;
+  }
+
   .sdk-pop {
     right: auto;
     left: 0;
@@ -612,12 +648,15 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
 
 /* Server link ------------------------------------------------------------------ */
 
+/* Wide enough for "Connected", so going offline doesn't widen the controls. */
 .topbar-link {
   display: inline-flex;
   flex: none;
   align-items: center;
   align-self: center;
+  justify-content: flex-end;
   gap: 6px;
+  min-width: 5.5rem;
   margin-left: auto;
   color: var(--ink-muted);
   font-size: var(--text-meta);
@@ -634,11 +673,99 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
   background: var(--critical);
 }
 
-@media (max-width: 1180px) {
+/* Secondary status parts collapse in this order as the session cluster narrows. They stay in the
+   accessibility tree (visually hidden, never display: none) and in the pills' tooltips. */
+@container session (width < 680px) {
+  .sdk-frames {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@container session (width < 600px) {
+  .sdk-pill[data-state='disconnected'] .sdk-version {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@container session (width < 580px) {
+  .sdk-connected {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@container session (width < 540px) {
+  .status-pid {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@container session (width < 430px) {
+  .sdk-version {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* Phones: Start / Stop shrinks to its icon (the label is still its name), the time keeps only its own room. */
+@container session (width < 380px) {
+  .session-btn {
+    width: 30px;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .session-btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .status-elapsed {
+    min-width: 0;
+  }
+}
+
+/* A typical "model · serial" label still fits; the room goes to the session cluster. */
+@media (max-width: 1599px) {
+  .select {
+    width: 240px;
+  }
+}
+
+/* Below 1280 px (the device column is a drawer): brand and link on one row, the controls on the next. */
+@media (max-width: 1279px) {
   .topbar {
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2) var(--space-4);
+    block-size: auto;
   }
 
   .topbar-controls {
@@ -646,6 +773,17 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
     order: 3;
     padding-left: 0;
     border-left: 0;
+  }
+}
+
+/* Too narrow for the pills beside the fields: the session cluster always takes a third row. */
+@media (max-width: 1179px) {
+  .topbar-controls {
+    flex-wrap: wrap;
+  }
+
+  .topbar-session {
+    flex: 1 1 100%;
   }
 }
 
@@ -660,9 +798,14 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
     width: 100%;
   }
 
-  .topbar-session {
-    flex: 1 1 100%;
+  /* Stacked: device, app and the session cluster each take a full row. */
+  .topbar-controls {
     flex-wrap: wrap;
+  }
+
+  .topbar-session {
+    position: relative;
+    flex: 1 1 100%;
   }
 
   .status-pill {
