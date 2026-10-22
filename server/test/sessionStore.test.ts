@@ -42,6 +42,7 @@ describe('SessionStore', () => {
       stalls: [],
       strictMode: [],
       screens: [],
+      mirror: [],
     });
     expect(setup().store.snapshot()).toEqual(emptySnapshot());
     expect(SAMPLE_STREAMS).toContain('breakdown');
@@ -255,5 +256,27 @@ describe('SessionStore', () => {
     expect(store.topScreenAt(3500)).toBeNull();
     expect(store.topScreenAt(4999)).toBe('home');
     expect(store.topScreenAt(5000)).toBeNull();
+  });
+
+  it('keeps mirroring spans: one open at a time, closed with the same start, pruned by their end', () => {
+    const { store, messages, setNow } = setup(10_000, 100_000);
+    store.closeMirror(100_000);
+    store.openMirror('FAKEPHYS0001', 100_000);
+    store.openMirror('FAKEPHYS0001', 100_500);
+    store.closeMirror(99_000);
+    store.closeMirror(102_000);
+    expect(messages).toEqual([
+      { type: 'mirror', span: { serial: 'FAKEPHYS0001', start: 100_000, end: null } },
+      { type: 'mirror', span: { serial: 'FAKEPHYS0001', start: 100_000, end: 100_000 } },
+    ]);
+    // A new span never starts before the previous one ended.
+    store.openMirror('FAKEPHYS0001', 99_500);
+    expect(store.snapshot().mirror).toEqual([
+      { serial: 'FAKEPHYS0001', start: 100_000, end: 100_000 },
+      { serial: 'FAKEPHYS0001', start: 100_000, end: null },
+    ]);
+    store.closeMirror(105_000);
+    setNow(112_000);
+    expect(store.snapshot().mirror).toEqual([{ serial: 'FAKEPHYS0001', start: 100_000, end: 105_000 }]);
   });
 });

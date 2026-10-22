@@ -3,6 +3,13 @@ import type { ScreenClientMessage, ScreenSize } from '@lionscope/protocol/wire';
 import { downloadBlob, screenshotFileName } from '../../lib/download.ts';
 import { createFpsMeter, createFrameDecoder } from '../../lib/frameQueue.ts';
 import {
+  createVideoPipeline,
+  videoUnavailableMessage,
+  type VideoError,
+  webCodecsApi,
+  type VideoPipeline,
+} from '../../lib/videoDecoder.ts';
+import {
   createScreenConnection,
   screenUrl,
   type ScreenConnection,
@@ -23,7 +30,8 @@ export interface ScreenStreamEvents {
 
 interface Input {
   serial: string;
-  avdName: string;
+  /** Screenshot file name prefix. */
+  name: string;
   size: ScreenSize;
   /** False while the panel is collapsed or the tab is hidden: no socket, no decoding. */
   isEnabled: boolean;
@@ -39,30 +47,45 @@ export interface ScreenStream {
   send: (msg: ScreenClientMessage) => boolean;
   /** Opens a fresh socket, e.g. after an error a retry couldn't fix. */
   retry: () => void;
+  /** The device's H.264 stream can't be decoded here; the socket is closed. */
+  videoError: VideoError | null;
+  /** The device refuses input (`input_denied`), with the server's message; the video keeps playing. */
+  inputDenied: string | null;
+  dismissInputDenied: () => void;
 }
 
-function drawFrame(canvas: HTMLCanvasElement | null, bitmap: ImageBitmap): void {
+function drawFrame(
+  canvas: HTMLCanvasElement | null,
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+): void {
   if (!canvas) return;
   // The canvas keeps the frame's pixel size; CSS scales it into the device frame.
-  if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-  if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-  canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  canvas.getContext('2d')?.drawImage(image, 0, 0);
 }
 
-/** One screen socket per visible panel: frames go straight to the canvas, screenshots to a download. */
-export function useScreenStream({ serial, avdName, size, isEnabled, events }: Input): ScreenStream {
+/**
+ * One screen socket per visible panel: PNG frames (emulators) and H.264 video (physical devices) go straight
+ * to the canvas, screenshots to a download.
+ */
+export function useScreenStream({ serial, name, size, isEnabled, events }: Input): ScreenStream {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const connectionRef = useRef<ScreenConnection | null>(null);
   const sizeRef = useRef(size);
-  const avdRef = useRef(avdName);
+  const nameRef = useRef(name);
   const [state, setState] = useState<ScreenConnectionState>(CONNECTING);
   const [info, setInfo] = useState<ScreenInfo | null>(null);
   const [fps, setFps] = useState(0);
   const [attempt, setAttempt] = useState(0);
+  const [videoError, setVideoError] = useState<VideoError | null>(null);
+  const [inputDenied, setInputDenied] = useState<string | null>(null);
 
   useEffect(() => {
-    avdRef.current = avdName;
-  }, [avdName]);
+    nameRef.current = name;
+  }, [name]);
 
   // A new size goes over the open socket; a reconnect picks it up from the URL.
   useEffect(() => {
@@ -77,20 +100,53 @@ export function useScreenStream({ serial, avdName, size, isEnabled, events }: In
     const decoder = createFrameDecoder<ImageBitmap>({
       decode: (png) => createImageBitmap(png),
       draw: (bitmap) => {
-        drawFrame(canvasRef.current, bitmap);
+        drawFrame(canvasRef.current, bitmap, bitmap.width, bitmap.height);
         meter.tick(performance.now());
       },
     });
+    let video: VideoPipeline | null = null;
+    const failVideo = (error: VideoError) => {
+      connection.close();
+      setVideoError(error);
+    };
+    // Created on the first video packet: emulators stream PNG and never touch WebCodecs.
+    const videoPipeline = (): VideoPipeline | null => {
+      if (video !== null) return video;
+      const api = webCodecsApi();
+      if (api === null) {
+        failVideo({ message: videoUnavailableMessage(), canRetry: false });
+        return null;
+      }
+      video = createVideoPipeline({
+        api,
+        draw: (frame) => {
+          drawFrame(canvasRef.current, frame, frame.displayWidth, frame.displayHeight);
+          meter.tick(performance.now());
+          connection.markLive();
+        },
+        onUnsupported: (message) => failVideo({ message, canRetry: false }),
+        onFailed: (message) => failVideo({ message, canRetry: true }),
+        // RESET_VIDEO on the device: a fresh IDR instead of waiting for the encoder's next one (~10 s).
+        onKeyFrameNeeded: () => connection.send({ type: 'keyFrame' }),
+      });
+      return video;
+    };
     const connection = createScreenConnection({
       url: () => screenUrl(window.location, serial, sizeRef.current),
       onBinary: (msg) => {
         if (msg.kind === 'frame') decoder.push(msg.png);
-        else downloadBlob(msg.png, screenshotFileName(avdRef.current, new Date()));
+        else if (msg.kind === 'video') videoPipeline()?.push(msg.packet);
+        else downloadBlob(msg.png, screenshotFileName(nameRef.current, new Date()));
       },
-      onInfo: setInfo,
+      onInfo: (next) => {
+        // A new capture session (rotation, size): its own SPS / PPS and key frame follow.
+        if (next.codec === 'h264') video?.reset();
+        setInfo(next);
+      },
       onState: setState,
       onOpen: () => events?.current.onOpen?.(),
       onClipboard: (text) => events?.current.onClipboard?.(text),
+      onInputDenied: setInputDenied,
     });
     connectionRef.current = connection;
     const timer = setInterval(() => setFps(meter.fps(performance.now())), FPS_REFRESH_MS);
@@ -98,22 +154,30 @@ export function useScreenStream({ serial, avdName, size, isEnabled, events }: In
       clearInterval(timer);
       connection.close();
       decoder.dispose();
+      video?.dispose();
       connectionRef.current = null;
       // A re-enabled panel must not show the old stream as live before the new socket reports.
       setState(CONNECTING);
       setFps(0);
+      setVideoError(null);
+      setInputDenied(null);
     };
   }, [isEnabled, serial, attempt, events]);
 
   const send = useCallback((msg: ScreenClientMessage) => connectionRef.current?.send(msg) ?? false, []);
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const dismissInputDenied = useCallback(() => setInputDenied(null), []);
+  const isVideoFailed = isEnabled && videoError !== null;
 
   return {
-    state: isEnabled ? state : CONNECTING,
+    state: !isEnabled ? CONNECTING : isVideoFailed ? { ...state, status: 'failed' } : state,
     info: info !== null && info.serial === serial ? info : null,
-    fps: isEnabled && state.status === 'live' ? fps : 0,
+    fps: isEnabled && state.status === 'live' && !isVideoFailed ? fps : 0,
     canvasRef,
     send,
     retry,
+    videoError: isVideoFailed ? videoError : null,
+    inputDenied: isEnabled ? inputDenied : null,
+    dismissInputDenied,
   };
 }

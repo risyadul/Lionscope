@@ -15,11 +15,15 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { SCRCPY_VERSION } from '../../server/src/scrcpy/protocol.ts';
 
 const cliDir = fileURLToPath(new URL('..', import.meta.url));
 const repoDir = path.dirname(cliDir.replace(/[\\/]$/, ''));
 const dashboardDist = path.join(repoDir, 'dashboard', 'dist');
 const outFile = path.join(cliDir, 'dist', 'lionscope.mjs');
+/** The vendored scrcpy-server and its checksum line, shipped next to the bundle (resolveScrcpyJar). */
+const SCRCPY_JAR = `scrcpy-server-v${SCRCPY_VERSION}`;
+const vendorDir = path.join(repoDir, 'server', 'vendor');
 
 // ws loads these optional native addons inside try/catch; left external, the bundle runs without them.
 const OPTIONAL_NATIVE = ['bufferutil', 'utf-8-validate'];
@@ -79,10 +83,24 @@ function licenseText(dir: string): string {
   return file ? readFileSync(path.join(dir, file), 'utf8').trim() : '(no license file in the package)';
 }
 
+/** scrcpy-server is shipped as a file, not bundled: its notice is written by hand (Apache-2.0, like Lionscope). */
+function scrcpyNotice(): string {
+  return [
+    `scrcpy-server@${SCRCPY_VERSION} (Apache-2.0)`,
+    '',
+    `dist/${SCRCPY_JAR}, unmodified from https://github.com/Genymobile/scrcpy/releases/tag/v${SCRCPY_VERSION}.`,
+    'Copyright (C) 2018 Genymobile',
+    'Copyright (C) 2018-2026 Romain Vimont',
+    '',
+    readFileSync(path.join(repoDir, 'LICENSE'), 'utf8').trim(),
+  ].join('\n');
+}
+
 function thirdPartyNotices(packages: Iterable<PackageInfo>): string {
   const sections = [...packages]
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((info) => `${info.name}@${info.version} (${info.license})\n\n${licenseText(info.dir)}`);
+  sections.push(scrcpyNotice());
   return `Third-party software bundled in the lionscope package\n\n${sections.join(`\n\n${'-'.repeat(78)}\n\n`)}\n`;
 }
 
@@ -130,6 +148,9 @@ async function main(): Promise<void> {
   }
   writeFileSync(path.join(cliDir, 'dist', 'THIRD_PARTY_NOTICES.txt'), thirdPartyNotices(bundled.values()));
 
+  for (const file of [SCRCPY_JAR, `${SCRCPY_JAR}.sha256`]) {
+    copyFileSync(path.join(vendorDir, file), path.join(cliDir, 'dist', file));
+  }
   cpSync(dashboardDist, path.join(cliDir, 'dashboard'), { recursive: true });
   for (const file of ['LICENSE', 'NOTICE']) copyFileSync(path.join(repoDir, file), path.join(cliDir, file));
 

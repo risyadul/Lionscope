@@ -4,6 +4,19 @@ All notable changes to Lionscope are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/). The npm package, the server and the Android SDK share one version.
 
+## [Unreleased]
+
+### Added
+
+- Physical devices in the Device column: pick a phone connected over USB and see and operate its screen like
+  an emulator's (touch, multi-touch, wheel, keys, Share clipboard, navigation, rotation, screenshot, frame size).
+  Lionscope pushes the bundled scrcpy-server v5.0.1 (Apache-2.0, SHA-256 checked) over adb while the column is
+  open; the phone's hardware encoder streams H.264 that the browser decodes with WebCodecs. Nothing is installed.
+- A "Mirroring on" band on the timeline while a phone of the current session is mirrored, since its encoder
+  adds a little work.
+- Clear messages when a phone refuses injected input (Xiaomi / HyperOS: "USB debugging (Security settings)"),
+  when the mirroring server can't start, and when the browser can't decode H.264.
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
@@ -115,6 +128,7 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.3.0...HEAD
 [0.3.0]: https://github.com/risyadul/Lionscope/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/risyadul/Lionscope/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/risyadul/Lionscope/compare/0.1.0...0.1.1

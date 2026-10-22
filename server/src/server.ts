@@ -9,7 +9,8 @@ import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
 import { createEmulatorHost } from './emulator/emulatorHost.ts';
 import type { EmulatorHost } from './emulator/emulatorHost.ts';
 import { EmulatorManager } from './emulator/emulatorManager.ts';
-import { createScreenGateway } from './emulator/screenGateway.ts';
+import { createScreenGateway, isEmulatorSerial } from './emulator/screenGateway.ts';
+import { cleanupScrcpyLeftovers } from './scrcpy/scrcpyServer.ts';
 import { errorMessage, log } from './log.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
 import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
@@ -36,6 +37,8 @@ export interface LionscopeServerOptions {
   /** Defaults to the emulator of adb's SDK (tests pass a fake). */
   emulatorHost?: EmulatorHost;
   emulatorPollMs?: number;
+  /** scrcpy-server for physical devices; defaults to the vendored one (tests pass a fixture). */
+  scrcpyJarPath?: string;
 }
 
 export interface LionscopeServer {
@@ -139,6 +142,12 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     server,
     emulators,
     createClient: emulatorHost.createClient,
+    devices: {
+      adb: options.adb,
+      devices: () => manager.getDevices(),
+      onMirroring: (serial, open) => manager.setMirroring(serial, open),
+      ...(options.scrcpyJarPath ? { jarPath: options.scrcpyJarPath } : {}),
+    },
     allowedOrigins: () => allowedOrigins,
     pingIntervalMs: options.pingIntervalMs,
   });
@@ -179,12 +188,20 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       }
       manager.startDevicePolling();
       void emulators.refresh();
+      // Servers an earlier, killed Lionscope left on physical devices (emulators never run scrcpy).
+      void manager.refreshDevices().then((devices) =>
+        cleanupScrcpyLeftovers(
+          options.adb,
+          devices
+            .filter((device) => device.state === 'device' && !isEmulatorSerial(device.serial))
+            .map((device) => device.serial),
+        ),
+      );
       return bound;
     },
     async close() {
-      await screenGateway.close();
-      // Emulators this server booted are shut down (in parallel with the session).
-      await Promise.all([manager.close(), emulators.close()]);
+      // In parallel: device screens (scrcpy cleanup), the session, and the emulators this server booted.
+      await Promise.all([screenGateway.close(), manager.close(), emulators.close()]);
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

@@ -206,6 +206,7 @@ describe('parseScreenClientMessage', () => {
       { type: 'nav', button: 'recents' },
       { type: 'rotate', direction: 'left' },
       { type: 'screenshot' },
+      { type: 'keyFrame' },
       ...SCREEN_SIZES.map((size) => ({ type: 'setSize', size })),
     ];
     for (const message of messages) expect(parse(message)).toEqual({ ok: true, value: message });
@@ -271,6 +272,7 @@ describe('parseScreenClientMessage', () => {
     expect(parse({ type: 'setSize', size: 1080 }).ok).toBe(false);
     expect(parse({ type: 'setSize', size: '540' }).ok).toBe(false);
     expect(parse({ type: 'screenshot', full: true }).ok).toBe(false);
+    expect(parse({ type: 'keyFrame', now: true }).ok).toBe(false);
     expect(parse({ type: 'startSession' }).ok).toBe(false);
     expect(parseScreenClientMessage('{nope')).toEqual({ ok: false, error: 'invalid JSON' });
   });

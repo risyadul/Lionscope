@@ -482,6 +482,46 @@
   display: none;
 }
 
+/* Physical device that refuses input: video keeps playing, so this sits under the screen, not over it. */
+.device-input-denied {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-3) 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--jank) 40%, var(--rule));
+  border-radius: var(--radius-m);
+  background: var(--jank-wash);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  line-height: 1.45;
+}
+
+.device-input-denied p {
+  margin: 0;
+}
+
+.device-input-denied-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  overflow-wrap: anywhere;
+}
+
+.device-input-denied strong {
+  color: var(--jank-text);
+  font-weight: 600;
+}
+
+.device-input-denied-dismiss {
+  flex: none;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
 /* Android → desktop clipboard feedback, floating over the bottom of the screen area. */
 .screen-view {
   position: relative;

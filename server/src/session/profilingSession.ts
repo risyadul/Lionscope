@@ -173,6 +173,15 @@ export class ProfilingSession {
     return this.store.snapshot();
   }
 
+  /** The session's device is mirrored from now on (its hardware encoder is busy): a "Mirroring on" span. */
+  mirrorOn(): void {
+    if (!this.stopped) this.store.openMirror(this.serial, this.now());
+  }
+
+  mirrorOff(): void {
+    this.store.closeMirror(this.now());
+  }
+
   /** Change this session's SDK options (partial); the session is re-announced and live links get `config`. */
   setSdkOptions(changes: Partial<SdkOptions>): void {
     this.sdk.setOptions(changes);
@@ -229,6 +238,7 @@ export class ProfilingSession {
     if (this.flushTimer) clearInterval(this.flushTimer);
     this.flushTimer = null;
     this.logs.flush();
+    this.store.closeMirror(this.now());
     this.logcat?.stop();
     this.logcat = null;
     for (const shell of Object.values(this.shells)) shell.close();

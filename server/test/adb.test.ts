@@ -2,8 +2,9 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { adbShell, createAdb } from '../src/adb/adb.ts';
+import { adbShell, createAdb, execBinary } from '../src/adb/adb.ts';
 import { resolveAdbPath } from '../src/adb/resolveAdb.ts';
+import { FakeAdb, FakeChild } from './helpers/fakes.ts';
 
 describe('createAdb (against a stand-in POSIX adb script)', () => {
   let dir: string;
@@ -111,5 +112,72 @@ describe('resolveAdbPath', () => {
   it('falls back to adb on PATH', () => {
     expect(resolveAdbPath({ env: {}, exists: none, platform: 'linux', home: '/x' })).toBe('adb');
     expect(resolveAdbPath({ env: {}, exists: none, platform: 'win32' })).toBe('adb.exe');
+  });
+});
+
+describe('execBinary', () => {
+  const adbWith = (script: (child: FakeChild) => void) => {
+    const adb = new FakeAdb(() => '');
+    const children: FakeChild[] = [];
+    adb.spawn = () => {
+      const child = new FakeChild();
+      children.push(child);
+      setImmediate(() => script(child));
+      return child;
+    };
+    return { adb, children };
+  };
+
+  it('collects stdout as bytes once the process exited and its output ended', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00]);
+    const { adb } = adbWith((child) => {
+      child.stdout.write(png.subarray(0, 3));
+      child.stdout.write(png.subarray(3));
+      child.exit(0);
+    });
+    await expect(
+      execBinary(adb, ['exec-out', 'screencap', '-p'], { timeoutMs: 1000, maxBytes: 100 }),
+    ).resolves.toEqual(png);
+  });
+
+  it('kills the process and rejects when aborted', async () => {
+    const { adb, children } = adbWith(() => undefined);
+    const controller = new AbortController();
+    const running = execBinary(adb, ['push', 'x', 'y'], {
+      timeoutMs: 1000,
+      maxBytes: 4,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(running).rejects.toThrow('aborted');
+    expect(children[0]?.killed).toBe(true);
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      execBinary(adb, ['x'], { timeoutMs: 1000, maxBytes: 4, signal: aborted.signal }),
+    ).rejects.toThrow('aborted');
+  });
+
+  it('rejects on a failed exit (with stderr), too much output, a timeout and a spawn error', async () => {
+    const options = { timeoutMs: 1000, maxBytes: 4 };
+    await expect(
+      execBinary(
+        adbWith((child) => (child.stderr.write('device offline\n'), child.exit(1))).adb,
+        ['x'],
+        options,
+      ),
+    ).rejects.toThrow('adb x failed: device offline');
+    await expect(execBinary(adbWith((child) => child.exit(2)).adb, ['x'], options)).rejects.toThrow(
+      'exit code 2',
+    );
+    const big = adbWith((child) => child.stdout.write(Buffer.alloc(5)));
+    await expect(execBinary(big.adb, ['x'], options)).rejects.toThrow('output over 4 bytes');
+    expect(big.children[0]?.killed).toBe(true);
+    await expect(
+      execBinary(adbWith(() => undefined).adb, ['x'], { ...options, timeoutMs: 20 }),
+    ).rejects.toThrow('timed out');
+    await expect(
+      execBinary(adbWith((child) => child.emit('error', new Error('spawn ENOENT'))).adb, ['x'], options),
+    ).rejects.toThrow('spawn ENOENT');
   });
 });

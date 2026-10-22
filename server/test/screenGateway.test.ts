@@ -153,6 +153,7 @@ describe('screen gateway', () => {
       {
         type: 'screenInfo',
         serial: SERIAL,
+        codec: 'png',
         displayWidth: 1080,
         displayHeight: 2424,
         rotation: 0,

@@ -80,3 +80,62 @@ export function createAdb(adbPath: string): Adb {
 export function adbShell(adb: Adb, serial: string, command: string, options?: ExecOptions): Promise<string> {
   return adb.exec(['-s', serial, 'shell', command], options);
 }
+
+export interface ExecBinaryOptions {
+  timeoutMs: number;
+  maxBytes: number;
+  /** Aborting kills the process and rejects. */
+  signal?: AbortSignal;
+}
+
+/** `adb <args>` to completion with stdout as bytes (exec decodes UTF-8), e.g. `exec-out screencap -p`. */
+export function execBinary(adb: Adb, args: readonly string[], options: ExecBinaryOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = adb.spawn(args);
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let stderr = '';
+    let exitCode: number | null | undefined;
+    let ended = false;
+    let settled = false;
+    const finish = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+      if (error) {
+        child.kill();
+        reject(error);
+      } else resolve(Buffer.concat(chunks, bytes));
+    };
+    const maybeDone = () => {
+      if (!ended || exitCode === undefined) return;
+      if (exitCode === 0) finish(null);
+      else finish(new Error(`adb ${args.join(' ')} failed: ${stderr.trim() || `exit code ${exitCode}`}`));
+    };
+    const timer = setTimeout(() => finish(new Error(`adb ${args.join(' ')} timed out`)), options.timeoutMs);
+    const onAbort = () => finish(new Error(`adb ${args.join(' ')} aborted`));
+    if (options.signal?.aborted) onAbort();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout?.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > options.maxBytes)
+        finish(new Error(`adb ${args.join(' ')}: output over ${options.maxBytes} bytes`));
+      else chunks.push(chunk);
+    });
+    child.stdout?.on('end', () => {
+      ended = true;
+      maybeDone();
+    });
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (text: string) => {
+      stderr = (stderr + text).slice(-4096);
+    });
+    child.on('exit', (code) => {
+      exitCode = code;
+      if (!child.stdout) ended = true;
+      maybeDone();
+    });
+    child.on('error', (error) => finish(error));
+  });
+}

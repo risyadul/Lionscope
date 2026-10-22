@@ -21,6 +21,7 @@ const EMPTY_SNAPSHOT = {
   stalls: [],
   strictMode: [],
   screens: [],
+  mirror: [],
 };
 const DEVICES = fixture('adb-devices.txt');
 
@@ -213,6 +214,39 @@ describe('SessionManager', () => {
     expect(manager.getSessionState()).toMatchObject({ status: 'running', pid: 1105 });
     expect(messages.map((message) => message.type)).toContain('cpu');
     expect(manager.getSnapshot().cpu.length).toBeGreaterThan(0);
+    await manager.close();
+  });
+
+  it('records mirroring spans of the session device: open before or during the session, closed on stop', async () => {
+    const { manager, messages } = setup();
+    const serial = 'emulator-5554';
+    const mirrors = () => messages.flatMap((message) => (message.type === 'mirror' ? [message.span] : []));
+    manager.setMirroring(serial, true);
+    manager.setMirroring('other-device', true);
+    const t0 = Date.now();
+    await manager.startSession(serial, PKG);
+    expect(mirrors()).toEqual([{ serial, start: t0, end: null }]);
+    // A second socket on the same device keeps the span open until both are gone.
+    manager.setMirroring(serial, true);
+    await vi.advanceTimersByTimeAsync(1000);
+    manager.setMirroring(serial, false);
+    manager.setMirroring('other-device', false);
+    expect(mirrors()).toHaveLength(1);
+    manager.setMirroring(serial, false);
+    expect(mirrors().at(-1)).toEqual({ serial, start: t0, end: t0 + 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    manager.setMirroring(serial, true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(manager.getSnapshot().mirror).toEqual([
+      { serial, start: t0, end: t0 + 1000 },
+      { serial, start: t0 + 2000, end: null },
+    ]);
+    await manager.stopSession();
+    expect(mirrors().at(-1)).toEqual({ serial, start: t0 + 2000, end: t0 + 2500 });
+    // No session, no span.
+    manager.setMirroring(serial, false);
+    manager.setMirroring(serial, true);
+    expect(mirrors()).toHaveLength(4);
     await manager.close();
   });
 

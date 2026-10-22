@@ -180,7 +180,8 @@ export function App() {
   // The window follows the clock only while a session is live; once stopped, errored or
   // disconnected it stays on the last sample so the recording doesn't scroll away.
   const isLive = isActive && isOpen;
-  const endTs = paused?.at ?? (isLive || state.latestTs === 0 ? now : state.latestTs);
+  const isFollowingNow = paused === null && (isLive || state.latestTs === 0);
+  const endTs = paused?.at ?? (isFollowingNow ? now : state.latestTs);
   const series = paused ?? state;
   const startTs = endTs - windowMs;
   const screenRows = useMemo(
@@ -294,6 +295,8 @@ export function App() {
         >
           <DevicePanel
             target={selection.target}
+            device={serial === null ? null : (state.devices?.find((d) => d.serial === serial) ?? null)}
+            hasDeviceList={state.devices !== null}
             isOnline={isOpen}
             isVisible={deviceColumn.isVisible}
             pending={emulatorActions.pending}
@@ -311,6 +314,8 @@ export function App() {
             breakdown={series.breakdown}
             stalls={series.stalls}
             strictMode={series.strictMode}
+            mirror={series.mirror}
+            isFollowingNow={isFollowingNow}
             showScreens={showScreens}
             showBreakdown={showBreakdown}
             showMainThread={showMainThread}

@@ -157,6 +157,9 @@ export class ScreenSession {
       case 'screenshot':
         void this.screenshot();
         return;
+      case 'keyFrame':
+        // PNG frames stand on their own.
+        return;
       case 'clipboardSync':
       case 'clipboard':
       case 'paste':
@@ -277,6 +280,7 @@ export class ScreenSession {
     const info = {
       type: 'screenInfo',
       serial: this.serial,
+      codec: 'png',
       displayWidth: display.width,
       displayHeight: display.height,
       rotation: frame.rotation,

@@ -1,2 +1,6 @@
 Lionscope
 Copyright 2026 risyadul
+
+This product includes scrcpy-server (server/vendor/scrcpy-server-v5.0.1), from scrcpy
+(https://github.com/Genymobile/scrcpy), Copyright (C) 2018 Genymobile and Copyright (C) 2018-2026 Romain Vimont,
+licensed under the Apache License, Version 2.0.

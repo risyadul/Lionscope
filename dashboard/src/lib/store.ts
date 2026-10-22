@@ -11,6 +11,7 @@ import type {
   FrameSample,
   LogEntry,
   MemorySample,
+  MirrorSpan,
   ScreenSpan,
   ServerMessage,
   SessionState,
@@ -20,6 +21,7 @@ import type {
   TimelineEvent,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
+import { normalizeMirrorSpans, pruneMirrorSpans, upsertMirrorSpan } from './mirror.ts';
 
 export const DEFAULT_BUFFER_WINDOW_MS = 10 * 60_000;
 export const MAX_LOGS = 5000;
@@ -81,6 +83,8 @@ export interface DashboardState {
   stalls: StallSample[];
   /** Coalesced StrictMode violations, ascending by `ts`. */
   strictMode: StrictModeSample[];
+  /** While the session's physical device was mirrored (its video encoder busy), ascending by start. */
+  mirror: MirrorSpan[];
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode); the pruning reference.
@@ -140,6 +144,7 @@ export function createInitialState(): DashboardState {
     breakdown: [],
     stalls: [],
     strictMode: [],
+    mirror: [],
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -326,6 +331,7 @@ function pruneAll(state: DashboardState): DashboardState {
   const breakdown = pruneBefore(state.breakdown, cutoff);
   const stalls = pruneStallsBefore(state.stalls, cutoff);
   const strictMode = pruneBefore(state.strictMode, cutoff);
+  const mirror = pruneMirrorSpans(state.mirror, cutoff, state.latestTs);
   if (
     cpu === state.cpu &&
     memory === state.memory &&
@@ -335,11 +341,12 @@ function pruneAll(state: DashboardState): DashboardState {
     screens === state.screens &&
     breakdown === state.breakdown &&
     stalls === state.stalls &&
-    strictMode === state.strictMode
+    strictMode === state.strictMode &&
+    mirror === state.mirror
   ) {
     return state;
   }
-  return { ...state, cpu, memory, frames, logs, events, screens, breakdown, stalls, strictMode };
+  return { ...state, cpu, memory, frames, logs, events, screens, breakdown, stalls, strictMode, mirror };
 }
 
 function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): DashboardState {
@@ -363,6 +370,7 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
     breakdown,
     stalls,
     strictMode,
+    mirror: normalizeMirrorSpans(snapshot.mirror ?? []),
     nextLogSeq: state.nextLogSeq + logs.length,
     latestTs: Math.max(
       maxTs(snapshot.cpu, snapshot.memory, snapshot.frames, snapshot.events, breakdown, stalls, strictMode),
@@ -380,11 +388,12 @@ type MetricKey = 'cpu' | 'memory' | 'frames' | 'breakdown';
 
 /**
  * The laptop clock moved back: every laptop-clock buffer restarts at `ts`. The screen on top
- * is still on top, so an open span carries over, re-based to the reset.
+ * is still on top (and a mirror still open), so an open span carries over, re-based to the reset.
  */
 function resetTimeline(state: DashboardState, ts: number): DashboardState {
   const open = state.screens[state.screens.length - 1];
   const screens = open !== undefined && open.end === null ? [{ ...open, start: ts }] : [];
+  const mirror = state.mirror.filter((span) => span.end === null).map((span) => ({ ...span, start: ts }));
   return {
     ...state,
     cpu: [],
@@ -395,6 +404,7 @@ function resetTimeline(state: DashboardState, ts: number): DashboardState {
     breakdown: [],
     stalls: [],
     strictMode: [],
+    mirror,
     latestTs: ts,
   };
 }
@@ -513,6 +523,12 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return applyStall(state, msg.sample, now);
     case 'strictmode':
       return applyStrictMode(state, msg.sample, now);
+    case 'mirror': {
+      const span: Partial<MirrorSpan> | undefined = msg.span;
+      if (typeof span?.start !== 'number' || typeof span.serial !== 'string') return state;
+      // A decoration, not a sample: it never moves the pruning reference.
+      return pruneAll({ ...state, mirror: upsertMirrorSpan(state.mirror, msg.span) });
+    }
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

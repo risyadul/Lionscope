@@ -178,6 +178,7 @@ export const screenClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('rotate'), direction: z.enum(['left', 'right']) }).strict(),
   z.object({ type: z.literal('setSize'), size: z.literal(SCREEN_SIZES) }).strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
+  z.object({ type: z.literal('keyFrame') }).strict(),
   z.object({ type: z.literal('clipboardSync'), enabled: z.boolean() }).strict(),
   z.object({ type: z.literal('clipboard'), text: clipboardText }).strict(),
   z.object({ type: z.literal('paste'), text: clipboardText }).strict(),

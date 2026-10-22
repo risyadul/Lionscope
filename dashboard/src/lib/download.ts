@@ -4,11 +4,14 @@ function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-/** `Pixel_9a-20261021-142530.png`, in local time. AVD names are already filename-safe (AVD_NAME_PATTERN). */
-export function screenshotFileName(avdName: string, at: Date): string {
+/**
+ * `Pixel_9a-20261021-142530.png`, in local time. AVD names are already filename-safe (AVD_NAME_PATTERN); the
+ * device panel makes a physical device's model or serial so.
+ */
+export function screenshotFileName(name: string, at: Date): string {
   const date = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`;
   const time = `${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
-  return `${avdName}-${date}-${time}.png`;
+  return `${name}-${date}-${time}.png`;
 }
 
 /** How long the blob URL outlives the click; the download has started by then. */

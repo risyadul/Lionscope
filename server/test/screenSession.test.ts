@@ -45,12 +45,21 @@ describe('ScreenSession frames', () => {
     expect(socket.texts[0]).toEqual({
       type: 'screenInfo',
       serial: SERIAL,
+      codec: 'png',
       displayWidth: 1080,
       displayHeight: 2424,
       rotation: 0,
       frameWidth: 540,
       frameHeight: 1212,
     });
+  });
+
+  it('ignores keyFrame requests (PNG frames need none)', async () => {
+    const { client, socket, session } = await started();
+    const sent = socket.sent.length;
+    session.handle({ type: 'keyFrame' });
+    expect(socket.sent).toHaveLength(sent);
+    expect(client.inputs).toHaveLength(0);
   });
 
   it('drops frames while the socket has unsent data, and never queues them', async () => {

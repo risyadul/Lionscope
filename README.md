@@ -10,8 +10,8 @@ It works in two modes:
   DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
   stalls with the app code line that caused them (plus opt-in StrictMode violations).
 
-On an emulator you can also boot the AVD headless from the dashboard and see and operate its screen right
-next to the charts (0.3.0+); physical devices follow in a later release.
+You can also see and operate the device's screen right next to the charts: emulators (0.3.0+, which you can
+also boot headless from the dashboard) and physical devices over USB (0.3.1+).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
@@ -116,6 +116,25 @@ frame and ~55 ms from input to frame.
 If an emulator renders in software (SwiftShader, e.g. `-no-window` without `-gpu host`), the dashboard warns:
 frame times are then not representative of a device.
 
+### Operating a physical device from the dashboard
+
+Pick a phone connected over USB and its screen shows in the Device column, with the same controls as an
+emulator (touch, multi-touch, wheel, keys, Share clipboard, Back / Home / Recents / Power, rotation where the app
+allows it, screenshot and frame size). Nothing is installed on the phone: Lionscope pushes the bundled
+[scrcpy](https://github.com/Genymobile/scrcpy) server (v5.0.1, Apache-2.0, checked against its published SHA-256)
+to `/data/local/tmp`, runs it over adb while the column is open, and it removes itself when mirroring stops. The
+phone's screen stays on while it is mirrored (scrcpy's `stay_awake`); the previous setting comes back afterwards.
+The phone's hardware encoder sends H.264 video that the browser decodes with WebCodecs (Chrome, Firefox 130+,
+Safari 16.4+; the dashboard must be opened on `localhost`).
+
+The encoder does add a little work on the phone, so while a phone of the current session is mirrored the timeline
+shows a **Mirroring on** band: numbers inside it include that small cost. Close the Device column for the
+cleanest measurements.
+
+On Xiaomi / HyperOS (and some other OEM builds) the phone refuses injected input until **USB debugging (Security
+settings)** is turned on in Developer options; the screen still mirrors and the dashboard tells you what to turn
+on.
+
 ## Requirements
 
 - Node.js ≥ 22.12
@@ -216,6 +235,7 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.3.0"
                                                                  ▼
                                                                dashboard/ in the browser
  emulator ◀─────────── gRPC (EmulatorController, token) ─────── server/ emulator manager + /ws/screen
+ phone ◀── adb forward ── scrcpy-server (H.264 + control) ───── server/ scrcpy session + /ws/screen
 ```
 
 | Directory      | What it is                                                                                                                       |
@@ -256,6 +276,12 @@ protocol version 1 and closes the connection on unknown message types.
   never logged or sent to the browser. The screen socket (`/ws/screen`) has the same Host/Origin checks, a
   size cap and an input rate limit. AVD names must match `emulator -list-avds` before anything is spawned, and
   only emulators this server booted can be shut down.
+- For physical devices, the scrcpy server jar is checked against its SHA-256 before every push, the command line
+  on the phone is built from fixed presets (no dashboard values reach the device shell), and the phone process
+  and adb forward are removed on every exit path. Video and device messages from the phone are size-checked.
+  While mirroring starts, adb briefly forwards a local port to the phone; it is removed as soon as Lionscope is
+  connected. If you run the adb server with `adb -a` (listen on all interfaces), that port is reachable from your
+  network for that moment, so keep adb on its default loopback binding.
 - The SDK only sends screen class names / aliases, frame timings and, with stalls enabled, stack frames of the
   main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. Without
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could receive that stream.
@@ -284,10 +310,11 @@ protocol version 1 and closes the connection on unknown message types.
   policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
   by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
   permits network on the main thread.
-- **Emulators only, for the screen.** Mirroring and controlling the screen needs an emulator whose discovery file
-  has a gRPC port and token (tested with emulator 36.6); physical devices are not mirrored yet. AVDs have no
-  mouse, so the wheel scrolls with a short touch drag. Typed keys are reliable for printable ASCII (the emulator
-  may drop other characters); use paste for anything else. The discovery locations for Linux and Windows follow Android Studio's and have not
+- **Screen mirroring.** Emulators need a discovery file with a gRPC port and token (tested with emulator 36.6).
+  AVDs have no mouse, so the wheel scrolls with a short touch drag, and typed keys are reliable for printable
+  ASCII (the emulator may drop other characters); use paste for anything else. Physical devices need a browser
+  with WebCodecs H.264 decoding, and rotating from the dashboard only works where the app allows rotation; the
+  mirrored video is the phone's own encoder output, so quality and latency depend on the phone. The discovery locations for Linux and Windows follow Android Studio's and have not
   been tried on those systems yet.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.

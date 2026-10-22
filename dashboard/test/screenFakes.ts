@@ -1,7 +1,10 @@
-/** Fakes for the screen mirror: a WebSocket, binary frames and the canvas / ImageBitmap APIs jsdom lacks. */
+/**
+ * Fakes for the screen mirror: a WebSocket, binary frames and video packets, and the canvas / ImageBitmap /
+ * WebCodecs APIs jsdom lacks.
+ */
 import { vi } from 'vitest';
 import type { EmulatorInfo, ScreenServerMessage } from '@lionscope/protocol/wire';
-import { SCREEN_BINARY_KIND } from '@lionscope/protocol/wire';
+import { SCREEN_BINARY_KIND, SCREEN_VIDEO_FLAG, SCREEN_VIDEO_HEADER_BYTES } from '@lionscope/protocol/wire';
 import type { ScreenSocketLike } from '../src/lib/screenSocket.ts';
 
 export class FakeScreenSocket implements ScreenSocketLike {
@@ -76,6 +79,7 @@ export function binaryMessage(kind: keyof typeof SCREEN_BINARY_KIND, payload = [
 export const SCREEN_INFO: ScreenServerMessage = {
   type: 'screenInfo',
   serial: 'emulator-5554',
+  codec: 'png',
   displayWidth: 1080,
   displayHeight: 2424,
   rotation: 0,
@@ -119,4 +123,125 @@ export function installCanvasStubs(): CanvasStubs {
     vi.fn(async () => ({ width: 540, height: 1212, close: closed })),
   );
   return { drawImage, closed };
+}
+
+/** SPS (High 4.0) and PPS NAL units, Annex B, as a config packet carries them. */
+export const CONFIG_PAYLOAD = [
+  0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80,
+];
+export const IDR_PAYLOAD = [0, 0, 0, 1, 0x65, 0x88, 0x84];
+export const DELTA_PAYLOAD = [0, 0, 0, 1, 0x41, 0x9a, 0x02];
+
+/** One binary `video` message: kind byte, flags byte, PTS (µs, big-endian float64), Annex B payload. */
+export function videoMessage(flags: { config?: boolean; key?: boolean }, pts: number, payload: number[]) {
+  const bytes = new Uint8Array(SCREEN_VIDEO_HEADER_BYTES + payload.length);
+  bytes[0] = SCREEN_BINARY_KIND.video;
+  bytes[1] = (flags.config ? SCREEN_VIDEO_FLAG.config : 0) | (flags.key ? SCREEN_VIDEO_FLAG.key : 0);
+  new DataView(bytes.buffer).setFloat64(2, pts, false);
+  bytes.set(payload, SCREEN_VIDEO_HEADER_BYTES);
+  return bytes.buffer;
+}
+
+export const DEVICE_SCREEN_INFO: Extract<ScreenServerMessage, { type: 'screenInfo' }> = {
+  type: 'screenInfo',
+  serial: 'R58M123ABC',
+  codec: 'h264',
+  displayWidth: 1080,
+  displayHeight: 2400,
+  rotation: 0,
+  frameWidth: 540,
+  frameHeight: 1200,
+};
+
+export class FakeVideoFrame {
+  closed = false;
+  constructor(
+    readonly displayWidth = 540,
+    readonly displayHeight = 1200,
+  ) {}
+  close() {
+    this.closed = true;
+  }
+}
+
+export class FakeChunk {
+  readonly type: EncodedVideoChunkType;
+  readonly timestamp: number;
+  readonly data: Uint8Array;
+  constructor(init: EncodedVideoChunkInit) {
+    this.type = init.type;
+    this.timestamp = init.timestamp;
+    this.data = new Uint8Array(init.data as ArrayBuffer);
+  }
+}
+
+/** A `VideoDecoder` that records calls; tests emit frames and errors through its callbacks. */
+export class FakeVideoDecoder {
+  static instances: FakeVideoDecoder[] = [];
+  static support = true;
+  state: CodecState = 'unconfigured';
+  decodeQueueSize = 0;
+  configs: VideoDecoderConfig[] = [];
+  chunks: FakeChunk[] = [];
+  resets = 0;
+  readonly output: (frame: VideoFrame) => void;
+  readonly error: (error: DOMException) => void;
+
+  constructor(init: VideoDecoderInit) {
+    this.output = init.output;
+    this.error = init.error;
+    FakeVideoDecoder.instances.push(this);
+  }
+
+  static isConfigSupported(config: VideoDecoderConfig): Promise<VideoDecoderSupport> {
+    return Promise.resolve({ supported: FakeVideoDecoder.support, config });
+  }
+
+  static latest(): FakeVideoDecoder {
+    const decoder = FakeVideoDecoder.instances[FakeVideoDecoder.instances.length - 1];
+    if (!decoder) throw new Error('no video decoder was created');
+    return decoder;
+  }
+
+  static reset() {
+    FakeVideoDecoder.instances = [];
+    FakeVideoDecoder.support = true;
+  }
+
+  configure(config: VideoDecoderConfig) {
+    this.configs.push(config);
+    this.state = 'configured';
+  }
+
+  decode(chunk: EncodedVideoChunk) {
+    this.chunks.push(chunk as unknown as FakeChunk);
+  }
+
+  reset() {
+    this.resets++;
+    this.state = 'unconfigured';
+  }
+
+  close() {
+    this.state = 'closed';
+  }
+
+  /** Emits a decoded frame, as the browser does after `decode`. */
+  emit(frame = new FakeVideoFrame()): FakeVideoFrame {
+    this.output(frame as unknown as VideoFrame);
+    return frame;
+  }
+
+  /** Fails like a real decoder: closed, then the error callback. */
+  fail() {
+    this.state = 'closed';
+    this.error(new DOMException('decode failed', 'EncodingError'));
+  }
+}
+
+/** Installs the fake WebCodecs globals the physical-device mirror needs. */
+export function installWebCodecs() {
+  FakeVideoDecoder.reset();
+  vi.stubGlobal('VideoDecoder', FakeVideoDecoder);
+  vi.stubGlobal('EncodedVideoChunk', FakeChunk);
 }

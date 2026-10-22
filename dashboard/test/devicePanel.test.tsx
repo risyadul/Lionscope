@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BootMode } from '@lionscope/protocol/wire';
-import { DevicePanel, PHYSICAL_MIRROR_NOTE } from '../src/components/device/DevicePanel.tsx';
+import { DevicePanel } from '../src/components/device/DevicePanel.tsx';
 import { PASTE_TRUNCATED_NOTE } from '../src/components/device/useScreenInput.ts';
 import { LAYOUT_KEYS } from '../src/lib/layoutPrefs.ts';
 import type { DeviceTarget, PendingEmulatorAction } from '../src/lib/emulators.ts';
@@ -81,12 +81,6 @@ describe('DevicePanel states', () => {
   it('asks for a device when none is selected', () => {
     renderPanel({ serial: null, emulator: null });
     expect(screen.getByText('No device selected')).toBeTruthy();
-  });
-
-  it('says physical devices are mirrored from 0.3.1 on', () => {
-    renderPanel({ serial: 'R58M123ABC', emulator: null });
-    expect(screen.getByText(PHYSICAL_MIRROR_NOTE)).toBeTruthy();
-    expect(FakeScreenSocket.instances).toHaveLength(0);
   });
 
   it('offers Quick and Cold boot for an AVD that is off', () => {
@@ -223,12 +217,12 @@ describe('ScreenView stream', () => {
     expect(screen.getByText(/rejected Lionscope’s gRPC token/)).toBeTruthy();
   });
 
-  it('maps the not_emulator error to the 0.3.1 note', () => {
+  it('maps the not_emulator error to a device that isn’t ready in adb', () => {
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     act(() => {
       FakeScreenSocket.latest().receiveJson({ type: 'screenError', code: 'not_emulator', message: 'x' });
     });
-    expect(screen.getByText('Mirroring physical devices arrives in 0.3.1.')).toBeTruthy();
+    expect(screen.getByText(/adb doesn’t list it as ready/)).toBeTruthy();
   });
 });
 

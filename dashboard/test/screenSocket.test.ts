@@ -10,7 +10,15 @@ import {
   type ScreenInfo,
 } from '../src/lib/screenSocket.ts';
 import { BACKOFF_CAP_MS } from '../src/lib/connection.ts';
-import { binaryMessage, FakeScreenSocket, SCREEN_INFO } from './screenFakes.ts';
+import {
+  binaryMessage,
+  CONFIG_PAYLOAD,
+  DEVICE_SCREEN_INFO,
+  FakeScreenSocket,
+  IDR_PAYLOAD,
+  SCREEN_INFO,
+  videoMessage,
+} from './screenFakes.ts';
 
 describe('screenUrl', () => {
   it('targets the screen path on the page origin with the serial and size', () => {
@@ -26,9 +34,9 @@ describe('screenUrl', () => {
 describe('parseScreenBinary', () => {
   it('reads the kind byte and keeps the rest as a PNG blob', async () => {
     const frame = parseScreenBinary(binaryMessage('frame', [1, 2, 3]));
-    expect(frame?.kind).toBe('frame');
-    expect(frame?.png.type).toBe('image/png');
-    expect([...new Uint8Array(await frame!.png.arrayBuffer())]).toEqual([1, 2, 3]);
+    if (frame?.kind !== 'frame') throw new Error('expected a frame');
+    expect(frame.png.type).toBe('image/png');
+    expect([...new Uint8Array(await frame.png.arrayBuffer())]).toEqual([1, 2, 3]);
     expect(parseScreenBinary(binaryMessage('screenshot'))?.kind).toBe('screenshot');
   });
 
@@ -36,6 +44,24 @@ describe('parseScreenBinary', () => {
     expect(parseScreenBinary(new Uint8Array([9, 1, 2]).buffer)).toBeNull();
     expect(parseScreenBinary(new Uint8Array([1]).buffer)).toBeNull();
     expect(parseScreenBinary(new ArrayBuffer(0))).toBeNull();
+  });
+
+  it('reads a video packet: flags, big-endian float64 PTS in µs and the Annex B payload', () => {
+    const config = parseScreenBinary(videoMessage({ config: true }, 0, CONFIG_PAYLOAD));
+    expect(config).toEqual({
+      kind: 'video',
+      packet: { isConfig: true, isKey: false, pts: 0, data: new Uint8Array(CONFIG_PAYLOAD) },
+    });
+    const key = parseScreenBinary(videoMessage({ key: true }, 1_234_567, IDR_PAYLOAD));
+    expect(key).toMatchObject({ kind: 'video', packet: { isConfig: false, isKey: true, pts: 1_234_567 } });
+    const delta = parseScreenBinary(videoMessage({}, 2 ** 40, [0, 0, 1, 0x41]));
+    expect(delta).toMatchObject({ packet: { isConfig: false, isKey: false, pts: 2 ** 40 } });
+  });
+
+  it('drops video packets without a payload or with a bad PTS', () => {
+    expect(parseScreenBinary(videoMessage({ key: true }, 0, []))).toBeNull();
+    expect(parseScreenBinary(videoMessage({ key: true }, Number.NaN, IDR_PAYLOAD))).toBeNull();
+    expect(parseScreenBinary(videoMessage({ key: true }, -1, IDR_PAYLOAD))).toBeNull();
   });
 });
 
@@ -176,6 +202,66 @@ describe('createScreenConnection', () => {
     second.open();
     expect(second.url).toContain('size=360');
     expect(second.sent).toEqual([]);
+  });
+
+  it('forwards video and h264 screenInfo, and goes live only when the first frame is decoded', () => {
+    const connection = connect();
+    const socket = FakeScreenSocket.latest();
+    socket.open();
+    socket.receiveJson(DEVICE_SCREEN_INFO);
+    socket.receive(videoMessage({ config: true }, 0, CONFIG_PAYLOAD));
+    socket.receive(videoMessage({ key: true }, 1000, IDR_PAYLOAD));
+    expect(infos).toEqual([DEVICE_SCREEN_INFO]);
+    expect(binaries.map((b) => b.kind)).toEqual(['video', 'video']);
+    expect(lastStatus()).toBe('connecting');
+    connection.markLive();
+    connection.markLive();
+    expect(states.filter((s) => s.status === 'live')).toHaveLength(1);
+    // A dropped socket starts over: live again only with the new socket's first frame.
+    socket.drop();
+    vi.advanceTimersByTime(BACKOFF_CAP_MS);
+    expect(lastStatus()).toBe('reconnecting');
+    connection.markLive();
+    expect(lastStatus()).toBe('live');
+    connection.close();
+    connection.markLive();
+    expect(lastStatus()).toBe('live');
+    expect(states.filter((s) => s.status === 'live')).toHaveLength(2);
+  });
+
+  it('input_denied is reported on its own and never stops or marks the stream', () => {
+    const denied: string[] = [];
+    createScreenConnection({
+      url: () => 'ws://test/ws/screen',
+      onBinary: (msg) => binaries.push(msg),
+      onInfo: () => {},
+      onState: (state) => states.push(state),
+      onInputDenied: (message) => denied.push(message),
+      createSocket: (url) => new FakeScreenSocket(url),
+    });
+    const socket = FakeScreenSocket.latest();
+    socket.open();
+    socket.receive(binaryMessage('frame'));
+    socket.receiveJson({ type: 'screenError', code: 'input_denied', message: 'INJECT_EVENTS denied' });
+    expect(denied).toEqual(['INJECT_EVENTS denied']);
+    expect(socket.readyState).toBe(1);
+    expect(states[states.length - 1]).toEqual({ status: 'live', attempt: 0, error: null });
+    socket.drop();
+    expect(states[states.length - 1]).toMatchObject({ status: 'reconnecting', error: null });
+  });
+
+  it('mirror_failed stops for good, keeping the server’s message', () => {
+    connect();
+    const socket = FakeScreenSocket.latest();
+    socket.open();
+    socket.receiveJson({ type: 'screenError', code: 'mirror_failed', message: 'Could not find codec' });
+    expect(socket.readyState).toBe(3);
+    expect(states[states.length - 1]).toMatchObject({
+      status: 'failed',
+      error: { code: 'mirror_failed', message: 'Could not find codec' },
+    });
+    vi.advanceTimersByTime(BACKOFF_CAP_MS);
+    expect(FakeScreenSocket.instances).toHaveLength(1);
   });
 
   it('ignores messages from a socket it already replaced', () => {

@@ -5,6 +5,7 @@ import type {
   FrameSample,
   FrameSource,
   MemorySample,
+  MirrorSpan,
   ScreenSpan,
   StallSample,
   StrictModeSample,
@@ -49,6 +50,7 @@ import {
 } from './chartSpec.ts';
 import { Lane, type LegendItem } from './Lane.tsx';
 import { MainThreadLane } from './MainThreadLane.tsx';
+import { MirrorLane } from './MirrorLane.tsx';
 import { ScreensLane } from './ScreensLane.tsx';
 import type { Backdrop } from './uplotOptions.ts';
 import './timeline.css';
@@ -162,6 +164,10 @@ type Props = {
   breakdown: readonly FrameBreakdownSample[];
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
+  /** Physical-device mirroring spans; the thin "Mirroring on" lane shows while any is buffered. */
+  mirror: readonly MirrorSpan[];
+  /** The window's right edge is the clock (not paused, not a stopped recording). */
+  isFollowingNow: boolean;
   /** Show the Screens lane (an SDK is connected or spans were recorded). */
   showScreens: boolean;
   /**
@@ -204,6 +210,8 @@ export function Timeline({
   breakdown,
   stalls,
   strictMode,
+  mirror,
+  isFollowingNow,
   showScreens,
   showBreakdown,
   showMainThread,
@@ -291,6 +299,9 @@ export function Timeline({
             cursorX={cursorX}
             probeTs={probeTs}
           />
+        )}
+        {mirror.length > 0 && (
+          <MirrorLane spans={mirror} fromTs={startTs} toTs={endTs} openEnd={endTs} isLive={isFollowingNow} />
         )}
         <Lane
           id="lane-cpu"

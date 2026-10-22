@@ -1,4 +1,7 @@
-/** Screen mirror WebSocket (`SCREEN_WS_PATH`): binary PNG frames in, JSON input out, reconnect with backoff. */
+/**
+ * Screen mirror WebSocket (`SCREEN_WS_PATH`): binary PNG frames (emulators) or H.264 access units (physical
+ * devices) in, JSON input out, reconnect with backoff.
+ */
 import type {
   ScreenClientMessage,
   ScreenErrorCode,
@@ -9,9 +12,12 @@ import {
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
   MAX_SCREEN_SOCKET_FRAME_BYTES,
   SCREEN_BINARY_KIND,
+  SCREEN_VIDEO_FLAG,
+  SCREEN_VIDEO_HEADER_BYTES,
   SCREEN_WS_PATH,
 } from '@lionscope/protocol/wire';
 import { backoffDelay, type SocketLike } from './connection.ts';
+import type { VideoPacket } from './videoDecoder.ts';
 
 export function screenUrl(
   location: Pick<Location, 'protocol' | 'host'>,
@@ -25,12 +31,27 @@ export function screenUrl(
 
 export type ScreenBinaryKind = keyof typeof SCREEN_BINARY_KIND;
 
-export interface ScreenBinary {
-  kind: ScreenBinaryKind;
-  png: Blob;
+export type ScreenBinary =
+  { kind: 'frame' | 'screenshot'; png: Blob } | { kind: 'video'; packet: VideoPacket };
+
+function parseVideo(data: ArrayBuffer): VideoPacket | null {
+  if (data.byteLength <= SCREEN_VIDEO_HEADER_BYTES) return null;
+  const view = new DataView(data);
+  const flags = view.getUint8(1);
+  const pts = view.getFloat64(2, false);
+  if (!Number.isFinite(pts) || pts < 0) return null;
+  return {
+    isConfig: (flags & SCREEN_VIDEO_FLAG.config) !== 0,
+    isKey: (flags & SCREEN_VIDEO_FLAG.key) !== 0,
+    pts,
+    data: new Uint8Array(data, SCREEN_VIDEO_HEADER_BYTES),
+  };
 }
 
-/** One kind byte, then a PNG. Unknown kinds and empty payloads are dropped. */
+/**
+ * One kind byte, then a PNG, or for `video` a flags byte, the PTS (µs, big-endian float64) and the Annex B
+ * payload. Unknown kinds and empty payloads are dropped.
+ */
 export function parseScreenBinary(data: ArrayBuffer): ScreenBinary | null {
   if (data.byteLength < 2) return null;
   const kindByte = new Uint8Array(data, 0, 1)[0];
@@ -38,6 +59,10 @@ export function parseScreenBinary(data: ArrayBuffer): ScreenBinary | null {
     (k) => SCREEN_BINARY_KIND[k] === kindByte,
   );
   if (kind === undefined) return null;
+  if (kind === 'video') {
+    const packet = parseVideo(data);
+    return packet === null ? null : { kind, packet };
+  }
   return { kind, png: new Blob([new Uint8Array(data, 1)], { type: 'image/png' }) };
 }
 
@@ -60,6 +85,7 @@ export function parseScreenMessage(raw: unknown): ScreenServerMessage | null {
 /** Retrying can't fix these: the panel shows the reason and stops reconnecting. */
 export const PERMANENT_SCREEN_ERRORS: ReadonlySet<ScreenErrorCode> = new Set([
   'not_emulator',
+  'mirror_failed',
   'unavailable',
   'auth',
 ]);
@@ -95,6 +121,8 @@ export interface ScreenConnectionOptions {
   onOpen?: () => void;
   /** Text copied inside Android (only sent while `clipboardSync` is on). */
   onClipboard?: (text: string) => void;
+  /** The device refuses input (`input_denied`); the video keeps streaming. */
+  onInputDenied?: (message: string) => void;
   createSocket?: (url: string) => ScreenSocketLike;
   random?: () => number;
 }
@@ -105,6 +133,8 @@ export interface ScreenConnection {
    * `setSize` sent before the socket opens is held and sent on open (a reconnect takes the size from `url`).
    */
   send(msg: ScreenClientMessage): boolean;
+  /** The first picture of this socket is on screen (decoded video); a no-op once live. */
+  markLive(): void;
   close(): void;
 }
 
@@ -153,6 +183,7 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
       if (event.data instanceof ArrayBuffer) {
         const binary = parseScreenBinary(event.data);
         if (!binary) return;
+        // Video goes live on its first decoded frame (`markLive`), not on SPS / PPS that show nothing.
         if (binary.kind === 'frame') markLive();
         options.onBinary(binary);
         return;
@@ -165,6 +196,10 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
       }
       if (msg.type === 'clipboard') {
         options.onClipboard?.(msg.text);
+        return;
+      }
+      if (msg.code === 'input_denied') {
+        options.onInputDenied?.(msg.message);
         return;
       }
       error = { code: msg.code, message: msg.message };
@@ -206,6 +241,10 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
       if (encoder.encode(json).length > limit) return false;
       socket.send(json);
       return true;
+    },
+    markLive() {
+      if (isClosed || isFailed || socket === null) return;
+      markLive();
     },
     close() {
       if (isClosed) return;

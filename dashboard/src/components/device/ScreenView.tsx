@@ -6,7 +6,8 @@ import { useStoredState } from '../../hooks/useStoredState.ts';
 import { pasteShortcut } from '../../lib/clipboard.ts';
 import { LAYOUT_KEYS } from '../../lib/layoutPrefs.ts';
 import { fitDeviceGlass, mirrorPoint, type FramePoint } from '../../lib/screenInput.ts';
-import type { ScreenConnectionState } from '../../lib/screenSocket.ts';
+import type { ScreenConnectionState, ScreenError } from '../../lib/screenSocket.ts';
+import type { VideoError } from '../../lib/videoDecoder.ts';
 import { Segmented } from '../ui/Segmented.tsx';
 import {
   BackIcon,
@@ -66,7 +67,10 @@ function ToolButton({ label, icon, disabled, onClick, isPressed, title }: ToolBu
 }
 
 const ERROR_TEXT: Record<ScreenErrorCode, string> = {
-  not_emulator: 'Mirroring physical devices arrives in 0.3.1.',
+  not_emulator:
+    'This device can’t be mirrored: adb doesn’t list it as ready (offline, unauthorized or gone).',
+  mirror_failed: 'Couldn’t start mirroring on the device.',
+  input_denied: 'The device refuses input.',
   unavailable:
     'This emulator has no usable gRPC endpoint. Update the Android Emulator, or boot the AVD from Lionscope.',
   auth: 'The emulator rejected Lionscope’s gRPC token. Restart the emulator and try again.',
@@ -74,14 +78,53 @@ const ERROR_TEXT: Record<ScreenErrorCode, string> = {
   busy: 'Too many screens are streaming',
 };
 
-function statusText(state: ScreenConnectionState): string | null {
+function errorText(error: ScreenError): string {
+  // The server's own reason (scrcpy's, sanitised) says more than a generic line.
+  if (error.code === 'mirror_failed' && error.message !== '') {
+    return `Couldn’t start mirroring: ${error.message}`;
+  }
+  return ERROR_TEXT[error.code];
+}
+
+function statusText(state: ScreenConnectionState, videoError: VideoError | null): string | null {
+  if (videoError !== null) return videoError.message;
   if (state.status === 'live') return null;
-  if (state.status === 'failed')
-    return state.error ? ERROR_TEXT[state.error.code] : 'The screen stream failed.';
+  if (state.status === 'failed') return state.error ? errorText(state.error) : 'The screen stream failed.';
   if (state.status === 'reconnecting') {
-    return `${state.error ? ERROR_TEXT[state.error.code] : 'The stream dropped'} — reconnecting…`;
+    return `${state.error ? errorText(state.error) : 'The stream dropped'} — reconnecting…`;
   }
   return 'Connecting to the screen…';
+}
+
+/** Mirroring works but injection is refused (Xiaomi / HyperOS needs an extra developer option). */
+function InputDeniedBanner({
+  label,
+  message,
+  onDismiss,
+}: {
+  label: string;
+  /** The server's reason; null while input works. */
+  message: string | null;
+  onDismiss: () => void;
+}) {
+  // The alert region stays mounted so screen readers announce it the moment it fills.
+  return (
+    <div className="device-alert-region" role="alert">
+      {message !== null && (
+        <div className="device-input-denied">
+          <p>
+            <strong>{label} refuses input.</strong> Mirroring works, but taps, keys and paste are ignored. On
+            Xiaomi / HyperOS, turn on Developer options → “USB debugging (Security settings)”, then reconnect
+            the device.
+            {message !== '' && <span className="device-input-denied-detail mono">{message}</span>}
+          </p>
+          <button type="button" className="btn device-input-denied-dismiss" onClick={onDismiss}>
+            Dismiss
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function percent(value: number): string {
@@ -102,26 +145,32 @@ function PinchHint({ point }: { point: FramePoint }) {
   );
 }
 
+/** What is mirrored: an emulator (PNG over gRPC) or a physical device (H.264 from scrcpy). */
+export type ScreenTargetKind = 'emulator' | 'device';
+
 type Props = {
   serial: string;
-  avdName: string;
+  /** Screenshot file name prefix. */
+  name: string;
   label: string;
+  kind: ScreenTargetKind;
   /** Stream only while the panel is on screen and the tab is visible. */
   isVisible: boolean;
 };
 
-/** The live emulator screen in a device frame, with its controls. */
-export function ScreenView({ serial, avdName, label, isVisible }: Props) {
+/** The live emulator or device screen in a device frame, with its controls. */
+export function ScreenView({ serial, name, label, kind, isVisible }: Props) {
   const [size, setSize] = useStoredState<ScreenSize>(LAYOUT_KEYS.screenSize, parseScreenSize);
   // Destructured: the stream object carries the canvas ref, which render must not read through.
   const streamEvents = useRef<ScreenStreamEvents>({});
-  const { state, info, fps, canvasRef, send, retry } = useScreenStream({
-    serial,
-    avdName,
-    size,
-    isEnabled: isVisible,
-    events: streamEvents,
-  });
+  const { state, info, fps, canvasRef, send, retry, videoError, inputDenied, dismissInputDenied } =
+    useScreenStream({
+      serial,
+      name,
+      size,
+      isEnabled: isVisible,
+      events: streamEvents,
+    });
   const isLive = state.status === 'live';
   const { handlers, pinchHint, pasteNote } = useScreenInput(canvasRef, send, isLive);
   const clipboard = useClipboardShare(send, isLive);
@@ -137,7 +186,9 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
   const aspect = info && info.frameHeight > 0 ? info.frameWidth / info.frameHeight : DEFAULT_ASPECT;
   const glass = fitDeviceGlass(stage.width, stage.height, aspect);
   const orientation = aspect > 1 ? 'landscape' : 'portrait';
-  const status = statusText(state);
+  const status = statusText(state, videoError);
+  // Many apps lock their orientation; a device only rotates when the foreground app allows it.
+  const rotateNote = kind === 'device' ? ' (best effort on a device)' : '';
 
   return (
     <div className="screen-view">
@@ -150,19 +201,21 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
         />
         <ToolButton
           label="Rotate left"
+          title={`Rotate left${rotateNote}`}
           icon={<RotateLeftIcon />}
           disabled={!isLive}
           onClick={() => send({ type: 'rotate', direction: 'left' })}
         />
         <ToolButton
           label="Rotate right"
+          title={`Rotate right${rotateNote}`}
           icon={<RotateRightIcon />}
           disabled={!isLive}
           onClick={() => send({ type: 'rotate', direction: 'right' })}
         />
         <ToolButton
           label="Share clipboard"
-          title="Share clipboard with the emulator"
+          title={`Share clipboard with the ${kind}`}
           icon={<ClipboardIcon />}
           disabled={false}
           isPressed={clipboard.isEnabled}
@@ -213,7 +266,7 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
               <div className="device-glass-status" data-tone={state.status} role="status">
                 {state.status !== 'failed' && <span className="banner-spinner" aria-hidden="true" />}
                 <span>{status}</span>
-                {state.status === 'failed' && (
+                {state.status === 'failed' && (videoError === null || videoError.canRetry) && (
                   <button type="button" className="btn device-retry" onClick={retry}>
                     Try again
                   </button>
@@ -225,6 +278,7 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
         </div>
       </div>
 
+      <InputDeniedBanner label={label} message={inputDenied} onDismiss={dismissInputDenied} />
       <div className="device-nav" role="group" aria-label="Navigation buttons">
         {NAV_BUTTONS.map(({ button, label: name, icon }) => (
           <ToolButton
@@ -248,7 +302,7 @@ export function ScreenView({ serial, avdName, label, isVisible }: Props) {
       <p className="device-paste-note" role="status">
         {pasteNote}
       </p>
-      <ClipboardToast toast={clipboard.toast} onCopy={clipboard.copyManually} />
+      <ClipboardToast toast={clipboard.toast} noun={kind} onCopy={clipboard.copyManually} />
     </div>
   );
 }

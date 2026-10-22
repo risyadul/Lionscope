@@ -1,0 +1,88 @@
+/* Mirroring lane: a thin neutral hatch on the shared x axis. It qualifies the numbers (the device's
+   encoder was busy), so it stays out of the data hues and reads as a caveat, not a series. */
+
+.lane.lane--mirror {
+  flex: none;
+  height: auto;
+  min-height: 0;
+}
+
+.lane.lane--mirror .lane-head {
+  align-items: center;
+  padding-top: var(--space-1);
+}
+
+.mirror-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.mirror-swatch,
+.mirror-run {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ink-muted) 55%, transparent) 0 1px,
+    color-mix(in srgb, var(--ink-muted) 14%, var(--surface)) 1px 4px
+  );
+  box-shadow: inset 0 1px 0 var(--ink-muted);
+}
+
+.mirror-swatch {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.mirror-now {
+  padding: 0 4px;
+  border-radius: var(--radius-s);
+  background: var(--hover-wash);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+}
+
+.mirror-track-host {
+  position: relative;
+  height: 14px;
+}
+
+.mirror-track {
+  position: absolute;
+  top: 2px;
+  bottom: 4px;
+}
+
+.mirror-track::before {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  content: '';
+}
+
+.mirror-run {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+/* Still mirroring: the right edge stays open. */
+.mirror-run[data-open] {
+  border-radius: 2px 0 0 2px;
+}
+
+@media (forced-colors: active) {
+  .mirror-swatch,
+  .mirror-run {
+    border: 1px solid CanvasText;
+  }
+}

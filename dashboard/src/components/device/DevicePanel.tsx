@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
-import type { BootMode } from '@lionscope/protocol/wire';
+import type { BootMode, DeviceInfo } from '@lionscope/protocol/wire';
+import { deviceName, deviceStateReason, serialUnavailableReason } from '../../lib/devices.ts';
 import {
   emulatorBusy,
   emulatorLabel,
   type DeviceTarget,
   type PendingEmulatorAction,
 } from '../../lib/emulators.ts';
+import { videoUnavailableMessage, webCodecsApi } from '../../lib/videoDecoder.ts';
 import { ScreenView } from './ScreenView.tsx';
-
-export const PHYSICAL_MIRROR_NOTE = 'Mirroring physical devices arrives in 0.3.1';
 
 type NoteProps = {
   title: string;
@@ -28,8 +28,67 @@ function Note({ title, isBusy = false, children }: NoteProps) {
   );
 }
 
+/** Screenshot file names keep to letters, digits, `.`, `-` and `_` (a network serial has a colon). */
+function fileNamePart(raw: string): string {
+  return raw.replace(/[^\w.-]+/g, '_');
+}
+
+/** A physical device: mirrored over scrcpy once adb lists it as ready and the browser can decode H.264. */
+function PhysicalDevice({
+  serial,
+  device,
+  hasDeviceList,
+  isVisible,
+}: {
+  serial: string;
+  device: DeviceInfo | null;
+  hasDeviceList: boolean;
+  isVisible: boolean;
+}) {
+  if (!hasDeviceList) return <Note title="Connecting…" isBusy />;
+  if (device === null) {
+    return (
+      <Note title="Device not connected">
+        <p>{serialUnavailableReason(null, serial)}.</p>
+      </Note>
+    );
+  }
+  const label = deviceName(device);
+  const reason = deviceStateReason(device.state);
+  if (reason !== null) {
+    return (
+      <Note title={`Can’t mirror ${label}`}>
+        <p>
+          {label} is {reason}. The screen appears as soon as it is ready.
+        </p>
+      </Note>
+    );
+  }
+  if (webCodecsApi() === null) {
+    return (
+      <Note title={`Can’t show ${label}`}>
+        <p>{videoUnavailableMessage()}.</p>
+      </Note>
+    );
+  }
+  return (
+    <ScreenView
+      key={serial}
+      serial={serial}
+      name={fileNamePart(device.model ?? serial)}
+      label={label}
+      kind="device"
+      isVisible={isVisible}
+    />
+  );
+}
+
 type Props = {
   target: DeviceTarget;
+  /** The adb entry for `target.serial`, when adb lists it. */
+  device?: DeviceInfo | null;
+  /** False until the server's first device list: a missing `device` then means "not known yet". */
+  hasDeviceList?: boolean;
   isOnline: boolean;
   /** The column is open and the tab visible: the screen may stream. */
   isVisible: boolean;
@@ -38,7 +97,15 @@ type Props = {
 };
 
 /** The selected device's live screen, or why there is none. Mirroring doesn't need a profiling session. */
-export function DevicePanel({ target, isOnline, isVisible, pending, onBoot }: Props) {
+export function DevicePanel({
+  target,
+  device = null,
+  hasDeviceList = true,
+  isOnline,
+  isVisible,
+  pending,
+  onBoot,
+}: Props) {
   const { serial, emulator } = target;
   if (!isOnline) {
     return <Note title="Offline — waiting for the server" />;
@@ -52,9 +119,7 @@ export function DevicePanel({ target, isOnline, isVisible, pending, onBoot }: Pr
       );
     }
     return (
-      <Note title={PHYSICAL_MIRROR_NOTE}>
-        <p>Emulators can be mirrored and operated here today. Profiling this device works as usual.</p>
-      </Note>
+      <PhysicalDevice serial={serial} device={device} hasDeviceList={hasDeviceList} isVisible={isVisible} />
     );
   }
 
@@ -106,8 +171,9 @@ export function DevicePanel({ target, isOnline, isVisible, pending, onBoot }: Pr
     <ScreenView
       key={emulator.serial}
       serial={emulator.serial}
-      avdName={emulator.avdName}
+      name={emulator.avdName}
       label={label}
+      kind="emulator"
       isVisible={isVisible}
     />
   );

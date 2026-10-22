@@ -264,6 +264,16 @@ export interface StrictModeSample {
   screen: string | null;
 }
 
+/**
+ * While a physical device's screen is mirrored (its hardware video encoder is busy), for the timeline's
+ * "Mirroring on" band. Emulator mirroring costs the guest nothing and records no span. `end` null = still on.
+ */
+export interface MirrorSpan {
+  serial: string;
+  start: number;
+  end: number | null;
+}
+
 export interface Snapshot {
   cpu: CpuSample[];
   memory: MemorySample[];
@@ -276,6 +286,8 @@ export interface Snapshot {
   /** Phase 3 streams, optional like the Phase 2 ones. */
   stalls?: StallSample[];
   strictMode?: StrictModeSample[];
+  /** 0.3.1: mirroring spans on the session's device. */
+  mirror?: MirrorSpan[];
 }
 
 // ---------------------------------------------------------------------------
@@ -343,17 +355,40 @@ export const MAX_SCREEN_SOCKET_FRAME_BYTES = MAX_SCREEN_CLIPBOARD_BYTES + 1024;
 export const MAX_SCREEN_INPUT_PER_SECOND = 400;
 
 /**
- * Binary server → dashboard messages on the screen socket: one kind byte, then a PNG.
- * `frame` is a live, scaled frame; `screenshot` is the full-resolution answer to a `screenshot` request.
+ * Binary server → dashboard messages on the screen socket: one kind byte, then the payload.
+ * - `frame` (emulators): a live, scaled PNG frame.
+ * - `screenshot`: the full-resolution PNG answering a `screenshot` request (emulators and physical devices).
+ * - `video` (physical devices, 0.3.1): one H.264 access unit, see SCREEN_VIDEO_HEADER_BYTES.
  */
-export const SCREEN_BINARY_KIND = { frame: 1, screenshot: 2 } as const;
+export const SCREEN_BINARY_KIND = { frame: 1, screenshot: 2, video: 3 } as const;
+
+/**
+ * `video` messages: kind byte, then a flags byte (SCREEN_VIDEO_FLAG), then the PTS in microseconds as a
+ * big-endian float64 (0 for config packets), then the H.264 Annex B payload (start codes included). Config
+ * packets carry SPS/PPS: the dashboard (re)configures its decoder from them; a key frame always follows one.
+ */
+export const SCREEN_VIDEO_HEADER_BYTES = 1 + 1 + 8;
+export const SCREEN_VIDEO_FLAG = { config: 1, key: 2 } as const;
+
+/** How a screen socket delivers pixels: PNG frames (emulator gRPC) or an H.264 stream (scrcpy on a device). */
+export type ScreenCodec = 'png' | 'h264';
 
 /** Degrees clockwise from the display's natural (portrait) orientation, as the frame is shown. */
 export type ScreenRotation = 0 | 90 | 180 | 270;
 
 export type ScreenErrorCode =
-  /** The serial is not a running emulator (physical devices are mirrored from 0.3.1 on). */
+  /**
+   * The serial can't be mirrored: not an adb device in the `device` state (offline, unauthorized, gone), or an
+   * emulator without gRPC (see `unavailable`). The name predates physical-device mirroring (0.3.1).
+   */
   | 'not_emulator'
+  /** A physical device: the mirroring server (scrcpy) could not be started; `message` says why. */
+  | 'mirror_failed'
+  /**
+   * A physical device refused input injection (screen mirroring still works). On Xiaomi / HyperOS this needs
+   * "USB debugging (Security settings)" turned on in Developer options.
+   */
+  | 'input_denied'
   /** The emulator has no usable gRPC endpoint or token (too old, or started with `-grpc` without a token). */
   | 'unavailable'
   /** The emulator rejected the token. */
@@ -367,12 +402,14 @@ export type ScreenErrorCode =
 export type ScreenServerMessage =
   /**
    * Sent before the first frame and again before the first frame after any change. `displayWidth/Height` are
-   * the display's natural (unrotated) size in device pixels; `frameWidth/Height` the PNG size as delivered
-   * (already rotated: a landscape frame is wider than tall).
+   * the display's natural (unrotated) size in device pixels; `frameWidth/Height` the PNG or video size as
+   * delivered (already rotated: a landscape frame is wider than tall). Physical devices rotate by themselves,
+   * so their `rotation` follows the device and a new `screenInfo` arrives with each rotation.
    */
   | {
       type: 'screenInfo';
       serial: string;
+      codec: ScreenCodec;
       displayWidth: number;
       displayHeight: number;
       rotation: ScreenRotation;
@@ -429,7 +466,13 @@ export type ScreenClientMessage =
   /** Put desktop text on Android's clipboard (Unicode-safe, ≤ MAX_SCREEN_CLIPBOARD_BYTES); no key is pressed. */
   | { type: 'clipboard'; text: string }
   /** Cmd/Ctrl+V on the screen: put the text on Android's clipboard, then press Paste in the focused field. */
-  | { type: 'paste'; text: string };
+  | { type: 'paste'; text: string }
+  /**
+   * Physical devices: the dashboard dropped video until the next key frame (decoder reset, backpressure, first
+   * key frame lost while configuring). The server asks the encoder for one now (scrcpy RESET_VIDEO), at most
+   * a few times per second. Ignored for emulators (PNG frames need none).
+   */
+  | { type: 'keyFrame' };
 
 // ---------------------------------------------------------------------------
 // Server → dashboard
@@ -458,6 +501,8 @@ export type ServerMessage =
   | { type: 'breakdown'; sample: FrameBreakdownSample }
   | { type: 'stall'; sample: StallSample }
   | { type: 'strictmode'; sample: StrictModeSample }
+  /** Mirroring span update: replace the span with the same `start`, else append (like `screen`). */
+  | { type: 'mirror'; span: MirrorSpan }
   | { type: 'error'; message: string; code?: string };
 
 export type ServerMessageType = ServerMessage['type'];
