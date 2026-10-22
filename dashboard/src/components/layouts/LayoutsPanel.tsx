@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { InflateSample } from '@lionscope/protocol/wire';
 import { SLOW_INFLATE_MS } from '@lionscope/protocol/wire';
 import { formatInflateMs, formatInteger } from '../../lib/format.ts';
@@ -169,19 +169,34 @@ function EmptyPanel({ empty, onEnableTracking }: { empty: LayoutsEmpty; onEnable
   }
 }
 
+/** Snake-case resource names break after each `_`, so a long name wraps whole words instead of being cut off. */
+function breakableName(name: string) {
+  const parts = name.split('_');
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {part}
+      {index < parts.length - 1 && (
+        <>
+          _<wbr />
+        </>
+      )}
+    </Fragment>
+  ));
+}
+
 function LayoutCell({ row }: { row: LayoutRow }) {
   const shownScreens = row.screens.slice(0, 2).join(', ');
   const more = row.screens.length - 2;
   return (
     <th scope="row" data-col="name">
-      <span className="layout-name-line">
-        <span
-          className="layout-name mono"
-          data-label={row.isLabel || undefined}
-          title={row.isLabel ? LABEL_TITLE : row.name}
-        >
-          {row.name}
-        </span>
+      <span
+        className="layout-name mono"
+        data-label={row.isLabel || undefined}
+        title={row.isLabel ? LABEL_TITLE : row.name}
+      >
+        {breakableName(row.name)}
+      </span>
+      <span className="layout-meta-line">
         {row.library && (
           <span className="layout-badge" title="From a library or the Android framework">
             lib
@@ -199,13 +214,13 @@ function LayoutCell({ row }: { row: LayoutRow }) {
             {row.nestedCount === row.count ? 'nested' : 'some nested'}
           </span>
         )}
+        {row.screens.length > 0 && (
+          <span className="layout-screens" title={row.screens.join(', ')}>
+            {shownScreens}
+            {more > 0 && ` +${more}`}
+          </span>
+        )}
       </span>
-      {row.screens.length > 0 && (
-        <span className="layout-screens" title={row.screens.join(', ')}>
-          {shownScreens}
-          {more > 0 && ` +${more}`}
-        </span>
-      )}
     </th>
   );
 }
