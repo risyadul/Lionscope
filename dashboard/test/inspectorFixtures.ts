@@ -1,4 +1,4 @@
-import type { InspectorNode, InspectorSnapshot, PixelRect } from '@lionscope/protocol/wire';
+import type { InspectorNode, InspectorSnapshot, PixelRect, ViewState } from '@lionscope/protocol/wire';
 
 export function node(
   id: number,
@@ -85,6 +85,45 @@ export function inspectorSnapshot(overrides: Partial<InspectorSnapshot> = {}): I
     truncated: false,
     captureMs: 4.2,
     fallbackReason: null,
+    ...overrides,
+  };
+}
+
+export function viewState(overrides: Partial<ViewState> = {}): ViewState {
+  return {
+    key: 100,
+    translationX: 0,
+    translationY: 0,
+    elevation: 0,
+    backgroundColor: null,
+    textSize: null,
+    textColor: null,
+    password: false,
+    ...overrides,
+  };
+}
+
+/**
+ * `inspectorSnapshot()` from an SDK 0.8.0 app: every View carries its editable state (key 100 + id). The button and
+ * the price are TextViews; the button has a solid background.
+ */
+export function editableSnapshot(
+  overrides: Partial<InspectorSnapshot> = {},
+  views: Partial<Record<number, Partial<ViewState>>> = {},
+): InspectorSnapshot {
+  const text: Partial<Record<number, Partial<ViewState>>> = {
+    2: { textSize: 14, textColor: '#DE000000', backgroundColor: '#FF6200EE', elevation: 2 },
+    3: { textSize: 16, textColor: '#FF202124' },
+    7: { textSize: 14, textColor: '#FF202124' },
+  };
+  const base = inspectorSnapshot();
+  return {
+    ...base,
+    nodes: base.nodes.map((n) => ({
+      ...n,
+      view: viewState({ key: 100 + n.id, ...text[n.id], ...views[n.id] }),
+    })),
+    liveEdits: 0,
     ...overrides,
   };
 }

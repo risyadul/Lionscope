@@ -1,6 +1,23 @@
 import type { ReactNode } from 'react';
-import type { InspectorNode, InspectorSnapshot, PixelRect } from '@lionscope/protocol/wire';
+import {
+  editableProperties,
+  type InspectorNode,
+  type InspectorSnapshot,
+  type PixelRect,
+  type ViewProperty,
+} from '@lionscope/protocol/wire';
+import type { ViewEdits } from '../../hooks/useViewEdits.ts';
 import { CopyButton } from '../stalls/CopyButton.tsx';
+import {
+  AlphaRow,
+  ColorRow,
+  EditableBoxModel,
+  EnabledSwitch,
+  LayoutSizeRow,
+  TypedRow,
+  VisibilityRow,
+  type EditorProps,
+} from './ViewEditors.tsx';
 import {
   ancestorsOf,
   fallbackHint,
@@ -97,7 +114,24 @@ type Props = {
   onSelect: (id: number) => void;
   /** Who selected it: an AI agent's pick is marked. */
   origin: 'user' | 'agent' | null;
+  /** 0.8.0. Live edits of the snapshot's views. */
+  edits: ViewEdits;
 };
+
+/** Why a node offers no editors, null when it does. */
+function readOnlyReason(
+  node: InspectorNode,
+  snapshot: InspectorSnapshot,
+  isEditable: boolean,
+): string | null {
+  if (isEditable) return null;
+  if (isComposable(node)) {
+    const source = sourceLabel(node);
+    return `A composable can’t be edited live: change it in code${source === null ? '' : ` (${source})`}.`;
+  }
+  if (snapshot.source !== 'sdk') return 'Editing views live needs the Lionscope SDK in the app.';
+  return 'Update the app’s Lionscope SDK to 0.8.0 to edit views live.';
+}
 
 /** Where a view's or a composable's source line points, and why one may be missing. */
 function SourceRow({ node, why }: { node: InspectorNode; why: string | undefined }) {
@@ -133,7 +167,7 @@ function SourceRow({ node, why }: { node: InspectorNode; why: string | undefined
 }
 
 /** Everything the snapshot knows about one view or composable; fields the source can't provide say so. */
-export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Props) {
+export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits }: Props) {
   const isSdk = snapshot.source === 'sdk';
   const composable = isComposable(node);
   const id = idLabel(node);
@@ -146,6 +180,13 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
   const size = rectSize(node.bounds);
   const visible = node.visibleBounds;
   const path = ancestorsOf(index, node.id);
+  const editable = new Set(editableProperties(node));
+  const can = (property: ViewProperty) => editable.has(property);
+  const editor: EditorProps = { edits, node, resetKey: snapshot.id };
+  const readOnly = readOnlyReason(node, snapshot, editable.size > 0);
+  const isEdited = (node.view?.edited?.length ?? 0) > 0;
+  const viewStatus = edits.status(node.id);
+  const enabledStatus = edits.status(node.id, 'enabled');
 
   return (
     <div className="attrs">
@@ -169,6 +210,25 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
           </p>
         )}
         <p className="attrs-full mono">{composable ? '@Composable' : node.className}</p>
+        {readOnly !== null && <p className="attr-note attr-readonly">{readOnly}</p>}
+        {isEdited && (
+          <div className="attrs-edited">
+            <button
+              type="button"
+              className="attr-revert"
+              disabled={!edits.canEdit}
+              aria-busy={viewStatus.kind === 'applying' || undefined}
+              onClick={() => edits.revert(node.id)}
+            >
+              Revert this view
+            </button>
+            {viewStatus.kind === 'error' && (
+              <p className="attr-error" role="alert">
+                {viewStatus.message}
+              </p>
+            )}
+          </div>
+        )}
       </header>
 
       {path.length > 0 && (
@@ -212,10 +272,19 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
             <Unset why={why} />
           )}
         </Row>
-        {node.text !== null && node.text !== '' && (
+        {can('text') ? (
+          <TypedRow {...editor} property="text" name="Text" />
+        ) : node.view?.password === true ? (
           <Row name="Text">
-            <span className="attr-text">{node.text}</span>
+            <span className="attr-unset">A password field: its text is never shown or edited.</span>
           </Row>
+        ) : (
+          node.text !== null &&
+          node.text !== '' && (
+            <Row name="Text">
+              <span className="attr-text">{node.text}</span>
+            </Row>
+          )
         )}
         {node.contentDescription !== null && node.contentDescription !== '' && (
           <Row name="Description">
@@ -241,27 +310,50 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
             </Row>
           )
         )}
-        <Row name="Visibility">{node.visibility}</Row>
+        {can('visibility') ? <VisibilityRow {...editor} /> : <Row name="Visibility">{node.visibility}</Row>}
         {!composable && (
           <>
-            <Row name="Alpha">
-              {node.alpha === null ? <Unset why={why} /> : <span className="mono">{node.alpha}</span>}
-            </Row>
-            <Row name="Layout">
-              {node.layoutWidth !== null && node.layoutHeight !== null ? (
-                <span className="mono">
-                  {node.layoutWidth} × {node.layoutHeight}
-                </span>
-              ) : (
-                <Unset why={why} />
-              )}
-            </Row>
+            {can('alpha') ? (
+              <AlphaRow {...editor} />
+            ) : (
+              <Row name="Alpha">
+                {node.alpha === null ? <Unset why={why} /> : <span className="mono">{node.alpha}</span>}
+              </Row>
+            )}
+            {can('layoutWidth') && can('layoutHeight') ? (
+              <>
+                <LayoutSizeRow {...editor} property="layoutWidth" />
+                <LayoutSizeRow {...editor} property="layoutHeight" />
+              </>
+            ) : (
+              <Row name="Layout">
+                {node.layoutWidth !== null && node.layoutHeight !== null ? (
+                  <span className="mono">
+                    {node.layoutWidth} × {node.layoutHeight}
+                  </span>
+                ) : (
+                  <Unset why={why} />
+                )}
+              </Row>
+            )}
           </>
         )}
+        {can('translationX') && (
+          <TypedRow {...editor} property="translationX" name="Translation X" unit="px" />
+        )}
+        {can('translationY') && (
+          <TypedRow {...editor} property="translationY" name="Translation Y" unit="px" />
+        )}
+        {can('elevation') && <TypedRow {...editor} property="elevation" name="Elevation" unit="px" />}
+        {can('backgroundColor') && <ColorRow {...editor} property="backgroundColor" name="Background" />}
+        {can('textSize') && <TypedRow {...editor} property="textSize" name="Text size" unit="sp" />}
+        {can('textColor') && <ColorRow {...editor} property="textColor" name="Text color" />}
         <Row name="Flags">
           <span className="attr-flags">
+            {can('enabled') && <EnabledSwitch {...editor} />}
             {FLAGS.map(({ key, label }) => {
               const value = node[key];
+              if (key === 'enabled' && can('enabled')) return null;
               return value === null ? null : (
                 <span key={key} className="attr-flag" data-on={value || undefined}>
                   {label}
@@ -269,10 +361,17 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
               );
             })}
           </span>
+          {enabledStatus.kind === 'error' && (
+            <p className="attr-error" role="alert">
+              {enabledStatus.message}
+            </p>
+          )}
         </Row>
       </dl>
 
-      {composable ? (
+      {can('paddingLeft') ? (
+        <EditableBoxModel {...editor} canEditMargin={can('marginLeft')} />
+      ) : composable ? (
         <p className="attr-note">
           Bounds are the content box of what it lays out (inside its padding modifiers).
         </p>

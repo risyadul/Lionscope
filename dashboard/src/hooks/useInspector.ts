@@ -3,6 +3,7 @@ import type { ClientMessage, InspectorSelection, InspectorSnapshot } from '@lion
 import { buildIndex, type InspectorIndex } from '../lib/inspector.ts';
 import { createSignal, type Signal } from '../lib/signal.ts';
 import type { DashboardState } from '../lib/store.ts';
+import { useViewEdits, type ViewEdits } from './useViewEdits.ts';
 
 /** The server's error code for a failed `inspect`. */
 export const INSPECT_FAILED_CODE = 'inspect_failed';
@@ -38,6 +39,8 @@ export interface InspectorController {
   selectionOrigin: InspectorSelection['origin'] | null;
   /** The view under the pointer or tree row; a signal so hovering never re-renders the app. */
   hoverId: Signal<number | null>;
+  /** 0.8.0. Live view edits on this snapshot. */
+  edits: ViewEdits;
   toggle: () => void;
   exit: () => void;
   refresh: () => void;
@@ -95,6 +98,7 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
   const selectionOrigin = hasSelection ? selection.origin : null;
   const isStale = isActive && snapshot !== null && snapshot.id === staleId;
   const isCapturing = pending !== null && pending.serial === serial;
+  const edits = useViewEdits({ state, send, snapshot, index, isEnabled: !isStale });
 
   // Answers arrive as store state; settle the request when one does (adjusting state while rendering).
   const [seen, setSeen] = useState({ errorSeq: state.errorSeq, inspectionId });
@@ -216,6 +220,7 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
       selectedId,
       selectionOrigin,
       hoverId,
+      edits,
       toggle,
       exit,
       refresh: request,
@@ -233,6 +238,7 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
       selectedId,
       selectionOrigin,
       hoverId,
+      edits,
       toggle,
       exit,
       request,

@@ -1,0 +1,341 @@
+/* Live view edits (0.8.0): the attribute editors of the Inspector tab. Compact enough for the ~320 px side column. */
+
+.attr-row[data-editable] dt {
+  padding-top: 4px;
+}
+
+.attr-row label {
+  cursor: default;
+}
+
+.attr-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) 6px;
+  min-width: 0;
+}
+
+/* Applying: the field stays usable (and focused) but recedes until the next snapshot shows the result. */
+.attr-edit[data-applying] > :is(input, textarea, .segmented),
+.attr-switch-wrap[data-applying] .attr-switch,
+.attr-box-input[aria-busy='true'] {
+  opacity: 0.55;
+}
+
+.attr-spinner {
+  flex: none;
+}
+
+.attr-input {
+  width: 11ch;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-meta);
+  transition: border-color var(--dur-fast) linear;
+}
+
+.attr-input.mono {
+  font-family: var(--font-mono);
+}
+
+.attr-input--short {
+  width: 7ch;
+}
+
+.attr-input--text {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+textarea.attr-input {
+  height: auto;
+  padding: 4px 6px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.attr-input:hover:not(:disabled),
+.attr-box-input:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+}
+
+.attr-input:focus-visible,
+.attr-box-input:focus-visible {
+  border-color: var(--focus);
+  outline-offset: 0;
+}
+
+.attr-input[aria-invalid='true'],
+.attr-box-input[aria-invalid='true'] {
+  border-color: var(--critical);
+}
+
+.attr-input:disabled,
+.attr-box-input:disabled,
+.attr-range:disabled {
+  opacity: 0.5;
+}
+
+.attr-input::placeholder {
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+}
+
+.attr-unit {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.attr-range {
+  flex: 1 1 72px;
+  min-width: 60px;
+  max-width: 160px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.attr-segmented > button {
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-size: var(--text-overline);
+}
+
+/* Swatch: a checkerboard under the color, so a translucent one reads as translucent. */
+.attr-swatch {
+  position: relative;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: var(--radius-s);
+  background: repeating-conic-gradient(var(--rule-strong) 0% 25%, var(--surface-raised) 0% 50%) 0 0 / 8px 8px;
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+}
+
+.attr-swatch > span {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+/* No single color: a struck-through square. */
+.attr-swatch[data-none] {
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1px),
+    var(--critical) calc(50% - 1px) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+}
+
+/* Switch ----------------------------------------------------------------------- */
+
+.attr-switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attr-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 7px 0 3px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  line-height: 17px;
+  transition: background-color var(--dur-fast) linear;
+}
+
+.attr-switch:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.attr-switch-track {
+  position: relative;
+  width: 24px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--rule-strong);
+  transition: background-color var(--dur-fast) linear;
+}
+
+.attr-switch-track::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  content: '';
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.attr-switch[aria-checked='true'] {
+  color: var(--ink);
+}
+
+.attr-switch[aria-checked='true'] .attr-switch-track {
+  background: var(--ink);
+}
+
+.attr-switch[aria-checked='true'] .attr-switch-track::after {
+  background: var(--ink-inverse);
+  transform: translateX(10px);
+}
+
+/* Edited mark and Revert --------------------------------------------------------- */
+
+.attr-edited-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.attr-edited {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--jank-wash);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jank) 45%, transparent);
+  color: var(--jank-text);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.attr-revert {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  transition:
+    background-color var(--dur-fast) linear,
+    border-color var(--dur-fast) linear,
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.attr-revert:hover:not(:disabled) {
+  border-color: var(--ink-muted);
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+.attr-revert:active:not(:disabled) {
+  background: var(--active-wash);
+  transform: translateY(1px);
+}
+
+.attr-revert:disabled {
+  opacity: 0.45;
+}
+
+.attr-revert[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.attr-error {
+  margin: 3px 0 0;
+  color: var(--critical);
+  font-size: var(--text-meta);
+}
+
+.attr-readonly {
+  margin-top: var(--space-2);
+}
+
+.attr-readonly code {
+  color: var(--ink-2);
+}
+
+.attrs-edited {
+  margin-top: var(--space-2);
+}
+
+/* Editable box model: each side's number is a field. */
+.attr-box[data-editable] .attr-box-margin,
+.attr-box[data-editable] .attr-box-padding {
+  padding: 24px 46px;
+}
+
+.attr-box-side {
+  position: absolute;
+}
+
+.attr-box-input {
+  width: 5ch;
+  height: 18px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  color: var(--ink);
+  font-size: var(--text-overline);
+  text-align: center;
+  transition: border-color var(--dur-fast) linear;
+}
+
+.attr-box-edited {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 6px 0 0;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.attr-box-edited-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@container inspector (max-width: 320px) {
+  .attr-row[data-editable] dt {
+    padding-top: 0;
+  }
+}
+
+/* Head: the app's live edits and Revert all. */
+.inspect-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspect-badge[data-source='edit'] {
+  background: var(--jank-wash);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jank) 45%, transparent);
+  color: var(--jank-text);
+  cursor: help;
+}
+
+.inspect-revert-all {
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+.inspect-revert-all[aria-busy='true'] {
+  cursor: progress;
+}
