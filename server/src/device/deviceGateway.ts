@@ -3,6 +3,7 @@ import type { AddressInfo, Socket } from 'node:net';
 import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V4,
+  DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
@@ -20,8 +21,11 @@ import type {
   SdkInspection,
   SdkInspectFailure,
   SdkInspectMessage,
+  SdkAttachResult,
   SdkLink,
   SdkLinkHandler,
+  SdkLinkMessage,
+  SdkLinkMode,
   SdkLinkTarget,
 } from './sdkLink.ts';
 
@@ -70,6 +74,11 @@ const HTTP_REQUEST_LINE = /^(GET|POST|PUT|HEAD|OPTIONS|DELETE|PATCH|CONNECT) /;
 const CLOSE_GRACE_MS = 1000;
 const NEWLINE = 0x0a;
 const MAX_LOGGED_TYPE_LENGTH = 64;
+/**
+ * Messages a connection may send while its hello is being checked (its current screen, a heartbeat): held and
+ * handed on once it is welcomed, discarded if it is refused. Beyond this they are dropped.
+ */
+export const MAX_HELD_LINES = 16;
 
 export interface DeviceGatewayOptions {
   /** 0 picks a free port (tests). */
@@ -78,7 +87,16 @@ export interface DeviceGatewayOptions {
   limits?: Partial<DeviceGatewayLimits>;
   /** Clock of the rate limiters (tests). */
   now?: () => number;
+  /**
+   * A hello token bucket shared with the other inspect-only listeners (one per device), taken from after this
+   * listener's own: the hello rate stays bounded however many listeners there are.
+   */
+  sharedHellos?: TokenBucket;
 }
+
+/** The shared hello bucket of the inspect-only listeners (sharedHellos): a few devices' worth of one's rate. */
+export const SHARED_HELLO_BURST = 10;
+export const SHARED_HELLOS_PER_SECOND = 3;
 
 export interface DeviceGateway {
   /** Listen on `port` (default: the configured one). */
@@ -89,8 +107,9 @@ export interface DeviceGateway {
 
 /**
  * TCP listener for the in-app SDK (reached through `adb reverse`), loopback only. Speaks NDJSON: every
- * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts, and
- * `welcome` answers with the negotiated protocol version (on a v2 link followed by `config`). Later lines of an
+ * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts (it may
+ * check the PID first: nothing is sent until it decided), and `welcome` answers with the negotiated protocol
+ * version and, on a v5 link, the link's mode (on a v2 session link followed by `config`). Later lines of an
  * unknown `type` (a newer SDK) or of a type the negotiated version lacks are skipped; any other protocol
  * violation closes the connection, and the SDK reconnects with backoff.
  */
@@ -100,6 +119,7 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   const handshaking = new Set<Socket>();
   const linked = new Set<Socket>();
   const hellos = new TokenBucket(limits.helloBurst, limits.hellosPerSecond, now);
+  const sharedHellos = options.sharedHellos;
   const warnings = new ErrorThrottle();
   let address: AddressInfo | null = null;
   let ignoredMessages = 0;
@@ -159,7 +179,9 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
       linked.delete(socket);
     });
     const admit = (): ByeReason | null => {
-      if (linked.size >= limits.maxLinks || !hellos.take()) return 'too_many_connections';
+      if (linked.size >= limits.maxLinks || !hellos.take() || sharedHellos?.take() === false) {
+        return 'too_many_connections';
+      }
       handshaking.delete(socket);
       linked.add(socket);
       return null;
@@ -306,6 +328,12 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   let protocolVersion = 0;
   /** A `config` asked for before the `welcome` went out. */
   let pendingConfig: GatewayMessage | null = null;
+  let mode: SdkLinkMode = 'session';
+  /** The hello is being checked by the target: later lines are held (up to MAX_HELD_LINES) until it decided. */
+  let attaching = false;
+  let held: SdkLinkMessage[] = [];
+  /** The socket is closed (its `close` event fired). */
+  let gone = false;
   let closing = false;
   const inspects = new Map<number, PendingInspect>();
   let nextRequestId = 1;
@@ -434,20 +462,73 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       protocolVersion,
       close,
       sendConfig: (options) => {
-        if (protocolVersion < DEVICE_PROTOCOL_V2 || closing) return;
+        // An inspect-only link gets no options (its SDK runs no collectors).
+        if (protocolVersion < DEVICE_PROTOCOL_V2 || closing || mode === 'inspect') return;
         if (handler) socket.write(gatewayLine(configMessage(options)));
         else pendingConfig = configMessage(options);
       },
       inspect,
     };
-    const result = target.attachSdk(parsed.value, link);
+    let result: SdkAttachResult | Promise<SdkAttachResult>;
+    try {
+      result = target.attachSdk(parsed.value, link);
+    } catch (error) {
+      return onAttachFailed(error);
+    }
+    if (!(result instanceof Promise)) return onAttached(result);
+    attaching = true;
+    result.then(onAttached, onAttachFailed);
+  };
+
+  const onAttachFailed = (error: unknown): void => {
+    attaching = false;
+    held = [];
+    log.error('Device gateway: failed to attach an SDK link:', errorMessage(error));
+    close('protocol_error');
+  };
+
+  const onAttached = (result: SdkAttachResult): void => {
+    attaching = false;
+    const pending = held;
+    held = [];
     if (!result.ok) return close(result.reason);
     handler = result.handler;
+    if (gone) {
+      // The connection went away while the target checked it.
+      handler = null;
+      return result.handler.onClose();
+    }
     // The target may have closed the link while attaching it.
     if (closing) return;
-    socket.write(gatewayLine({ type: 'welcome', protocolVersion }));
-    if (pendingConfig) socket.write(gatewayLine(pendingConfig));
+    mode = result.mode ?? 'session';
+    if (mode === 'inspect' && protocolVersion < DEVICE_PROTOCOL_V5) {
+      warn('inspect mode below v5');
+      return close('no_session');
+    }
+    socket.write(
+      gatewayLine(
+        protocolVersion >= DEVICE_PROTOCOL_V5
+          ? { type: 'welcome', protocolVersion, mode }
+          : { type: 'welcome', protocolVersion },
+      ),
+    );
+    if (pendingConfig && mode === 'session') socket.write(gatewayLine(pendingConfig));
     pendingConfig = null;
+    try {
+      for (const message of pending) {
+        if (closing || !handler) return;
+        handler.onMessage(message);
+      }
+    } catch (error) {
+      log.error('Device gateway: failed to handle a line:', errorMessage(error));
+      close('protocol_error');
+    }
+  };
+
+  /** A validated message: to the handler, or held while the hello is being checked. */
+  const deliver = (message: SdkLinkMessage): void => {
+    if (handler) handler.onMessage(message);
+    else if (held.length < MAX_HELD_LINES) held.push(message);
   };
 
   /**
@@ -466,7 +547,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
 
   const onLine = (raw: string, rawBytes: number): void => {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-    const type = handler ? peekType(line) : null;
+    const helloSeen = handler !== null || attaching;
+    const type = helloSeen ? peekType(line) : null;
     // A snapshot's chunks come in a burst: while a request waits for them, its answer lines don't count against
     // the line budget, up to the announced node count and MAX_INSPECT_ANSWER_BYTES (they still go through every
     // other check). Whether a line really is such an answer is only known once parsed.
@@ -477,7 +559,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       inspectAllowance > 0 &&
       rawBytes <= inspectBytesAllowance;
     if (!exempt && !bucket.take()) return overBudget(type);
-    if (!handler) return onHello(line);
+    if (!helloSeen) return onHello(line);
     const parsed = parseDeviceMessage(line, protocolVersion);
     if (exempt) {
       // JSON.parse keeps the last of duplicate keys: the type peeked at must be the type parsed.
@@ -502,14 +584,14 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     if (!parsed.ok && parsed.invalidDiagnostic !== undefined) {
       dropDiagnostic(parsed.invalidDiagnostic, parsed.error);
       if (INSPECT_TYPES.has(parsed.invalidDiagnostic)) return failAllInspects('invalid');
-      return handler.onInvalidDiagnostic();
+      return handler?.onInvalidDiagnostic();
     }
     if (!parsed.ok || parsed.value.type === 'hello') {
       warn('invalid message');
       return close('protocol_error');
     }
     if (isInspectMessage(parsed.value)) return onInspectMessage(parsed.value, rawBytes);
-    handler.onMessage(parsed.value);
+    deliver(parsed.value);
   };
 
   socket.on('data', (chunk: Buffer) => {
@@ -540,6 +622,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   });
 
   socket.on('close', () => {
+    gone = true;
     closing = true;
     clearTimeout(helloTimer);
     failAllInspects('closed');

@@ -28,6 +28,7 @@ import { useDeviceTarget } from './hooks/useDeviceTarget.ts';
 import { useEmulatorActions } from './hooks/useEmulatorActions.ts';
 import { useEscape } from './hooks/useEscape.ts';
 import { useInspector } from './hooks/useInspector.ts';
+import { useInspectorFocus } from './hooks/useInspectorFocus.ts';
 import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { useViewMode } from './hooks/useViewMode.ts';
@@ -114,6 +115,12 @@ export function App() {
     send,
     serial: inspectorSerial,
     canInspect: isOpen && inspectorSerial !== null && isValidSerial(inspectorSerial),
+  });
+  useInspectorFocus({
+    send,
+    isInspectorShown: viewMode === 'inspect' || (viewMode === 'profile' && sideTab === 'inspector'),
+    serial: inspector.canInspect ? inspectorSerial : null,
+    isOpen,
   });
   const emulatorActions = useEmulatorActions({ send, emulators: state.emulators, errorSeq: state.errorSeq });
   // Shutting it down stops this session first (the server does; the confirmation says so).

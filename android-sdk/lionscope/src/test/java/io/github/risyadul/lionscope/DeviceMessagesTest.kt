@@ -62,9 +62,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionFour() {
-        assertEquals(4, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V4, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionFive() {
+        assertEquals(5, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V5, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test

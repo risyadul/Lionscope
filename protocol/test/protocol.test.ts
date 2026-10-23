@@ -177,6 +177,13 @@ describe('Inspector client messages', () => {
     }
   });
 
+  it('parses inspectorFocus with a serial or null', () => {
+    for (const serial of ['emulator-5554', 'R58M123ABC', null]) {
+      const message = { type: 'inspectorFocus', serial };
+      expect(parseClientMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+    }
+  });
+
   it('rejects bad serials, snapshot ids, node ids and extra fields', () => {
     for (const message of [
       { type: 'inspect', serial: 'emulator-5554; reboot' },
@@ -188,6 +195,10 @@ describe('Inspector client messages', () => {
       { type: 'selectInspectorNode', snapshotId, nodeId: MAX_INSPECTOR_NODES },
       { type: 'selectInspectorNode', snapshotId, nodeId: 1.5 },
       { type: 'selectInspectorNode', snapshotId },
+      { type: 'inspectorFocus', serial: 'emulator-5554; reboot' },
+      { type: 'inspectorFocus', serial: '' },
+      { type: 'inspectorFocus' },
+      { type: 'inspectorFocus', serial: 'emulator-5554', tab: 'inspector' },
     ]) {
       expect(parseClientMessage(JSON.stringify(message)).ok).toBe(false);
     }

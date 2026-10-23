@@ -99,6 +99,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       nodeId: inspectorNodeId.nullable(),
     })
     .strict(),
+  z.object({ type: z.literal('inspectorFocus'), serial: serialSchema.nullable() }).strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

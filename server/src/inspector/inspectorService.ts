@@ -1,12 +1,14 @@
 /**
  * The Layout Inspector: snapshots of a device screen's view hierarchy with a screenshot taken at the same moment.
- * From the in-app SDK when the session's app on that device is linked at device protocol ≥ 4 (layout source,
- * owners, layout params), else, and for Compose screens, from `uiautomator dump`. The last few snapshots and their
- * PNGs are kept in memory; the newest is the current one, and the selection always refers to it.
+ * From the in-app SDK when the app on top of that device is linked at device protocol ≥ 4 (layout source, owners,
+ * layout params): the session's link, or outside a session an inspect-only link (SDK 0.5.2+); else, and for
+ * Compose screens, from `uiautomator dump`. The last few snapshots and their PNGs are kept in memory; the newest is
+ * the current one, and the selection always refers to it.
  */
 import { randomBytes } from 'node:crypto';
 import { DEVICE_PROTOCOL_V4 } from '@lionscope/protocol';
 import type { DeviceInfo, InspectorSelection, InspectorSnapshot, ServerMessage } from '@lionscope/protocol';
+import type { InspectLinkFallback, InspectLinkReadiness } from '../device/inspectLinks.ts';
 import type { SdkInspectFailure } from '../device/sdkLink.ts';
 import { SdkInspectError } from '../device/sdkLink.ts';
 import { PublicError } from '../errors.ts';
@@ -45,7 +47,9 @@ export type FallbackReason =
   | 'sdk_disabled'
   | 'sdk_timeout'
   | 'sdk_too_large'
-  | 'sdk_failed';
+  | 'sdk_failed'
+  | InspectLinkFallback
+  | 'sdk_needs_session';
 
 const SDK_FALLBACKS: Readonly<Record<SdkInspectFailure, FallbackReason>> = {
   background: 'background',
@@ -59,11 +63,31 @@ const SDK_FALLBACKS: Readonly<Record<SdkInspectFailure, FallbackReason>> = {
   unsupported: 'old_sdk',
 };
 
+/** Inspect-only SDK links outside the session (InspectLinks). */
+export interface InspectorLinks {
+  /** An inspect of `serial`: keeps (or starts) its inspect-only link for a while. */
+  noteInspect(serial: string): void;
+  /** Its linked apps on top, after the wait window when that applies. */
+  prepare(serial: string): Promise<InspectLinkReadiness>;
+  /** An SDK too old to link outside a session is in `packageName` on `serial`. */
+  needsSession(serial: string, packageName: string): boolean;
+}
+
+/** Reasons that only say no SDK on the device answered: refined when the app on top has an SDK below v5. */
+const NO_ANSWER_REASONS: ReadonlySet<FallbackReason> = new Set(['no_sdk', 'sdk_linking', 'background']);
+
 export interface InspectorServiceOptions {
   sessions: {
     getDevices(): DeviceInfo[];
     inspectorSource(serial: string): InspectorSessionSource | null;
   };
+  links?: InspectorLinks;
+  /**
+   * The package of the device's foreground activity now (`dumpsys activity`), read with the screenshot: an
+   * inspect-only link is only asked when its app is that package (any app can claim to be on top). Omitted, or
+   * null: no inspect-only link is asked.
+   */
+  foregroundPackage?: (serial: string) => Promise<string | null>;
   /** A fresh `uiautomator dump` of the device (the agent's uiDump). */
   dumpUi: (serial: string) => Promise<UiTree>;
   /** `adb exec-out screencap -p`. */
@@ -112,6 +136,8 @@ export class InspectorService {
    * same device joins it. Rejects with a PublicError when neither the SDK nor uiautomator could read the screen.
    */
   inspect(serial: string): Promise<InspectorSnapshot> {
+    // Every inspect (also one joining a capture) keeps the device's inspect-only link around.
+    this.options.links?.noteInspect(serial);
     let pending = this.inFlight.get(serial);
     if (!pending) {
       pending = this.capture(serial).finally(() => this.inFlight.delete(serial));
@@ -146,14 +172,39 @@ export class InspectorService {
     const device = this.options.sessions.getDevices().find((candidate) => candidate.serial === serial);
     if (!device) throw new PublicError(`Device ${serial} is not connected`);
     if (device.state !== 'device') throw new PublicError(`Device ${serial} is ${device.state}`);
-    const source = this.options.sessions.inspectorSource(serial);
+    const session = this.options.sessions.inspectorSource(serial);
     // At the same moment as the hierarchy, so the boxes line up with the picture.
     let shot = this.screenshot(serial);
-    let result = await this.fromSdk(serial, source, shot.ts);
+    /** An SDK was asked, or the wait window ran, since `shot` was taken: the next reading needs a new one. */
+    let stale = false;
+    const ask = async (source: InspectorSessionSource): Promise<Built | FallbackReason> => {
+      if (source.link && source.link.protocolVersion < DEVICE_PROTOCOL_V4) return 'old_sdk';
+      if (stale) shot = this.screenshot(serial);
+      stale = true;
+      return this.fromSdk(serial, source, shot.ts);
+    };
+    const readiness = (): Promise<InspectLinkReadiness> =>
+      this.options.links?.prepare(serial).then((ready) => {
+        if (ready.waited) stale = true;
+        return ready;
+      }) ?? Promise.resolve({ sources: [], reason: null, waited: false });
+    const foreground = async (): Promise<string | null> => {
+      // A fresh picture goes with the foreground app it is checked against.
+      if (stale) shot = this.screenshot(serial);
+      stale = false;
+      try {
+        return (await this.options.foregroundPackage?.(serial)) ?? null;
+      } catch (error) {
+        log.warn(`Inspector: could not read the foreground app of ${serial}: ${errorMessage(error)}`);
+        return null;
+      }
+    };
+    const sourced = await this.fromSources(session, ask, readiness, foreground);
+    let result = sourced.result;
     if (typeof result === 'string') {
-      // The SDK was asked and could not answer: a new picture goes with the uiautomator dump.
-      if (result !== 'no_sdk' && result !== 'old_sdk') shot = this.screenshot(serial);
-      result = this.build(serial, shot.ts, await this.fromUiautomator(serial, source, result));
+      if (stale) shot = this.screenshot(serial);
+      const sources = [session, ...sourced.linked];
+      result = this.build(serial, shot.ts, await this.fromUiautomator(serial, sources, result));
       if (result.bytes > MAX_SNAPSHOT_BYTES) {
         throw new PublicError(`The screen of ${serial} has too many views to inspect`);
       }
@@ -178,15 +229,48 @@ export class InspectorService {
   }
 
   /**
+   * Ask the SDK links in turn: the session's when its app is on top, then the inspect-only link of the foreground
+   * app, if it says it is on top (an app that went to the background answers `background`), then a session app
+   * that seems to be in the background. The first answer, or the first failure that is not about being in the
+   * background, wins. `linked`: the inspect-only sources there were.
+   */
+  private async fromSources(
+    session: InspectorSessionSource | null,
+    ask: (source: InspectorSessionSource) => Promise<Built | FallbackReason>,
+    readiness: () => Promise<InspectLinkReadiness>,
+    foreground: () => Promise<string | null>,
+  ): Promise<{ result: Built | FallbackReason; linked: InspectorSessionSource[] }> {
+    const sessionLink = session?.link ? session : null;
+    let asked = false;
+    if (sessionLink && sessionLink.screen !== null) {
+      const result = await ask(sessionLink);
+      if (result !== 'background') return { result, linked: [] };
+      asked = true;
+    }
+    const ready = await readiness();
+    const top = ready.sources.length > 0 ? await foreground() : null;
+    for (const source of ready.sources.filter((candidate) => candidate.packageName === top)) {
+      const result = await ask(source);
+      if (result !== 'background' && result !== 'no_sdk') return { result, linked: ready.sources };
+      asked = true;
+    }
+    if (sessionLink && sessionLink.screen === null) {
+      const result = await ask(sessionLink);
+      if (result !== 'background' || ready.reason === null) return { result, linked: ready.sources };
+    }
+    return { result: ready.reason ?? (asked ? 'background' : 'no_sdk'), linked: ready.sources };
+  }
+
+  /**
    * The SDK's snapshot when it can give one (top window not Compose, not too large), else why not. The capture
    * time is the screenshot's, taken at the same moment.
    */
   private async fromSdk(
     serial: string,
-    source: InspectorSessionSource | null,
+    source: InspectorSessionSource,
     ts: number,
   ): Promise<Built | FallbackReason> {
-    if (!source?.link) return 'no_sdk';
+    if (!source.link) return 'no_sdk';
     if (source.link.protocolVersion < DEVICE_PROTOCOL_V4) return 'old_sdk';
     let inspection;
     try {
@@ -200,9 +284,10 @@ export class InspectorService {
     return built.bytes > MAX_SNAPSHOT_BYTES ? 'sdk_too_large' : built;
   }
 
+  /** `sources`: the session and inspect-only links of the device, whose screen names describe their own app. */
   private async fromUiautomator(
     serial: string,
-    source: InspectorSessionSource | null,
+    sources: readonly (InspectorSessionSource | null)[],
     reason: FallbackReason,
   ): Promise<SnapshotBody> {
     let tree;
@@ -213,8 +298,12 @@ export class InspectorService {
       throw new PublicError(`Could not inspect the screen of ${serial}: ${errorMessage(error)}`);
     }
     // The SDK's screen name only describes its own app.
-    const screen = source && tree.package === source.packageName ? source.screen : null;
-    return uiautomatorSnapshot(tree, screen, reason);
+    const screen = sources.find((source) => source && tree.package === source.packageName)?.screen ?? null;
+    const needsSession =
+      NO_ANSWER_REASONS.has(reason) &&
+      tree.package !== null &&
+      this.options.links?.needsSession(serial, tree.package) === true;
+    return uiautomatorSnapshot(tree, screen, needsSession ? 'sdk_needs_session' : reason);
   }
 
   /** The snapshot with its id, and its `inspection` message serialized once (measured and broadcast). */

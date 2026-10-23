@@ -41,6 +41,11 @@ internal class DeviceLink(
     override var negotiatedVersion: Int? = null
         private set
 
+    /** True while the current connection is a profiling session (not an `inspect`-only link). */
+    @Volatile
+    var isSession = false
+        private set
+
     @Volatile
     private var currentScreen: ScreenRef? = null
 
@@ -50,6 +55,7 @@ internal class DeviceLink(
     private val stateLock = ReentrantLock()
     private val stateChanged = stateLock.newCondition()
     private val welcomeListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
+    private val sessionListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
     private val configListeners = CopyOnWriteArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = CopyOnWriteArrayList<(Int) -> Unit>()
 
@@ -92,6 +98,10 @@ internal class DeviceLink(
 
     override fun addWelcomeListener(listener: (welcomed: Boolean) -> Unit) {
         welcomeListeners.add(listener)
+    }
+
+    override fun addSessionListener(listener: (active: Boolean) -> Unit) {
+        sessionListeners.add(listener)
     }
 
     override fun addConfigListener(listener: (SdkOptions) -> Unit) {
@@ -149,6 +159,7 @@ internal class DeviceLink(
             session.close()
             negotiatedVersion = null
             if (session.welcomed) setWelcomed(false)
+            if (isSession) setSession(false)
         }
         val reason = session.byeReason
         return if (reason != null) LinkState.bye(reason) else LinkState.DISCONNECTED
@@ -185,6 +196,11 @@ internal class DeviceLink(
         dispatch(welcomeListeners, welcomed)
     }
 
+    private fun setSession(active: Boolean) {
+        isSession = active
+        dispatch(sessionListeners, active)
+    }
+
     private fun <T> dispatch(listeners: List<(T) -> Unit>, value: T) {
         for (listener in listeners) {
             try {
@@ -217,7 +233,7 @@ internal class DeviceLink(
 
         fun onMessage(message: GatewayMessage) {
             when (message) {
-                is GatewayMessage.Welcome -> onWelcome(message.protocolVersion)
+                is GatewayMessage.Welcome -> onWelcome(message.protocolVersion, message.inspectOnly)
                 is GatewayMessage.Bye -> {
                     byeReason = message.reason
                     close()
@@ -243,7 +259,7 @@ internal class DeviceLink(
 
         /** Synchronized with [close] so a late welcome can never outlive its connection. */
         @Synchronized
-        private fun onWelcome(protocolVersion: Int) {
+        private fun onWelcome(protocolVersion: Int, inspectOnly: Boolean) {
             if (welcomed || closed) return
             welcomed = true
             // Nothing below MIN exists while MIN is 1. Once MIN > 1, a welcome below MIN must close the link
@@ -252,6 +268,8 @@ internal class DeviceLink(
             stateLock.withLock { policy.onWelcome(clock()) }
             logState(LinkState.CONNECTED)
             setWelcomed(true)
+            // `mode` exists from v5 on; below it every welcome is a session.
+            if (!(inspectOnly && speaks(negotiatedVersion, DEVICE_PROTOCOL_V5))) setSession(true)
         }
 
         @Synchronized

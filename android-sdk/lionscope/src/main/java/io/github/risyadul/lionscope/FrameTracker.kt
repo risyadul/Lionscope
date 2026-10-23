@@ -17,8 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Per-frame FrameMetrics of resumed activity windows and shown dialog windows, delivered on the
- * `lionscope-frames` thread and batched every 500 ms. Listeners are only registered while the link is welcomed,
- * so there is no observer effect when no dashboard is connected. While frames flow, it also asks the screen
+ * `lionscope-frames` thread and batched every 500 ms. Listeners are only registered during a profiling session
+ * (not on an inspect-only link), so there is no observer effect when no dashboard is profiling. While frames flow, it also asks the screen
  * tracker to re-resolve (at most every 500 ms) to catch changes that have no lifecycle event.
  */
 @RequiresApi(24)
@@ -50,8 +50,12 @@ internal class FrameTracker(
         override fun onDisplayChanged(displayId: Int) = guarded { updateInterval(displayId) }
     }
 
+    /** True while FrameMetrics listeners may be attached (a profiling session is up). */
+    val isActive: Boolean
+        get() = windows.isActive
+
     init {
-        link.addWelcomeListener { welcomed -> main.post(Runnable { guarded { onLinkChanged(welcomed) } }) }
+        link.addSessionListener { welcomed -> main.post(Runnable { guarded { onLinkChanged(welcomed) } }) }
     }
 
     override fun onActivityResumed(activity: Activity) = guarded {

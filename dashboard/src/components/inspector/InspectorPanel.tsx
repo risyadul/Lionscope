@@ -1,6 +1,6 @@
 import { memo, useState, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
-import { fallbackLabel } from '../../lib/inspector.ts';
+import { fallbackHint, fallbackLabel } from '../../lib/inspector.ts';
 import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
 import { InspectorTree } from './InspectorTree.tsx';
@@ -38,7 +38,8 @@ export const InspectorPanel = memo(function InspectorPanel() {
       <Empty title={controller.failure ?? 'Nothing inspected yet'}>
         <p>
           Press <strong>Inspect</strong> in the device toolbar to freeze the screen, hover to find a view and
-          click to see its attributes and the XML layout it came from.
+          click to see its attributes and the XML layout it came from. Apps with the Lionscope SDK (0.5.2 or
+          newer) give the layout sources without a session; older SDKs need Start.
         </p>
         <div className="inspect-empty-actions">
           <button
@@ -57,11 +58,12 @@ export const InspectorPanel = memo(function InspectorPanel() {
 
   const selected = selectedId === null ? undefined : index.byId.get(selectedId);
   const reason = fallbackLabel(snapshot.fallbackReason);
+  const hint = snapshot.source === 'sdk' ? undefined : fallbackHint(snapshot.fallbackReason);
   return (
     <div className="inspector" data-stale={controller.isStale || undefined}>
       <div className="inspect-head">
         <div className="inspect-badges">
-          <span className="inspect-badge" data-source={snapshot.source}>
+          <span className="inspect-badge" data-source={snapshot.source} title={hint}>
             {snapshot.source === 'sdk' ? 'SDK' : reason === null ? 'uiautomator' : `uiautomator — ${reason}`}
           </span>
           {snapshot.captureMs !== null && (
@@ -91,6 +93,7 @@ export const InspectorPanel = memo(function InspectorPanel() {
             {controller.isCapturing ? (controller.isStale ? 'Refreshing…' : 'Capturing…') : 'Refresh'}
           </button>
         </div>
+        {hint !== undefined && <p className="inspect-hint">{hint}</p>}
         {controller.failure !== null && (
           <p className="inspect-failure" role="alert">
             {controller.failure}

@@ -2,15 +2,17 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SCREEN_WS_PATH, WS_PATH } from '@lionscope/protocol';
+import { adbShell } from './adb/adb.ts';
 import type { Adb } from './adb/adb.ts';
 import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
-import { dumpUi } from './agent/uiDump.ts';
+import { dumpUi, parseTopPackage, TOP_ACTIVITY_COMMAND } from './agent/uiDump.ts';
 import { UiHelpers } from './agent/uiHelper.ts';
 import type { AgentContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
-import { createDeviceGateway } from './device/deviceGateway.ts';
+import { createDeviceGateway, SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
+import { InspectLinks } from './device/inspectLinks.ts';
 import { createEmulatorHost } from './emulator/emulatorHost.ts';
 import type { EmulatorHost } from './emulator/emulatorHost.ts';
 import { EmulatorManager } from './emulator/emulatorManager.ts';
@@ -20,6 +22,7 @@ import { errorMessage, log } from './log.ts';
 import { INSPECTOR_PATH_PREFIX, serveInspectorPng } from './http/inspectorFiles.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
 import { InspectorService } from './inspector/inspectorService.ts';
+import { TokenBucket } from './net/tokenBucket.ts';
 import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
 import { buildAllowedOrigins, createWsGateway, isAllowedHost } from './http/wsGateway.ts';
 import type { WsGateway } from './http/wsGateway.ts';
@@ -66,6 +69,7 @@ export interface LionscopeServer {
 
 /** Longest an Inspector snapshot may wait for uiautomator (it retries while the screen is not idle). */
 const INSPECT_UI_DUMP_MS = 20_000;
+const FOREGROUND_TIMEOUT_MS = 5000;
 
 function sendPlain(res: ServerResponse, status: number, body: string): void {
   res.statusCode = status;
@@ -94,7 +98,17 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     pollMs: options.emulatorPollMs,
     stopSessionOn: (serial) => manager.stopSessionOn(serial),
   });
-  const manager = new SessionManager({
+  // Every inspect-only listener shares one hello budget (the session gateway keeps its own: inspect traffic must
+  // not starve the session's app).
+  const sharedHellos = new TokenBucket(SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND);
+  const inspectLinks: InspectLinks = new InspectLinks({
+    adb: options.adb,
+    createListener: (target) =>
+      createDeviceGateway({ port: 0, target, limits: options.deviceLimits, sharedHellos }),
+    route: (serial, hello, link) => manager.attachSdkOn(serial, hello, link),
+    sessionPort: () => deviceGateway.address?.port ?? null,
+  });
+  const manager: SessionManager = new SessionManager({
     adb: options.adb,
     broadcast: (message) => {
       // A change in the adb device list can be an emulator starting or stopping.
@@ -105,6 +119,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     bufferWindowMs,
     sessionIntervals: options.sessionIntervals,
     deviceGatewayPort: () => deviceGateway.address?.port ?? null,
+    inspectLinks,
   });
   const deviceGateway = createDeviceGateway({
     port: options.devicePort,
@@ -118,6 +133,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   });
   const inspector = new InspectorService({
     sessions: manager,
+    links: inspectLinks,
     // The agent's dump: it also refreshes what the element tools know of the screen.
     dumpUi: async (serial) =>
       (
@@ -126,6 +142,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         })
       ).tree,
     screencap: (serial) => screencap({ adb: options.adb }, serial),
+    foregroundPackage: async (serial) =>
+      parseTopPackage(
+        await adbShell(options.adb, serial, TOP_ACTIVITY_COMMAND, { timeoutMs: FOREGROUND_TIMEOUT_MS }),
+      ),
     broadcast: (message, payload) => gateway?.broadcast(message, payload),
   });
   const agent: Omit<AgentContext, 'deviceControl'> = {
@@ -198,6 +218,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     manager,
     emulators,
     inspector,
+    inspectLinks,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,
@@ -266,10 +287,12 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
-      // In parallel: device screens (scrcpy cleanup), UI helpers, the session, and the emulators this server booted.
+      // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, and the emulators
+      // this server booted.
       await Promise.all([
         screenGateway.close(),
         uiHelper.close(),
+        inspectLinks.close(),
         manager.close(),
         emulators.close(),
         agentHttp.close(),

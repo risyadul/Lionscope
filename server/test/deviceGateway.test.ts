@@ -1,21 +1,25 @@
 import {
   DEFAULT_SDK_OPTIONS,
   DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_V4,
+  DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_VERSION,
   MAX_DEVICE_LINE_BYTES,
 } from '@lionscope/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDeviceGateway, DEFAULT_DEVICE_LIMITS } from '../src/device/deviceGateway.ts';
+import { createDeviceGateway, DEFAULT_DEVICE_LIMITS, MAX_HELD_LINES } from '../src/device/deviceGateway.ts';
 import type { DeviceGateway, DeviceGatewayLimits } from '../src/device/deviceGateway.ts';
 import type {
   ByeReason,
   SdkAttachResult,
   SdkHello,
   SdkLink,
+  SdkLinkHandler,
   SdkLinkMessage,
   SdkLinkTarget,
 } from '../src/device/sdkLink.ts';
 import { log } from '../src/log.ts';
+import { TokenBucket } from '../src/net/tokenBucket.ts';
 import { DeviceClient } from './helpers/deviceClient.ts';
 
 const HELLO: SdkHello = {
@@ -223,10 +227,12 @@ describe('device gateway', () => {
   it('negotiates down to its own protocol version with a newer SDK and keeps it on the link', async () => {
     const port = await start();
     const client = await open(port);
-    client.send({ ...HELLO, protocolVersion: 5 });
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_VERSION + 1 });
     await client.waitFor((message) => message.type === 'welcome');
-    expect(client.received).toEqual([{ type: 'welcome', protocolVersion: DEVICE_PROTOCOL_VERSION }]);
-    expect(target.hellos[0]?.protocolVersion).toBe(5);
+    expect(client.received).toEqual([
+      { type: 'welcome', protocolVersion: DEVICE_PROTOCOL_VERSION, mode: 'session' },
+    ]);
+    expect(target.hellos[0]?.protocolVersion).toBe(DEVICE_PROTOCOL_VERSION + 1);
     expect(target.links[0]?.protocolVersion).toBe(DEVICE_PROTOCOL_VERSION);
   });
 
@@ -630,5 +636,169 @@ describe('device gateway', () => {
     const fallback = await second.listen(0);
     expect(fallback.port).not.toBe(port);
     await second.close();
+  });
+});
+
+describe('device gateway: checking a hello before the welcome', () => {
+  const gateways: DeviceGateway[] = [];
+  const clients: DeviceClient[] = [];
+  const SCREEN = { type: 'screen', ts: 1792516376000, screen: null };
+
+  /** A target that decides on each hello only when the test resolves it. */
+  function deferredTarget() {
+    const pending: { hello: SdkHello; link: SdkLink; resolve: (result: SdkAttachResult) => void }[] = [];
+    const messages: SdkLinkMessage[] = [];
+    let closes = 0;
+    const handler: SdkLinkHandler = {
+      onMessage: (message) => messages.push(message),
+      onInvalidDiagnostic: () => undefined,
+      onClose: () => {
+        closes += 1;
+      },
+    };
+    const target: SdkLinkTarget = {
+      attachSdk: (hello, link) => new Promise((resolve) => pending.push({ hello, link, resolve })),
+    };
+    return { target, pending, messages, handler, closes: () => closes };
+  }
+
+  async function listen(target: SdkLinkTarget, sharedHellos?: TokenBucket): Promise<number> {
+    const gateway = createDeviceGateway({ port: 0, target, ...(sharedHellos ? { sharedHellos } : {}) });
+    gateways.push(gateway);
+    return (await gateway.listen()).port;
+  }
+
+  async function open(port: number): Promise<DeviceClient> {
+    const client = await DeviceClient.open(port);
+    clients.push(client);
+    return client;
+  }
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) client.socket.destroy();
+    for (const gateway of gateways.splice(0)) await gateway.close();
+  });
+
+  it('sends nothing until the target decided, then welcomes and hands on the lines it held', async () => {
+    const deferred = deferredTarget();
+    const client = await open(await listen(deferred.target));
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V5 });
+    client.send(SCREEN);
+    client.send(HEARTBEAT);
+    await waitUntil(() => deferred.pending.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(client.rawLines).toEqual([]);
+    expect(deferred.messages).toEqual([]);
+    deferred.pending[0]?.resolve({ ok: true, handler: deferred.handler, mode: 'inspect' });
+    await client.waitFor((message) => message.type === 'welcome');
+    await waitUntil(() => deferred.messages.length === 2);
+    expect(deferred.messages.map((message) => message.type)).toEqual(['screen', 'heartbeat']);
+    client.send(HEARTBEAT);
+    await waitUntil(() => deferred.messages.length === 3);
+  });
+
+  it(`holds at most ${MAX_HELD_LINES} lines while checking`, async () => {
+    const deferred = deferredTarget();
+    const client = await open(await listen(deferred.target));
+    client.send(HELLO);
+    for (let index = 0; index < MAX_HELD_LINES + 5; index++) client.send(HEARTBEAT);
+    await waitUntil(() => deferred.pending.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    deferred.pending[0]?.resolve({ ok: true, handler: deferred.handler });
+    await client.waitFor((message) => message.type === 'welcome');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deferred.messages).toHaveLength(MAX_HELD_LINES);
+  });
+
+  it('a refused hello hears nothing but bye no_session, however long the check took', async () => {
+    const deferred = deferredTarget();
+    const client = await open(await listen(deferred.target));
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V5 });
+    client.send(SCREEN);
+    await waitUntil(() => deferred.pending.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    deferred.pending[0]?.resolve({ ok: false, reason: 'no_session' });
+    await client.closed;
+    expect(client.rawLines).toEqual(['{"type":"bye","reason":"no_session"}']);
+    expect(deferred.messages).toEqual([]);
+  });
+
+  it('sends welcome.mode on v5 links only, never inspect mode below v5, and no config to inspect links', async () => {
+    const deferred = deferredTarget();
+    const port = await listen(deferred.target);
+    const welcome = async (protocolVersion: number, mode: 'session' | 'inspect' | undefined) => {
+      const client = await open(port);
+      client.send({ ...HELLO, protocolVersion });
+      await waitUntil(() => deferred.pending.length > 0);
+      const entry = deferred.pending.shift();
+      // Options asked for while attaching go out right after a session welcome.
+      entry?.link.sendConfig(DEFAULT_SDK_OPTIONS);
+      entry?.resolve({ ok: true, handler: deferred.handler, ...(mode ? { mode } : {}) });
+      await client.waitFor((message) => message.type === 'welcome' || message.type === 'bye');
+      entry?.link.sendConfig(DEFAULT_SDK_OPTIONS);
+      client.send(HEARTBEAT);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return client.rawLines;
+    };
+    const config = JSON.stringify({ type: 'config', ...DEFAULT_SDK_OPTIONS });
+    expect(await welcome(DEVICE_PROTOCOL_V5, undefined)).toEqual([
+      '{"type":"welcome","protocolVersion":5,"mode":"session"}',
+      config,
+      config,
+    ]);
+    expect(await welcome(DEVICE_PROTOCOL_V5 + 1, 'inspect')).toEqual([
+      '{"type":"welcome","protocolVersion":5,"mode":"inspect"}',
+    ]);
+    expect(await welcome(DEVICE_PROTOCOL_V4, 'session')).toEqual([
+      '{"type":"welcome","protocolVersion":4}',
+      config,
+      config,
+    ]);
+    expect(await welcome(DEVICE_PROTOCOL_V4, 'inspect')).toEqual(['{"type":"bye","reason":"no_session"}']);
+  });
+
+  it('tells the handler when the connection went away while the target checked it', async () => {
+    const deferred = deferredTarget();
+    const client = await open(await listen(deferred.target));
+    client.send(HELLO);
+    await waitUntil(() => deferred.pending.length === 1);
+    client.socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    deferred.pending[0]?.resolve({ ok: true, handler: deferred.handler });
+    await waitUntil(() => deferred.closes() === 1);
+  });
+
+  it('closes with protocol_error when the target fails', async () => {
+    vi.spyOn(log, 'error').mockImplementation(() => undefined);
+    const client = await open(await listen({ attachSdk: () => Promise.reject(new Error('boom')) }));
+    client.send(HELLO);
+    await client.closed;
+    expect(client.received).toEqual([{ type: 'bye', reason: 'protocol_error' }]);
+    vi.restoreAllMocks();
+  });
+
+  it('bounds hellos across listeners with a shared bucket, on top of each one’s own', async () => {
+    vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const shared = new TokenBucket(2, 0);
+    const accept: SdkLinkTarget = {
+      attachSdk: () => ({
+        ok: true,
+        handler: {
+          onMessage: () => undefined,
+          onInvalidDiagnostic: () => undefined,
+          onClose: () => undefined,
+        },
+      }),
+    };
+    const ports = [await listen(accept, shared), await listen(accept, shared)];
+    const answers: string[] = [];
+    for (const port of [ports[0], ports[1], ports[1]]) {
+      const client = await open(port ?? 0);
+      client.send(HELLO);
+      await client.waitFor((message) => message.type === 'welcome' || message.type === 'bye');
+      answers.push(client.received[0]?.type === 'bye' ? client.received[0].reason : 'welcome');
+    }
+    expect(answers).toEqual(['welcome', 'welcome', 'too_many_connections']);
+    vi.restoreAllMocks();
   });
 });

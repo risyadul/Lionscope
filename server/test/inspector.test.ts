@@ -1,16 +1,18 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { DeviceInfo, InspectorNode, ServerMessage } from '@lionscope/protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildUiTree } from '../src/agent/uiTree.ts';
 import { parseUiXml } from '../src/agent/uiXml.ts';
 import { SdkInspectError } from '../src/device/sdkLink.ts';
 import type { SdkInspection, SdkLink } from '../src/device/sdkLink.ts';
 import { PublicError } from '../src/errors.ts';
+import { log } from '../src/log.ts';
 import { serveInspectorPng } from '../src/http/inspectorFiles.ts';
 import { buildAllowedOrigins } from '../src/http/wsGateway.ts';
+import type { InspectLinkReadiness } from '../src/device/inspectLinks.ts';
 import { InspectorService, MAX_KEPT_SNAPSHOTS } from '../src/inspector/inspectorService.ts';
-import type { InspectorServiceOptions } from '../src/inspector/inspectorService.ts';
+import type { InspectorLinks, InspectorServiceOptions } from '../src/inspector/inspectorService.ts';
 import type { InspectorSessionSource } from '../src/session/sessionManager.ts';
 import { fixture } from './helpers/fakes.ts';
 import { rgbPng } from './helpers/png.ts';
@@ -23,6 +25,8 @@ const DEVICES: DeviceInfo[] = [
   { serial: 'R58M123ABC', state: 'unauthorized' },
 ];
 const PNG = rgbPng(108, 240, () => [200, 200, 200]);
+const OTHER = 'com.example.other';
+const otherInFront = async () => OTHER;
 const uiTree = () => buildUiTree(parseUiXml(fixture('ui-dump.xml')), { width: 1080, height: 2400 });
 
 function sdkNode(id: number, overrides: Partial<InspectorNode> = {}): InspectorNode {
@@ -94,7 +98,7 @@ function fakeLink(
 
 function setup(options: Partial<InspectorServiceOptions> & { source?: InspectorSessionSource | null } = {}) {
   const messages: ServerMessage[] = [];
-  const calls = { dumps: 0, screencaps: 0 };
+  const calls = { dumps: 0, screencaps: 0, foregrounds: 0 };
   let clock = 1_800_000_000_000;
   const service = new InspectorService({
     sessions: {
@@ -111,6 +115,11 @@ function setup(options: Partial<InspectorServiceOptions> & { source?: InspectorS
     },
     broadcast: (message) => messages.push(message),
     now: () => (clock += 1000),
+    // The dump fixture's app is in the foreground.
+    foregroundPackage: async () => {
+      calls.foregrounds += 1;
+      return PKG;
+    },
     ...options,
   });
   return { service, messages, calls };
@@ -133,7 +142,7 @@ describe('Inspector service', () => {
     });
     expect(snapshot.id).toMatch(/^[0-9a-f]{16}$/);
     expect(snapshot.nodes).toEqual(inspection().nodes);
-    expect(calls).toEqual({ dumps: 0, screencaps: 1 });
+    expect(calls).toEqual({ dumps: 0, screencaps: 1, foregrounds: 0 });
     expect(messages).toEqual([{ type: 'inspection', snapshot }]);
     expect(service.current).toBe(snapshot);
     expect(service.png(snapshot.id)).toBe(PNG);
@@ -411,6 +420,182 @@ describe('Inspector service', () => {
       },
     });
     expect(await sdkFailure.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'sdk_too_large' });
+  });
+});
+
+/** Inspect-only links that report `ready` on every prepare; `oldSdks`: packages with an SDK below v5. */
+function fakeLinks(ready: Partial<InspectLinkReadiness> = {}, oldSdks: readonly string[] = []) {
+  const calls = { notes: [] as string[], prepares: 0 };
+  const links: InspectorLinks = {
+    noteInspect: (serial) => {
+      calls.notes.push(serial);
+    },
+    prepare: async () => {
+      calls.prepares += 1;
+      return { sources: [], reason: null, waited: false, ...ready };
+    },
+    needsSession: (serial, packageName) => serial === SERIAL && oldSdks.includes(packageName),
+  };
+  return { links, calls };
+}
+
+describe('Inspector service with inspect-only links', () => {
+  it('takes the snapshot from the inspect-only link of the app on top, and every inspect keeps the link', async () => {
+    const link = fakeLink(5, async () => inspection());
+    const { links, calls } = fakeLinks({ sources: [{ packageName: PKG, link, screen: 'homepage' }] });
+    const { service } = setup({ links });
+    expect(await service.inspect(SERIAL)).toMatchObject({
+      source: 'sdk',
+      packageName: PKG,
+      fallbackReason: null,
+    });
+    await service.inspect(SERIAL);
+    expect(calls.notes).toEqual([SERIAL, SERIAL]);
+    expect(link.calls).toBe(2);
+  });
+
+  it("asks the session's link first while its app is on top, then the linked apps on top in turn", async () => {
+    const sessionLink = fakeLink(4, async () => inspection());
+    const onTop = fakeLinks({
+      sources: [
+        { packageName: 'com.example.other', link: fakeLink(5, async () => inspection()), screen: 'x' },
+      ],
+    });
+    const first = setup({
+      source: { packageName: PKG, link: sessionLink, screen: 'homepage' },
+      links: onTop.links,
+      foregroundPackage: otherInFront,
+    });
+    expect(await first.service.inspect(SERIAL)).toMatchObject({ source: 'sdk', packageName: PKG });
+    expect(onTop.calls.prepares).toBe(0);
+
+    // The session's app went to the background: the foreground app's link answers; another app that says it is on
+    // top but is not the foreground app is not asked.
+    const background = fakeLink(4, () => Promise.reject(new SdkInspectError('background')));
+    const stale = fakeLink(5, () => Promise.reject(new SdkInspectError('background')));
+    const other = fakeLink(5, async () => inspection());
+    const { links } = fakeLinks({
+      sources: [
+        { packageName: 'com.example.stale', link: stale, screen: 'gone' },
+        { packageName: 'com.example.other', link: other, screen: 'x' },
+      ],
+    });
+    const second = setup({
+      source: { packageName: PKG, link: background, screen: 'homepage' },
+      links,
+      foregroundPackage: otherInFront,
+    });
+    expect(await second.service.inspect(SERIAL)).toMatchObject({
+      source: 'sdk',
+      packageName: 'com.example.other',
+    });
+    expect([background.calls, stale.calls, other.calls]).toEqual([1, 0, 1]);
+  });
+
+  it('asks a session app that seems to be in the background last', async () => {
+    const sessionLink = fakeLink(4, () => Promise.reject(new SdkInspectError('background')));
+    const other = fakeLink(5, async () => inspection());
+    const withOther = fakeLinks({
+      sources: [{ packageName: 'com.example.other', link: other, screen: 'x' }],
+    });
+    const first = setup({
+      source: { packageName: PKG, link: sessionLink, screen: null },
+      links: withOther.links,
+      foregroundPackage: otherInFront,
+    });
+    expect(await first.service.inspect(SERIAL)).toMatchObject({ packageName: 'com.example.other' });
+    expect(sessionLink.calls).toBe(0);
+
+    const alone = setup({
+      source: { packageName: PKG, link: sessionLink, screen: null },
+      links: fakeLinks().links,
+    });
+    expect(await alone.service.inspect(SERIAL)).toMatchObject({
+      source: 'uiautomator',
+      fallbackReason: 'background',
+    });
+    expect(sessionLink.calls).toBe(1);
+  });
+
+  it.each([
+    ['sdk_linking', { reason: 'sdk_linking', waited: true }, 2],
+    ['sdk_link_busy', { reason: 'sdk_link_busy' }, 1],
+    ['no_sdk', {}, 1],
+  ] as const)('falls back with %s', async (reason, ready, screencaps) => {
+    const { links } = fakeLinks(ready);
+    const { service, calls } = setup({ links });
+    expect(await service.inspect(SERIAL)).toMatchObject({ source: 'uiautomator', fallbackReason: reason });
+    // After the wait window the first picture is stale: a new one goes with the dump.
+    expect(calls.screencaps).toBe(screencaps);
+  });
+
+  it('says sdk_needs_session when the app on top has an SDK too old to link outside a session', async () => {
+    const linking = setup({ links: fakeLinks({ reason: 'sdk_linking', waited: true }, [PKG]).links });
+    expect(await linking.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'sdk_needs_session' });
+    const none = setup({ links: fakeLinks({}, [PKG]).links });
+    expect(await none.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'sdk_needs_session' });
+    // Another app's old SDK says nothing about the one on top (the dump's package).
+    const elsewhere = setup({ links: fakeLinks({}, ['com.example.other']).links });
+    expect(await elsewhere.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'no_sdk' });
+    // A busy link stays busy.
+    const busy = setup({ links: fakeLinks({ reason: 'sdk_link_busy' }, [PKG]).links });
+    expect(await busy.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'sdk_link_busy' });
+  });
+
+  it("names the screen from the linked app's SDK when the dump shows that app", async () => {
+    const link = fakeLink(5, () => Promise.reject(new SdkInspectError('no_window')));
+    const { links } = fakeLinks({ sources: [{ packageName: PKG, link, screen: 'homepage' }] });
+    const { service } = setup({ links });
+    expect(await service.inspect(SERIAL)).toMatchObject({
+      source: 'uiautomator',
+      fallbackReason: 'no_window',
+      screen: 'homepage',
+    });
+  });
+});
+
+describe('Inspector service: which inspect-only link may answer', () => {
+  it('asks only the link of the foreground app, whatever the others claim, with a picture taken then', async () => {
+    const impostor = fakeLink(5, async () => inspection());
+    const { links } = fakeLinks({ sources: [{ packageName: OTHER, link: impostor, screen: 'login' }] });
+    // The app in front (the dump's) is not the one claiming to be on top.
+    const { service, calls } = setup({ links });
+    expect(await service.inspect(SERIAL)).toMatchObject({ source: 'uiautomator', fallbackReason: 'no_sdk' });
+    expect(impostor.calls).toBe(0);
+    expect(calls.foregrounds).toBe(1);
+
+    const unknown = setup({ links, foregroundPackage: async () => null });
+    expect(await unknown.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'no_sdk' });
+    vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const failing = setup({
+      links,
+      foregroundPackage: () => Promise.reject(new Error('device offline')),
+    });
+    expect(await failing.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'no_sdk' });
+    // Without a way to tell the foreground app, no inspect-only link is asked at all.
+    const without = setup({ links, foregroundPackage: undefined });
+    expect(await without.service.inspect(SERIAL)).toMatchObject({ fallbackReason: 'no_sdk' });
+    expect(impostor.calls).toBe(0);
+    vi.restoreAllMocks();
+  });
+
+  it('takes a new picture with the foreground check after waiting for the link', async () => {
+    const link = fakeLink(5, async () => inspection());
+    const { links } = fakeLinks({ sources: [{ packageName: PKG, link, screen: 'homepage' }], waited: true });
+    const order: string[] = [];
+    const { service } = setup({
+      links,
+      screencap: async () => {
+        order.push('screencap');
+        return PNG;
+      },
+      foregroundPackage: async () => {
+        order.push('foreground');
+        return PKG;
+      },
+    });
+    expect(await service.inspect(SERIAL)).toMatchObject({ source: 'sdk' });
+    expect(order).toEqual(['screencap', 'screencap', 'foreground']);
   });
 });
 

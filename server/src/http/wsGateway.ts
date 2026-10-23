@@ -15,6 +15,7 @@ import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
+import type { InspectLinks } from '../device/inspectLinks.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 
@@ -97,11 +98,16 @@ export type GatewayManager = Pick<
 /** What the gateway needs from the Inspector. */
 export type GatewayInspector = Pick<InspectorService, 'inspect' | 'select' | 'current' | 'selection'>;
 
+/** What the gateway needs from the inspect-only SDK links. */
+export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
+
 export interface WsGatewayOptions {
   server: Server;
   manager: GatewayManager;
   emulators: GatewayEmulators;
   inspector: GatewayInspector;
+  /** Which device each client's Inspector shows (`inspectorFocus`); omitted = no inspect-only links. */
+  inspectLinks?: GatewayInspectLinks;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -127,6 +133,7 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   setSdkOptions: 'Could not change the SDK options',
   inspect: 'Could not inspect the screen',
   selectInspectorNode: 'Could not select the Inspector node',
+  inspectorFocus: 'Could not focus the Inspector',
 };
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
@@ -218,6 +225,10 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         // Answered by the `inspectorSelection` broadcast (none when nothing changed).
         inspector.select(message.snapshotId, message.nodeId, 'user');
         return;
+      case 'inspectorFocus':
+        // Not answered: it only keeps (or stops keeping) an inspect-only SDK link to the device.
+        options.inspectLinks?.setFocus(ws, message.serial);
+        return;
     }
   };
 
@@ -251,7 +262,10 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       needsResync: false,
     };
     clients.set(ws, state);
-    ws.on('close', () => clients.delete(ws));
+    ws.on('close', () => {
+      clients.delete(ws);
+      options.inspectLinks?.setFocus(ws, null);
+    });
     ws.on('pong', () => {
       state.alive = true;
     });

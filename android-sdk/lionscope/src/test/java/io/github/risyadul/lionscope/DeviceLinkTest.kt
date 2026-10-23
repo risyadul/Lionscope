@@ -348,4 +348,63 @@ class DeviceLinkTest {
             assertTrue(link.isConnected)
         }
     }
+
+    @Test(timeout = 20_000)
+    fun anInspectModeWelcomeAnswersInspectWithoutStartingASession() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            val welcomeEvents = CopyOnWriteArrayList<Boolean>()
+            val sessionEvents = CopyOnWriteArrayList<Boolean>()
+            val requests = CopyOnWriteArrayList<Int>()
+            link.addWelcomeListener { welcomeEvents += it }
+            link.addSessionListener { sessionEvents += it }
+            link.addInspectListener { requests += it }
+            link.start()
+
+            server.accept().use { client ->
+                val input = client.reader()
+                assertEquals(hello, input.readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"inspect\"}")
+                waitFor { link.isWelcomed }
+                assertFalse(link.isSession)
+                client.reply("{\"type\":\"inspect\",\"requestId\":7}")
+                waitFor { requests.isNotEmpty() }
+                link.sendV4(16) { "{\"type\":\"inspectError\",\"requestId\":7}" }
+                assertEquals(7.0, input.readUntil { it["type"] != "heartbeat" }["requestId"])
+            }
+            waitFor { !link.isConnected }
+            assertEquals(listOf(true, false), welcomeEvents.toList())
+            assertTrue(sessionEvents.isEmpty())
+
+            // The next connection is a session: everything activates, and ends with the connection.
+            server.accept().use { client ->
+                assertEquals(hello, client.reader().readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"session\"}")
+                waitFor { link.isSession }
+            }
+            waitFor { !link.isSession }
+            assertEquals(listOf(true, false), sessionEvents.toList())
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun aWelcomeWithoutAModeOrBelowV5IsASession() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            link.start()
+
+            server.accept().use { client ->
+                assertEquals(hello, client.reader().readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":4}")
+                waitFor { link.isSession }
+            }
+            waitFor { !link.isConnected }
+            server.accept().use { client ->
+                assertEquals(hello, client.reader().readLine())
+                // `mode` is only defined from v5: on a v3 link it is ignored.
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":3,\"mode\":\"inspect\"}")
+                waitFor { link.isSession }
+            }
+        }
+    }
 }

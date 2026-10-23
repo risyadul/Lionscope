@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { callTool } from '../src/agent/registry.ts';
-import { parseTopActivity, UI_DUMP_FAILED, UI_DUMP_TIMEOUT } from '../src/agent/uiDump.ts';
+import { parseTopActivity, parseTopPackage, UI_DUMP_FAILED, UI_DUMP_TIMEOUT } from '../src/agent/uiDump.ts';
 import { parseInputOrientation, parseWmSize, rotate } from '../src/agent/display.ts';
 import {
   buildUiTree,
@@ -142,6 +142,17 @@ describe('the UI tree', () => {
       ),
     ).toBe('com.example.shop.cart.CartActivity');
     expect(parseTopActivity('nothing')).toBeNull();
+    // Split screen: several resumed activities; the focused one (topResumedActivity) wins wherever it is listed.
+    const split = [
+      '    mResumedActivity: ActivityRecord{1b2 u0 com.example.other/.ListActivity t9}',
+      '  topResumedActivity=ActivityRecord{7a1 u0 com.example.shop/.MainActivity t12}',
+    ].join('\n');
+    expect(parseTopActivity(split)).toBe('com.example.shop.MainActivity');
+    expect(parseTopPackage(split)).toBe('com.example.shop');
+    expect(
+      parseTopPackage('    mResumedActivity: ActivityRecord{1b2 u0 com.example.other/.ListActivity t9}'),
+    ).toBe('com.example.other');
+    expect(parseTopPackage('nothing')).toBeNull();
   });
 });
 

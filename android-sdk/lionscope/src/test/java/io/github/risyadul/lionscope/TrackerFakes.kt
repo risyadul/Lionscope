@@ -32,6 +32,7 @@ internal class FakeScheduler : MainScheduler {
 
 internal class FakeLink : LinkPort {
     private val listeners = ArrayList<(Boolean) -> Unit>()
+    private val sessionListeners = ArrayList<(Boolean) -> Unit>()
     private val configListeners = ArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = ArrayList<(Int) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
@@ -58,6 +59,10 @@ internal class FakeLink : LinkPort {
 
     override fun addWelcomeListener(listener: (welcomed: Boolean) -> Unit) {
         listeners += listener
+    }
+
+    override fun addSessionListener(listener: (active: Boolean) -> Unit) {
+        sessionListeners += listener
     }
 
     override fun addConfigListener(listener: (SdkOptions) -> Unit) {
@@ -87,10 +92,12 @@ internal class FakeLink : LinkPort {
         inspectListeners.forEach { it(requestId) }
     }
 
-    fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION) {
+    /** [inspectOnly]: a v5 `inspect`-mode welcome, which the real link does not report as a session. */
+    fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION, inspectOnly: Boolean = false) {
         isWelcomed = welcomed
         negotiatedVersion = if (welcomed) version else null
         listeners.forEach { it(welcomed) }
+        if (!inspectOnly) sessionListeners.forEach { it(welcomed) }
     }
 
     fun config(options: SdkOptions) {

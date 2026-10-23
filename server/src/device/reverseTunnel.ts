@@ -15,6 +15,51 @@ export interface ReverseTunnelOptions {
   onOpenFailed: (error: unknown) => void;
   /** Whether something accepts connections on 127.0.0.1:`port` (tests replace the TCP probe). */
   isHostPortLive?: (port: number) => Promise<boolean>;
+  /** Runs the `adb reverse` steps per device; shared with the inspect-only links so their steps never interleave. */
+  devices?: DeviceReverseQueues;
+}
+
+/**
+ * Runs `adb reverse` steps strictly one after another. A failing step is logged and never wedges the queue for
+ * the steps after it.
+ */
+export class ReverseQueue {
+  private chain: Promise<void> = Promise.resolve();
+
+  run(operation: () => Promise<void>): Promise<void> {
+    this.chain = this.chain
+      .then(operation)
+      .catch((error: unknown) => log.warn(`adb reverse step failed: ${errorMessage(error)}`));
+    return this.chain;
+  }
+}
+
+/**
+ * One ReverseQueue per device: steps on one device run strictly in order, while a slow or unplugged device does not
+ * hold up the others. A device's queue is dropped once it is idle.
+ */
+export class DeviceReverseQueues {
+  private readonly queues = new Map<string, { queue: ReverseQueue; steps: number; last: Promise<void> }>();
+
+  run(serial: string, operation: () => Promise<void>): Promise<void> {
+    let entry = this.queues.get(serial);
+    if (!entry) {
+      entry = { queue: new ReverseQueue(), steps: 0, last: Promise.resolve() };
+      this.queues.set(serial, entry);
+    }
+    const current = entry;
+    current.steps += 1;
+    current.last = current.queue.run(operation).finally(() => {
+      current.steps -= 1;
+      if (current.steps === 0 && this.queues.get(serial) === current) this.queues.delete(serial);
+    });
+    return current.last;
+  }
+
+  /** Resolves once every step scheduled so far, on every device, is done. */
+  async idle(): Promise<void> {
+    await Promise.all([...this.queues.values()].map((entry) => entry.last));
+  }
 }
 
 /**
@@ -46,37 +91,59 @@ export function probeLoopbackPort(port: number, timeoutMs = PROBE_TIMEOUT_MS): P
 }
 
 /**
- * The `adb reverse` mapping for the active session's device. Operations run strictly in order, so a
- * `--remove` for the previous session can never land after the mapping of the next one.
+ * The `adb reverse` mapping for the active session's device. Each adb step joins its device's queue
+ * (DeviceReverseQueues) when open() / close() is called, so steps on one device land in call order: a `--remove`
+ * for the previous session can never land after the mapping of the next one, nor after a step another owner of the
+ * queue (an inspect-only link) scheduled later.
  */
 export class ReverseTunnel {
-  private chain: Promise<void> = Promise.resolve();
-  /** Serial we mapped (or tried to: the intent is recorded first, so close() always attempts removal). */
+  private readonly devices: DeviceReverseQueues;
+  /** Serial we mapped (or are mapping: the intent is recorded first, so close() always attempts removal). */
   private mapped: string | null = null;
 
-  constructor(private readonly options: ReverseTunnelOptions) {}
+  constructor(private readonly options: ReverseTunnelOptions) {
+    this.devices = options.devices ?? new DeviceReverseQueues();
+  }
+
+  /** The device whose port is mapped to the gateway (connections to it come from there), null when none is. */
+  get serial(): string | null {
+    return this.mapped;
+  }
 
   /**
    * Map the device port of `serial` to the gateway. Idempotent for the same device (`adb reverse` replaces
-   * its own mapping), so it can be re-run after USB flickers; a previous device's mapping is removed first.
+   * its own mapping), so it can be re-run after USB flickers; a previous device's mapping is removed.
    */
   open(serial: string): Promise<void> {
-    return this.enqueue(async () => {
-      if (this.mapped !== null && this.mapped !== serial) await this.removeMapping();
-      const hostPort = this.options.hostPort();
-      if (hostPort === null) return;
-      this.mapped = serial;
+    const previous = this.mapped;
+    const removed = previous !== null && previous !== serial ? this.remove(previous) : Promise.resolve();
+    const hostPort = this.options.hostPort();
+    if (hostPort === null) {
+      if (previous !== serial) this.mapped = null;
+      return removed;
+    }
+    this.mapped = serial;
+    const mapping = this.devices.run(serial, async () => {
       try {
         await this.options.adb.reverse(serial, this.options.devicePort, hostPort);
       } catch (error) {
         this.options.onOpenFailed(error);
       }
     });
+    return Promise.all([removed, mapping]).then(() => undefined);
   }
 
   /** Remove the mapping, if any (best effort: a vanished device can't be cleaned up). */
   close(): Promise<void> {
-    return this.enqueue(() => this.removeMapping());
+    const serial = this.mapped;
+    this.mapped = null;
+    return serial === null ? Promise.resolve() : this.remove(serial);
+  }
+
+  /** Forget the mapping without removing it: another owner (an inspect-only link) re-points it. */
+  release(): Promise<void> {
+    this.mapped = null;
+    return Promise.resolve();
   }
 
   /**
@@ -86,50 +153,44 @@ export class ReverseTunnel {
    * Best effort, logged.
    */
   clearStale(serials: readonly string[]): Promise<void> {
-    return this.enqueue(async () => {
-      for (const serial of serials) {
-        if (serial === this.mapped) continue;
-        try {
-          const listing = await this.options.adb.exec(['-s', serial, 'reverse', '--list'], {
-            timeoutMs: LIST_TIMEOUT_MS,
-          });
-          const target = mappedHostPort(listing, this.options.devicePort);
-          if (target === undefined) continue;
-          if (target !== null && target !== this.options.hostPort() && (await this.isHostPortLive(target))) {
-            log.info(
-              `Left adb reverse tcp:${this.options.devicePort} on ${serial} alone: another server listens on ${target}`,
-            );
-            continue;
-          }
-          await this.options.adb.removeReverse(serial, this.options.devicePort);
-          log.info(`Removed a stale adb reverse tcp:${this.options.devicePort} on ${serial}`);
-        } catch (error) {
-          log.warn(`Could not check adb reverse on ${serial}: ${errorMessage(error)}`);
-        }
+    const mapped = this.mapped;
+    const steps = serials
+      .filter((serial) => serial !== mapped)
+      .map((serial) => this.devices.run(serial, () => this.clearStaleOn(serial)));
+    return Promise.all(steps).then(() => undefined);
+  }
+
+  private async clearStaleOn(serial: string): Promise<void> {
+    try {
+      const listing = await this.options.adb.exec(['-s', serial, 'reverse', '--list'], {
+        timeoutMs: LIST_TIMEOUT_MS,
+      });
+      const target = mappedHostPort(listing, this.options.devicePort);
+      if (target === undefined) return;
+      if (target !== null && target !== this.options.hostPort() && (await this.isHostPortLive(target))) {
+        log.info(
+          `Left adb reverse tcp:${this.options.devicePort} on ${serial} alone: another server listens on ${target}`,
+        );
+        return;
       }
-    });
+      await this.options.adb.removeReverse(serial, this.options.devicePort);
+      log.info(`Removed a stale adb reverse tcp:${this.options.devicePort} on ${serial}`);
+    } catch (error) {
+      log.warn(`Could not check adb reverse on ${serial}: ${errorMessage(error)}`);
+    }
   }
 
   private isHostPortLive(port: number): Promise<boolean> {
     return (this.options.isHostPortLive ?? probeLoopbackPort)(port);
   }
 
-  private async removeMapping(): Promise<void> {
-    const serial = this.mapped;
-    if (serial === null) return;
-    this.mapped = null;
-    try {
-      await this.options.adb.removeReverse(serial, this.options.devicePort);
-    } catch (error) {
-      log.warn(`Could not remove adb reverse on ${serial}: ${errorMessage(error)}`);
-    }
-  }
-
-  private enqueue(operation: () => Promise<void>): Promise<void> {
-    // A failing step (e.g. a throwing callback) must not wedge the chain for every later operation.
-    this.chain = this.chain
-      .then(operation)
-      .catch((error: unknown) => log.warn(`adb reverse step failed: ${errorMessage(error)}`));
-    return this.chain;
+  private remove(serial: string): Promise<void> {
+    return this.devices.run(serial, async () => {
+      try {
+        await this.options.adb.removeReverse(serial, this.options.devicePort);
+      } catch (error) {
+        log.warn(`Could not remove adb reverse on ${serial}: ${errorMessage(error)}`);
+      }
+    });
   }
 }

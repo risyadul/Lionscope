@@ -132,12 +132,14 @@ export class SdkBridge {
     this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
   }
 
-  attach(hello: SdkHello, link: SdkLink): SdkLinkHandler {
+  /** `verified`: the gateway already confirmed the hello's PID on the session device (no second check). */
+  attach(hello: SdkHello, link: SdkLink, verified = false): SdkLinkHandler {
     const entry: LinkEntry = { hello, link, held: [] };
     this.pending.add(entry);
     // Options are not sensitive: a link gets them right after its welcome, before its PID is verified.
     link.sendConfig(this.sdkOptions);
-    void this.verify(entry);
+    if (verified) this.activate(entry);
+    else void this.verify(entry);
     return {
       onMessage: (message) => {
         if (this.stopped) return;
@@ -195,6 +197,13 @@ export class SdkBridge {
       entry.link.close('no_session');
       return;
     }
+    this.activate(entry);
+  }
+
+  /** A pending link checked out: it becomes the live one. */
+  private activate(entry: LinkEntry): void {
+    this.pending.delete(entry);
+    if (this.stopped) return;
     const previous = this.active;
     this.active = entry;
     // The app reconnected (or restarted): the screen span and gfxinfo pause carry over to the new link.

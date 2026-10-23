@@ -207,4 +207,26 @@ class InflateReporterTest {
         assertEquals(0, coalescer.overflow)
         assertEquals(null, coalescer.windowStartMs)
     }
+
+    @Test
+    fun anInspectOnlyLinkReportsNothingUntilASessionWelcome() {
+        LayoutsTracker(link, main, reporter, tracer = null, snapshotter = ViewTreeSnapshotter(link, { "homepage" }, afterFrameAndIdle = {}))
+        link.welcome(true, DEVICE_PROTOCOL_V5, inspectOnly = true)
+        main.runPosted()
+        reporter.add(home, "homepage", 1, 18.4, 42) // Origins recording is unchanged: still recorded...
+        now = 5_000
+        main.runDelayed()
+        assertTrue(link.v3Lines.isEmpty()) // ...but never sent.
+
+        link.welcome(false)
+        main.runPosted()
+        link.welcome(true, DEVICE_PROTOCOL_V5)
+        main.runPosted()
+        link.config(SdkOptions(150, false, inflateTracking = true))
+        main.runPosted()
+        reporter.add(home, "homepage", 2, 10.0, 42)
+        now = 10_000
+        main.runDelayed()
+        assertEquals(1, link.v3Lines.size)
+    }
 }

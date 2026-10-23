@@ -5,7 +5,13 @@ import { CONTROL_SERVER_MESSAGE_TYPES } from '@lionscope/protocol';
 import type { CpuSample, InspectorSnapshot, Snapshot } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAllowedOrigins, createWsGateway, MAX_CLIENT_BUFFERED_BYTES } from '../src/http/wsGateway.ts';
-import type { GatewayEmulators, GatewayInspector, GatewayManager, WsGateway } from '../src/http/wsGateway.ts';
+import type {
+  GatewayEmulators,
+  GatewayInspectLinks,
+  GatewayInspector,
+  GatewayManager,
+  WsGateway,
+} from '../src/http/wsGateway.ts';
 import { PublicError } from '../src/errors.ts';
 import { IDLE_SESSION } from '../src/session/sessionManager.ts';
 import { Client } from './helpers/net.ts';
@@ -290,7 +296,11 @@ describe('WebSocket gateway Inspector', () => {
     fallbackReason: 'no_sdk',
   };
 
-  async function withGateway(fake: GatewayInspector, run: (port: number) => Promise<void>): Promise<void> {
+  async function withGateway(
+    fake: GatewayInspector,
+    run: (port: number) => Promise<void>,
+    inspectLinks?: GatewayInspectLinks,
+  ): Promise<void> {
     const server = createServer();
     let port = 0;
     const gateway = createWsGateway({
@@ -298,6 +308,7 @@ describe('WebSocket gateway Inspector', () => {
       manager,
       emulators,
       inspector: fake,
+      ...(inspectLinks ? { inspectLinks } : {}),
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -363,5 +374,37 @@ describe('WebSocket gateway Inspector', () => {
       ]);
       client.close();
     });
+  });
+
+  it('passes inspectorFocus on per client, and drops a closed client’s focus', async () => {
+    const focus: [object, string | null][] = [];
+    const inspectLinks: GatewayInspectLinks = { setFocus: (client, serial) => focus.push([client, serial]) };
+    await withGateway(
+      inspector,
+      async (port) => {
+        const first = await Client.open(port);
+        const second = await Client.open(port);
+        await first.waitFor('inspectorSelection');
+        await second.waitFor('inspectorSelection');
+        first.send({ type: 'inspectorFocus', serial: 'emulator-5554' });
+        second.send({ type: 'inspectorFocus', serial: 'R58M123ABC' });
+        await waitUntil(() => focus.length === 2);
+        first.send({ type: 'inspectorFocus', serial: null });
+        await waitUntil(() => focus.length === 3);
+        second.close();
+        await waitUntil(() => focus.length === 4);
+        expect(focus.map(([, serial]) => serial)).toEqual(['emulator-5554', 'R58M123ABC', null, null]);
+        // One client object per connection: the first and third calls are the same client, the fourth the other.
+        expect(focus[0]?.[0]).toBe(focus[2]?.[0]);
+        expect(focus[1]?.[0]).toBe(focus[3]?.[0]);
+        expect(focus[0]?.[0]).not.toBe(focus[1]?.[0]);
+        // No answer, and an invalid serial is a bad request.
+        first.send({ type: 'inspectorFocus', serial: 'emulator-5554; reboot' });
+        expect(await first.waitFor('error')).toMatchObject({ code: 'bad_request' });
+        expect(focus).toHaveLength(4);
+        first.close();
+      },
+      inspectLinks,
+    );
   });
 });
