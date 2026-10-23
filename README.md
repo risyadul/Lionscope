@@ -156,6 +156,8 @@ keys (↑↓ move, → opens, ← closes) and searches class, id and text; hover
 screen. `Esc` or the toggle goes back to the live screen. While Inspect is on the snapshot refreshes about 0.7 s
 after the app changes its top screen (never continuously), and the refresh button takes a new one.
 
+<img width="710" alt="Layout Inspector on the sample app: the frozen screen with the first card's Share button selected and labelled MaterialButton 231 × 126, and the Inspector tab with the view tree, its ancestor path, source view_dashboard_actions.xml:15 (end of start tag), owner HomeFragment in MainActivity, text, bounds and size" src="docs/images/dashboard-inspector.png">
+
 - **Where the tree comes from.** With the SDK linked (Lionscope 0.5.0 or later) the SDK walks the app's own views
   and the badge reads `SDK`. On Android 10 and later that is every window of the app, dialogs included; below
   Android 10 it is the top Activity and its dialogs, and without layout sources. Otherwise (no SDK in the app, an older SDK,
@@ -261,7 +263,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.1"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.5.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -294,7 +296,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.1"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -651,7 +653,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.4.1`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.5.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

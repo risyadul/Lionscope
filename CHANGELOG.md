@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-23
+
 ### Added
 
 - Layout Inspector in the dashboard. An **Inspect** toggle in the device toolbar freezes the screen to a snapshot
@@ -43,7 +45,20 @@ All notable changes to Lionscope are documented here. The format is based on
   request only; the link stays up and the snapshot falls back to uiautomator. A line whose type changes between
   the first key and the parsed message closes the link.
 
+### Changed
+
+- UI trees for the agent tools and the Inspector's fallback are read by a small helper
+  (`lionscope-ui-helper-v1.jar`, built from `android-sdk/ui-helper`, checksum-verified) that Lionscope pushes to
+  `/data/local/tmp` and runs with `app_process` while it is in use, instead of a new `uiautomator dump` each time. It
+  waits at most 500 ms for the screen to settle, so screens that keep animating (carousels, shimmer) no longer time
+  out, and a read takes a few hundred milliseconds instead of seconds. It stops 20 s after the last read and removes
+  itself; while it is connected, apps see accessibility as enabled and other automation (Appium, UiAutomator tests)
+  can't connect. Not used below Android 7, where `uiautomator dump` stays the only path; it is also the fallback.
+
 ### Fixed
+
+- The device toolbar no longer overflows its column (which made the FPS readout overlap the controls): the FPS
+  readout moved to the navigation row under the screen.
 
 - README: the device-control tools launch apps with `am start -W`, not `monkey`.
 
@@ -270,7 +285,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.4.1...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/risyadul/Lionscope/compare/0.4.1...0.5.0
 [0.4.1]: https://github.com/risyadul/Lionscope/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/risyadul/Lionscope/compare/0.3.1...0.4.0
 [0.3.1]: https://github.com/risyadul/Lionscope/compare/0.3.0...0.3.1
