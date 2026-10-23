@@ -11,6 +11,7 @@ import android.os.Process
 import android.util.Log
 import android.view.Display
 import androidx.navigation.NavController
+import java.lang.ref.WeakReference
 
 internal const val LOG_TAG = "Lionscope"
 internal const val DEFAULT_REFRESH_RATE_HZ = 60.0
@@ -46,10 +47,16 @@ internal object LionscopeRuntime {
         }
     }
 
+    /** The last controller passed in, so calls from every recomposition cost nothing (weak: it holds an Activity). */
+    @Volatile
+    private var lastTracked = WeakReference<Any>(null)
+
     /** Main thread soon; ignored until the SDK is installed. [navController] is a NavController. */
     fun trackNavigation(navController: Any) {
         val screens = screenTracker ?: return
         val main = mainScheduler ?: return
+        if (lastTracked.get() === navController) return
+        lastTracked = WeakReference(navController)
         main.post(Runnable {
             guarded {
                 val tracker = navigation ?: NavigationTracker(screens::requestResolve).also {

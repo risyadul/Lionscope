@@ -50,8 +50,11 @@ internal class ComposeViewReader : ComposeReading {
         ComposeRead(CompositionStatus.FAILED) // e.g. a slot table that cannot be read right now.
     }
 
+    // ViewRootForTest is the public interface through which AndroidComposeView (an internal class) gives its semantics.
+    @Suppress("VisibleForTests")
     private fun readOrFail(view: View): ComposeRead {
-        val tagId = slotTableSetTag ?: return ComposeRead(CompositionStatus.FAILED)
+        val tagId = slotTableSetTag ?: view.resources.getIdentifier(SLOT_TABLE_SET, "id", view.context.packageName)
+            .takeIf { it != 0 } ?: return ComposeRead(CompositionStatus.FAILED)
         val tables = view.getTag(tagId) as? Set<*> ?: return ComposeRead(CompositionStatus.DISABLED)
         val owner = view as? ViewRootForTest ?: return ComposeRead(CompositionStatus.FAILED)
         val rootSemantics = owner.semanticsOwner.unmergedRootSemanticsNode
@@ -129,10 +132,15 @@ internal class ComposeViewReader : ComposeReading {
         const val RECOMPOSE_SCOPE = ".RecomposeScopeImpl"
         const val SCOPE_BLOCK = "block"
 
-        /** `androidx.compose.ui.R.id.inspection_slot_table_set` in the app (its R ids are not constants here). */
+        const val SLOT_TABLE_SET = "inspection_slot_table_set"
+
+        /**
+         * `androidx.compose.ui.R.id.inspection_slot_table_set` in the app (its R ids are not constants here); when R8
+         * removed the R class, the resource is looked up by name instead.
+         */
         val slotTableSetTag: Int? by lazy {
             try {
-                Class.forName("androidx.compose.ui.R\$id").getField("inspection_slot_table_set").getInt(null)
+                Class.forName("androidx.compose.ui.R\$id").getField(SLOT_TABLE_SET).getInt(null)
             } catch (e: ReflectiveOperationException) {
                 null
             } catch (e: LinkageError) {
