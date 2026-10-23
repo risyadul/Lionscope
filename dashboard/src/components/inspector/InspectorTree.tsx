@@ -6,7 +6,8 @@ import { useHoverId } from './InspectorContext.tsx';
 import {
   ancestorsOf,
   defaultExpanded,
-  idName,
+  idLabel,
+  isComposable,
   isTreeKey,
   shortClass,
   treeMove,
@@ -65,6 +66,7 @@ const TreeRow = memo(function TreeRow({
       data-hover={isHover || undefined}
       data-dim={isDim || undefined}
       data-match={isMatch || undefined}
+      data-compose={isComposable(node) || undefined}
       style={{ paddingLeft: `${8 + depth * INDENT_PX}px` }}
       onPointerEnter={() => onHover(node.id)}
       onClick={() => onPick(node.id)}
@@ -88,12 +90,15 @@ const TreeRow = memo(function TreeRow({
       ) : (
         <span className="inspect-twist" aria-hidden="true" />
       )}
-      <span className="inspect-class" title={node.className}>
+      <span
+        className="inspect-class"
+        title={isComposable(node) ? `${node.className} (composable)` : node.className}
+      >
         {shortClass(node.className)}
       </span>
       {node.resourceId !== null && (
         <span className="inspect-id mono" title={node.resourceId}>
-          #{idName(node.resourceId)}
+          #{idLabel(node)}
         </span>
       )}
       {node.text !== null && node.text.trim() !== '' && (

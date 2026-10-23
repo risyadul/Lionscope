@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildIndex,
+  compositionNote,
   defaultExpanded,
   fallbackLabel,
   hitTest,
+  isComposable,
   nodeLabel,
+  nodeMatches,
   percentBox,
   ringClip,
   shortClass,
@@ -91,6 +94,37 @@ describe('labels and geometry', () => {
   it('writes the source as layout.xml:line', () => {
     expect(sourceLabel(snap.nodes[2]!)).toBe('fragment_cart.xml:33');
     expect(sourceLabel(snap.nodes[3]!)).toBeNull();
+  });
+
+  it('labels composables by name and testTag and writes their call site as File.kt:line', () => {
+    const button = node(9, 1, [0, 0, 10, 10], {
+      className: 'Button',
+      resourceId: 'nav/checkout',
+      composable: { file: 'CartScreen.kt', line: 87 },
+      destination: 'cart',
+    });
+    expect(isComposable(button)).toBe(true);
+    expect(isComposable(snap.nodes[2]!)).toBe(false);
+    expect(nodeLabel(button)).toBe('Button#nav/checkout'); // A testTag is kept whole.
+    expect(sourceLabel(button)).toBe('CartScreen.kt:87');
+    expect(sourceLabel({ ...button, composable: { file: 'CartScreen.kt', line: null } })).toBe(
+      'CartScreen.kt',
+    );
+    expect(sourceLabel({ ...button, composable: { file: null, line: null } })).toBeNull();
+    expect(nodeMatches(button, 'cartscreen')).toBe(true);
+    expect(nodeMatches(button, 'CART')).toBe(true);
+    expect(nodeMatches(snap.nodes[2]!, 'cartscreen')).toBe(false);
+  });
+
+  it('says why a composition was not read', () => {
+    const composeView = node(9, 1, [0, 0, 10, 10], {
+      className: 'androidx.compose.ui.platform.AndroidComposeView',
+    });
+    expect(compositionNote(composeView)).toBeNull();
+    expect(compositionNote({ ...composeView, composition: 'read' })).toBeNull();
+    expect(compositionNote({ ...composeView, composition: 'disabled' })).toContain('restart the app');
+    expect(compositionNote({ ...composeView, composition: 'no_source' })).toContain('source information');
+    expect(fallbackLabel('compose_disabled')).toContain('restart the app');
   });
 
   it('explains a fallback', () => {

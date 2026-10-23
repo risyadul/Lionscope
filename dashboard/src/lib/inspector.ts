@@ -120,20 +120,52 @@ export function idName(resourceId: string): string {
   return slash === -1 ? resourceId : resourceId.slice(slash + 1);
 }
 
-/** `MaterialButton#btn_share`, the label of the highlight and the tree row. */
+/** A composable read from the composition (SDK 0.6.0+): its name is its class, its testTag its id. */
+export function isComposable(node: InspectorNode): boolean {
+  return node.composable !== undefined;
+}
+
+/** What follows `#`: a view's id entry name, a composable's whole testTag. */
+export function idLabel(node: InspectorNode): string | null {
+  if (node.resourceId === null) return null;
+  return isComposable(node) ? node.resourceId : idName(node.resourceId);
+}
+
+/** `MaterialButton#btn_share` (or `Button#checkout` for a composable), the label of the highlight and the tree row. */
 export function nodeLabel(node: InspectorNode): string {
-  return node.resourceId === null
-    ? shortClass(node.className)
-    : `${shortClass(node.className)}#${idName(node.resourceId)}`;
+  const id = idLabel(node);
+  return id === null ? shortClass(node.className) : `${shortClass(node.className)}#${id}`;
 }
 
 export function rectSize(rect: PixelRect): { width: number; height: number } {
   return { width: Math.max(0, rect[2] - rect[0]), height: Math.max(0, rect[3] - rect[1]) };
 }
 
-/** `layout.xml:33`: the line is where the start tag ends. */
+/**
+ * `layout.xml:33` for a view (the line is where the start tag ends); `HomeScreen.kt:42` for a composable (the line it
+ * is called on), just the file when no line was recorded.
+ */
 export function sourceLabel(node: InspectorNode): string | null {
+  if (node.composable) {
+    const { file, line } = node.composable;
+    if (file === null) return null;
+    return line === null ? file : `${file}:${line}`;
+  }
   return node.source === null ? null : `${node.source.layout}.xml:${node.source.line}`;
+}
+
+const COMPOSITION_NOTES: Readonly<Record<string, string>> = {
+  disabled:
+    'Composed before Lionscope turned Compose inspection on, or the app opted out: restart the app to read it',
+  no_source: 'Built without Compose source information: composables cannot be named',
+  failed: 'Lionscope could not read this composition',
+};
+
+/** Why an AndroidComposeView's composables are missing, null when they were read (or the SDK predates 0.6.0). */
+export function compositionNote(node: InspectorNode): string | null {
+  const status = node.composition;
+  if (status === undefined || status === 'read') return null;
+  return COMPOSITION_NOTES[status] ?? status.replace(/_/g, ' ');
 }
 
 const FALLBACK_REASONS: Record<string, string> = {
@@ -254,13 +286,18 @@ export type TreeRow =
       isMatch: boolean;
     };
 
-/** What a search query looks at: class, resource id, text and content description. */
+/** What a search query looks at: class, resource id, text, content description, a composable's file and destination. */
 export function nodeMatches(node: InspectorNode, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (q === '') return false;
-  return [node.className, node.resourceId, node.text, node.contentDescription].some(
-    (field) => field !== null && field.toLowerCase().includes(q),
-  );
+  return [
+    node.className,
+    node.resourceId,
+    node.text,
+    node.contentDescription,
+    node.composable?.file ?? null,
+    node.destination ?? null,
+  ].some((field) => field !== null && field.toLowerCase().includes(q));
 }
 
 /** Roots and one level below: what a fresh snapshot shows before anything is opened. */

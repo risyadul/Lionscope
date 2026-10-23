@@ -338,6 +338,11 @@
   line-height: 15px;
 }
 
+/* Composables read from the composition (views keep the ink color). */
+.inspect-row[data-compose] .inspect-class {
+  color: var(--compose);
+}
+
 .inspect-row[data-match] .inspect-class {
   text-decoration: underline;
   text-decoration-color: var(--inspect-select);
@@ -721,6 +726,23 @@
 .attrs-ai {
   margin-left: var(--space-2);
   vertical-align: middle;
+}
+
+.attrs-kind {
+  margin-left: var(--space-2);
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-s);
+  color: var(--compose);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  vertical-align: middle;
+}
+
+.attr-owner-destination {
+  color: var(--compose);
 }
 
 .inspect-row[aria-selected='true'][data-hover] {

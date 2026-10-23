@@ -4,8 +4,10 @@ import { CopyButton } from '../stalls/CopyButton.tsx';
 import {
   ancestorsOf,
   fallbackHint,
+  compositionNote,
   fallbackLabel,
-  idName,
+  idLabel,
+  isComposable,
   isZeroRect,
   nodeLabel,
   rectSize,
@@ -97,10 +99,46 @@ type Props = {
   origin: 'user' | 'agent' | null;
 };
 
-/** Everything the snapshot knows about one view; fields the source can't provide say so. */
+/** Where a view's or a composable's source line points, and why one may be missing. */
+function SourceRow({ node, why }: { node: InspectorNode; why: string | undefined }) {
+  const source = sourceLabel(node);
+  const composable = isComposable(node);
+  if (source === null) {
+    const missing = composable
+      ? 'The compiler recorded no call site for it'
+      : 'Built in code, a ViewStub, or inflated off the main thread';
+    return <Unset why={why ?? missing} />;
+  }
+  return (
+    <span className="attr-source">
+      <code className="mono">{source}</code>
+      {composable ? (
+        <span
+          className="attr-hint"
+          title="The file and line this composable is called from, not where it is defined."
+        >
+          call site
+        </span>
+      ) : (
+        <span
+          className="attr-hint"
+          title="aapt2 records the line where the start tag ends (its “>”), not where “<Tag” begins."
+        >
+          end of start tag
+        </span>
+      )}
+      <CopyButton text={() => source} label="Copy" ariaLabel={`Copy ${source}`} />
+    </span>
+  );
+}
+
+/** Everything the snapshot knows about one view or composable; fields the source can't provide say so. */
 export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Props) {
   const isSdk = snapshot.source === 'sdk';
-  const source = sourceLabel(node);
+  const composable = isComposable(node);
+  const id = idLabel(node);
+  const note = compositionNote(node);
+  const destination = node.destination ?? null;
   const why = isSdk
     ? undefined
     : `Not available from uiautomator${fallbackLabel(snapshot.fallbackReason) ? ` (${fallbackLabel(snapshot.fallbackReason)})` : ''}`;
@@ -114,6 +152,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
       <header className="attrs-head">
         <h3 className="attrs-class" title={node.className}>
           {shortClass(node.className)}
+          {composable && <span className="attrs-kind">Compose</span>}
           {origin === 'agent' && (
             <span className="attrs-ai" title="An AI agent selected this view, not you">
               AI selected
@@ -121,12 +160,15 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
           )}
         </h3>
         {hint !== undefined && <p className="inspect-hint">{hint}</p>}
-        {node.resourceId !== null && (
-          <p className="attrs-id mono" title={node.resourceId}>
-            #{idName(node.resourceId)}
+        {id !== null && (
+          <p
+            className="attrs-id mono"
+            title={composable ? `testTag ${node.resourceId}` : (node.resourceId ?? '')}
+          >
+            #{id}
           </p>
         )}
-        <p className="attrs-full mono">{node.className}</p>
+        <p className="attrs-full mono">{composable ? '@Composable' : node.className}</p>
       </header>
 
       {path.length > 0 && (
@@ -144,24 +186,21 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
 
       <dl className="attr-grid">
         <Row name="Source">
-          {source !== null ? (
-            <span className="attr-source">
-              <code className="mono">{source}</code>
-              <span
-                className="attr-hint"
-                title="aapt2 records the line where the start tag ends (its “>”), not where “<Tag” begins."
-              >
-                end of start tag
-              </span>
-              <CopyButton text={() => source} label="Copy" ariaLabel={`Copy ${source}`} />
-            </span>
-          ) : (
-            <Unset why={isSdk ? 'Built in code, a ViewStub, or inflated off the main thread' : why} />
-          )}
+          <SourceRow node={node} why={why} />
         </Row>
+        {note !== null && (
+          <Row name="Compose">
+            <span className="attr-text">{note}</span>
+          </Row>
+        )}
         <Row name="Owner">
-          {node.fragment !== null || node.activity !== null ? (
+          {destination !== null || node.fragment !== null || node.activity !== null ? (
             <span className="attr-owner">
+              {destination !== null && (
+                <span className="attr-owner-destination mono" title="Navigation destination">
+                  {destination}
+                </span>
+              )}
               {node.fragment !== null && <span title={node.fragment}>{shortClass(node.fragment)}</span>}
               {node.activity !== null && (
                 <span className="attr-owner-activity" title={node.activity}>
@@ -203,18 +242,22 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
           )
         )}
         <Row name="Visibility">{node.visibility}</Row>
-        <Row name="Alpha">
-          {node.alpha === null ? <Unset why={why} /> : <span className="mono">{node.alpha}</span>}
-        </Row>
-        <Row name="Layout">
-          {node.layoutWidth !== null && node.layoutHeight !== null ? (
-            <span className="mono">
-              {node.layoutWidth} × {node.layoutHeight}
-            </span>
-          ) : (
-            <Unset why={why} />
-          )}
-        </Row>
+        {!composable && (
+          <>
+            <Row name="Alpha">
+              {node.alpha === null ? <Unset why={why} /> : <span className="mono">{node.alpha}</span>}
+            </Row>
+            <Row name="Layout">
+              {node.layoutWidth !== null && node.layoutHeight !== null ? (
+                <span className="mono">
+                  {node.layoutWidth} × {node.layoutHeight}
+                </span>
+              ) : (
+                <Unset why={why} />
+              )}
+            </Row>
+          </>
+        )}
         <Row name="Flags">
           <span className="attr-flags">
             {FLAGS.map(({ key, label }) => {
@@ -229,9 +272,13 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
         </Row>
       </dl>
 
-      {isSdk &&
-      (node.padding !== null || node.margin !== null) &&
-      !(isZeroRect(node.padding) && isZeroRect(node.margin)) ? (
+      {composable ? (
+        <p className="attr-note">
+          Bounds are the content box of what it lays out (inside its padding modifiers).
+        </p>
+      ) : isSdk &&
+        (node.padding !== null || node.margin !== null) &&
+        !(isZeroRect(node.padding) && isZeroRect(node.margin)) ? (
         <BoxModel node={node} />
       ) : (
         isSdk && <p className="attr-note">No padding or margin.</p>

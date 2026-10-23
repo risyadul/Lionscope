@@ -275,6 +275,65 @@ describe('Inspector tab', () => {
     expect(within(attrs).getByText('clickable').getAttribute('data-on')).toBe('true');
   });
 
+  it('shows a composable with its call site, destination and no view-only fields', async () => {
+    const compose = inspectorSnapshot({
+      nodes: [
+        node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+        node(1, 0, [0, 0, 1080, 2400], {
+          className: 'androidx.compose.ui.platform.AndroidComposeView',
+          composition: 'read',
+        }),
+        node(2, 1, [100, 200, 500, 300], {
+          className: 'Button',
+          resourceId: 'checkout',
+          clickable: true,
+          alpha: null,
+          padding: null,
+          margin: null,
+          layoutWidth: null,
+          layoutHeight: null,
+          composable: { file: 'CartScreen.kt', line: 87 },
+          destination: 'cart',
+          activity: 'com.example.shop.MainActivity',
+        }),
+      ],
+    });
+    const { push } = setup();
+    await push({ type: 'inspection', snapshot: compose });
+    openTab();
+    await push(selectedOn(2));
+    const row = document.querySelector('[data-node="2"]')!;
+    expect(row.getAttribute('data-compose')).toBe('true');
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText('CartScreen.kt:87')).toBeTruthy();
+    expect(within(attrs).getByText('call site')).toBeTruthy();
+    expect(within(attrs).queryByText('end of start tag')).toBeNull();
+    expect(within(attrs).getByText('Compose')).toBeTruthy();
+    expect(within(attrs).getByText('#checkout')).toBeTruthy();
+    expect(within(attrs).getByText('cart')).toBeTruthy();
+    expect(within(attrs).queryByText('Alpha')).toBeNull();
+    expect(within(attrs).queryByText('Layout')).toBeNull();
+    expect(within(attrs).queryByText('No padding or margin.')).toBeNull();
+  });
+
+  it('says why an AndroidComposeView shows no composables', async () => {
+    const unread = inspectorSnapshot({
+      nodes: [
+        node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+        node(1, 0, [0, 0, 1080, 600], {
+          className: 'androidx.compose.ui.platform.AndroidComposeView',
+          composition: 'disabled',
+        }),
+      ],
+    });
+    const { push } = setup();
+    await push({ type: 'inspection', snapshot: unread });
+    openTab();
+    await push(selectedOn(1));
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText(/restart the app/)).toBeTruthy();
+  });
+
   it('opens the path to a selection that was already there when the tree mounts (a reloaded page)', async () => {
     // Node 5 sits under the invisible View 4, which the default shape (depth < 2) leaves closed.
     setup([...BASE, snapshotMsg(), selectedOn(5)]);
