@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-24
+
 ### Added
 
 - Dashboard views: a **Profiler · Inspector · Device** switch at the right of the top bar. **Inspector** shows
@@ -307,7 +309,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.5.1...HEAD
+[0.5.1]: https://github.com/risyadul/Lionscope/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/risyadul/Lionscope/compare/0.4.1...0.5.0
 [0.4.1]: https://github.com/risyadul/Lionscope/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/risyadul/Lionscope/compare/0.3.1...0.4.0

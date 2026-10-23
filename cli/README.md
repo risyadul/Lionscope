@@ -35,7 +35,7 @@ prints a tool's JSON result for shell-only agents (`npx lionscope query --list`)
 `claude mcp add lionscope -- npx -y lionscope mcp`. Setup for other editors and agents is in the main README.
 
 Nothing needs to be installed on the device. For screen names and per-frame `FrameMetrics`, add the optional
-debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.5.0"` from JitPack).
+debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.5.1"` from JitPack).
 
 Documentation, the SDK and the source: <https://github.com/risyadul/Lionscope>. Licensed under the
 [Apache License 2.0](LICENSE); bundled third-party licenses are in `dist/THIRD_PARTY_NOTICES.txt`.

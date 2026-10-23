@@ -1,6 +1,6 @@
 {
   "name": "lionscope",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Lightweight Android profiler and Layout Inspector in your browser, with MCP tools for AI agents: CPU, memory, frames, stalls, layouts and logcat over adb",
   "license": "Apache-2.0",
   "repository": {
