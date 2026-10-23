@@ -232,7 +232,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.0"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.4.1"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -265,7 +265,7 @@ Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()
 release; for them there is a no-op artifact with the same API:
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.4.1"
 ```
 
 ### Cost when no dashboard is connected
@@ -599,7 +599,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.4.0`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.4.1`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

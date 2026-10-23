@@ -1,6 +1,6 @@
 {
   "name": "lionscope",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Lightweight Android profiler with a web dashboard: CPU, memory, frames, screens and logcat for one app over adb",
   "license": "Apache-2.0",
   "repository": {

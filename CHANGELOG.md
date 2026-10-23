@@ -6,12 +6,15 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
 ### Added
 
 - AI agents can use Lionscope (README: "Use with AI agents"): one tool layer in the server, served three ways.
   - **MCP over stdio**: `lionscope mcp` attaches to the Lionscope server running on `--port` or, when none
     answers, starts one in its own process (dashboard still at http://localhost:8701) that stops when the MCP
-    client disconnects; if the server it uses stops, the next call starts one. Works with Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf and Claude Desktop.
+    client disconnects; if the server it uses stops, the next call starts one. Works with Claude Code, Cursor, VS Code, Codex, Gemini CLI, Devin Desktop (Windsurf) and Claude
+    Desktop.
   - **Streamable HTTP MCP** at `http://localhost:8701/mcp` on the running server.
   - **`lionscope query <tool>`** for agents with only a shell: prints the tool's JSON result
     (`lionscope query stalls`, `lionscope query logcat --level E --limit 50`); `--list` prints every tool and
@@ -42,6 +45,10 @@ All notable changes to Lionscope are documented here. The format is based on
   Device control over HTTP MCP follows the server's flag only; the opt-in of `lionscope mcp` applies to its own
   client. It is an autonomy guard for AI agents, not a security boundary: local processes are trusted (as with
   adb), browsers are not.
+
+### Changed
+
+- The Android SDK is unchanged from 0.4.0 (only its version); 0.4.x SDKs and servers work together.
 
 ## [0.4.0] - 2026-10-22
 
@@ -222,7 +229,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/risyadul/Lionscope/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/risyadul/Lionscope/compare/0.3.1...0.4.0
 [0.3.1]: https://github.com/risyadul/Lionscope/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/risyadul/Lionscope/compare/0.2.0...0.3.0
