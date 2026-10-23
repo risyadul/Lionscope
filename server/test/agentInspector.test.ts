@@ -5,7 +5,9 @@ import {
   CROP_MAX_EDGE,
   LARGE_ELEMENT_NOTE,
   NOTHING_SELECTED,
+  COMPOSE_SOURCE_NOTE,
   SOURCE_LINE_NOTE,
+  sourceText,
 } from '../src/agent/inspectorTools.ts';
 import { mcpInstructions } from '../src/agent/mcpServer.ts';
 import { decodePng } from '../src/agent/png.ts';
@@ -102,12 +104,12 @@ const INSPECTION: SdkInspection = {
   nodes: NODES,
 };
 
-function inspectorAgent() {
+function inspectorAgent(answer: SdkInspection = INSPECTION) {
   const link: SdkLink = {
-    protocolVersion: 4,
+    protocolVersion: answer === INSPECTION ? 4 : 6,
     close: () => undefined,
     sendConfig: () => undefined,
-    inspect: async () => INSPECTION,
+    inspect: async () => answer,
   };
   let now = Date.UTC(2026, 9, 20, 12, 0, 0);
   const inspector = new InspectorService({
@@ -205,6 +207,66 @@ describe('Inspector agent tools', () => {
       shown: 1,
       nodes: [{ nodeId: 2 }],
     });
+  });
+
+  it('describes composables by name and call site, with their destination', async () => {
+    const compose: InspectorNode[] = [
+      node(0, null, { className: 'com.android.internal.policy.DecorView' }),
+      node(1, 0, { className: 'androidx.compose.ui.platform.AndroidComposeView', composition: 'read' }),
+      node(2, 1, {
+        className: 'Button',
+        resourceId: 'checkout',
+        clickable: true,
+        bounds: SHARE,
+        visibleBounds: SHARE,
+        alpha: null,
+        padding: null,
+        layoutWidth: null,
+        layoutHeight: null,
+        composable: { file: 'CartScreen.kt', line: 87 },
+        destination: 'cart',
+      }),
+      node(3, 2, { className: 'Text', text: 'Pay', composable: { file: 'CartScreen.kt', line: null } }),
+      node(4, 1, { className: 'Spacer', composable: { file: null, line: null } }),
+    ];
+    const { agent, inspector } = inspectorAgent({
+      ...INSPECTION,
+      begin: { ...INSPECTION.begin, nodeCount: compose.length, compose: true },
+      nodes: compose,
+    });
+    const listed = await callTool(agent.ctx, 'inspect_screen', { query: 'cartscreen' }, true);
+    const result = (listed as { result: Json }).result;
+    expect(result.snapshot).toMatchObject({ source: 'sdk', fallbackReason: null });
+    expect(result.nodes).toEqual([
+      {
+        nodeId: 2,
+        parent: 1,
+        label: 'Button#checkout',
+        bounds: SHARE,
+        source: 'CartScreen.kt:87',
+        flags: ['clickable'],
+      },
+      {
+        nodeId: 3,
+        parent: 2,
+        label: 'Text',
+        text: 'Pay',
+        bounds: [0, 0, 1080, 2400],
+        source: 'CartScreen.kt',
+      },
+    ]);
+    expect(sourceText(compose[4] as InspectorNode)).toBeNull();
+    expect(sourceText(NODES[2] as InspectorNode)).toBe('view_dashboard_actions.xml:15');
+
+    inspector.select(inspector.current?.id ?? '', 2, 'user');
+    const selected = (await callTool(agent.ctx, 'get_inspector_selection', {}, false)) as { result: Json };
+    expect(selected.result.element).toMatchObject({
+      label: 'Button#checkout',
+      kind: 'composable',
+      source: { kind: 'compose', file: 'CartScreen.kt', line: 87, note: COMPOSE_SOURCE_NOTE },
+      destination: 'cart',
+    });
+    expect(selected.result.ancestors).toEqual(['DecorView', 'AndroidComposeView']);
   });
 
   it('select_inspector_node points at a node, refuses a stale snapshot or unknown node, and clears', async () => {

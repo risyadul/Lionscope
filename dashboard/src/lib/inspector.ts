@@ -139,6 +139,9 @@ export function sourceLabel(node: InspectorNode): string | null {
 const FALLBACK_REASONS: Record<string, string> = {
   no_sdk: 'no SDK',
   compose: 'Compose screen',
+  compose_disabled: 'Compose inspection off (restart the app)',
+  compose_no_source: 'Compose without source information',
+  compose_failed: 'Compose could not be read',
   old_sdk: 'SDK too old',
   background: 'app in the background',
   no_window: 'no app window',

@@ -205,6 +205,41 @@ describe('Inspector service', () => {
     expect(await small.service.inspect(SERIAL)).toMatchObject({ source: 'sdk' });
   });
 
+  it('uses the SDK for a Compose top window it read (v6), else says why it could not', async () => {
+    const composeView = (composition?: InspectorNode['composition']) =>
+      sdkNode(1, {
+        className: 'androidx.compose.ui.platform.AndroidComposeView',
+        visibleBounds: [0, 0, 1080, 2400],
+        ...(composition ? { composition } : {}),
+      });
+    const button = sdkNode(2, {
+      parent: 1,
+      className: 'Button',
+      composable: { file: 'CartScreen.kt', line: 87 },
+    });
+    const inspect = async (nodes: InspectorNode[]) =>
+      setup({
+        source: { packageName: PKG, link: fakeLink(6, async () => inspection(nodes, true)), screen: 'cart' },
+      }).service.inspect(SERIAL);
+    const read = await inspect([sdkNode(0), composeView('read'), button]);
+    expect(read).toMatchObject({ source: 'sdk', fallbackReason: null });
+    expect(read.nodes[2]).toMatchObject({
+      className: 'Button',
+      composable: { file: 'CartScreen.kt', line: 87 },
+    });
+    for (const [status, reason] of [
+      ['disabled', 'compose_disabled'],
+      ['no_source', 'compose_no_source'],
+      ['failed', 'compose_failed'],
+      [undefined, 'compose'],
+    ] as const) {
+      expect(await inspect([sdkNode(0), composeView(status)])).toMatchObject({
+        source: 'uiautomator',
+        fallbackReason: reason,
+      });
+    }
+  });
+
   it('maps a uiautomator dump: clipped bounds, no password text, SDK-only fields null', async () => {
     const { service } = setup({ source: { packageName: PKG, link: null, screen: 'Cart' } });
     const snapshot = await service.inspect(SERIAL);
