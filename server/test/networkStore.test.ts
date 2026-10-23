@@ -1,7 +1,7 @@
-import { HTTP_REDACTED } from '@lionscope/protocol';
+import { HTTP_REDACTED, MAX_HTTP_SUMMARY_URL_CHARS } from '@lionscope/protocol';
 import type { HttpExchange, ServerMessage } from '@lionscope/protocol';
 import { describe, expect, it } from 'vitest';
-import { LOST_LINK_MESSAGE, NetworkStore } from '../src/store/networkStore.ts';
+import { LOST_LINK_MESSAGE, NetworkStore, summaryUrl } from '../src/store/networkStore.ts';
 import type { SdkHttpRequest, SdkHttpResponse } from '../src/store/networkStore.ts';
 import { SessionStore } from '../src/store/sessionStore.ts';
 
@@ -69,7 +69,8 @@ function setup(limits: { maxExchanges?: number; maxBytes?: number } = {}) {
 
 describe('NetworkStore', () => {
   it('opens a pending exchange on a request and completes it on its response, announcing both', () => {
-    const { store, announced } = setup();
+    const { store, announced, advance } = setup();
+    advance(5000);
     const link = {};
     store.request(
       link,
@@ -173,7 +174,7 @@ describe('NetworkStore', () => {
     expect(store.summaries()).toMatchObject([{ url: 'https://api.example.com/v1/items/1', status: 200 }]);
   });
 
-  it('re-applies redaction to headers, query parameters and form bodies', () => {
+  it('re-applies redaction to headers, URLs, form / JSON / XML bodies and error messages', () => {
     const { store } = setup();
     const link = {};
     const form = 'user=ada&password=hunter2&api_key=k-123&note=a+b';
@@ -200,11 +201,14 @@ describe('NetworkStore', () => {
     store.response(
       link,
       response(1, {
-        headers: [['Set-Cookie', 'sid=1']],
+        headers: [
+          ['Set-Cookie', 'sid=1'],
+          ['Location', 'https://ada:pw@example.com/next?code=c-1'],
+        ],
         body: {
           size: 13,
           contentType: 'application/json',
-          text: '{"token":"t"}',
+          text: '{"token":"t","user":{"accessKey":[1,2]},"n":1}',
           truncated: false,
           omitted: null,
         },
@@ -221,9 +225,70 @@ describe('NetworkStore', () => {
     expect(detail?.requestBody?.text).toBe(
       `user=ada&password=${HTTP_REDACTED}&api_key=${HTTP_REDACTED}&note=a+b`,
     );
-    expect(detail?.responseHeaders).toEqual([['Set-Cookie', HTTP_REDACTED]]);
-    // JSON bodies are not redacted.
-    expect(detail?.responseBody?.text).toBe('{"token":"t"}');
+    expect(detail?.responseHeaders).toEqual([
+      ['Set-Cookie', HTTP_REDACTED],
+      ['Location', `https://${HTTP_REDACTED}@example.com/next?code=${HTTP_REDACTED}`],
+    ]);
+    expect(detail?.responseBody?.text).toBe(
+      `{"token":"${HTTP_REDACTED}","user":{"accessKey":"${HTTP_REDACTED}"},"n":1}`,
+    );
+
+    const xml = '<login><user>ada</user><password>hunter2</password></login>';
+    const xmlBody = { size: xml.length, contentType: 'text/xml', text: xml, truncated: false, omitted: null };
+    store.request(link, T0, request(2, { method: 'POST', body: xmlBody }));
+    store.response(
+      link,
+      response(2, {
+        status: null,
+        body: null,
+        error: {
+          kind: 'connection',
+          message: 'SSLHandshakeException: https://api.example.com/x?token=t-9 failed, Bearer abc.def',
+        },
+      }),
+    );
+    const failed = store.summaries()[1];
+    expect(store.detail(failed?.id ?? -1)?.requestBody?.text).toBe(
+      `<login><user>ada</user><password>${HTTP_REDACTED}</password></login>`,
+    );
+    expect(failed?.error).toEqual({
+      kind: 'connection',
+      message: `SSLHandshakeException: https://api.example.com/x?token=${HTTP_REDACTED} failed, Bearer ${HTTP_REDACTED}`,
+    });
+  });
+
+  it('keeps the reported duration but never ends an exchange in the future', () => {
+    const { store, announced, advance } = setup();
+    const link = {};
+    store.request(link, T0, request(1));
+    advance(100);
+    store.response(link, response(1, { durationMs: 60_000 }));
+    expect(announced().at(-1)).toMatchObject({ ts: T0, endTs: T0 + 100, durationMs: 60_000 });
+  });
+
+  it(`cuts summary URLs to ${MAX_HTTP_SUMMARY_URL_CHARS} characters, keeping the whole URL in the detail`, () => {
+    const { store, announced } = setup();
+    const url = `https://api.example.com/${'a'.repeat(MAX_HTTP_SUMMARY_URL_CHARS)}`;
+    store.request({}, T0, request(1, { url }));
+    const [summary] = store.summaries();
+    expect(summary?.url).toHaveLength(MAX_HTTP_SUMMARY_URL_CHARS);
+    expect(summary?.url).toBe(`${url.slice(0, MAX_HTTP_SUMMARY_URL_CHARS - 1)}…`);
+    expect(announced()[0]?.url).toBe(summary?.url);
+    expect(store.detail(summary?.id ?? -1)?.url).toBe(url);
+    // Exactly at the limit: whole; a cut never splits a surrogate pair.
+    const exact = 'h'.repeat(MAX_HTTP_SUMMARY_URL_CHARS);
+    expect(summaryUrl(exact)).toBe(exact);
+    const emoji = `${'h'.repeat(MAX_HTTP_SUMMARY_URL_CHARS - 2)}😀😀`;
+    expect(summaryUrl(emoji)).toBe(`${'h'.repeat(MAX_HTTP_SUMMARY_URL_CHARS - 2)}…`);
+  });
+
+  it('counts the kept exchanges against the clock', () => {
+    const { store, advance } = setup();
+    store.request({}, T0, request(1));
+    store.request({}, T0 + 1000, request(2));
+    expect(store.count()).toBe(2);
+    advance(WINDOW_MS + 500);
+    expect(store.count()).toBe(1);
   });
 
   it('keeps the window by start time, evicting the oldest first', () => {

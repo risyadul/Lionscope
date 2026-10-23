@@ -1,9 +1,11 @@
-import { isFormContentType, redactHeaders, redactPairs, redactUrl } from '@lionscope/protocol/insights';
+import { MAX_HTTP_SUMMARY_URL_CHARS } from '@lionscope/protocol';
+import { redactBodyText, redactFreeText, redactHeaders, redactUrl } from '@lionscope/protocol/insights';
 import type {
   DeviceMessage,
   HttpBody,
   HttpExchange,
   HttpExchangeDetail,
+  HttpFailure,
   HttpHeader,
   ServerMessage,
 } from '@lionscope/protocol';
@@ -55,12 +57,32 @@ function sizeOf(detail: HttpExchangeDetail): number {
   );
 }
 
-/** Form fields with sensitive names are redacted again (an older or foreign SDK may not have). */
+/** Sensitive form fields, JSON keys and XML elements are redacted again (an older or foreign SDK may not have). */
 function redactBody(body: HttpBody | null): HttpBody | null {
   if (!body) return null;
   const { size, contentType, text, truncated, omitted } = body;
-  const redacted = text !== null && isFormContentType(contentType) ? redactPairs(text) : text;
-  return { size, contentType, text: redacted, truncated, omitted };
+  return {
+    size,
+    contentType,
+    text: text === null ? null : redactBodyText(contentType, text),
+    truncated,
+    omitted,
+  };
+}
+
+/** An exception message can quote a URL or a credential. */
+function redactError(error: HttpFailure | null): HttpFailure | null {
+  if (error === null) return null;
+  return { kind: error.kind, message: error.message === null ? null : redactFreeText(error.message) };
+}
+
+/** A summary's URL: at most MAX_HTTP_SUMMARY_URL_CHARS, ending in `…` when cut (never inside a surrogate pair). */
+export function summaryUrl(url: string): string {
+  if (url.length <= MAX_HTTP_SUMMARY_URL_CHARS) return url;
+  let end = MAX_HTTP_SUMMARY_URL_CHARS - 1;
+  const last = url.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${url.slice(0, end)}…`;
 }
 
 function headerValue(headers: readonly HttpHeader[], name: string): string | null {
@@ -76,14 +98,14 @@ export function summaryOf(detail: HttpExchangeDetail): HttpExchange {
     responseBody: _responseBody,
     ...summary
   } = detail;
-  return summary;
+  return { ...summary, url: summaryUrl(summary.url) };
 }
 
 /**
  * The HTTP exchanges of one profiling session, as the SDK's OkHttp interceptor reports them (device protocol v7):
  * an `httpRequest` opens a pending exchange under a new server id, the `httpResponse` with the same SDK id on the
- * same link completes or fails it. Redaction (headers, query parameters, form fields) is applied again to whatever
- * arrives. Bounded like the other streams: the window (by start), MAX_HTTP_EXCHANGES and MAX_HTTP_STORE_BYTES,
+ * same link completes or fails it. Redaction (headers, URLs, form / JSON / XML bodies, error messages) is applied
+ * again to whatever arrives; summaries carry the URL cut to MAX_HTTP_SUMMARY_URL_CHARS, details whole. Bounded like the other streams: the window (by start), MAX_HTTP_EXCHANGES and MAX_HTTP_STORE_BYTES,
  * oldest first. Every change is announced as an `http` message (the summary); details are read on demand.
  */
 export class NetworkStore {
@@ -106,6 +128,12 @@ export class NetworkStore {
   }
 
   get size(): number {
+    return this.entries.size;
+  }
+
+  /** Exchanges kept, pruned against the clock first (no summaries built). */
+  count(): number {
+    this.prune();
     return this.entries.size;
   }
 
@@ -172,16 +200,17 @@ export class NetworkStore {
     if (entry.detail.state !== 'pending') return this.duplicate('httpResponse');
     const headers = redactHeaders(message.headers);
     const body = redactBody(message.body);
+    // The SDK's duration is kept as reported; its end can't lie in the future.
     this.replace(entry, {
       ...entry.detail,
-      endTs: entry.detail.ts + message.durationMs,
+      endTs: Math.min(entry.detail.ts + message.durationMs, Math.max(entry.detail.ts, this.options.now())),
       state: message.error ? 'failed' : 'complete',
       status: message.status,
       headersMs: message.headersMs,
       durationMs: message.durationMs,
       responseSize: body?.size ?? null,
       responseType: body?.contentType ?? headerValue(headers, 'content-type'),
-      error: message.error,
+      error: redactError(message.error),
       protocol: message.protocol,
       responseHeaders: headers,
       responseBody: body,

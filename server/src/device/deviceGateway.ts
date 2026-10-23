@@ -118,7 +118,8 @@ export interface DeviceGateway {
  * TCP listener for the in-app SDK (reached through `adb reverse`), loopback only. Speaks NDJSON: every
  * line is validated with `parseDeviceMessage`; the first one must be a `hello` that the target accepts (it may
  * check the PID first: nothing is sent until it decided), and `welcome` answers with the negotiated protocol
- * version and, on a v5 link, the link's mode (on a v2 session link followed by `config`). Later lines of an
+ * version, on a v5 link the link's mode and on a v7 session link the target's link proof (on a v2 session link
+ * followed by `config`). Later lines of an
  * unknown `type` (a newer SDK) or of a type the negotiated version lacks are skipped; any other protocol
  * violation closes the connection, and the SDK reconnects with backoff.
  */
@@ -237,6 +238,21 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
 function gatewayLine(message: GatewayMessage): string {
   return `${JSON.stringify(message)}\n`;
 }
+
+/**
+ * The `welcome` line: `mode` on v5 links, `proof` (after it) on v7 session links that have one, as in
+ * protocol/fixtures/gateway-messages.ndjson.
+ */
+export function encodeWelcome(protocolVersion: number, mode: SdkLinkMode, proof?: string): string {
+  if (protocolVersion < DEVICE_PROTOCOL_V5) return gatewayLine({ type: 'welcome', protocolVersion });
+  const proven = proof !== undefined && mode === 'session' && protocolVersion >= DEVICE_PROTOCOL_V7;
+  return gatewayLine(
+    proven ? { type: 'welcome', protocolVersion, mode, proof } : { type: 'welcome', protocolVersion, mode },
+  );
+}
+
+/** A mock rule set waits for 'drain' (only the latest one) while the socket buffers more than this. */
+export const MAX_PENDING_MOCK_BYTES = 1024 * 1024;
 
 function configMessage(options: SdkOptions): GatewayMessage {
   return {
@@ -371,6 +387,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   let pendingConfig: GatewayMessage | null = null;
   /** The latest mock rule set asked for before the `welcome` went out (sent after it, on a session link). */
   let pendingMocks: string | null = null;
+  /** The latest mock rule set asked for while the socket's buffer was over MAX_PENDING_MOCK_BYTES. */
+  let drainingMocks: { rev: number; rules: readonly NetworkMockRule[] } | null = null;
   let mode: SdkLinkMode = 'session';
   /** The hello is being checked by the target: later lines are held (up to MAX_HELD_LINES) until it decided. */
   let attaching = false;
@@ -483,6 +501,21 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     failAllInspects('closed');
     socket.destroy();
   };
+  const writeMocks = (rev: number, rules: readonly NetworkMockRule[]): void => {
+    if (drainingMocks === null && socket.writableLength <= MAX_PENDING_MOCK_BYTES) {
+      socket.write(encodeMocks(rev, rules));
+      return;
+    }
+    // A slow phone: only the latest set waits; older ones would be replaced by it anyway.
+    if (drainingMocks === null) {
+      socket.once('drain', () => {
+        const latest = drainingMocks;
+        drainingMocks = null;
+        if (latest && !closing) writeMocks(latest.rev, latest.rules);
+      });
+    }
+    drainingMocks = { rev, rules };
+  };
   const helloTimer = setTimeout(() => abort('no hello'), limits.helloTimeoutMs);
   socket.setTimeout(limits.idleTimeoutMs, () => abort('idle'));
 
@@ -514,7 +547,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         // Mocks belong to a profiling session: inspect-only links never get them.
         if (protocolVersion < DEVICE_PROTOCOL_V7 || closing) return;
         if (!handler) pendingMocks = encodeMocks(rev, rules);
-        else if (mode === 'session') socket.write(encodeMocks(rev, rules));
+        else if (mode === 'session') writeMocks(rev, rules);
       },
       inspect,
     };
@@ -554,13 +587,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       warn('inspect mode below v5');
       return close('no_session');
     }
-    socket.write(
-      gatewayLine(
-        protocolVersion >= DEVICE_PROTOCOL_V5
-          ? { type: 'welcome', protocolVersion, mode }
-          : { type: 'welcome', protocolVersion },
-      ),
-    );
+    socket.write(encodeWelcome(protocolVersion, mode, result.proof));
     if (pendingConfig && mode === 'session') socket.write(gatewayLine(pendingConfig));
     if (pendingMocks !== null && mode === 'session') socket.write(pendingMocks);
     pendingConfig = null;

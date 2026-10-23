@@ -23,11 +23,21 @@ export interface MockRulesOptions {
 const bodyBytes = (rules: readonly NetworkMockRule[]): number =>
   rules.reduce((sum, rule) => sum + Buffer.byteLength(rule.body), 0);
 
+/** Changes are pushed to the SDK this long after the last one (an editor may save several at once). */
+export const MOCK_PUSH_DEBOUNCE_MS = 100;
+
+/** The same rule but for `enabled` (and who saved it, and when). */
+function onlyEnabledDiffers(a: NetworkMockRule, b: NetworkMockRule): boolean {
+  const rest = (rule: NetworkMockRule) =>
+    JSON.stringify({ ...rule, enabled: null, origin: null, updatedAt: null });
+  return a.enabled !== b.enabled && rest(a) === rest(b);
+}
+
 /**
  * The mock rules of one profiling session: validated, normalised (scheme and host lower case, default port
  * dropped), ordered by precedence (orderMocks) and versioned (`rev`, one step per change). The enabled ones are
- * pushed to the session's live SDK link when it speaks v7: on every change, and when a link goes live (only if
- * there are any); `appliedRev` follows its `mocksApplied`. Every change is announced as `networkMocks`. They end with
+ * pushed to the session's live, proven SDK link (network `active`): MOCK_PUSH_DEBOUNCE_MS after a change (the latest
+ * set wins), and at once when a link goes live (only if there are any); `appliedRev` follows its `mocksApplied`. Every change is announced as `networkMocks`. They end with
  * the session.
  */
 export class MockRules {
@@ -35,8 +45,9 @@ export class MockRules {
   private rev = 0;
   private appliedRev: number | null = null;
   private nextId = 1;
-  /** The session's live SDK link, while it is at protocol ≥ 7. */
+  /** The session's live SDK link, while it is at protocol ≥ 7 with a link proof. */
   private link: SdkLink | null = null;
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private ended = false;
 
   constructor(private readonly options: MockRulesOptions) {}
@@ -82,8 +93,11 @@ export class MockRules {
       origin,
       updatedAt: this.options.now(),
     };
-    this.change([...others, rule]);
-    return rule;
+    // Switching a rule on or off keeps its place among rules that tie on everything else.
+    const kept =
+      existing && onlyEnabledDiffers(existing, rule) ? { ...rule, updatedAt: existing.updatedAt } : rule;
+    this.change([...others, kept]);
+    return kept;
   }
 
   /** Remove one rule; false when there is none with that id. */
@@ -99,10 +113,11 @@ export class MockRules {
     this.change([]);
   }
 
-  /** The session's SDK link went live (verified): a v7 one gets the rules at once, when there are any. */
+  /** The session's SDK link went live (verified and proven): a v7 one gets the rules at once, when there are any. */
   linkUp(link: SdkLink): void {
     if (this.ended) return;
     if (link.protocolVersion < DEVICE_PROTOCOL_V7) return this.linkDown();
+    this.cancelPush();
     this.link = link;
     const enabled = this.enabledRules();
     // A fresh SDK has no rules: with none to send, it already runs this rev.
@@ -113,6 +128,7 @@ export class MockRules {
 
   /** The session has no live SDK link (anymore). */
   linkDown(): void {
+    this.cancelPush();
     if (this.link === null && this.appliedRev === null) return;
     this.link = null;
     this.appliedRev = null;
@@ -131,6 +147,7 @@ export class MockRules {
   end(): void {
     if (this.ended) return;
     this.ended = true;
+    this.cancelPush();
     this.link = null;
     this.appliedRev = null;
     if (this.rules.length > 0) {
@@ -143,8 +160,22 @@ export class MockRules {
   private change(rules: NetworkMockRule[]): void {
     this.rules = orderMocks(rules);
     this.rev += 1;
-    this.link?.sendMocks(this.rev, this.enabledRules());
+    if (this.link) {
+      this.cancelPush();
+      this.pushTimer = setTimeout(() => this.push(), MOCK_PUSH_DEBOUNCE_MS);
+    }
     this.announce();
+  }
+
+  /** The current set (whatever changed since the timer was set) to the live link. */
+  private push(): void {
+    this.pushTimer = null;
+    this.link?.sendMocks(this.rev, this.enabledRules());
+  }
+
+  private cancelPush(): void {
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+    this.pushTimer = null;
   }
 
   private enabledRules(): NetworkMockRule[] {

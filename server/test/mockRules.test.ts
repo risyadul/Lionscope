@@ -1,7 +1,12 @@
 import { MAX_MOCK_BODY_BYTES, MAX_MOCK_SET_BODY_BYTES, MAX_NETWORK_MOCKS } from '@lionscope/protocol';
 import type { NetworkMocksState, ServerMessage } from '@lionscope/protocol';
-import { describe, expect, it } from 'vitest';
-import { EMPTY_MOCKS, MockRules, NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  EMPTY_MOCKS,
+  MOCK_PUSH_DEBOUNCE_MS,
+  MockRules,
+  NO_SESSION_MOCKS_MESSAGE,
+} from '../src/session/mockRules.ts';
 import { mockInput } from './helpers/networkFixtures.ts';
 import { FakeLink } from './helpers/sdkSession.ts';
 
@@ -23,6 +28,10 @@ function setup() {
     },
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('MockRules', () => {
   it('validates, normalises and numbers rules, announcing every change with a new rev', () => {
@@ -117,6 +126,8 @@ describe('MockRules', () => {
   });
 
   it('pushes the enabled rules to a live v7 link and follows its mocksApplied', () => {
+    vi.useFakeTimers();
+    const settle = () => vi.advanceTimersByTime(MOCK_PUSH_DEBOUNCE_MS);
     const { mocks, states } = setup();
     const disabled = mocks.set(mockInput({ enabled: false }), 'user');
     // A link that goes live gets no empty set: a fresh SDK already runs it.
@@ -126,6 +137,8 @@ describe('MockRules', () => {
     expect(states().at(-1)).toMatchObject({ rev: 1, appliedRev: 1 });
 
     const enabled = mocks.set(mockInput({ url: 'https://api.example.com/v2' }), 'user');
+    expect(link.mockSets).toEqual([]);
+    settle();
     expect(link.mockSets).toEqual([{ rev: 2, rules: [enabled] }]);
     expect(mocks.state.appliedRev).toBe(1);
     mocks.applied(5); // not a rev we sent
@@ -134,6 +147,7 @@ describe('MockRules', () => {
     mocks.applied(1); // a late confirmation of an older set
     expect(mocks.state.appliedRev).toBe(2);
     mocks.remove(enabled.id);
+    settle();
     expect(link.mockSets.at(-1)).toEqual({ rev: 3, rules: [] });
 
     // A reconnecting SDK gets the current set at once; no live link: no applied rev.
@@ -150,8 +164,53 @@ describe('MockRules', () => {
     const old = new FakeLink(5);
     mocks.linkUp(old);
     mocks.set(mockInput(), 'user');
+    settle();
     expect(old.mockSets).toEqual([]);
     expect(mocks.state.appliedRev).toBeNull();
+  });
+
+  it(`pushes a burst of changes once, ${MOCK_PUSH_DEBOUNCE_MS} ms after the last, with the latest set`, () => {
+    vi.useFakeTimers();
+    const { mocks } = setup();
+    const link = new FakeLink(7);
+    mocks.linkUp(link);
+    for (let i = 0; i < 5; i += 1) {
+      mocks.set(mockInput({ url: `https://api.example.com/${i}` }), 'user');
+      vi.advanceTimersByTime(MOCK_PUSH_DEBOUNCE_MS - 1);
+    }
+    expect(link.mockSets).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(link.mockSets).toEqual([{ rev: 5, rules: mocks.state.rules }]);
+    expect(mocks.state.rules).toHaveLength(5);
+
+    // A change still waiting when the link goes down (or the rules end) is never sent.
+    mocks.clear();
+    mocks.linkDown();
+    vi.advanceTimersByTime(MOCK_PUSH_DEBOUNCE_MS);
+    mocks.linkUp(link);
+    expect(link.mockSets).toHaveLength(1); // no rules: nothing to send to a fresh link
+    mocks.set(mockInput(), 'user');
+    mocks.end();
+    vi.advanceTimersByTime(MOCK_PUSH_DEBOUNCE_MS);
+    expect(link.mockSets).toHaveLength(1);
+  });
+
+  it('keeps updatedAt (and so the order of tied rules) when a change only switches a rule on or off', () => {
+    const { mocks, tick } = setup();
+    const first = mocks.set(mockInput(), 'user');
+    tick();
+    const second = mocks.set(mockInput(), 'user');
+    expect(mocks.state.rules.map((rule) => rule.id)).toEqual([second.id, first.id]);
+    tick();
+    const off = mocks.set({ ...mockInput({ enabled: false }), id: second.id }, 'agent');
+    expect(off).toMatchObject({ enabled: false, origin: 'agent', updatedAt: second.updatedAt });
+    expect(mocks.state.rules.map((rule) => rule.id)).toEqual([second.id, first.id]);
+    expect(mocks.state.rev).toBe(3);
+    tick();
+    // Any other change is an edit: it moves the rule ahead of its ties.
+    const edited = mocks.set({ ...mockInput({ enabled: false, delayMs: 10 }), id: first.id }, 'user');
+    expect(edited.updatedAt).toBe(T0 + 3000);
+    expect(mocks.state.rules.map((rule) => rule.id)).toEqual([first.id, second.id]);
   });
 
   it('ends with an empty set and refuses changes afterwards', () => {

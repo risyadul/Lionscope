@@ -1,9 +1,10 @@
 import type { HttpExchange, HttpExchangeDetail, SessionState } from '@lionscope/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mcpInstructions } from '../src/agent/mcpServer.ts';
+import { DISCONNECTED_SDK } from '../src/device/sdkBridge.ts';
 import { BODIES_HIDDEN, BODIES_UNTRUSTED, NO_CAPTURE } from '../src/agent/networkTools.ts';
 import { AGENT_TOOLS, availableTools, callTool, DEVICE_CONTROL_DISABLED } from '../src/agent/registry.ts';
-import { NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
+import { MOCK_PUSH_DEBOUNCE_MS, NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
 import { fakeAgent, RUNNING, T0 } from './helpers/agentFixtures.ts';
 import type { FakeAgent, Json } from './helpers/agentFixtures.ts';
 import { FakeLink } from './helpers/sdkSession.ts';
@@ -18,6 +19,7 @@ const V7_SESSION: SessionState = {
     apiLevel: 35,
     framesActive: false,
     protocolVersion: 7,
+    network: 'active',
   },
 };
 
@@ -309,7 +311,7 @@ describe('set_network_mock and clear_network_mocks', () => {
     );
     expect(sent.delivery.applied).toBe(false);
     expect(sent.delivery.reason).toContain('Sent to the app');
-    expect(link.mockSets).toHaveLength(1);
+    await vi.waitFor(() => expect(link.mockSets).toHaveLength(1), { timeout: MOCK_PUSH_DEBOUNCE_MS * 20 });
     fake.mocks.applied(1);
     expect((await run(fake, 'status')).network.mocks).toEqual({ total: 1, enabled: 1, applied: true });
   });
@@ -366,5 +368,17 @@ describe('status network section', () => {
       mocks: { total: 1, enabled: 0, applied: false },
     });
     expect(on.server.networkBodies).toBe(true);
+  });
+
+  it('reports no capture on a v7 link without a link proof, and the SDK network state', async () => {
+    const unverified = agent({
+      ...V7_SESSION,
+      sdk: { ...(V7_SESSION.sdk ?? DISCONNECTED_SDK), network: 'unverified' },
+    });
+    const status = await run(unverified, 'status');
+    expect(status.network.capture).toBe(false);
+    expect(status.sdk).toMatchObject({ connected: true, protocolVersion: 7, network: 'unverified' });
+    expect(NO_CAPTURE).toContain('link key');
+    expect((await run(agent(V7_SESSION), 'status')).sdk.network).toBe('active');
   });
 });

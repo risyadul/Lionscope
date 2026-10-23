@@ -220,6 +220,7 @@ export function fakeAgent(
         return agent.session.status !== 'idle';
       },
       getHttpExchange: (id) => agent.httpDetails.get(id) ?? null,
+      getHttpExchangeCount: () => agent.snapshot.http.length,
       getNetworkMocks: () => agent.mocks.state,
       setNetworkMock: (input, origin) => {
         if (!running()) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);

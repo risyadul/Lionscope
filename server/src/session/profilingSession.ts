@@ -153,7 +153,9 @@ export class ProfilingSession {
       setGfxinfoPaused: (paused) => this.setCollectorEnabled('frames', !paused),
       onStatusChange: () => this.emit({ type: 'session', session: this.state }),
       notify: (key, message) => this.errors.notify(key, message),
-      onLiveLink: (link) => (link ? this.mocks.linkUp(link) : this.mocks.linkDown()),
+      // Mocks only reach an app that holds the link key: an unproven SDK keeps them off anyway.
+      onLiveLink: (link, network) =>
+        link && network === 'active' ? this.mocks.linkUp(link) : this.mocks.linkDown(),
       onMocksApplied: (rev) => this.mocks.applied(rev),
     });
   }
@@ -223,10 +225,15 @@ export class ProfilingSession {
 
   /**
    * Hand an SDK connection for this app to the session; it goes live once its PID checks out (at once when
-   * `verified`: its PID was already checked on the session device).
+   * `verified`: its PID was already checked on the session device). `proven`: its welcome carries the link proof.
    */
-  attachSdk(hello: SdkHello, link: SdkLink, verified = false): SdkLinkHandler {
-    return this.sdk.attach(hello, link, verified);
+  attachSdk(hello: SdkHello, link: SdkLink, verified = false, proven = false): SdkLinkHandler {
+    return this.sdk.attach(hello, link, verified, proven);
+  }
+
+  /** HTTP exchanges kept (status counts them without building a snapshot). */
+  get httpExchangeCount(): number {
+    return this.store.http.count();
   }
 
   /**

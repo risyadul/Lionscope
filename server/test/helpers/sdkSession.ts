@@ -94,12 +94,13 @@ export async function setupSdkSession() {
   const ofType = <T extends ServerMessage['type']>(type: T) =>
     messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
   const gfxinfoPolls = () => device.commands.filter((command) => command.includes('gfxinfo')).length;
-  /** Attach a link and let its PID check (a `pidof` on the device) finish. */
+  /** Attach a link and let its PID check (a `pidof` on the device) finish; `proven`: it got the link proof. */
   const connect = async (
     hello: SdkHello = HELLO,
     link = new FakeLink(hello.protocolVersion),
+    proven = false,
   ): Promise<{ link: FakeLink; handler: SdkLinkHandler }> => {
-    const handler = session.attachSdk(hello, link);
+    const handler = session.attachSdk(hello, link, false, proven);
     await vi.advanceTimersByTimeAsync(0);
     return { link, handler };
   };

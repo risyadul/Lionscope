@@ -2,7 +2,7 @@ import type { NetworkMocksState, ServerMessage } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { droppedHttpMessage } from '../src/device/sdkBridge.ts';
 import type { SdkLinkHandler } from '../src/device/sdkLink.ts';
-import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
+import { EMPTY_MOCKS, MOCK_PUSH_DEBOUNCE_MS, NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
 import { LOST_LINK_MESSAGE } from '../src/store/networkStore.ts';
 import type { SdkHttpRequest, SdkHttpResponse } from '../src/store/networkStore.ts';
@@ -59,7 +59,7 @@ describe('ProfilingSession network capture', () => {
   it('records the live link’s exchanges on the laptop clock, clamped into the session', async () => {
     const { session, connect } = await setup();
     await vi.advanceTimersByTimeAsync(5000);
-    const { handler } = await connect(V7_HELLO);
+    const { handler } = await connect(V7_HELLO, undefined, true);
     handler.onMessage({ type: 'screen', ts: deviceNow() - 1000, screen: HOME });
     handler.onMessage(request(1, deviceNow() - 200));
     handler.onMessage(request(2, deviceNow() - 3_600_000)); // before the session started
@@ -72,9 +72,19 @@ describe('ProfilingSession network capture', () => {
     session.stop();
   });
 
+  it('ignores network messages from a link without the link proof', async () => {
+    const { session, connect } = await setup();
+    const { handler } = await connect(V7_HELLO);
+    expect(session.state.sdk?.network).toBe('unverified');
+    handler.onMessage(request(1, deviceNow()));
+    handler.onMessage(response(1));
+    expect(session.snapshot().http ?? []).toEqual([]);
+    session.stop();
+  });
+
   it('sums the calls the SDK did not record into one throttled notice', async () => {
     const { connect, ofType } = await setup();
-    const { handler } = await connect(V7_HELLO);
+    const { handler } = await connect(V7_HELLO, undefined, true);
     handler.onMessage(request(1, deviceNow(), { dropped: 3 }));
     handler.onMessage(request(2, deviceNow(), { dropped: 4 }));
     expect(ofType('error')).toEqual([
@@ -89,14 +99,14 @@ describe('ProfilingSession network capture', () => {
     const { session, connect } = await setup();
     const states = () =>
       (session.snapshot().http ?? []).map((exchange) => exchange.error?.kind ?? exchange.state);
-    const first = await connect(V7_HELLO);
+    const first = await connect(V7_HELLO, undefined, true);
     first.handler.onMessage(request(1, deviceNow()));
     first.handler.onClose();
     expect(session.snapshot().http?.[0]?.error).toEqual({ kind: 'lost', message: LOST_LINK_MESSAGE });
 
-    const second = await connect(V7_HELLO);
+    const second = await connect(V7_HELLO, undefined, true);
     second.handler.onMessage(request(1, deviceNow()));
-    const third = await connect(V7_HELLO);
+    const third = await connect(V7_HELLO, undefined, true);
     expect(second.link.closedWith).toBe('none');
     third.handler.onMessage(request(1, deviceNow()));
     third.handler.onMessage(request(2, deviceNow()));
@@ -106,14 +116,14 @@ describe('ProfilingSession network capture', () => {
     expect(states()).toEqual(['lost', 'lost', 'lost', 'complete']);
   });
 
-  it('pushes its mock rules to a v7 link once verified and tracks what the SDK applied', async () => {
+  it('pushes its mock rules to a proven v7 link once verified and tracks what the SDK applied', async () => {
     const { session, connect, messages } = await setup();
     expect(session.networkMocks).toEqual(EMPTY_MOCKS);
     const rule = session.setNetworkMock(mockInput(), 'user');
     expect(mockStates(messages).at(-1)).toEqual({ rules: [rule], rev: 1, appliedRev: null });
 
     const pendingLink = new FakeLink(7);
-    const handler: SdkLinkHandler = session.attachSdk(V7_HELLO, pendingLink);
+    const handler: SdkLinkHandler = session.attachSdk(V7_HELLO, pendingLink, false, true);
     expect(pendingLink.mockSets).toEqual([]); // not before its PID checked out
     await vi.advanceTimersByTimeAsync(0);
     expect(pendingLink.mockSets).toEqual([{ rev: 1, rules: [rule] }]);
@@ -122,6 +132,7 @@ describe('ProfilingSession network capture', () => {
 
     expect(session.clearNetworkMocks('m7')).toBe(false);
     expect(session.clearNetworkMocks()).toBe(true);
+    await vi.advanceTimersByTimeAsync(MOCK_PUSH_DEBOUNCE_MS);
     expect(pendingLink.mockSets.at(-1)).toEqual({ rev: 2, rules: [] });
     handler.onClose();
     expect(session.networkMocks.appliedRev).toBeNull();
@@ -135,6 +146,32 @@ describe('ProfilingSession network capture', () => {
     session.stop();
     expect(mockStates(messages).at(-1)).toEqual({ rules: [], rev: 4, appliedRev: null });
     expect(() => session.setNetworkMock(mockInput(), 'user')).toThrow(NO_SESSION_MOCKS_MESSAGE);
+  });
+
+  it('never pushes mocks to an unproven v7 link, and reports the network state of each link', async () => {
+    const { session, connect } = await setup();
+    session.setNetworkMock(mockInput(), 'user');
+    expect(session.state.sdk?.network).toBeNull();
+
+    const unproven = await connect(V7_HELLO);
+    expect(session.state.sdk).toMatchObject({ connected: true, protocolVersion: 7, network: 'unverified' });
+    session.setNetworkMock(mockInput({ url: 'https://api.example.com/v2' }), 'user');
+    await vi.advanceTimersByTimeAsync(MOCK_PUSH_DEBOUNCE_MS);
+    expect(unproven.link.mockSets).toEqual([]);
+    unproven.handler.onMessage({ type: 'mocksApplied', rev: 2, count: 2 });
+    expect(session.networkMocks.appliedRev).toBeNull();
+
+    const proven = new FakeLink(7);
+    session.attachSdk(V7_HELLO, proven, true, true);
+    expect(session.state.sdk?.network).toBe('active');
+    expect(proven.mockSets).toEqual([{ rev: 2, rules: session.networkMocks.rules }]);
+
+    const old = await connect({ ...HELLO, protocolVersion: 6 });
+    expect(session.state.sdk?.network).toBe('needs_sdk');
+    expect(old.link.mockSets).toEqual([]);
+    old.handler.onClose();
+    expect(session.state.sdk).toMatchObject({ connected: false, network: null });
+    session.stop();
   });
 });
 

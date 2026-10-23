@@ -6,7 +6,13 @@ import {
   MAX_HTTP_LINE_BYTES,
 } from '@lionscope/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createDeviceGateway, encodeMocks } from '../src/device/deviceGateway.ts';
+import {
+  createDeviceGateway,
+  encodeMocks,
+  encodeWelcome,
+  MAX_PENDING_MOCK_BYTES,
+} from '../src/device/deviceGateway.ts';
+import { linkProof } from '../src/device/linkKey.ts';
 import type { DeviceGateway, DeviceGatewayLimits } from '../src/device/deviceGateway.ts';
 import type {
   SdkAttachResult,
@@ -23,6 +29,16 @@ const GATEWAY_GOLDEN = readFileSync(
   new URL('../../protocol/fixtures/gateway-messages.ndjson', import.meta.url),
   'utf8',
 );
+/** The fixtures' link key: bytes 0x00..0x1f. */
+const TEST_KEY = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+const GOLDEN_NONCE = (
+  JSON.parse(
+    readFileSync(new URL('../../protocol/fixtures/device-messages.ndjson', import.meta.url), 'utf8')
+      .trim()
+      .split('\n')
+      .at(-1) ?? '{}',
+  ) as { nonce?: string }
+).nonce;
 
 const HELLO: SdkHello = {
   type: 'hello',
@@ -70,8 +86,14 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
-describe('mock rule lines for the SDK', () => {
+describe('welcome and mock rule lines for the SDK', () => {
   it('reproduces the golden gateway lines byte for byte', () => {
+    expect(GOLDEN_NONCE).toMatch(/^[0-9a-f]{32}$/);
+    const welcome = encodeWelcome(
+      DEVICE_PROTOCOL_V7,
+      'session',
+      linkProof(TEST_KEY, GOLDEN_NONCE ?? '', 7, 'session'),
+    );
     const rules = [
       mockRule({
         id: 'm2',
@@ -95,7 +117,19 @@ describe('mock rule lines for the SDK', () => {
         body: 'ignored',
       }),
     ];
-    expect(encodeMocks(3, rules) + encodeMocks(4, [])).toBe(GATEWAY_GOLDEN);
+    expect(welcome + encodeMocks(3, rules) + encodeMocks(4, [])).toBe(GATEWAY_GOLDEN);
+  });
+
+  it('puts a proof only into the welcome of a v7 session link', () => {
+    const proof = 'ab'.repeat(32);
+    expect(encodeWelcome(7, 'session')).toBe('{"type":"welcome","protocolVersion":7,"mode":"session"}\n');
+    expect(encodeWelcome(7, 'inspect', proof)).toBe(
+      '{"type":"welcome","protocolVersion":7,"mode":"inspect"}\n',
+    );
+    expect(encodeWelcome(6, 'session', proof)).toBe(
+      '{"type":"welcome","protocolVersion":6,"mode":"session"}\n',
+    );
+    expect(encodeWelcome(4, 'session', proof)).toBe('{"type":"welcome","protocolVersion":4}\n');
   });
 });
 
@@ -107,6 +141,7 @@ class Target implements SdkLinkTarget {
   constructor(
     private readonly mode: SdkLinkMode = 'session',
     private readonly onAttach?: (link: SdkLink) => void,
+    private readonly proof?: string,
   ) {}
   attachSdk(_hello: SdkHello, link: SdkLink): SdkAttachResult {
     this.links.push(link);
@@ -114,6 +149,7 @@ class Target implements SdkLinkTarget {
     return {
       ok: true,
       mode: this.mode,
+      ...(this.proof === undefined ? {} : { proof: this.proof }),
       handler: {
         onMessage: (message) => this.messages.push(message),
         onInvalidDiagnostic: () => {
@@ -221,6 +257,40 @@ describe('device gateway: network messages (v7)', () => {
     target.links[0]?.sendMocks(2, []);
     await waitUntil(() => client.rawLines.length === 4);
     expect(client.rawLines.slice(1).join('\n') + '\n').toBe(encodeMocks(1, rules) + encodeMocks(2, []));
+  });
+
+  it("writes the target's proof into a v7 session link's welcome, never an inspect-only link's", async () => {
+    const proof = 'cd'.repeat(32);
+    const session = await linked(await start(new Target('session', undefined, proof)));
+    expect(session.rawLines[0]).toBe(
+      `{"type":"welcome","protocolVersion":7,"mode":"session","proof":"${proof}"}`,
+    );
+    await gateway?.close();
+    const inspect = await linked(await start(new Target('inspect', undefined, proof)));
+    expect(inspect.rawLines[0]).toBe('{"type":"welcome","protocolVersion":7,"mode":"inspect"}');
+  });
+
+  it('keeps only the latest mock set while the socket buffers over 1 MB, and writes it on drain', async () => {
+    const target = new Target();
+    const client = await linked(await start(target));
+    client.socket.pause(); // a slow phone: nothing is read for now
+    // 4 rules with 256 KB bodies: ~1.4 MB of lines per set.
+    const body = 'x'.repeat(256 * 1024);
+    const rules = [1, 2, 3, 4].map((index) =>
+      mockRule({ id: `m${index}`, url: `https://api.example.com/${index}`, body }),
+    );
+    expect(encodeMocks(1, rules).length).toBeGreaterThan(MAX_PENDING_MOCK_BYTES);
+    const sets = 30;
+    for (let rev = 1; rev <= sets; rev += 1) target.links[0]?.sendMocks(rev, rules);
+    client.socket.resume();
+    const revs = () => client.received.flatMap((message) => (message.type === 'mocks' ? [message.rev] : []));
+    await waitUntil(() => revs().at(-1) === sets, 10_000);
+    await settle();
+    // Some sets were never written, the latest was, and every written set is whole and in order.
+    expect(revs().length).toBeLessThan(sets);
+    expect(revs()).toEqual([...revs()].sort((a, b) => a - b));
+    expect(client.received.filter((message) => message.type === 'mock')).toHaveLength(revs().length * 4);
+    expect(client.isClosed).toBe(false);
   });
 
   it('never sends mocks to a link below v7 or to an inspect-only link', async () => {

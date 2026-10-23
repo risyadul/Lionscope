@@ -1,5 +1,11 @@
-import { DEFAULT_SDK_OPTIONS, HTTP_EXCHANGES_PER_SECOND } from '@lionscope/protocol';
-import type { DeviceMessageType, SdkFrame, SdkOptions, SdkStatus } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS, DEVICE_PROTOCOL_V7, HTTP_EXCHANGES_PER_SECOND } from '@lionscope/protocol';
+import type {
+  DeviceMessageType,
+  SdkFrame,
+  SdkNetworkState,
+  SdkOptions,
+  SdkStatus,
+} from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { SdkFrameAggregator } from '../metrics/sdkFrames.ts';
@@ -51,7 +57,14 @@ export const DISCONNECTED_SDK: SdkStatus = {
   framesActive: false,
   protocolVersion: null,
   options: DEFAULT_SDK_OPTIONS,
+  network: null,
 };
+
+/** Network capture on a link: v7 with a link proof in its welcome, v7 without one, or an older SDK. */
+export function networkStateOf(protocolVersion: number, proven: boolean): SdkNetworkState {
+  if (protocolVersion < DEVICE_PROTOCOL_V7) return 'needs_sdk';
+  return proven ? 'active' : 'unverified';
+}
 
 export interface SdkBridgeOptions {
   store: SessionStore;
@@ -69,8 +82,11 @@ export interface SdkBridgeOptions {
   /** A throttled, client-facing problem report. */
   notify: (key: string, message: string) => void;
   logPrefix: string;
-  /** The live, verified link changed (null: none is live anymore); the session's mock rules follow it. */
-  onLiveLink?: (link: SdkLink | null) => void;
+  /**
+   * The live, verified link changed (null: none is live anymore), with its network state (null without a link); the
+   * session's mock rules follow an `active` one.
+   */
+  onLiveLink?: (link: SdkLink | null, network: SdkNetworkState | null) => void;
   /** The live link's SDK applied mock rule set `rev`. */
   onMocksApplied?: (rev: number) => void;
 }
@@ -79,6 +95,7 @@ interface LinkEntry {
   hello: SdkHello;
   link: SdkLink;
   held: SdkLinkMessage[];
+  network: SdkNetworkState;
 }
 
 /**
@@ -140,9 +157,13 @@ export class SdkBridge {
     this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
   }
 
-  /** `verified`: the gateway already confirmed the hello's PID on the session device (no second check). */
-  attach(hello: SdkHello, link: SdkLink, verified = false): SdkLinkHandler {
-    const entry: LinkEntry = { hello, link, held: [] };
+  /**
+   * `verified`: the gateway already confirmed the hello's PID on the session device (no second check). `proven`: its
+   * welcome carries the link proof (the app holds the link key), so network capture and mocks run on it.
+   */
+  attach(hello: SdkHello, link: SdkLink, verified = false, proven = false): SdkLinkHandler {
+    const network = networkStateOf(link.protocolVersion, proven);
+    const entry: LinkEntry = { hello, link, held: [], network };
     this.pending.add(entry);
     // Options are not sensitive: a link gets them right after its welcome, before its PID is verified.
     link.sendConfig(this.sdkOptions);
@@ -165,8 +186,8 @@ export class SdkBridge {
         this.active = null;
         this.release();
         this.options.store.http.linkClosed(link);
-        this.update({ connected: false, framesActive: false, protocolVersion: null });
-        this.options.onLiveLink?.(null);
+        this.update({ connected: false, framesActive: false, protocolVersion: null, network: null });
+        this.options.onLiveLink?.(null, null);
       },
     };
   }
@@ -184,7 +205,13 @@ export class SdkBridge {
     this.release();
     this.options.store.http.end();
     active?.link.close('no_session');
-    this.current = { ...this.current, connected: false, framesActive: false, protocolVersion: null };
+    this.current = {
+      ...this.current,
+      connected: false,
+      framesActive: false,
+      protocolVersion: null,
+      network: null,
+    };
   }
 
   private pushConfig(): void {
@@ -227,8 +254,9 @@ export class SdkBridge {
       processName: entry.hello.processName,
       apiLevel: entry.hello.apiLevel,
       protocolVersion: entry.link.protocolVersion,
+      network: entry.network,
     });
-    this.options.onLiveLink?.(entry.link);
+    this.options.onLiveLink?.(entry.link, entry.network);
     for (const message of entry.held.splice(0)) this.onMessage(message);
   }
 
@@ -312,6 +340,8 @@ export class SdkBridge {
         return;
       }
       case 'httpRequest': {
+        // Network data counts only from a link that got the link proof (a proven SDK sends nothing else).
+        if (this.current.network !== 'active') return;
         if (message.dropped > 0) {
           this.droppedHttp += message.dropped;
           this.options.notify('sdk:dropped-http', droppedHttpMessage(this.droppedHttp));
@@ -321,12 +351,13 @@ export class SdkBridge {
         return;
       }
       case 'httpResponse': {
+        if (this.current.network !== 'active') return;
         const link = this.active?.link;
         if (link) this.options.store.http.response(link, message);
         return;
       }
       case 'mocksApplied':
-        this.options.onMocksApplied?.(message.rev);
+        if (this.current.network === 'active') this.options.onMocksApplied?.(message.rev);
         return;
       case 'viewtree': {
         const ts = this.eventTime('viewtree', message.ts, 0);
