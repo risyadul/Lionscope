@@ -23,6 +23,13 @@ internal const val DEVICE_PROTOCOL_V6 = 6
  * (SDK → server) and `mocks` / `mock` (server → SDK).
  */
 internal const val DEVICE_PROTOCOL_V7 = 7
+/**
+ * v7 link proof (protocol/src/wire.ts, `LINK_KEY_RECEIVER`): the server hands a [LINK_KEY_BYTES] key to
+ * [LinkKeyReceiver] over adb, and its welcome carries hex(HMAC-SHA256(key, `<nonce>:<protocolVersion>:<mode>`)) over
+ * the hello's [LINK_NONCE_BYTES] nonce. Network capture and mocks need a matching proof; nothing else does.
+ */
+internal const val LINK_KEY_BYTES = 32
+internal const val LINK_NONCE_BYTES = 16
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link; every other line keeps [MAX_DEVICE_LINE_BYTES]. */
@@ -210,6 +217,9 @@ internal const val MAX_HTTP_DROPPED = 1_000_000
 /** `headersMs` / `durationMs` at most (the server's MAX_SDK_DURATION_MS). */
 internal const val MAX_HTTP_DURATION_MS = 3_600_000.0
 internal const val MAX_NETWORK_MOCKS = 32
+/** A rule with a longer url, or a glob with more `*`, never matches (the server never sends one). */
+internal const val MAX_MOCK_URL_CHARS = 2048
+internal const val MAX_MOCK_GLOB_STARS = 8
 internal const val MAX_MOCK_DELAY_MS = 30_000
 
 /**
@@ -258,7 +268,8 @@ internal enum class MockAction(val wire: String) {
 
 /**
  * One mock rule as the server sends it (`mock`): [method] null = any; [headers] in order; [body] the UTF-8 body
- * (respond only); [delayMs] clamped to 0..[MAX_MOCK_DELAY_MS].
+ * (respond only); [delayMs] clamped to 0..[MAX_MOCK_DELAY_MS]. Out of bounds ([MAX_MOCK_URL_CHARS],
+ * [MAX_MOCK_GLOB_STARS]) it stays in its set but is not [matchable].
  */
 internal class MockRule(
     val id: String,
@@ -270,4 +281,7 @@ internal class MockRule(
     val headers: List<Pair<String, String>>,
     val body: ByteArray,
     val delayMs: Int,
-)
+) {
+    val matchable: Boolean = url.length <= MAX_MOCK_URL_CHARS &&
+        (match != MockMatch.GLOB || url.count { it == '*' } <= MAX_MOCK_GLOB_STARS)
+}

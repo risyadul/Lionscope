@@ -15,7 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-/** A MockWebServer on 127.0.0.1, a [FakeLink] in a v7 session and an interceptor recording into it. */
+/** A MockWebServer on 127.0.0.1, a [FakeLink] in a (proven) v7 session and an interceptor recording into it. */
 internal class NetworkHarness(nanoTime: () -> Long = System::nanoTime) : Closeable {
     val server = MockWebServer().apply { start(InetAddress.getByName("127.0.0.1"), 0) }
     val link = FakeLink()
@@ -30,8 +30,9 @@ internal class NetworkHarness(nanoTime: () -> Long = System::nanoTime) : Closeab
         capture.attach(link)
     }
 
-    fun session(version: Int = DEVICE_PROTOCOL_V7, inspectOnly: Boolean = false) {
-        link.welcome(true, version, inspectOnly)
+    /** [proven]: the welcome carried a valid link proof. */
+    fun session(version: Int = DEVICE_PROTOCOL_V7, inspectOnly: Boolean = false, proven: Boolean = true) {
+        link.welcome(true, version, inspectOnly, proven)
     }
 
     fun endSession() {
@@ -71,6 +72,14 @@ internal class NetworkHarness(nanoTime: () -> Long = System::nanoTime) : Closeab
         server.shutdown()
     }
 }
+
+/** The key protocol/fixtures/gateway-messages.ndjson's golden welcome proof was made with: bytes 0x00..0x1f. */
+internal val TEST_LINK_KEY = ByteArray(LINK_KEY_BYTES) { it.toByte() }
+/** The nonce of the golden v7 hello (protocol/fixtures/device-messages.ndjson). */
+internal const val GOLDEN_NONCE = "9f86d081884c7d659a2feaa0c55ad015"
+/** The golden welcome: its proof is over [GOLDEN_NONCE] with [TEST_LINK_KEY]. */
+internal const val GOLDEN_WELCOME = "{\"type\":\"welcome\",\"protocolVersion\":7,\"mode\":\"session\"," +
+    "\"proof\":\"f2d88543b6cc93f29e7d04d3c7239f4bbcbd8b40566ba077664e2729f885a0e4\"}"
 
 internal fun mockRule(
     id: String = "m1",

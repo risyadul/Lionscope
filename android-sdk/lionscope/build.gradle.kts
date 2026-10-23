@@ -76,6 +76,12 @@ fun Test.lionscopeTestInputs() {
     val noopClasses = rootProject.file("lionscope-noop/build/tmp/kotlin-classes/release")
     inputs.dir(noopClasses)
     systemProperty("lionscope.noopClasses", noopClasses.absolutePath)
+    // Both manifests, for the link key receiver's declaration (and its absence from the no-op artifact).
+    val manifest = file("src/main/AndroidManifest.xml")
+    val noopManifest = rootProject.file("lionscope-noop/src/main/AndroidManifest.xml")
+    inputs.files(manifest, noopManifest)
+    systemProperty("lionscope.manifest", manifest.absolutePath)
+    systemProperty("lionscope.noopManifest", noopManifest.absolutePath)
 }
 
 // The same unit tests once more against OkHttp 5: the debug unit-test classes (compiled against OkHttp 4.12) with

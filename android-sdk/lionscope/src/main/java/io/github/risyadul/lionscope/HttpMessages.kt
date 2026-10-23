@@ -25,7 +25,7 @@ internal class HttpRequestRecord(
     val mockId: String?,
     val dropped: Int,
 ) {
-    fun sizeHint(): Int = RECORD_OVERHEAD + url.length + headersSize(headers) + (body?.bytes?.size ?: 0)
+    fun sizeHint(): Int = RECORD_OVERHEAD + url.length + headersSize(headers) + bodySize(body)
 }
 
 /** An `httpResponse` waiting to be encoded. */
@@ -40,12 +40,17 @@ internal class HttpResponseRecord(
     val durationMs: Double,
     val error: HttpFailure?,
 ) {
-    fun sizeHint(): Int = RECORD_OVERHEAD + headersSize(headers) + (body?.bytes?.size ?: 0)
+    fun sizeHint(): Int = RECORD_OVERHEAD + headersSize(headers) + bodySize(body)
 }
 
 private const val RECORD_OVERHEAD = 256
 
+/** JSON escapes make text longer than its raw bytes; twice the bytes keeps the queue's byte budget honest. */
+private const val ESCAPED_TEXT_FACTOR = 2
+
 private fun headersSize(headers: List<Pair<String, String>>): Int = headers.sumOf { it.first.length + it.second.length + 8 }
+
+private fun bodySize(body: RawBody?): Int = ESCAPED_TEXT_FACTOR * (body?.bytes?.size ?: 0)
 
 /**
  * Encoders for the v7 network lines (field order = protocol/src/wire.ts = the golden fixtures). They apply the
@@ -167,7 +172,7 @@ internal object HttpMessages {
         .endObject().toString()
 
     /**
-     * Headers as sent: redacted, names that are not HTTP tokens (or too long) dropped, values cleaned and capped, and
+     * Headers as sent: redacted (URL-valued ones as URLs), names that are not HTTP tokens (or too long) dropped, values cleaned and capped, and
      * only the first ones that fit [MAX_HTTP_HEADERS] / [MAX_HTTP_HEADER_BYTES] (a header that doesn't fit is skipped).
      */
     fun wireHeaders(headers: List<Pair<String, String>>): List<Pair<String, String>> {
@@ -176,10 +181,11 @@ internal object HttpMessages {
         for ((name, value) in headers) {
             if (out.size == MAX_HTTP_HEADERS) break
             if (name.length > MAX_HTTP_HEADER_NAME_CHARS || !HttpText.isToken(name)) continue
-            val wireValue = if (HttpRedaction.isSensitiveName(name)) {
-                HTTP_REDACTED
+            val redacted = HttpRedaction.redactHeaderValue(name, value)
+            val wireValue = if (redacted === HTTP_REDACTED) {
+                redacted
             } else {
-                capLength(HttpText.replaceControls(value), MAX_HTTP_HEADER_VALUE_CHARS)
+                capLength(HttpText.replaceControls(redacted), MAX_HTTP_HEADER_VALUE_CHARS)
             }
             val size = StackFrames.utf8Length(name) + StackFrames.utf8Length(wireValue)
             if (bytes + size > MAX_HTTP_HEADER_BYTES) continue

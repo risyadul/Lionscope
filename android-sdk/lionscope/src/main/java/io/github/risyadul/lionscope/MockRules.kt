@@ -39,8 +39,9 @@ internal object MockMatching {
         return p == pattern.length
     }
 
-    /** [url] is the request URL as OkHttp prints it (`HttpUrl.toString()`). */
+    /** [url] is the request URL as OkHttp prints it (`HttpUrl.toString()`); a rule out of bounds never matches. */
     fun matches(rule: MockRule, method: String, url: String): Boolean {
+        if (!rule.matchable) return false
         if (rule.method != null && rule.method != method) return false
         val target = target(rule.url, url)
         return when (rule.match) {
@@ -109,12 +110,18 @@ internal class MockSetAssembler {
 internal object MockWire {
     private const val BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
-    /** `Name: value` lines joined by `\n` (empty = none); a line without `:` is skipped. */
+    /**
+     * `Name: value` lines joined by `\n` (empty = none); a line without `:`, a name that is not an HTTP token and a
+     * value with a control character other than a tab (CR, LF, NUL, …) are skipped, so no rule can inject a header.
+     */
     fun headers(compact: String): List<Pair<String, String>> {
         if (compact.isEmpty()) return emptyList()
         return compact.split('\n').mapNotNull { line ->
             val colon = line.indexOf(':')
-            if (colon <= 0) null else line.substring(0, colon).trim() to line.substring(colon + 1).trim()
+            if (colon <= 0) return@mapNotNull null
+            val name = line.substring(0, colon).trim()
+            val value = line.substring(colon + 1).trim()
+            if (!HttpText.isToken(name) || value.any { it != '\t' && Character.isISOControl(it) }) null else name to value
         }
     }
 

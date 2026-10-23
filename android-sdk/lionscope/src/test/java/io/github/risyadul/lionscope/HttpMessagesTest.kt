@@ -171,6 +171,23 @@ class HttpMessagesTest {
             RawBody(30, "application/x-www-form-urlencoded", "user=ana&password=hunter2".toByteArray(), false, null),
         )
         assertEquals("user=ana&password=$r", form.text)
+        val apiJson = HttpBodies.decode(RawBody(40, "application/vnd.api+json", "{\"id\":1,\"token\":\"abc\"}".toByteArray(), false, null))
+        assertEquals("{\"id\":1,\"token\":\"$r\"}", apiJson.text)
+        // Cut inside a sensitive value: the value is dropped, not half kept.
+        val cutJson = HttpBodies.decode(RawBody(99_999, "application/json", "{\"id\":1,\"secret\":\"ab".toByteArray(), true, null))
+        assertEquals(HttpBody(99_999, "application/json", "{\"id\":1,\"secret\":\"$r\"", true, null), cutJson)
+        val xml = HttpBodies.decode(RawBody(30, "text/xml", "<a><pwd>x</pwd></a>".toByteArray(), false, null))
+        assertEquals("<a><pwd>$r</pwd></a>", xml.text)
+    }
+
+    @Test
+    fun queuedSizesCountTheEscapedBody() {
+        val bytes = ByteArray(10_000)
+        val body = RawBody(10_000, "text/plain", bytes, false, null)
+        val request = HttpRequestRecord(1, 1, "POST", "https://api.example.com/", emptyList(), body, null, 0)
+        val response = HttpResponseRecord(1, 1, 200, null, emptyList(), body, 1.0, 1.0, null)
+        assertTrue(request.sizeHint() >= 2 * bytes.size)
+        assertTrue(response.sizeHint() >= 2 * bytes.size)
     }
 
     @Test

@@ -73,7 +73,7 @@ internal object LionscopeRuntime {
         // First: a composition can only be inspected if inspection was on when it was first composed.
         ComposeSupport.install(app)
         val processName = ProcessInfo.currentProcessName() ?: app.packageName
-        val deviceLink = DeviceLink(helloLine = {
+        val deviceLink = DeviceLink(helloLine = { nonce ->
             DeviceMessages.hello(
                 packageName = app.packageName,
                 processName = processName,
@@ -81,6 +81,7 @@ internal object LionscopeRuntime {
                 apiLevel = Build.VERSION.SDK_INT,
                 deviceWallMs = System.currentTimeMillis(),
                 refreshRateHz = defaultRefreshRate(app),
+                nonce = nonce,
             )
         })
         val main = HandlerScheduler(Handler(Looper.getMainLooper()))

@@ -15,5 +15,11 @@
                 android:name="io.github.risyadul.lionscope.LionscopeInitializer"
                 android:value="androidx.startup" />
         </provider>
+
+        <!-- The v7 link key, from `adb shell am broadcast`: only the shell and the system hold DUMP. -->
+        <receiver
+            android:name="io.github.risyadul.lionscope.LinkKeyReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>

@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * The network inspector's state, without any OkHttp type (the interceptor in [LionscopeOkHttpInterceptor] feeds it):
  * whether capture is on, the rate cap, exchange ids, and the active mock rules.
  *
- * Active only while the link is a welcomed profiling session at v7 ([isActive], one volatile read for the
- * interceptor's fast path). Mock rules arrive from the server per session and are cleared whenever the session
+ * Active only while the link is a welcomed profiling session at v7 whose welcome carried a valid link proof
+ * ([LinkPort.isNetworkAuthenticated]; [isActive], one volatile read for the interceptor's fast path). Mock rules arrive from the server per session and are cleared whenever the session
  * starts or ends. Everything here is called from app threads (the interceptor) or the link threads, never blocks
  * and never throws into callers.
  */
@@ -97,11 +97,14 @@ internal class NetworkCapture(
         if (loggedNotices.size < MAX_LOGGED_KINDS && loggedNotices.add(key)) log(Log.WARN, message)
     }
 
-    /** An SDK failure contained by the interceptor: one warning per place and exception class. */
+    /**
+     * An SDK failure contained by the interceptor: one warning per place and exception class, with the class name only
+     * (a message can hold request data).
+     */
     fun onSdkFailure(where: String, t: Throwable) {
         val key = "$where:${t.javaClass.name}"
         if (loggedFailures.size < MAX_LOGGED_KINDS && loggedFailures.add(key)) {
-            log(Log.WARN, "Lionscope network capture: $where failed, the call goes on unchanged: $t")
+            log(Log.WARN, "Lionscope network capture: $where failed, the call goes on unchanged: ${t.javaClass.name}")
         }
     }
 
@@ -120,7 +123,7 @@ internal class NetworkCapture(
         generation++
         assembler.reset()
         mocks = emptyList()
-        isActive = active && DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V7)
+        isActive = active && link.isNetworkAuthenticated && DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V7)
     }
 
     private fun onMocksMessage(message: GatewayMessage) {

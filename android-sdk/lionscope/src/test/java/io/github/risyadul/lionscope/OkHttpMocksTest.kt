@@ -12,8 +12,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 
 /** Mock rules answer matching calls without a network call; only during a v7 session. */
 class OkHttpMocksTest {
@@ -125,6 +127,23 @@ class OkHttpMocksTest {
     }
 
     @Test
+    fun aCallTimeoutDuringADelayIsATimeoutNotACancel() {
+        net.session()
+        net.mocks(1, mockRule(url = net.base, delayMs = 10_000))
+        val client = net.client { callTimeout(200, TimeUnit.MILLISECONDS) }
+        try {
+            client.newCall(Request.Builder().url(net.url("/slow")).build()).execute()
+            fail("expected the call timeout")
+        } catch (e: InterruptedIOException) {
+            assertEquals("timeout", e.message) // What OkHttp's call timeout throws without Lionscope.
+        }
+        val error = net.response()["error"] as Map<*, *>
+        assertEquals("timeout", error["kind"])
+        assertEquals("InterruptedIOException: timeout", error["message"])
+        assertEquals(0, net.server.requestCount)
+    }
+
+    @Test
     fun failureRulesThrowTheMatchingIOExceptions() {
         net.session()
         net.mocks(
@@ -231,6 +250,12 @@ class OkHttpMocksTest {
         net.mocks(1, rule)
         net.server.enqueue(MockResponse().setBody("real"))
         assertEquals("real", get("/x").second)
+        net.endSession()
+        net.session(proven = false)
+        net.mocks(1, rule)
+        net.server.enqueue(MockResponse().setBody("real"))
+        assertEquals("real", get("/x").second)
+        assertTrue(net.capture.mocks.isEmpty())
         assertTrue(net.link.v7Lines.isEmpty())
         assertFalse(net.capture.isActive)
     }

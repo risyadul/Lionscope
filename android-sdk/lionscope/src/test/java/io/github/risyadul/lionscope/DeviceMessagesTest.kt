@@ -495,6 +495,7 @@ class DeviceMessagesTest {
             refreshRateHz = message.num("refreshRateHz"),
             protocolVersion = message.num("protocolVersion").toInt(),
             sdkVersion = message.str("sdkVersion"),
+            nonce = message["nonce"] as String?,
         )
         "screen" -> DeviceMessages.screen(message.num("ts").toLong(), (message["screen"] as Map<*, *>?)?.toScreenRef())
         "frames" -> DeviceMessages.frames(

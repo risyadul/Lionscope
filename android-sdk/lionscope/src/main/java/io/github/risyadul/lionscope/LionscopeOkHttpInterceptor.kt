@@ -10,6 +10,7 @@ import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.AsyncTimeout
 import okio.Buffer
 import okio.BufferedSource
 import okio.ForwardingSource
@@ -32,10 +33,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 4.12 and tested against 4.12 and 5.x, which keep the JVM signatures used here.
  *
  * As an application interceptor: records each exchange and answers matching mock rules without a network call. As a
- * network interceptor (`chain.connection() != null`) it records but never mocks. Inactive (no v7 profiling session)
- * it costs one volatile read and calls `chain.proceed(chain.request())`. Any SDK failure is contained (the call goes
- * on unchanged); the app's own exceptions from `proceed` and from reading the body are rethrown untouched, and the
- * response body is read only by the app, exactly once.
+ * network interceptor (`chain.connection() != null`) it records but never mocks. Inactive (no proven v7 profiling
+ * session, see [NetworkCapture]) it costs one volatile read and calls `chain.proceed(chain.request())`. Any SDK
+ * failure is contained (the call goes on unchanged); the app's own exceptions from `proceed` and from reading the body
+ * are rethrown untouched, and the response body is read only by the app, exactly once.
  */
 internal class LionscopeOkHttpInterceptor(private val capture: NetworkCapture) : Interceptor {
 
@@ -117,12 +118,18 @@ private class OkHttpExchange(
         return capture.guarded("response", response) { onResponse(response, mocked = true) }
     }
 
-    /** Waits [delayMs] in [DELAY_SLICE_MS] slices; a cancelled (or call-timed-out) call throws `IOException("Canceled")`. */
+    /**
+     * Waits [delayMs] in [DELAY_SLICE_MS] slices; a cancelled call throws `IOException("Canceled")`, or OkHttp's own
+     * `InterruptedIOException("timeout")` when its call timeout fired.
+     */
     private fun delay(chain: Interceptor.Chain, delayMs: Int) {
         if (delayMs <= 0) return
         val end = System.nanoTime() + delayMs * NANOS_PER_MS
         while (true) {
-            if (chain.call().isCanceled()) throw IOException("Canceled")
+            if (chain.call().isCanceled()) {
+                if (callTimedOut(chain)) throw InterruptedIOException("timeout")
+                throw IOException("Canceled")
+            }
             val remainingMs = (end - System.nanoTime() + NANOS_PER_MS - 1) / NANOS_PER_MS
             if (remainingMs <= 0) return
             try {
@@ -132,6 +139,16 @@ private class OkHttpExchange(
                 throw InterruptedIOException("interrupted")
             }
         }
+    }
+
+    /**
+     * Whether the call was canceled by its call timeout. OkHttp's call timeout is an AsyncTimeout whose `exit()` tells
+     * (once); OkHttp's own later `exit()` then reads false and passes the exception thrown here on unchanged, which is
+     * the `InterruptedIOException("timeout")` it would have made itself.
+     */
+    private fun callTimedOut(chain: Interceptor.Chain): Boolean = capture.guarded("mock", false) {
+        val timeout = chain.call().timeout()
+        timeout is AsyncTimeout && timeout.exit()
     }
 
     private fun failed(chain: Interceptor.Chain, e: Throwable) {
@@ -185,7 +202,7 @@ private class OkHttpExchange(
         val bodiless = request.method == HEAD || status == NO_CONTENT || status == NOT_MODIFIED ||
             status in INFORMATIONAL || length == 0L
         if (bodiless) return atHeaders(RawBody(0, contentType, null, false, null))
-        val tap = BodyTap(capture, recording, status, protocol, headers, headersMs, contentType, encoding)
+        val tap = BodyTap(capture, recording, status, protocol, headers, headersMs, contentType, encoding, length)
         return response.newBuilder().body(TappedResponseBody(body, tap)).build()
     }
 
@@ -201,6 +218,11 @@ private class OkHttpExchange(
         private const val CONTENT_ENCODING = "Content-Encoding"
         /** Headers kept per side before encoding; the encoder keeps at most [MAX_HTTP_HEADERS] of them. */
         private const val MAX_SNAPSHOT_HEADERS = 2 * MAX_HTTP_HEADERS
+        /** A request body is written once more for the capture only when it is known to be at most this long. */
+        private const val MAX_REWRITTEN_REQUEST_BYTES = 1024L * 1024
+        /** Raw exception message chars redacted for [failureOf] (it keeps [MAX_FAILURE_MESSAGE_CHARS] of them). */
+        private const val MAX_RAW_FAILURE_CHARS = 1024
+        private const val MAX_FAILURE_MESSAGE_CHARS = 160
 
         /** Null when there is nothing to do: not recorded (rate cap) and no mock answers it. */
         fun begin(capture: NetworkCapture, chain: Interceptor.Chain): OkHttpExchange? {
@@ -244,6 +266,8 @@ private class OkHttpExchange(
 
         private fun mockResponse(request: Request, rule: MockRule): Response {
             val headers = Headers.Builder()
+            // MockWire.headers already dropped non-token names and values with CR / LF / other control characters;
+            // non-ASCII text (`✓`) is allowed in mock values.
             for ((name, value) in rule.headers) headers.addUnsafeNonAscii(name, value)
             val built = headers.build()
             val contentType: MediaType? = built[CONTENT_TYPE]?.toMediaTypeOrNull()
@@ -261,9 +285,11 @@ private class OkHttpExchange(
         }
 
         /**
-         * Duplex → streaming; not a text type or an encoding the SDK can't decode → type / encoding; one-shot →
-         * one_shot; otherwise written once more into a sink that keeps the first [MAX_HTTP_BODY_BYTES] and counts the
-         * rest (repeatable bodies may be written any number of times). A failing write → error.
+         * Duplex → streaming; not a text type or an encoding the SDK can't decode → type / encoding. The body is
+         * written once more (into a sink that keeps the first [MAX_HTTP_BODY_BYTES] and counts the rest) only when
+         * that is safe: not one-shot, and its contentLength() known and at most [MAX_REWRITTEN_REQUEST_BYTES] (a body
+         * of unknown length may be a stream that a second write would drain or block on, a large one costs memory and
+         * time on the app's thread). Otherwise → one_shot, with the length when known. A failing write → error.
          */
         private fun requestBody(request: Request, body: RequestBody): RawBody {
             val contentType = body.contentType()?.toString() ?: request.header(CONTENT_TYPE)
@@ -275,7 +301,9 @@ private class OkHttpExchange(
             }
             if (body.isDuplex()) return RawBody(size, contentType, null, false, HttpBodyOmission.STREAMING)
             HttpBodies.omission(contentType, encoding)?.let { return RawBody(size, contentType, null, false, it) }
-            if (body.isOneShot()) return RawBody(size, contentType, null, false, HttpBodyOmission.ONE_SHOT)
+            if (body.isOneShot() || size == null || size > MAX_REWRITTEN_REQUEST_BYTES) {
+                return RawBody(size, contentType, null, false, HttpBodyOmission.ONE_SHOT)
+            }
             val sink = CappingSink()
             try {
                 val buffered = sink.buffer()
@@ -294,19 +322,24 @@ private class OkHttpExchange(
 
         fun endTs(recording: NetworkCapture.Recording, durationMs: Double): Long = recording.ts + Math.round(durationMs)
 
-        /** `timeout`, `connection`, `canceled` or `io`, with `SimpleClassName: message`. */
+        /**
+         * `timeout`, `connection`, `canceled` or `io`, with `SimpleClassName: message`, the message redacted as free
+         * text ([HttpRedaction.redactFreeText]) and capped. A timeout (also OkHttp's call timeout, which cancels the
+         * call) is `timeout` even when the call reads as canceled.
+         */
         fun failureOf(e: Throwable, canceled: Boolean): HttpFailure {
             val kind = when {
-                canceled || (e is IOException && e.message == "Canceled") -> HttpFailureKind.CANCELED
                 e is SocketTimeoutException || (e is InterruptedIOException && e.message == "timeout") ->
                     HttpFailureKind.TIMEOUT
+                canceled || (e is IOException && e.message == "Canceled") -> HttpFailureKind.CANCELED
                 e is ConnectException || e is UnknownHostException || e is NoRouteToHostException ||
                     e is PortUnreachableException -> HttpFailureKind.CONNECTION
                 else -> HttpFailureKind.IO
             }
             val name = e.javaClass.simpleName.ifEmpty { e.javaClass.name }
-            val message = e.message?.let { "$name: $it" } ?: name
-            return HttpFailure(kind, capLength(message, MAX_HTTP_ERROR_CHARS))
+            val text = e.message?.let { HttpRedaction.redactFreeText(capLength(it, MAX_RAW_FAILURE_CHARS)) }
+            val message = text?.let { "$name: $it" } ?: name
+            return HttpFailure(kind, capLength(message, MAX_FAILURE_MESSAGE_CHARS))
         }
 
         private fun reasonPhrase(status: Int): String = REASONS[status] ?: ""
@@ -385,7 +418,9 @@ private class TapSource(delegate: Source, private val tap: BodyTap) : Forwarding
 
 /**
  * Copies up to [MAX_HTTP_BODY_BYTES] of what the app reads (text types only) and counts every byte; sends the
- * exchange's `httpResponse` once, at EOF, at close or when a read fails, whichever comes first.
+ * exchange's `httpResponse` once, at EOF, at close or when a read fails, whichever comes first. A body closed (or
+ * failed) before EOF is not complete unless every byte of its [contentLength] was read: `truncated`, its size the
+ * Content-Length (null when unknown), its text what the app read.
  */
 private class BodyTap(
     private val capture: NetworkCapture,
@@ -396,15 +431,20 @@ private class BodyTap(
     private val headersMs: Double,
     private val contentType: String?,
     private val encoding: String?,
+    private val contentLength: Long,
 ) {
     private val omission = HttpBodies.omission(contentType, encoding)
     private val kept = Buffer()
     private var total = 0L
     private val finished = AtomicBoolean(false)
 
+    @Volatile
+    private var atEof = false
+
     fun onRead(sink: Buffer, read: Long) {
         capture.guarded("body", Unit) {
             if (read == -1L) {
+                atEof = true
                 finish(null)
                 return@guarded
             }
@@ -426,7 +466,12 @@ private class BodyTap(
             val durationMs = capture.elapsedMs(recording)
             val raw = synchronized(this) {
                 val bytes = if (omission == null) kept.readByteArray() else null
-                RawBody(total, contentType, bytes, total > (bytes?.size ?: 0), omission, encoding)
+                val complete = atEof || (contentLength >= 0 && total >= contentLength)
+                if (complete) {
+                    RawBody(total, contentType, bytes, total > (bytes?.size ?: 0), omission, encoding)
+                } else {
+                    RawBody(contentLength.takeIf { it >= 0 }, contentType, bytes, bytes != null, omission, encoding)
+                }
             }
             capture.sendResponse(
                 recording,

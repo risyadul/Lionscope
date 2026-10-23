@@ -96,7 +96,7 @@ class OkHttpCaptureTest {
     @Test
     fun requestBodiesByType() {
         net.session()
-        repeat(6) { net.server.enqueue(MockResponse()) }
+        repeat(8) { net.server.enqueue(MockResponse()) }
         val client = net.client()
         fun post(body: RequestBody) = client.newCall(Request.Builder().url(net.url("/v1/cart")).post(body).build()).execute().close()
 
@@ -114,6 +114,16 @@ class OkHttpCaptureTest {
             }
         }
         post(oneShot)
+        // Not one-shot, but of unknown length: never written a second time.
+        val unknownLength = object : RequestBody() {
+            override fun contentType() = json
+            override fun writeTo(sink: BufferedSink) {
+                sink.writeUtf8("{\"stream\":true}")
+            }
+        }
+        post(unknownLength)
+        val huge = "[" + "2,".repeat(600_000) + "2]"
+        post(huge.toRequestBody(json))
 
         val bodies = net.messages("httpRequest").map { it.body() }
         assertEquals("{\"sku\":\"A-1\",\"qty\":2}", bodies[0]["text"])
@@ -128,12 +138,19 @@ class OkHttpCaptureTest {
         assertEquals(true, bodies[4]["truncated"])
         assertEquals("one_shot", bodies[5]["omitted"])
         assertNull(bodies[5]["text"])
+        assertEquals("one_shot", bodies[6]["omitted"])
+        assertNull(bodies[6]["size"])
+        assertEquals("one_shot", bodies[7]["omitted"]) // Over 1 MB.
+        assertEquals(huge.length.toDouble(), bodies[7]["size"])
+        assertNull(bodies[7]["text"])
 
         // The server got every body intact, the one-shot one written once.
-        val received = List(6) { net.server.takeRequest().body.readUtf8() }
+        val received = List(8) { net.server.takeRequest().body.readUtf8() }
         assertEquals("password=hunter2", received[1].substringAfter('&'))
         assertEquals(large, received[4])
         assertEquals("{\"once\":true}", received[5])
+        assertEquals("{\"stream\":true}", received[6])
+        assertEquals(huge, received[7])
     }
 
     @Test
@@ -247,7 +264,7 @@ class OkHttpCaptureTest {
     }
 
     @Test
-    fun aClosedBodyIsReportedWithWhatTheAppRead() {
+    fun aBodyClosedBeforeItsEndIsTruncatedWithWhatTheAppRead() {
         net.session()
         net.server.enqueue(MockResponse().setBody("x".repeat(100_000)).setHeader("Content-Type", "text/plain"))
         net.client().newCall(Request.Builder().url(net.url("/")).build()).execute().use { response ->
@@ -255,9 +272,27 @@ class OkHttpCaptureTest {
             assertTrue(net.messages("httpResponse").isEmpty()) // Not ended yet.
         }
         val body = net.response().body()
-        assertTrue((body["size"] as Double) >= 10.0)
+        assertEquals(100_000.0, body["size"]) // The Content-Length, not what was read.
+        assertEquals(true, body["truncated"])
         assertTrue((body["text"] as String).startsWith("xxxxxxxxxx"))
+        assertTrue((body["text"] as String).length < 100_000)
         assertEquals(1, net.messages("httpResponse").size)
+
+        // Chunked: no Content-Length, so no size.
+        net.server.enqueue(MockResponse().setChunkedBody("y".repeat(50_000), 1024).setHeader("Content-Type", "text/plain"))
+        net.client().newCall(Request.Builder().url(net.url("/chunked")).build()).execute().use { it.body!!.source().readUtf8(5) }
+        val chunked = net.messages("httpResponse").last().body()
+        assertNull(chunked["size"])
+        assertEquals(true, chunked["truncated"])
+        assertTrue((chunked["text"] as String).startsWith("yyyyy"))
+
+        // Every byte of the Content-Length read, then closed without reading EOF: complete.
+        net.server.enqueue(MockResponse().setBody("{\"a\":1}").setHeader("Content-Type", "application/json"))
+        net.client().newCall(Request.Builder().url(net.url("/exact")).build()).execute().use { it.body!!.source().readUtf8(7) }
+        val exact = net.messages("httpResponse").last().body()
+        assertEquals(7.0, exact["size"])
+        assertEquals(false, exact["truncated"])
+        assertEquals("{\"a\":1}", exact["text"])
     }
 
     @Test
@@ -276,6 +311,7 @@ class OkHttpCaptureTest {
         }
         assertTrue(net.link.v7Lines.isEmpty())
         assertTrue(net.logs.any { it.contains("IllegalStateException") })
+        assertTrue(net.logs.none { it.contains("link broke") }) // Class names only: a message can hold request data.
 
         // The request was recorded, then the link fails while the response is recorded (at its headers or its end).
         net.link.v7Failure = null
@@ -313,7 +349,10 @@ class OkHttpCaptureTest {
         net.networkBodyBytes.set(0)
         client.newCall(Request.Builder().url(net.url("/b")).build()).execute().close()
         assertEquals(0L, net.networkBodyBytes.get())
-        assertEquals(0.0, net.messages("httpResponse").last().body()["size"])
+        val unread = net.messages("httpResponse").last().body()
+        assertEquals(body.length.toDouble(), unread["size"]) // Not read, so not complete: the Content-Length.
+        assertEquals("", unread["text"])
+        assertEquals(true, unread["truncated"])
     }
 
     @Test
@@ -334,6 +373,18 @@ class OkHttpCaptureTest {
         assertEquals("io", error["kind"])
         assertEquals("IOException: boom", error["message"])
         assertNull(net.response()["status"])
+
+        // Exception messages are redacted as free text and capped.
+        val leaky = IOException("failed https://ana:pw@api.example.com/x?token=abc with Bearer xyz " + "z".repeat(500))
+        try {
+            net.client { addNetworkInterceptor { throw leaky } }.newCall(Request.Builder().url(net.url("/fail")).build()).execute()
+            fail("expected the app's exception")
+        } catch (e: IOException) {
+            assertSame(leaky, e)
+        }
+        val message = (net.messages("httpResponse").last()["error"] as Map<*, *>)["message"] as String
+        assertTrue(message, message.startsWith("IOException: failed https://$r@api.example.com/x?token=$r with Bearer $r zzz"))
+        assertEquals(160, message.length)
 
         val runtime = IllegalArgumentException("bad header")
         val failing = net.client { addNetworkInterceptor { throw runtime } }
@@ -401,6 +452,9 @@ class OkHttpCaptureTest {
         net.endSession()
         net.session(version = DEVICE_PROTOCOL_V5)
         call() // A session below v7.
+        net.endSession()
+        net.session(proven = false)
+        call() // A v7 session without a valid link proof.
         net.endSession()
         net.session()
         net.endSession()

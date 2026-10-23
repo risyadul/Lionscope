@@ -11,8 +11,9 @@ import java.util.zip.GZIPInputStream
 
 /**
  * Which bodies are captured as text, and how captured bytes become [HttpBody.text]: gunzipped (`Content-Encoding:
- * gzip`), decoded with the Content-Type's charset (UTF-8 by default, malformed bytes replaced), form fields redacted,
- * cut to [MAX_HTTP_BODY_BYTES]. [decode] runs on the link thread.
+ * gzip`), decoded with the Content-Type's charset (UTF-8 by default, malformed bytes replaced), redacted by content
+ * type ([HttpRedaction.redactBodyText]: form fields, JSON keys, XML elements and attributes), cut to
+ * [MAX_HTTP_BODY_BYTES]. [decode] runs on the link thread.
  */
 internal object HttpBodies {
     private const val GZIP_BUFFER = 8 * 1024
@@ -64,8 +65,8 @@ internal object HttpBodies {
         } else {
             bytes
         }
-        var text = decodeText(plain, charsetOf(raw.contentType), complete = !cut)
-        if (HttpRedaction.isFormContentType(raw.contentType)) text = HttpRedaction.redactPairs(text)
+        val decoded = decodeText(plain, charsetOf(raw.contentType), complete = !cut)
+        val text = HttpRedaction.redactBodyText(raw.contentType, decoded)
         val capped = HttpText.capUtf8(text, MAX_HTTP_BODY_BYTES)
         return HttpBody(raw.size, raw.contentType, capped, truncated = cut || capped.length != text.length, omitted = null)
     }

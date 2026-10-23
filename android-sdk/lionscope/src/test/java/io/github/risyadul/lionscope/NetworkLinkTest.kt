@@ -13,7 +13,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 
-/** The real [DeviceLink] over a socket: network capture and mocks only on welcomed v7 session links. */
+/** The real [DeviceLink] over a socket: network capture and mocks only on welcomed, proven v7 session links. */
 class NetworkLinkTest {
     private val loopback = InetAddress.getByName("127.0.0.1")
     private val hello = "{\"type\":\"hello\",\"protocolVersion\":7}"
@@ -54,6 +54,8 @@ class NetworkLinkTest {
                 port = gateway.localPort,
                 policy = ReconnectPolicy(System.currentTimeMillis(), Backoff(longArrayOf(50))),
                 heartbeatIntervalMs = 200,
+                linkKey = { TEST_LINK_KEY },
+                newNonce = { GOLDEN_NONCE },
             )
             val capture = NetworkCapture(log = { _, _ -> })
             capture.attach(link)
@@ -94,11 +96,11 @@ class NetworkLinkTest {
             }
             waitFor { !link.isConnected }
 
-            // A v7 session: rules apply once complete, exchanges are written, the link end clears everything.
+            // A proven v7 session: rules apply once complete, exchanges are written, the link end clears everything.
             gateway.accept().use { socket ->
                 val input = socket.getInputStream().bufferedReader(Charsets.UTF_8)
                 assertEquals(hello, input.readLine())
-                socket.reply("{\"type\":\"welcome\",\"protocolVersion\":7,\"mode\":\"session\"}")
+                socket.reply(GOLDEN_WELCOME)
                 waitFor { capture.isActive }
                 assertEquals("real", get())
                 assertEquals("httpRequest", input.next("httpRequest")["type"])
@@ -123,9 +125,11 @@ class NetworkLinkTest {
     }
 
     @Test
-    fun aV7ItemIsEncodedOnlyOnAV7Connection() {
+    fun aV7ItemIsEncodedOnlyOnAProvenV7Connection() {
         val item = DeviceLink.V2Item(16, DEVICE_PROTOCOL_V7) { "{\"type\":\"mocksApplied\"}" }
-        assertEquals(null, DeviceLink.encode(item, negotiatedVersion = 5))
-        assertEquals("{\"type\":\"mocksApplied\"}", DeviceLink.encode(item, negotiatedVersion = 7))
+        assertEquals(null, DeviceLink.encode(item, negotiatedVersion = 5, networkAuthenticated = true))
+        assertEquals("{\"type\":\"mocksApplied\"}", DeviceLink.encode(item, negotiatedVersion = 7, networkAuthenticated = true))
+        // Queued for a proven connection, written on one that is not: dropped.
+        assertEquals(null, DeviceLink.encode(item, negotiatedVersion = 7))
     }
 }

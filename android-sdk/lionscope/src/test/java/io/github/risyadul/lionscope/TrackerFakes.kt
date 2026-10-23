@@ -47,12 +47,14 @@ internal class FakeLink : LinkPort {
     var failure: Throwable? = null
     /** Thrown by [sendV7] (a link that fails while the interceptor records). */
     var v7Failure: Throwable? = null
-    private var session = false
 
     override var isWelcomed = false
         private set
 
     override var negotiatedVersion: Int? = null
+        private set
+
+    override var isNetworkAuthenticated = false
         private set
 
     override fun onScreen(ts: Long, screen: ScreenRef?) {
@@ -95,17 +97,17 @@ internal class FakeLink : LinkPort {
         if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V4) encode()?.let { v4Lines += it }
     }
 
-    /** Encodes right away, as the link thread would; dropped unless a v7 session, like the real link. */
+    /** Encodes right away, as the link thread would; dropped unless a network-authenticated link, like the real one. */
     override fun sendV7(sizeHint: Int, encode: () -> String?) {
         v7Failure?.let { throw it }
-        if (session && (negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V7) encode()?.let { v7Lines += it }
+        if (isNetworkAuthenticated) encode()?.let { v7Lines += it }
     }
 
     override fun addMocksListener(listener: (GatewayMessage) -> Unit) {
         mocksListeners += listener
     }
 
-    /** A `mocks` / `mock` line from the server (the real link forwards them only on v7 session links). */
+    /** A `mocks` / `mock` line from the server (the real link forwards them only on network-authenticated links). */
     fun gateway(message: GatewayMessage) {
         mocksListeners.forEach { it(message) }
     }
@@ -114,11 +116,19 @@ internal class FakeLink : LinkPort {
         inspectListeners.forEach { it(requestId) }
     }
 
-    /** [inspectOnly]: a v5 `inspect`-mode welcome, which the real link does not report as a session. */
-    fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION, inspectOnly: Boolean = false) {
+    /**
+     * [inspectOnly]: a v5 `inspect`-mode welcome, which the real link does not report as a session. [proven]: the
+     * welcome carried a valid link proof (network-authenticated on a v7 session).
+     */
+    fun welcome(
+        welcomed: Boolean,
+        version: Int = DEVICE_PROTOCOL_VERSION,
+        inspectOnly: Boolean = false,
+        proven: Boolean = true,
+    ) {
         isWelcomed = welcomed
         negotiatedVersion = if (welcomed) version else null
-        session = welcomed && !inspectOnly
+        isNetworkAuthenticated = welcomed && !inspectOnly && proven && version >= DEVICE_PROTOCOL_V7
         listeners.forEach { it(welcomed) }
         if (!inspectOnly) sessionListeners.forEach { it(welcomed) }
     }

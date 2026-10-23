@@ -4,9 +4,10 @@ package io.github.risyadul.lionscope
 internal sealed class GatewayMessage {
     /**
      * [protocolVersion] is the server's negotiated version as sent (1 when it is missing or not an integer).
-     * [inspectOnly] is v5's `mode: "inspect"`; a missing or unknown mode is a profiling session.
+     * [inspectOnly] is v5's `mode: "inspect"`; a missing or unknown mode is a profiling session. [proof] is v7's link
+     * proof (64 lower-case hex digits, else null; see [LinkProof]).
      */
-    class Welcome(val protocolVersion: Int, val inspectOnly: Boolean = false) : GatewayMessage()
+    class Welcome(val protocolVersion: Int, val inspectOnly: Boolean = false, val proof: String? = null) : GatewayMessage()
     class Bye(val reason: String) : GatewayMessage()
 
     /** v2: the session's SDK options, already normalised (see [parseConfig]). */
@@ -30,6 +31,7 @@ internal sealed class GatewayMessage {
         /** A JSON integer only: `2.5`, `1e3` or `"2"` do not match. */
         private val PROTOCOL_VERSION = Regex("\"protocolVersion\"\\s*:\\s*(-?\\d+)(?![\\d.eE])")
         private val MODE = Regex("\"mode\"\\s*:\\s*\"([A-Za-z_]+)\"")
+        private val PROOF = Regex("\"proof\"\\s*:\\s*\"([0-9a-f]{64})\"")
         private val STALL_THRESHOLD = Regex("\"stallThresholdMs\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)")
         private val STRICT_MODE = Regex("\"strictMode\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         private val INFLATE_TRACKING = Regex("\"inflateTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
@@ -39,7 +41,7 @@ internal sealed class GatewayMessage {
         /**
          * Returns null for unknown or malformed lines; unknown fields are ignored. A top-level scan, not a JSON
          * parser: it relies on the server contract in protocol/src/wire.ts (`GatewayMessage`) that each line is a
-         * flat object serialised with `type` first and no nested `type` / `protocolVersion` / `mode` keys (the v7 `mocks` /
+         * flat object serialised with `type` first and no nested `type` / `protocolVersion` / `mode` / `proof` keys (the v7 `mocks` /
          * `mock` lines, whose strings may hold any text, are read with [FlatJson] instead). A welcome without
          * an integer `protocolVersion` means version 1; out-of-range values are passed on for [DeviceLink] to clamp. An
          * `inspect` without a valid `requestId` (a non-negative Int) is dropped.
@@ -48,6 +50,7 @@ internal sealed class GatewayMessage {
             "welcome" -> Welcome(
                 PROTOCOL_VERSION.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: MIN_DEVICE_PROTOCOL_VERSION,
                 MODE.find(line)?.groupValues?.get(1) == "inspect",
+                PROOF.find(line)?.groupValues?.get(1),
             )
             "bye" -> Bye(REASON.find(line)?.groupValues?.get(1) ?: "unknown")
             "config" -> Config(parseConfig(line))

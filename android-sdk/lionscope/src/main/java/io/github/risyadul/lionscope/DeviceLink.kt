@@ -14,15 +14,18 @@ import kotlin.concurrent.withLock
 /**
  * Keeps one NDJSON TCP connection to the Lionscope gateway (127.0.0.1:8700 via `adb reverse`), retrying per
  * [ReconnectPolicy]. Producers call [send] / [onScreen] from any thread; nothing here blocks or throws into them.
+ * [helloLine] gets the connection's fresh nonce ([newNonce]); [linkKey] is the key held when a welcome arrives.
  */
 internal class DeviceLink(
-    private val helloLine: () -> String,
+    private val helloLine: (nonce: String) -> String,
     private val host: String = "127.0.0.1",
     private val port: Int = DEVICE_LINK_PORT,
     private val clock: () -> Long = System::currentTimeMillis,
     private val policy: ReconnectPolicy = ReconnectPolicy(clock()),
     private val queue: OutboundQueue<Any> = OutboundQueue(sizeOf = ::sizeHint),
     private val heartbeatIntervalMs: Long = HEARTBEAT_INTERVAL_MS,
+    private val linkKey: () -> ByteArray? = { LinkKey.current },
+    private val newNonce: () -> String = LinkProof::newNonce,
 ) : LinkPort {
     /** True while a socket is open; items sent while disconnected are discarded (not counted as drops). */
     @Volatile
@@ -44,6 +47,11 @@ internal class DeviceLink(
     /** True while the current connection is a profiling session (not an `inspect`-only link). */
     @Volatile
     var isSession = false
+        private set
+
+    /** True while the current connection is a v7 session whose welcome carried a valid link proof. */
+    @Volatile
+    override var isNetworkAuthenticated = false
         private set
 
     @Volatile
@@ -87,7 +95,7 @@ internal class DeviceLink(
     }
 
     override fun sendV7(sizeHint: Int, encode: () -> String?) {
-        if (isConnected && isSession && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
+        if (isConnected && isNetworkAuthenticated && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
             queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V7, encode))
         }
     }
@@ -153,7 +161,7 @@ internal class DeviceLink(
     /** Runs one connection attempt to completion and returns the state it ended in. */
     private fun connectOnce(): LinkState {
         val socket = Socket()
-        val session = Session(socket)
+        val session = Session(socket, newNonce())
         try {
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
@@ -169,6 +177,7 @@ internal class DeviceLink(
             isConnected = false
             session.close()
             negotiatedVersion = null
+            isNetworkAuthenticated = false
             if (session.welcomed) setWelcomed(false)
             if (isSession) setSession(false)
         }
@@ -177,7 +186,7 @@ internal class DeviceLink(
     }
 
     private fun pump(session: Session, out: BufferedWriter) {
-        out.writeLine(helloLine())
+        out.writeLine(helloLine(session.nonce))
         // Before `welcome` no version is agreed: a destination waits for it, so a v6 server gets its real kind.
         currentScreen?.takeIf { it.kind != ScreenKind.DESTINATION }?.let {
             out.writeLine(DeviceMessages.screen(clock(), it, negotiatedVersion = null))
@@ -188,7 +197,7 @@ internal class DeviceLink(
         while (!session.closed) {
             queue.drainTo(batch, DRAIN_BATCH, (nextHeartbeat - clock()).coerceAtLeast(0))
             if (session.closed) return
-            for (item in batch) encode(item, negotiatedVersion)?.let { out.writeLine(it) }
+            for (item in batch) encode(item, negotiatedVersion, isNetworkAuthenticated)?.let { out.writeLine(it) }
             batch.clear()
             val now = clock()
             if (now >= nextHeartbeat) {
@@ -232,7 +241,8 @@ internal class DeviceLink(
         Log.i(LOG_TAG, state.message)
     }
 
-    private inner class Session(private val socket: Socket) {
+    /** One connection; [nonce] is the link proof challenge sent in its hello. */
+    private inner class Session(private val socket: Socket, val nonce: String) {
         @Volatile
         var closed = false
             private set
@@ -247,7 +257,7 @@ internal class DeviceLink(
 
         fun onMessage(message: GatewayMessage) {
             when (message) {
-                is GatewayMessage.Welcome -> onWelcome(message.protocolVersion, message.inspectOnly)
+                is GatewayMessage.Welcome -> onWelcome(message)
                 is GatewayMessage.Bye -> {
                     byeReason = message.reason
                     close()
@@ -258,10 +268,10 @@ internal class DeviceLink(
             }
         }
 
-        /** Ignored before `welcome`, after close, on `inspect`-mode links and on a link negotiated below v7. */
+        /** Ignored before `welcome`, after close, and on links that are not network-authenticated (v7 sessions only). */
         @Synchronized
         private fun onMocks(message: GatewayMessage) {
-            if (!welcomed || closed || !isSession || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
+            if (!welcomed || closed || !isNetworkAuthenticated || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
             dispatch(mocksListeners, message)
         }
 
@@ -281,18 +291,31 @@ internal class DeviceLink(
 
         /** Synchronized with [close] so a late welcome can never outlive its connection. */
         @Synchronized
-        private fun onWelcome(protocolVersion: Int, inspectOnly: Boolean) {
+        private fun onWelcome(welcome: GatewayMessage.Welcome) {
             if (welcomed || closed) return
             welcomed = true
             // Nothing below MIN exists while MIN is 1. Once MIN > 1, a welcome below MIN must close the link
             // (unsupported server) instead of being clamped up.
-            negotiatedVersion = protocolVersion.coerceIn(MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION)
+            val version = welcome.protocolVersion.coerceIn(MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION)
+            negotiatedVersion = version
+            // `mode` exists from v5 on; below it every welcome is a session.
+            val session = !(welcome.inspectOnly && speaks(version, DEVICE_PROTOCOL_V5))
             stateLock.withLock { policy.onWelcome(clock()) }
             currentScreen?.takeIf { it.kind == ScreenKind.DESTINATION }?.let { queue.offer(ScreenEvent(clock(), it)) }
             logState(LinkState.CONNECTED)
             setWelcomed(true)
-            // `mode` exists from v5 on; below it every welcome is a session.
-            if (!(inspectOnly && speaks(negotiatedVersion, DEVICE_PROTOCOL_V5))) setSession(true)
+            if (!session) return
+            // Before the session listeners run: network capture follows this.
+            isNetworkAuthenticated = speaks(version, DEVICE_PROTOCOL_V7) && isProven(welcome)
+            setSession(true)
+        }
+
+        /** The welcome's proof over this connection's nonce, as sent (its `protocolVersion`), with the key held now. */
+        private fun isProven(welcome: GatewayMessage.Welcome): Boolean = try {
+            LinkProof.verifySession(linkKey(), nonce, welcome.protocolVersion, welcome.proof)
+        } catch (e: Exception) {
+            // No HMAC on this device, or a key it refuses: network stays off.
+            false
         }
 
         @Synchronized
@@ -337,16 +360,23 @@ internal class DeviceLink(
         /**
          * The line to write for a queued [item], or null. A v2 item can have been queued for an earlier connection
          * (the offer raced a reconnect); on a connection negotiated below its version, or not welcomed yet, it is
-         * dropped here. A failing v2 encoder drops that one message, never the connection.
+         * dropped here, and a v7 (network) item unless the connection is [networkAuthenticated]. A failing v2 encoder
+         * drops that one message, never the connection.
          */
-        fun encode(item: Any, negotiatedVersion: Int?): String? = when (item) {
+        fun encode(item: Any, negotiatedVersion: Int?, networkAuthenticated: Boolean = false): String? = when (item) {
             // A destination queued before `welcome` is offered again once the version is agreed (see onWelcome).
             is ScreenEvent -> if (item.screen?.kind == ScreenKind.DESTINATION && negotiatedVersion == null) {
                 null
             } else {
                 DeviceMessages.screen(item.ts, item.screen, negotiatedVersion)
             }
-            is V2Item -> if (speaks(negotiatedVersion, item.minVersion)) encodeContained(item) else null
+            is V2Item -> if (speaks(negotiatedVersion, item.minVersion) &&
+                (item.minVersion < DEVICE_PROTOCOL_V7 || networkAuthenticated)
+            ) {
+                encodeContained(item)
+            } else {
+                null
+            }
             else -> item.toString()
         }
 

@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,9 +18,17 @@ class GatewayNetworkMessagesTest {
 
     @Test
     fun parsesEveryGoldenLine() {
-        assertEquals(4, goldenLines.size)
-        val messages = goldenLines.map { checkNotNull(GatewayMessage.parse(it)) { "not parsed: $it" } }
+        assertEquals(5, goldenLines.size)
+        val all = goldenLines.map { checkNotNull(GatewayMessage.parse(it)) { "not parsed: $it" } }
 
+        val welcome = all[0] as GatewayMessage.Welcome
+        assertEquals(GOLDEN_WELCOME, goldenLines[0])
+        assertEquals(7, welcome.protocolVersion)
+        assertFalse(welcome.inspectOnly)
+        assertEquals("f2d88543b6cc93f29e7d04d3c7239f4bbcbd8b40566ba077664e2729f885a0e4", welcome.proof)
+        assertEquals(welcome.proof, LinkProof.proof(TEST_LINK_KEY, GOLDEN_NONCE, 7, "session"))
+
+        val messages = all.drop(1)
         val set = messages[0] as GatewayMessage.Mocks
         assertEquals(3, set.rev)
         assertEquals(2, set.count)
@@ -63,7 +72,7 @@ class GatewayNetworkMessagesTest {
         val bytes = goldenLines.joinToString("\n", postfix = "\n").toByteArray(Charsets.UTF_8)
         val messages = ArrayList<GatewayMessage>()
         GatewayReader(java.io.ByteArrayInputStream(bytes), onMessage = { messages += it }, onClosed = {}).readLoop()
-        assertEquals(listOf("Mocks", "Mock", "Mock", "Mocks"), messages.map { it.javaClass.simpleName })
+        assertEquals(listOf("Welcome", "Mocks", "Mock", "Mock", "Mocks"), messages.map { it.javaClass.simpleName })
     }
 
     private fun mockLine(vararg changes: Pair<String, String>): String {
@@ -93,6 +102,14 @@ class GatewayNetworkMessagesTest {
         assertEquals(
             MockAction.CONNECTION_ERROR,
             (GatewayMessage.parse(mockLine("action" to "\"connection_error\"", "status" to "0")) as GatewayMessage.Mock).rule.action,
+        )
+    }
+
+    @Test
+    fun mockHeadersThatCouldInjectAreDropped() {
+        assertEquals(
+            listOf("X-Ok" to "a\tb ✓"),
+            MockWire.headers("X-Ok: a\tb ✓\nBad Name: x\nX-Cr: a\rSet-Cookie: x\nX-Nul: a\u0000b\nX-Del: \u007f\n: empty"),
         )
     }
 
