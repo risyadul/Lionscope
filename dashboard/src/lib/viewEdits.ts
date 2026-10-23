@@ -16,6 +16,7 @@ import {
   normalizeViewValue,
   VIEW_PROPERTY_GROUPS,
   type InspectorNode,
+  type InspectorSnapshot,
   type ViewEditError,
   type ViewProperty,
   type ViewPropertyGroup,
@@ -180,6 +181,16 @@ const EDIT_ERRORS: Record<ViewEditError, string> = {
   limit: `${MAX_LIVE_EDITS} live edits are in effect: revert some first.`,
   timeout: 'The app did not answer in time.',
   failed: 'The app could not apply it.',
+  unauthenticated:
+    'The app takes live edits only during a profiling session: press Start, then inspect again.',
+};
+
+/** Why a snapshot's views offer no editors although the SDK read them (`editBlocked`), and what to do. */
+export const EDIT_BLOCKED_HINTS: Record<NonNullable<InspectorSnapshot['editBlocked']>, string> = {
+  needs_session:
+    'Live edits need a profiling session: press Start, then inspect again. Without one the app’s SDK can’t tell this server from anything else on the phone, so it takes no edits.',
+  unverified:
+    'This session’s SDK link has no link proof (the link key couldn’t be handed to the app), so it takes no live edits: stop and start the session again.',
 };
 
 /** The server's message, else words for its error code. */

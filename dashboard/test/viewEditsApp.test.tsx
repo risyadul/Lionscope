@@ -197,6 +197,24 @@ describe('which nodes get editors', () => {
   });
 });
 
+describe('a link that takes no edits', () => {
+  it('shows the values read-only, says to start a session, and sends nothing', () => {
+    const { sent } = setup(editableSnapshot({ editBlocked: 'needs_session', liveEdits: 2 }));
+    expect(within(attrs()).queryAllByRole('textbox')).toEqual([]);
+    expect(within(attrs()).queryByRole('switch')).toBeNull();
+    expect(within(attrs()).getByText(/Live edits need a profiling session: press Start/)).toBeTruthy();
+    const revertAll = screen.getByRole('button', { name: 'Revert all' }) as HTMLButtonElement;
+    expect(revertAll.disabled).toBe(true);
+    fireEvent.click(revertAll);
+    expect(sent.some((m) => m.type === 'setViewProperty' || m.type === 'revertViewProperties')).toBe(false);
+  });
+
+  it('says to restart a session whose link has no proof', () => {
+    setup(editableSnapshot({ editBlocked: 'unverified' }));
+    expect(within(attrs()).getByText(/no link proof/)).toBeTruthy();
+  });
+});
+
 describe('committing', () => {
   it('sends a padding side on Enter, once, and not a value the view already has', () => {
     const { edits } = setup();

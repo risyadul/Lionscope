@@ -3,7 +3,12 @@ import { VIEW_EDIT_BURST } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SdkEditError } from '../src/device/sdkLink.ts';
 import type { SdkViewEditResult } from '../src/device/sdkLink.ts';
-import { RESNAPSHOT_DELAY_MS, VIEW_EDIT_MESSAGES, ViewEdits } from '../src/inspector/viewEdits.ts';
+import {
+  EDIT_BLOCKED_MESSAGES,
+  RESNAPSHOT_DELAY_MS,
+  VIEW_EDIT_MESSAGES,
+  ViewEdits,
+} from '../src/inspector/viewEdits.ts';
 import type { ViewEditOutcome, ViewEditsOptions } from '../src/inspector/viewEdits.ts';
 import type { InspectorSessionSource } from '../src/session/sessionManager.ts';
 import { FakeLink } from './helpers/sdkSession.ts';
@@ -191,6 +196,30 @@ describe('live view edits', () => {
     expect(refused).toEqual({ ok: false, error: 'password', message: VIEW_EDIT_MESSAGES.password });
     expect((await edits.set({ nodeId: 1, property: 'textSize', value: 18 })).ok).toBe(true);
     expect(link.edits).toEqual([{ kind: 'set', viewKey: 9, property: 'textSize', value: 18 }]);
+  });
+
+  it('refuses a snapshot whose link takes no edits, saying what to do, without asking the SDK', async () => {
+    for (const editBlocked of ['needs_session', 'unverified'] as const) {
+      const { edits, link } = setup(snapshot([viewNode(0), viewNode(1)], { editBlocked }));
+      const refused = await edits.set({ nodeId: 1, property: 'alpha', value: 0.5 });
+      expect(refused).toEqual({
+        ok: false,
+        error: 'unauthenticated',
+        message: EDIT_BLOCKED_MESSAGES[editBlocked],
+      });
+      expect(failed(await edits.revert({}))).toBe('unauthenticated');
+      expect(link.edits).toEqual([]);
+    }
+    const { edits, link } = setup();
+    link.answerEdit = () =>
+      Promise.resolve({
+        type: 'viewPropertyResult',
+        requestId: 1,
+        ok: false,
+        error: 'unauthenticated',
+        liveEdits: 0,
+      });
+    expect(failed(await edits.set({ nodeId: 1, property: 'alpha', value: 0.5 }))).toBe('unauthenticated');
   });
 
   it('needs the link that captured the snapshot, at v8', async () => {

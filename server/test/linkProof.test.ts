@@ -49,6 +49,8 @@ class RecordingLink implements SdkLink {
   inspect(): Promise<never> {
     return Promise.reject(new Error('unsupported'));
   }
+  readonly mode = 'session';
+  readonly proven = false;
   setViewProperty = NO_EDITS.setViewProperty;
   revertViewProperties = NO_EDITS.revertViewProperties;
 }

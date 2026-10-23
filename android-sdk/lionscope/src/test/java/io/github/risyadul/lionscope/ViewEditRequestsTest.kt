@@ -100,6 +100,23 @@ class ViewEditRequestsTest {
     }
 
     @Test
+    fun onlyAServerVerifiedLinkMayEdit() {
+        val view = FakeEditView()
+        val key = key(view)
+        for (unverified in listOf(
+            FakeLink().apply { welcome(true, DEVICE_PROTOCOL_V8, inspectOnly = true) },
+            FakeLink().apply { welcome(true, DEVICE_PROTOCOL_V8, proven = false) },
+        )) {
+            ViewEditRequests(unverified, main, editor)
+            unverified.viewEdit(GatewayMessage.SetViewProperty(4, key, ViewProperty.ENABLED, true))
+            unverified.viewEdit(GatewayMessage.RevertViewProperties(5, null, null))
+            main.runPosted()
+            assertEquals(listOf("unauthenticated", "unauthenticated"), unverified.v8Lines.map { (TestJson.parse(it) as Map<*, *>)["error"] })
+        }
+        assertTrue(access.writes.isEmpty())
+    }
+
+    @Test
     fun nothingIsAnsweredBelowV8() {
         val old = FakeLink().apply { welcome(true, DEVICE_PROTOCOL_V6) }
         ViewEditRequests(old, main, editor)

@@ -208,7 +208,9 @@ internal class ViewEditor<V : Any>(
  * request whose connection has ended by the time the main thread gets to it is dropped, applied or not: that server
  * has given up on it, and its request id may mean another request on the next connection. No server can flood the
  * main thread: past a burst of [burst] then [perSecond] a second, or with [maxQueued] already waiting, a request is
- * answered `busy` right away (with the last count of live edits known).
+ * answered `busy` right away (with the last count of live edits known). Edits change what the app does (a disabled
+ * button enabled, a label rewritten), so only a server-verified link ([LinkPort.isServerVerified]: a session with the
+ * link proof) may make them; any other is answered `unauthenticated` and nothing is touched.
  */
 internal class ViewEditRequests<V : Any>(
     private val link: LinkPort,
@@ -229,7 +231,7 @@ internal class ViewEditRequests<V : Any>(
         link.addViewEditListener { message ->
             val connection = link.connection
             if (!bucket.take() || !enqueue()) {
-                refuse(message)
+                refuse(message, EditError.BUSY)
             } else {
                 main.post(Runnable {
                     queued.decrementAndGet()
@@ -246,20 +248,21 @@ internal class ViewEditRequests<V : Any>(
         return false
     }
 
-    /** Link thread: answered without touching any view. */
-    private fun refuse(message: GatewayMessage) {
+    /** Answered without touching any view (from the link thread too). */
+    private fun refuse(message: GatewayMessage, error: EditError) {
         val requestId = when (message) {
             is GatewayMessage.SetViewProperty -> message.requestId
             is GatewayMessage.RevertViewProperties -> message.requestId
             else -> return
         }
-        val result = EditResult(EditError.BUSY, lastLiveEdits)
+        val result = EditResult(error, lastLiveEdits)
         link.sendV8(RESULT_SIZE_HINT) { DeviceMessages.viewPropertyResult(requestId, result) }
     }
 
     /** Main thread. */
     fun answer(message: GatewayMessage) {
         if (!DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V8)) return
+        if (!link.isServerVerified) return refuse(message, EditError.UNAUTHENTICATED)
         val requestId: Int
         val result = when (message) {
             is GatewayMessage.SetViewProperty -> {

@@ -32,6 +32,13 @@ export interface SdkLink {
    * versions are only sent to links that negotiated them.
    */
   readonly protocolVersion: number;
+  /** `session` or `inspect` (`welcome.mode`), as attached; `session` until the welcome. */
+  readonly mode: SdkLinkMode;
+  /**
+   * The welcome carried the link proof (a v7+ session link whose app got its link key): only then does the SDK take
+   * live view edits.
+   */
+  readonly proven: boolean;
   /** Close the connection, telling the SDK why when a reason is given. */
   close(reason?: ByeReason): void;
   /**

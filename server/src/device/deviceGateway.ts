@@ -258,10 +258,15 @@ export function gatewayLine(message: GatewayMessage): string {
  */
 export function encodeWelcome(protocolVersion: number, mode: SdkLinkMode, proof?: string): string {
   if (protocolVersion < DEVICE_PROTOCOL_V5) return gatewayLine({ type: 'welcome', protocolVersion });
-  const proven = proof !== undefined && mode === 'session' && protocolVersion >= DEVICE_PROTOCOL_V7;
+  const proven = carriesProof(protocolVersion, mode, proof);
   return gatewayLine(
     proven ? { type: 'welcome', protocolVersion, mode, proof } : { type: 'welcome', protocolVersion, mode },
   );
+}
+
+/** Whether the welcome of a link like this goes out with its link proof. */
+function carriesProof(protocolVersion: number, mode: SdkLinkMode, proof: string | undefined): boolean {
+  return proof !== undefined && mode === 'session' && protocolVersion >= DEVICE_PROTOCOL_V7;
 }
 
 /** A mock rule set waits for 'drain' (only the latest one) while the socket buffers more than this. */
@@ -430,6 +435,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   /** The latest mock rule set asked for while the socket's buffer was over MAX_PENDING_MOCK_BYTES. */
   let drainingMocks: { rev: number; rules: readonly NetworkMockRule[] } | null = null;
   let mode: SdkLinkMode = 'session';
+  /** The welcome went out with the link proof (LINK_KEY_RECEIVER): the SDK can tell this server is the one adb trusts. */
+  let proven = false;
   /** The hello is being checked by the target: later lines are held (up to MAX_HELD_LINES) until it decided. */
   let attaching = false;
   let held: SdkLinkMessage[] = [];
@@ -609,6 +616,12 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     protocolVersion = Math.min(parsed.value.protocolVersion, DEVICE_PROTOCOL_VERSION);
     const link: SdkLink = {
       protocolVersion,
+      get mode() {
+        return mode;
+      },
+      get proven() {
+        return proven;
+      },
       close,
       sendConfig: (options) => {
         // An inspect-only link gets no options (its SDK runs no collectors).
@@ -664,6 +677,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       warn('inspect mode below v5');
       return close('no_session');
     }
+    proven = carriesProof(protocolVersion, mode, result.proof);
     socket.write(encodeWelcome(protocolVersion, mode, result.proof));
     if (pendingConfig && mode === 'session') socket.write(gatewayLine(pendingConfig));
     if (pendingMocks !== null && mode === 'session') socket.write(pendingMocks);

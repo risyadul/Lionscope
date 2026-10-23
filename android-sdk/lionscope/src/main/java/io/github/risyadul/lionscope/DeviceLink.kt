@@ -55,7 +55,7 @@ internal class DeviceLink(
 
     /** True while the current connection is a v7 session whose welcome carried a valid link proof. */
     @Volatile
-    override var isNetworkAuthenticated = false
+    override var isServerVerified = false
         private set
 
     @Volatile
@@ -100,7 +100,7 @@ internal class DeviceLink(
     }
 
     override fun sendV7(sizeHint: Int, encode: () -> String?) {
-        if (isConnected && isNetworkAuthenticated && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
+        if (isConnected && isServerVerified && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
             queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V7, encode))
         }
     }
@@ -192,7 +192,7 @@ internal class DeviceLink(
             isConnected = false
             session.close()
             negotiatedVersion = null
-            isNetworkAuthenticated = false
+            isServerVerified = false
             if (session.welcomed) setWelcomed(false)
             if (isSession) setSession(false)
         }
@@ -212,7 +212,7 @@ internal class DeviceLink(
         while (!session.closed) {
             queue.drainTo(batch, DRAIN_BATCH, (nextHeartbeat - clock()).coerceAtLeast(0))
             if (session.closed) return
-            for (item in batch) encode(item, negotiatedVersion, isNetworkAuthenticated)?.let { out.writeLine(it) }
+            for (item in batch) encode(item, negotiatedVersion, isServerVerified)?.let { out.writeLine(it) }
             batch.clear()
             val now = clock()
             if (now >= nextHeartbeat) {
@@ -284,10 +284,10 @@ internal class DeviceLink(
             }
         }
 
-        /** Ignored before `welcome`, after close, and on links that are not network-authenticated (v7 sessions only). */
+        /** Ignored before `welcome`, after close, and on links that are not server-verified (v7 sessions only). */
         @Synchronized
         private fun onMocks(message: GatewayMessage) {
-            if (!welcomed || closed || !isNetworkAuthenticated || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
+            if (!welcomed || closed || !isServerVerified || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
             dispatch(mocksListeners, message)
         }
 
@@ -330,7 +330,7 @@ internal class DeviceLink(
             setWelcomed(true)
             if (!session) return
             // Before the session listeners run: network capture follows this.
-            isNetworkAuthenticated = speaks(version, DEVICE_PROTOCOL_V7) && isProven(welcome)
+            isServerVerified = speaks(version, DEVICE_PROTOCOL_V7) && isProven(welcome)
             setSession(true)
         }
 

@@ -795,7 +795,17 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       requestId,
       ok: z.boolean(),
       error: z
-        .enum(['stale', 'unsupported', 'password', 'invalid', 'limit', 'failed', 'disabled', 'busy'])
+        .enum([
+          'stale',
+          'unsupported',
+          'password',
+          'invalid',
+          'limit',
+          'failed',
+          'disabled',
+          'busy',
+          'unauthenticated',
+        ])
         .optional(),
       liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS),
     })

@@ -17,7 +17,7 @@ import { errorMessage, log } from '../log.ts';
 import type { InspectorSessionSource } from '../session/sessionManager.ts';
 import type { UiTree } from '../agent/uiTree.ts';
 import { isPng } from '../agent/png.ts';
-import { composeFallback, matchingNode, sdkSnapshot, uiautomatorSnapshot } from './snapshots.ts';
+import { composeFallback, editBlock, matchingNode, sdkSnapshot, uiautomatorSnapshot } from './snapshots.ts';
 import type { ComposeFallback, SnapshotBody } from './snapshots.ts';
 
 /** Snapshots (with their PNGs) kept for `/inspector/<id>.png`; the oldest go first. */
@@ -304,7 +304,7 @@ export class InspectorService {
     }
     const compose = composeFallback(inspection);
     if (compose) return compose;
-    const built = this.build(serial, ts, sdkSnapshot(inspection, source.packageName));
+    const built = this.build(serial, ts, sdkSnapshot(inspection, source.packageName, editBlock(source.link)));
     return built.bytes > MAX_SNAPSHOT_BYTES ? 'sdk_too_large' : { ...built, source };
   }
 

@@ -688,6 +688,13 @@ export interface InspectorSnapshot {
    * this snapshot); absent for other snapshots.
    */
   liveEdits?: number;
+  /**
+   * 0.8.0 (SDK, v8). Why the views of this snapshot can't be edited live although the SDK reads them: the app only
+   * takes edits from a link with the link proof (LINK_KEY_RECEIVER). `needs_session`: an inspect-only link (it never
+   * gets a proof): Start a session. `unverified`: a session link whose welcome carried no proof (the link key could not
+   * be handed to the app). Absent when they can be edited.
+   */
+  editBlocked?: 'needs_session' | 'unverified';
 }
 
 /** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
@@ -963,6 +970,8 @@ export interface ViewState {
  * text of a password field. `invalid_value`: out of bounds or malformed. `old_sdk`: the app's SDK is older than 0.8.0.
  * `no_link`: the app's SDK link is gone. `rate_limited`: too many edits on the device. `limit`: MAX_LIVE_EDITS are in
  * effect: revert some. `timeout`: the SDK did not answer. `failed`: the setter threw, or anything else.
+ * `unauthenticated`: the app's SDK link has no link proof (InspectorSnapshot.editBlocked): edits need a profiling
+ * session whose link proof checked out.
  */
 export type ViewEditError =
   | 'stale'
@@ -974,7 +983,8 @@ export type ViewEditError =
   | 'rate_limited'
   | 'limit'
   | 'timeout'
-  | 'failed';
+  | 'failed'
+  | 'unauthenticated';
 
 /** Integer px within ±max (or 0..max when `negative` is false). */
 function isPixels(value: ViewPropertyValue, max: number, negative: boolean): value is number {
@@ -1494,13 +1504,23 @@ export type DeviceMessage =
    * number in effect after it. Errors: `stale` (no view with that key in the latest capture, or it is no longer
    * attached), `unsupported` (the property does not apply to that view), `password`, `invalid` (a value out of
    * bounds), `limit` (MAX_LIVE_EDITS in effect), `failed` (the setter threw), `disabled` (no editor in this SDK),
-   * `busy` (a flood of requests: past the SDK's own rate limit or queue, nothing was done).
+   * `busy` (a flood of requests: past the SDK's own rate limit or queue, nothing was done), `unauthenticated` (the
+   * link has no link proof: an inspect-only link, or a session whose link key could not be handed over).
    */
   | {
       type: 'viewPropertyResult';
       requestId: number;
       ok: boolean;
-      error?: 'stale' | 'unsupported' | 'password' | 'invalid' | 'limit' | 'failed' | 'disabled' | 'busy';
+      error?:
+        | 'stale'
+        | 'unsupported'
+        | 'password'
+        | 'invalid'
+        | 'limit'
+        | 'failed'
+        | 'disabled'
+        | 'busy'
+        | 'unauthenticated';
       liveEdits: number;
     };
 

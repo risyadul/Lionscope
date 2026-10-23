@@ -8,6 +8,7 @@ import {
 } from '@lionscope/protocol/wire';
 import type { ViewEdits } from '../../hooks/useViewEdits.ts';
 import { CopyButton } from '../stalls/CopyButton.tsx';
+import { EDIT_BLOCKED_HINTS } from '../../lib/viewEdits.ts';
 import {
   AlphaRow,
   ColorRow,
@@ -126,6 +127,8 @@ function readOnlyReason(
   isEditable: boolean,
 ): string | null {
   if (isEditable) return null;
+  if (snapshot.editBlocked !== undefined && node.view !== undefined)
+    return EDIT_BLOCKED_HINTS[snapshot.editBlocked];
   if (isComposable(node)) {
     const source = sourceLabel(node);
     return `A composable can’t be edited live: change it in code${source === null ? '' : ` (${source})`}.`;
@@ -181,7 +184,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
   const size = rectSize(node.bounds);
   const visible = node.visibleBounds;
   const path = ancestorsOf(index, node.id);
-  const editable = new Set(editableProperties(node));
+  const editable = new Set(snapshot.editBlocked === undefined ? editableProperties(node) : []);
   const can = (property: ViewProperty) => editable.has(property);
   const editor: EditorProps = { edits, node, resetKey: snapshot.id };
   const readOnly = readOnlyReason(node, snapshot, editable.size > 0);

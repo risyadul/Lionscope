@@ -261,7 +261,13 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
     (nodeId: number, property: ViewProperty, value: ViewPropertyValue): EditResult => {
       const { snapshot: shot, index: idx, isEnabled: enabled, requests: pending } = latest.current;
       const node = idx?.byId.get(nodeId);
-      if (shot === null || node === undefined || !enabled || !editableProperties(node).includes(property)) {
+      if (
+        shot === null ||
+        node === undefined ||
+        !enabled ||
+        shot.editBlocked !== undefined ||
+        !editableProperties(node).includes(property)
+      ) {
         return 'refused';
       }
       const normalized = normalizeViewValue(property, value);
@@ -308,7 +314,7 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
   const revert = useCallback(
     (nodeId: number | null, name?: EditName) => {
       const { snapshot: shot, isEnabled: enabled } = latest.current;
-      if (shot === null || !enabled) return;
+      if (shot === null || !enabled || shot.editBlocked !== undefined) return;
       request(shot.id, nodeId, name ?? null, (requestId) => ({
         type: 'revertViewProperties',
         requestId,

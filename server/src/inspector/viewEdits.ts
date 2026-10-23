@@ -81,6 +81,7 @@ const SDK_ERRORS: Readonly<Record<NonNullable<SdkViewEditResult['error']>, ViewE
   failed: 'failed',
   disabled: 'failed',
   busy: 'rate_limited',
+  unauthenticated: 'unauthenticated',
 };
 
 const LINK_ERRORS: Readonly<Record<SdkEditFailure, ViewEditError>> = {
@@ -103,7 +104,18 @@ export const VIEW_EDIT_MESSAGES: Readonly<Record<ViewEditError, string>> = {
   limit: 'The app already has the most live edits it keeps: revert some first.',
   timeout: 'The app did not answer the edit in time; it may still apply it: a new snapshot is being taken.',
   failed: 'The app could not apply the edit.',
+  unauthenticated:
+    'The app takes live edits only from a profiling session whose SDK link has the link proof: start a session and inspect again.',
 };
+
+/** Why a snapshot's views can't be edited (InspectorSnapshot.editBlocked), as said to the user. */
+export const EDIT_BLOCKED_MESSAGES: Readonly<Record<NonNullable<InspectorSnapshot['editBlocked']>, string>> =
+  {
+    needs_session:
+      'Live edits need a profiling session: this snapshot came over an inspect-only link, which has no link proof. Start a session and inspect again.',
+    unverified:
+      "The session's SDK link has no link proof (the link key could not be handed to the app over adb), so the app takes no live edits: restart the session.",
+  };
 
 /** Outcomes after which the app may have changed although nothing says so: a new snapshot shows what it has. */
 const UNCERTAIN: ReadonlySet<ViewEditError> = new Set(['stale', 'timeout', 'failed']);
@@ -226,6 +238,7 @@ export class ViewEdits {
         'Only views of an SDK snapshot can be edited live; this one came from uiautomator (no Lionscope SDK answered).',
       );
     }
+    if (snapshot.editBlocked) return failure('unauthenticated', EDIT_BLOCKED_MESSAGES[snapshot.editBlocked]);
     const source = this.options.inspector.editSource(snapshot.id);
     if (!source?.link) return failure('no_link');
     if (source.link.protocolVersion < DEVICE_PROTOCOL_V8) return failure('old_sdk');

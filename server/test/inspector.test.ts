@@ -493,6 +493,20 @@ describe('Inspector service', () => {
     expect(service.editSource(snapshot.id)).toBeNull();
   });
 
+  it('says on an SDK snapshot why its views take no edits: an inspect-only link, or a session without the proof', async () => {
+    const cases = [
+      { mode: 'inspect', proven: false, protocolVersion: 8, expected: 'needs_session' },
+      { mode: 'session', proven: false, protocolVersion: 8, expected: 'unverified' },
+      { mode: 'session', proven: true, protocolVersion: 8, expected: undefined },
+      { mode: 'session', proven: false, protocolVersion: 6, expected: undefined },
+    ] as const;
+    for (const { mode, proven, protocolVersion, expected } of cases) {
+      const link = { ...fakeLink(protocolVersion, async () => inspection()), mode, proven };
+      const { service } = setup({ source: { packageName: PKG, link, screen: 'homepage' } });
+      expect((await service.inspect(SERIAL)).editBlocked).toBe(expected);
+    }
+  });
+
   it('takes a fresh capture after one that was already running, instead of joining it', async () => {
     let release: () => void = () => undefined;
     const answers: Promise<SdkInspection>[] = [

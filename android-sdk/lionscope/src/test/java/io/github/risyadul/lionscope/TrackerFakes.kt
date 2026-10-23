@@ -56,7 +56,7 @@ internal class FakeLink : LinkPort {
     override var negotiatedVersion: Int? = null
         private set
 
-    override var isNetworkAuthenticated = false
+    override var isServerVerified = false
         private set
     override var connection = 0
         private set
@@ -101,17 +101,17 @@ internal class FakeLink : LinkPort {
         if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V4) encode()?.let { v4Lines += it }
     }
 
-    /** Encodes right away, as the link thread would; dropped unless a network-authenticated link, like the real one. */
+    /** Encodes right away, as the link thread would; dropped unless a server-verified link, like the real one. */
     override fun sendV7(sizeHint: Int, encode: () -> String?) {
         v7Failure?.let { throw it }
-        if (isNetworkAuthenticated) encode()?.let { v7Lines += it }
+        if (isServerVerified) encode()?.let { v7Lines += it }
     }
 
     override fun addMocksListener(listener: (GatewayMessage) -> Unit) {
         mocksListeners += listener
     }
 
-    /** A `mocks` / `mock` line from the server (the real link forwards them only on network-authenticated links). */
+    /** A `mocks` / `mock` line from the server (the real link forwards them only on server-verified links). */
     fun gateway(message: GatewayMessage) {
         mocksListeners.forEach { it(message) }
     }
@@ -135,7 +135,7 @@ internal class FakeLink : LinkPort {
 
     /**
      * [inspectOnly]: a v5 `inspect`-mode welcome, which the real link does not report as a session. [proven]: the
-     * welcome carried a valid link proof (network-authenticated on a v7 session).
+     * welcome carried a valid link proof (server-verified on a v7 session).
      */
     fun welcome(
         welcomed: Boolean,
@@ -145,7 +145,7 @@ internal class FakeLink : LinkPort {
     ) {
         isWelcomed = welcomed
         negotiatedVersion = if (welcomed) version else null
-        isNetworkAuthenticated = welcomed && !inspectOnly && proven && version >= DEVICE_PROTOCOL_V7
+        isServerVerified = welcomed && !inspectOnly && proven && version >= DEVICE_PROTOCOL_V7
         if (welcomed) connection++
         listeners.forEach { it(welcomed) }
         if (!inspectOnly) sessionListeners.forEach { it(welcomed) }

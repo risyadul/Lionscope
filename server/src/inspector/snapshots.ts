@@ -3,7 +3,8 @@
  * the SDK answer as a snapshot, and the checks the service makes on both.
  */
 import type { InspectorNode, InspectorSnapshot, InspectorWindow, PixelRect } from '@lionscope/protocol';
-import type { SdkInspection } from '../device/sdkLink.ts';
+import { DEVICE_PROTOCOL_V8 } from '@lionscope/protocol';
+import type { SdkInspection, SdkLink } from '../device/sdkLink.ts';
 import type { UiTree } from '../agent/uiTree.ts';
 import { MAX_INSPECTOR_WINDOWS } from '@lionscope/protocol';
 
@@ -101,7 +102,22 @@ export function uiautomatorSnapshot(
   };
 }
 
-export function sdkSnapshot(inspection: SdkInspection, packageName: string): SnapshotBody {
+/**
+ * Why the views a link captured can't be edited live (InspectorSnapshot.editBlocked): the SDK takes edits only from a
+ * link whose welcome carried the link proof. Undefined below v8 (no edits at all) and on a proven link.
+ */
+export function editBlock(
+  link: Pick<SdkLink, 'protocolVersion' | 'mode' | 'proven'>,
+): SnapshotBody['editBlocked'] {
+  if (link.protocolVersion < DEVICE_PROTOCOL_V8 || link.proven) return undefined;
+  return link.mode === 'inspect' ? 'needs_session' : 'unverified';
+}
+
+export function sdkSnapshot(
+  inspection: SdkInspection,
+  packageName: string,
+  editBlocked?: SnapshotBody['editBlocked'],
+): SnapshotBody {
   const { begin, nodes } = inspection;
   return {
     packageName,
@@ -114,6 +130,7 @@ export function sdkSnapshot(inspection: SdkInspection, packageName: string): Sna
     captureMs: begin.captureMs,
     fallbackReason: null,
     ...(begin.liveEdits === undefined ? {} : { liveEdits: begin.liveEdits }),
+    ...(editBlocked === undefined ? {} : { editBlocked }),
   };
 }
 

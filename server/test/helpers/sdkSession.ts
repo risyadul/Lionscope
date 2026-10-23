@@ -40,8 +40,10 @@ export const HELLO: SdkHello = {
   refreshRateHz: 120,
 };
 
-/** The edit methods of a link below v8 (they fail as `unsupported`), for fake links. */
-export const NO_EDITS: Pick<SdkLink, 'setViewProperty' | 'revertViewProperties'> = {
+/** What a fake link without edits has of them: a session link below v8, without a proof (edits fail `unsupported`). */
+export const NO_EDITS: Pick<SdkLink, 'mode' | 'proven' | 'setViewProperty' | 'revertViewProperties'> = {
+  mode: 'session',
+  proven: false,
   setViewProperty: () => Promise.reject(new SdkEditError('unsupported')),
   revertViewProperties: () => Promise.reject(new SdkEditError('unsupported')),
 };
@@ -52,6 +54,9 @@ export type EditRequest =
   | { kind: 'revert'; viewKey?: number; property?: ViewProperty | ViewPropertyGroup };
 
 export class FakeLink implements SdkLink {
+  mode: SdkLink['mode'] = 'session';
+  /** The welcome carried the link proof (a session link the SDK takes edits from). */
+  proven = true;
   readonly configs: SdkOptions[] = [];
   closedWith: ByeReason | 'none' | null = null;
   constructor(readonly protocolVersion = 1) {}

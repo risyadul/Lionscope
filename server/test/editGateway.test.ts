@@ -207,6 +207,12 @@ describe('device gateway edit requests', () => {
     await expect(link.revertViewProperties()).rejects.toEqual(new SdkEditError('closed'));
   });
 
+  it('tells whether a link may take edits: only a session whose welcome carried the proof', async () => {
+    const { link } = await linked();
+    expect(link.mode).toBe('inspect');
+    expect(link.proven).toBe(false);
+  });
+
   it('never gives two links the same request id', async () => {
     const first = await linked();
     const firstGateway = gateway;

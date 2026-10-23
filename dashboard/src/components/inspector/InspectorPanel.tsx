@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import { fallbackHint, fallbackLabel } from '../../lib/inspector.ts';
-import { liveEditsLabel } from '../../lib/viewEdits.ts';
+import { EDIT_BLOCKED_HINTS, liveEditsLabel } from '../../lib/viewEdits.ts';
 import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
 import { InspectorTree } from './InspectorTree.tsx';
@@ -103,7 +103,12 @@ export const InspectorPanel = memo(function InspectorPanel() {
               <button
                 type="button"
                 className="btn inspect-revert-all"
-                disabled={!edits.canEdit || revertAll.kind === 'applying'}
+                disabled={
+                  !edits.canEdit || revertAll.kind === 'applying' || snapshot.editBlocked !== undefined
+                }
+                title={
+                  snapshot.editBlocked === undefined ? undefined : EDIT_BLOCKED_HINTS[snapshot.editBlocked]
+                }
                 aria-busy={revertAll.kind === 'applying' || undefined}
                 onClick={(event) => {
                   // The count and this button go away once all is reverted: Refresh takes the focus.
