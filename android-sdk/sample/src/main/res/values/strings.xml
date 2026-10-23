@@ -37,6 +37,9 @@
     <string name="off_main_worker">Worker thread (Activity inflater clone): %1$s</string>
     <string name="more_body">MoreFragment is a child of MoreContainerFragment.</string>
     <string name="detail_body">DetailActivity reports the alias \"detail_page\".</string>
+    <string name="price_tag">Total 42.00</string>
+    <string name="pin_hint">PIN</string>
+    <string name="pay">Pay</string>
     <string name="dialog_title">Promo</string>
     <string name="dialog_message">PromoDialogFragment is on top while shown.</string>
     <string name="dialog_dismiss">Dismiss</string>
