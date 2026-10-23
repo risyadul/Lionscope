@@ -13,9 +13,28 @@ import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_V4,
+  DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
+  MAX_HTTP_BODY_BYTES,
+  MAX_HTTP_CONTENT_TYPE_CHARS,
+  MAX_HTTP_ERROR_CHARS,
+  MAX_HTTP_HEADER_BYTES,
+  MAX_HTTP_HEADER_NAME_CHARS,
+  MAX_HTTP_HEADER_VALUE_CHARS,
+  MAX_HTTP_HEADERS,
+  MAX_HTTP_LINE_BYTES,
+  MAX_HTTP_METHOD_CHARS,
+  MAX_HTTP_URL_CHARS,
+  MAX_MOCK_BODY_BYTES,
+  MAX_MOCK_CLIENT_MESSAGE_BYTES,
+  MAX_MOCK_DELAY_MS,
+  MAX_MOCK_GLOB_STARS,
+  MAX_MOCK_HEADER_BYTES,
+  MAX_MOCK_HEADERS,
+  MAX_MOCK_URL_CHARS,
+  MAX_NETWORK_MOCKS,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_INSPECTOR_NODES,
@@ -37,8 +56,11 @@ import {
   type ClientMessage,
   type DeviceMessage,
   type DeviceMessageType,
+  type HttpBody,
+  type HttpHeader,
   type InspectorNode,
   type InspectorWindow,
+  type NetworkMockInput,
   type ScreenClientMessage,
 } from './wire.ts';
 
@@ -54,6 +76,78 @@ const inspectorNodeId = z
   .int()
   .min(0)
   .max(MAX_INSPECTOR_NODES - 1);
+
+// ---------------------------------------------------------------------------
+// Network (0.7.0): shared by the dashboard's mock rules, the device gateway and the agent tools
+// ---------------------------------------------------------------------------
+
+const utf8Bytes = (value: string): number => utf8.encode(value).length;
+/** UTF-8 size at most `max`: a UTF-16 unit encodes to at least one byte, so longer strings fail without encoding. */
+const withinBytes = (value: string, max: number): boolean => value.length <= max && utf8Bytes(value) <= max;
+/** An RFC 9110 token: header names and methods. */
+export const HTTP_TOKEN_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+/** Control (Cc) and format (Cf) characters never belong in a URL, header or content type on the wire. */
+const HTTP_FORBIDDEN = /[\p{Cc}\p{Cf}]/u;
+/** Mock rule ids as the server assigns them (`NetworkMockRule.id`). */
+export const MOCK_ID_PATTERN = /^m[1-9][0-9]{0,8}$/;
+/** Mock rule methods: upper-case tokens (`GET`, `PROPFIND`). */
+export const MOCK_METHOD_PATTERN = /^[A-Z][A-Z0-9_-]{0,15}$/;
+const MOCK_URL_PATTERN = /^(https?|\*):\/\//i;
+/** Java's `int`: SDK exchange ids, mock revisions. */
+const MAX_INT32 = 2_147_483_647;
+/** Upper bound of a byte count (a body's size): beyond any real transfer, below 2^53. */
+export const MAX_HTTP_SIZE = 1e15;
+/** Calls the SDK may report as not recorded since its previous `httpRequest`. */
+export const MAX_HTTP_DROPPED = 1_000_000;
+
+const httpToken = (max: number) => z.string().min(1).max(max).regex(HTTP_TOKEN_PATTERN, 'invalid token');
+const httpText = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => !HTTP_FORBIDDEN.test(value), 'control or format character');
+
+export const httpHeaderSchema = z.tuple([
+  httpToken(MAX_HTTP_HEADER_NAME_CHARS),
+  httpText(MAX_HTTP_HEADER_VALUE_CHARS),
+]) satisfies z.ZodType<HttpHeader>;
+
+const headersBytes = (headers: readonly HttpHeader[]): number =>
+  headers.reduce((sum, [name, value]) => sum + utf8Bytes(name) + utf8Bytes(value), 0);
+
+const mockUrl = z
+  .string()
+  .min(1)
+  .max(MAX_MOCK_URL_CHARS)
+  .refine((value) => !HTTP_FORBIDDEN.test(value) && !/\s/.test(value), 'control or space character')
+  .refine((value) => MOCK_URL_PATTERN.test(value), 'must start with http://, https:// or *://');
+
+/** A mock rule from the dashboard or an agent (validated; the server normalises and orders it). */
+export const networkMockInputSchema = z
+  .object({
+    id: z.string().regex(MOCK_ID_PATTERN, 'invalid mock id').optional(),
+    method: z.string().regex(MOCK_METHOD_PATTERN, 'invalid method').nullable(),
+    match: z.enum(['exact', 'prefix', 'glob']),
+    url: mockUrl,
+    action: z.enum(['respond', 'timeout', 'connection_error']),
+    status: z.number().int().min(100).max(599),
+    headers: z
+      .array(httpHeaderSchema)
+      .max(MAX_MOCK_HEADERS)
+      .refine((headers) => headersBytes(headers) <= MAX_MOCK_HEADER_BYTES, 'headers too large'),
+    body: z.string().refine((body) => withinBytes(body, MAX_MOCK_BODY_BYTES), 'body too large'),
+    delayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS),
+    enabled: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (rule) => rule.match === 'glob' || !rule.url.startsWith('*'),
+    'an exact or prefix pattern needs http:// or https://',
+  )
+  .refine(
+    (rule) => rule.match !== 'glob' || rule.url.split('*').length - 1 <= MAX_MOCK_GLOB_STARS,
+    `at most ${MAX_MOCK_GLOB_STARS} * in a glob`,
+  ) satisfies z.ZodType<NetworkMockInput>;
 
 // ---------------------------------------------------------------------------
 // Dashboard → server (validated)
@@ -100,6 +194,16 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('inspectorFocus'), serial: serialSchema.nullable() }).strict(),
+  z
+    .object({ type: z.literal('getHttpExchange'), id: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) })
+    .strict(),
+  z.object({ type: z.literal('setNetworkMock'), rule: networkMockInputSchema }).strict(),
+  z
+    .object({
+      type: z.literal('clearNetworkMocks'),
+      id: z.string().regex(MOCK_ID_PATTERN, 'invalid mock id').optional(),
+    })
+    .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -126,9 +230,18 @@ function validate<T>(json: unknown, schema: z.ZodType<T>): ParseResult<T> {
   return { ok: true, value: result.data };
 }
 
+/** The size cap of a dashboard → server frame: MAX_CLIENT_MESSAGE_BYTES, or the larger one of `setNetworkMock`. */
+export const MAX_CLIENT_FRAME_BYTES = MAX_MOCK_CLIENT_MESSAGE_BYTES;
+
 export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
-  const json = readJson(raw, MAX_CLIENT_MESSAGE_BYTES);
-  return json.ok ? validate(json.value, clientMessageSchema) : json;
+  const json = readJson(raw, MAX_CLIENT_FRAME_BYTES);
+  if (!json.ok) return json;
+  const type: unknown =
+    typeof json.value === 'object' && json.value !== null && Reflect.get(json.value, 'type');
+  if (type !== 'setNetworkMock' && !withinBytes(raw, MAX_CLIENT_MESSAGE_BYTES)) {
+    return { ok: false, error: 'message too large' };
+  }
+  return validate(json.value, clientMessageSchema);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +510,32 @@ const inspectorNodeSchema = z
   })
   .strip() satisfies z.ZodType<InspectorNode>;
 
+const httpHeadersSchema = z
+  .array(httpHeaderSchema)
+  .max(MAX_HTTP_HEADERS)
+  .refine((headers) => headersBytes(headers) <= MAX_HTTP_HEADER_BYTES, 'headers too large');
+
+const httpBodySchema = z
+  .object({
+    size: z.number().int().min(0).max(MAX_HTTP_SIZE).nullable(),
+    contentType: httpText(MAX_HTTP_CONTENT_TYPE_CHARS).min(1).nullable(),
+    // Body text is the app's own data: newlines, tabs (and any other character) are kept.
+    text: z
+      .string()
+      .refine((text) => withinBytes(text, MAX_HTTP_BODY_BYTES), 'body text too large')
+      .nullable(),
+    truncated: z.boolean(),
+    omitted: z.enum(['type', 'streaming', 'encoding', 'one_shot', 'error']).nullable(),
+  })
+  .strip() satisfies z.ZodType<HttpBody>;
+
+const httpUrl = httpText(MAX_HTTP_URL_CHARS)
+  .min(1)
+  .refine((value) => /^https?:\/\//i.test(value), 'not an http(s) URL');
+const exchangeId = z.number().int().min(1).max(MAX_INT32);
+const mockRev = z.number().int().min(0).max(MAX_INT32);
+const HTTP_PROTOCOL_PATTERN = /^[a-z0-9_./-]{1,32}$/;
+
 export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -526,12 +665,56 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       reason: z.enum(['background', 'no_window', 'disabled', 'failed']),
     })
     .strip(),
+  z
+    .object({
+      type: z.literal('httpRequest'),
+      id: exchangeId,
+      ts: epochMs,
+      method: httpToken(MAX_HTTP_METHOD_CHARS),
+      url: httpUrl,
+      headers: httpHeadersSchema,
+      body: httpBodySchema.nullable(),
+      mockId: z.string().regex(MOCK_ID_PATTERN, 'invalid mock id').nullable(),
+      dropped: z.number().int().min(0).max(MAX_HTTP_DROPPED),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('httpResponse'),
+      id: exchangeId,
+      ts: epochMs,
+      status: z.number().int().min(100).max(999).nullable(),
+      protocol: z.string().regex(HTTP_PROTOCOL_PATTERN, 'invalid protocol').nullable(),
+      headers: httpHeadersSchema,
+      body: httpBodySchema.nullable(),
+      headersMs: durationMs.nullable(),
+      durationMs,
+      error: z
+        .object({
+          kind: z.enum(['timeout', 'connection', 'canceled', 'io']),
+          message: z
+            .string()
+            .max(MAX_HTTP_ERROR_CHARS)
+            .transform((value) => sanitized(value) || null)
+            .nullable(),
+        })
+        .strip()
+        .nullable(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('mocksApplied'),
+      rev: mockRev,
+      count: z.number().int().min(0).max(MAX_NETWORK_MOCKS),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
- * Diagnostics (v2, v3 `inflate` / `viewtree`) and the v4 Inspector answers: a line of these types that fails
- * validation is dropped by the caller (`invalidDiagnostic`), not fatal to the link like a bad v1 message (an
- * invalid Inspector answer fails its request instead).
+ * Diagnostics (v2, v3 `inflate` / `viewtree`), the v4 Inspector answers and the v7 network messages: a line of these
+ * types that fails validation is dropped by the caller (`invalidDiagnostic`), not fatal to the link like a bad v1
+ * message (an invalid Inspector answer fails its request instead).
  */
 const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'stall',
@@ -541,6 +724,9 @@ const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'inspectBegin',
   'inspectNodes',
   'inspectError',
+  'httpRequest',
+  'httpResponse',
+  'mocksApplied',
 ]);
 
 /**
@@ -559,6 +745,9 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   inspectBegin: DEVICE_PROTOCOL_V4,
   inspectNodes: DEVICE_PROTOCOL_V4,
   inspectError: DEVICE_PROTOCOL_V4,
+  httpRequest: DEVICE_PROTOCOL_V7,
+  httpResponse: DEVICE_PROTOCOL_V7,
+  mocksApplied: DEVICE_PROTOCOL_V7,
 };
 
 /**
@@ -581,6 +770,17 @@ export type DeviceParseResult =
       unsupportedVersion?: number;
     };
 
+const TYPE_PREFIX = '{"type":"';
+const MAX_PEEKED_TYPE_LENGTH = 16;
+
+/** The `type` of an SDK line without parsing it (the SDK writes it first); null when the line does not start so. */
+export function peekLineType(line: string): string | null {
+  if (!line.startsWith(TYPE_PREFIX)) return null;
+  const end = line.indexOf('"', TYPE_PREFIX.length);
+  if (end === -1 || end - TYPE_PREFIX.length > MAX_PEEKED_TYPE_LENGTH) return null;
+  return line.slice(TYPE_PREFIX.length, end);
+}
+
 function isKnownType(type: string): type is DeviceMessageType {
   return Object.hasOwn(DEVICE_MESSAGE_VERSIONS, type);
 }
@@ -597,11 +797,26 @@ function isSupportedProtocolVersion(version: number): boolean {
  * Parse one NDJSON line from the SDK (without its trailing newline). `protocolVersion` is the link's negotiated
  * version: types introduced later are not validated but reported as `unnegotiated`.
  */
+/** Lines of these types may be up to MAX_HTTP_LINE_BYTES on a v7 link; every other line, MAX_DEVICE_LINE_BYTES. */
+export const LARGE_DEVICE_MESSAGE_TYPES: ReadonlySet<DeviceMessageType> = new Set([
+  'httpRequest',
+  'httpResponse',
+]);
+
+/** The line size cap for a line of `type` (as peeked) on a link negotiated at `protocolVersion`. */
+export function maxDeviceLineBytes(type: string | null, protocolVersion: number): number {
+  return protocolVersion >= DEVICE_PROTOCOL_V7 &&
+    type !== null &&
+    LARGE_DEVICE_MESSAGE_TYPES.has(type as DeviceMessageType)
+    ? MAX_HTTP_LINE_BYTES
+    : MAX_DEVICE_LINE_BYTES;
+}
+
 export function parseDeviceMessage(
   line: string,
   protocolVersion: number = DEVICE_PROTOCOL_VERSION,
 ): DeviceParseResult {
-  const json = readJson(line, MAX_DEVICE_LINE_BYTES);
+  const json = readJson(line, maxDeviceLineBytes(peekLineType(line), protocolVersion));
   if (!json.ok) return json;
   const object = typeof json.value === 'object' && json.value !== null ? json.value : null;
   const rawType: unknown = object && Reflect.get(object, 'type');
