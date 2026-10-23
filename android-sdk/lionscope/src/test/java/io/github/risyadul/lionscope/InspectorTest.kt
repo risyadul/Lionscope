@@ -1,6 +1,7 @@
 package io.github.risyadul.lionscope
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,15 +24,20 @@ class InspectorTest {
 
     private class Scene(var root: FakeView?, var foreground: Boolean = true) : InspectorScene<FakeView> {
         var failure: RuntimeException? = null
+        /** Commits counted by the scene's `captured` hook, which a v8 capture calls once its walk worked. */
+        var commits = 0
         val readCompose = ArrayList<Boolean>()
+        val viewState = ArrayList<Boolean>()
         override val isForeground: Boolean
             get() = foreground
 
-        override fun prepare(readCompose: Boolean): PreparedScene<FakeView>? {
+        override fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<FakeView>? {
             this.readCompose += readCompose
+            this.viewState += viewState
             failure?.let { throw it }
             val root = root ?: return null
-            return PreparedScene(listOf(fakeWindow(root)), InspectorDisplay(1080, 2424, 0), FakeTreeAccess())
+            val captured = if (viewState) { { ++commits } } else null
+            return PreparedScene(listOf(fakeWindow(root)), InspectorDisplay(1080, 2424, 0), FakeTreeAccess(), captured)
         }
     }
 
@@ -127,6 +133,30 @@ class InspectorTest {
         link.welcome(true, 6)
         request(2)
         assertEquals(listOf(false, true), scene.readCompose)
+    }
+
+    @Test
+    fun viewStateAndLiveEditsAreOnlyOnAV8Link() {
+        request(1)
+        background.removeAt(0).run()
+        assertFalse(sent().single { it["type"] == "inspectBegin" }.containsKey("liveEdits"))
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V8)
+        link.v4Lines.clear()
+        request(2)
+        background.removeAt(0).run()
+        assertEquals(listOf(false, true), scene.viewState)
+        assertEquals(1, scene.commits)
+        assertEquals(1.0, sent().single { it["type"] == "inspectBegin" }["liveEdits"])
+    }
+
+    @Test
+    fun aFailedCaptureIsNotTheOneEditsName() {
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V8)
+        scene.failure = IllegalStateException("view tree changed")
+        request(1)
+        assertEquals(0, scene.commits)
     }
 
     @Test

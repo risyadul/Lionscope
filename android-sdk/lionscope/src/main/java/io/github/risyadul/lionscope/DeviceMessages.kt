@@ -34,6 +34,8 @@ internal object DeviceMessages {
     private const val MAX_CAPTURE_MS = 60_000.0
     /** `<n>px` layout sizes: at most 6 digits on the wire. */
     private const val MAX_LAYOUT_PX = 999_999
+    /** v8 text sizes as read (sp): the server's MAX_VIEW_TEXT_SIZE_SP. */
+    private const val MAX_TEXT_SIZE_SP = 10_000.0
     private const val MATCH_PARENT = "match_parent"
     private const val WRAP_CONTENT = "wrap_content"
     private val LAYOUT_PX = Regex("-?\\d{1,6}px")
@@ -237,6 +239,7 @@ internal object DeviceMessages {
     /**
      * v4. Start of the answer to `inspect` [requestId]; windows beyond [MAX_INSPECTOR_WINDOWS] are not sent (the
      * snapshot never has more). [display] sizes are clamped to 1..20 000 px, its rotation to a multiple of 90.
+     * [liveEdits] (v8) is only written when given.
      */
     fun inspectBegin(
         requestId: Int,
@@ -248,6 +251,7 @@ internal object DeviceMessages {
         truncated: Boolean,
         captureMs: Double,
         compose: Boolean,
+        liveEdits: Int? = null,
     ): String {
         val json = JsonWriter().beginObject()
             .name("type").value("inspectBegin")
@@ -270,12 +274,13 @@ internal object DeviceMessages {
             writeRect(json, window.bounds)
             json.endObject()
         }
-        return json.endArray()
+        json.endArray()
             .name("nodeCount").value(nodeCount.coerceIn(0, MAX_INSPECTOR_NODES))
             .name("truncated").value(truncated)
             .name("captureMs").value(clampMs(captureMs, MAX_CAPTURE_MS))
             .name("compose").value(compose)
-            .endObject().toString()
+        if (liveEdits != null) json.name("liveEdits").value(liveEdits.coerceIn(0, MAX_LIVE_EDITS))
+        return json.endObject().toString()
     }
 
     /**
@@ -361,8 +366,44 @@ internal object DeviceMessages {
         json.name("fragment").value(WireText.clean(node.fragment, MAX_V3_TEXT_LENGTH))
             .name("activity").value(WireText.clean(node.activity, MAX_V3_TEXT_LENGTH))
         writeCompose(json, node)
+        node.view?.let { writeView(json, it) }
         return json.endObject().toString()
     }
+
+    /** v8 `view`, only on View nodes of a v8 capture; px clamped like other pixels, text size to 0..10 000 sp. */
+    private fun writeView(json: JsonWriter, view: ViewState) {
+        json.name("view").beginObject()
+            .name("key").value(view.key.coerceAtLeast(1))
+            .name("translationX").value(viewPixels(view.translationX))
+            .name("translationY").value(viewPixels(view.translationY))
+            .name("elevation").value(viewPixels(view.elevation))
+            .name("backgroundColor").value(view.backgroundColor?.let(ViewValues::hex))
+            .name("textSize")
+        val textSize = view.textSize
+        if (textSize == null) json.nullValue() else json.value(if (textSize.isNaN()) 0.0 else textSize.coerceIn(0.0, MAX_TEXT_SIZE_SP))
+        json.name("textColor").value(view.textColor?.let(ViewValues::hex))
+            .name("password").value(view.password)
+        if (view.edited.isNotEmpty()) {
+            json.name("edited").beginArray()
+            for (property in view.edited.distinct().sortedBy { it.ordinal }) json.value(property.wire)
+            json.endArray()
+        }
+        json.endObject()
+    }
+
+    /** v8. The answer to `setViewProperty` / `revertViewProperties` [requestId]; `error` only when it failed. */
+    fun viewPropertyResult(requestId: Int, result: EditResult): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("viewPropertyResult")
+            .name("requestId").value(requestId.coerceAtLeast(0))
+            .name("ok").value(result.error == null)
+        result.error?.let { json.name("error").value(it.wire) }
+        return json.name("liveEdits").value(result.liveEdits.coerceIn(0, MAX_LIVE_EDITS))
+            .endObject().toString()
+    }
+
+    private fun viewPixels(value: Double): Double =
+        if (value.isNaN()) 0.0 else value.coerceIn(-MAX_INSPECTOR_PIXELS.toDouble(), MAX_INSPECTOR_PIXELS.toDouble())
 
     /** v6 fields, only written when set (a v4 snapshot has none, byte for byte as before). */
     private fun writeCompose(json: JsonWriter, node: InspectorNode) {

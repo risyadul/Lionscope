@@ -1,6 +1,6 @@
 package io.github.risyadul.lionscope
 
-/** Server → SDK line, parsed just enough to react to `welcome` / `bye` / `config` / `inspect` / `mocks` / `mock`. */
+/** Server → SDK line, parsed just enough to react to `welcome` / `bye` / `config` / `inspect` / `mocks` / `mock` and the v8 edits. */
 internal sealed class GatewayMessage {
     /**
      * [protocolVersion] is the server's negotiated version as sent (1 when it is missing or not an integer).
@@ -21,6 +21,11 @@ internal sealed class GatewayMessage {
 
     /** v7: rule [index] of set [rev]. */
     class Mock(val rev: Int, val index: Int, val rule: MockRule) : GatewayMessage()
+    /** v8: set [property] of the view with [viewKey] to [value] (a String, Double or Boolean, checked by the editor). */
+    class SetViewProperty(val requestId: Int, val viewKey: Int, val property: ViewProperty, val value: Any) : GatewayMessage()
+
+    /** v8: revert [properties] (all when null) of [viewKey], or every live edit when [viewKey] is null. */
+    class RevertViewProperties(val requestId: Int, val viewKey: Int?, val properties: List<ViewProperty>?) : GatewayMessage()
 
     companion object {
         private const val ANY_METHOD = "*"
@@ -44,7 +49,8 @@ internal sealed class GatewayMessage {
          * flat object serialised with `type` first and no nested `type` / `protocolVersion` / `mode` / `proof` keys (the v7 `mocks` /
          * `mock` lines, whose strings may hold any text, are read with [FlatJson] instead). A welcome without
          * an integer `protocolVersion` means version 1; out-of-range values are passed on for [DeviceLink] to clamp. An
-         * `inspect` without a valid `requestId` (a non-negative Int) is dropped.
+         * `inspect` without a valid `requestId` (a non-negative Int) is dropped. The v8 edit lines carry app text and are
+         * read whole by [FlatJson]; one with an unknown property, a missing value or a bad id is dropped.
          */
         fun parse(line: String): GatewayMessage? = when (TYPE.find(line)?.groupValues?.get(1)) {
             "welcome" -> Welcome(
@@ -57,6 +63,8 @@ internal sealed class GatewayMessage {
             "inspect" -> REQUEST_ID.find(line)?.groupValues?.get(1)?.toIntOrNull()?.let(::Inspect)
             "mocks" -> FlatJson.parse(line)?.takeIf { it.string("type") == "mocks" }?.let(::parseMocks)
             "mock" -> FlatJson.parse(line)?.takeIf { it.string("type") == "mock" }?.let(::parseMock)
+            "setViewProperty" -> FlatJson.parse(line)?.let(::setViewProperty)
+            "revertViewProperties" -> FlatJson.parse(line)?.let(::revertViewProperties)
             else -> null
         }
 
@@ -97,6 +105,33 @@ internal sealed class GatewayMessage {
             )
             return Mock(rev, index, rule)
         }
+
+        private fun setViewProperty(fields: FlatJson): SetViewProperty? {
+            if (fields.string("type") != "setViewProperty") return null
+            val requestId = fields.int("requestId")?.takeIf { it >= 0 } ?: return null
+            val viewKey = fields.int("viewKey")?.takeIf { it >= 1 } ?: return null
+            val property = fields.string("property")?.let(ViewProperty::of) ?: return null
+            val value: Any = fields.string("value") ?: fields.double("value") ?: fields.boolean("value") ?: return null
+            return SetViewProperty(requestId, viewKey, property, value)
+        }
+
+        /** A `viewKey` or `property` that is there (and not null) must be valid. */
+        private fun revertViewProperties(fields: FlatJson): RevertViewProperties? {
+            if (fields.string("type") != "revertViewProperties") return null
+            val requestId = fields.int("requestId")?.takeIf { it >= 0 } ?: return null
+            val viewKey = if (isAbsent(fields, "viewKey")) null else fields.int("viewKey")?.takeIf { it >= 1 } ?: return null
+            val properties = if (isAbsent(fields, "property")) {
+                null
+            } else {
+                fields.string("property")?.let(ViewProperty::group) ?: return null
+            }
+            if (properties != null && viewKey == null) return null
+            return RevertViewProperties(requestId, viewKey, properties)
+        }
+
+        /** Missing, or JSON null. */
+        private fun isAbsent(fields: FlatJson, key: String): Boolean =
+            !fields.has(key) || (fields.string(key) == null && fields.double(key) == null && fields.boolean(key) == null)
 
         /**
          * A missing or non-numeric threshold is the default; any other number snaps to the nearest allowed value

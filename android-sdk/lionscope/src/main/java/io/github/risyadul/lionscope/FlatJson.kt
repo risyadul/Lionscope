@@ -21,6 +21,10 @@ internal class FlatJson private constructor(private val values: Map<String, Any?
 
     fun boolean(key: String): Boolean? = values[key] as? Boolean
 
+    /** The value of [key] if it is a JSON number (a finite Double), else null. */
+    fun double(key: String): Double? =
+        (values[key] as? JsonNumber)?.literal?.toDoubleOrNull()?.takeIf { !it.isInfinite() }
+
     fun has(key: String): Boolean = values.containsKey(key)
 
     /** A number as written, so integers of any size are told apart from fractions without rounding. */

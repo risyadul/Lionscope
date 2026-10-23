@@ -53,6 +53,12 @@ internal interface LinkPort {
     fun addInspectListener(listener: (requestId: Int) -> Unit)
 
     /**
+     * Each `setViewProperty` / `revertViewProperties` ([GatewayMessage.SetViewProperty], [GatewayMessage.RevertViewProperties])
+     * on a v8 link; called on a link thread, it must only hand off.
+     */
+    fun addViewEditListener(listener: (GatewayMessage) -> Unit)
+
+    /**
      * Queues a v2 message, encoded later on the link thread by [encode] (null = nothing to send). Dropped unless the
      * current connection negotiated v2, checked again when it is written. [sizeHint] ≈ its encoded length.
      */
@@ -73,4 +79,6 @@ internal interface LinkPort {
      * bookkeeping.
      */
     fun addMocksListener(listener: (GatewayMessage) -> Unit)
+    /** [sendV2] for v8 messages: dropped unless the connection negotiated v8. */
+    fun sendV8(sizeHint: Int, encode: () -> String?)
 }

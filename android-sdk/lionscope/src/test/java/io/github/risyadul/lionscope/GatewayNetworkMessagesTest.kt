@@ -11,9 +11,12 @@ import java.io.File
 /** protocol/fixtures/gateway-messages.ndjson: the server reproduces these lines byte for byte; the SDK reads them. */
 class GatewayNetworkMessagesTest {
 
+    /** The welcome with its proof and the mock lines (the file also holds the v8 edit lines). */
     private val goldenLines: List<String> by lazy {
         val dir = System.getProperty("lionscope.fixtures") ?: "../../protocol/fixtures"
-        File(dir, "gateway-messages.ndjson").readLines(Charsets.UTF_8).filter { it.isNotBlank() }
+        File(dir, "gateway-messages.ndjson").readLines(Charsets.UTF_8).filter { line ->
+            line.isNotBlank() && NETWORK_TYPES.any { line.startsWith("{\"type\":\"$it\"") }
+        }
     }
 
     @Test
@@ -128,5 +131,9 @@ class GatewayNetworkMessagesTest {
         assertArrayEquals(byteArrayOf(-5, -1), MockWire.base64("+/8="))
         assertNull(MockWire.base64("W10=="))
         assertNull(MockWire.base64("W1 0"))
+    }
+
+    private companion object {
+        val NETWORK_TYPES = listOf("welcome", "mocks", "mock")
     }
 }

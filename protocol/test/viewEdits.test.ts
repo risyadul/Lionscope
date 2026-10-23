@@ -220,7 +220,7 @@ describe('v8 device messages', () => {
     const parsed = GOLDEN.map((line) => JSON.parse(line) as Record<string, unknown>);
     const begin = parsed.find((message) => message.type === 'inspectBegin' && 'liveEdits' in message);
     expect(begin?.liveEdits).toBe(2);
-    const nodes = parsed.find((message) => message.type === 'inspectNodes' && message.requestId === 10)
+    const nodes = parsed.find((message) => message.type === 'inspectNodes' && message.requestId === 11)
       ?.nodes as InspectorNode[];
     expect(nodes.every((view) => view.view !== undefined)).toBe(true);
     expect(nodes[1]?.view?.edited).toEqual(['paddingLeft', 'text']);
@@ -249,7 +249,7 @@ describe('v8 device messages', () => {
     expect(result({ liveEdits: MAX_LIVE_EDITS + 1 })).toMatchObject({
       invalidDiagnostic: 'viewPropertyResult',
     });
-    const golden = GOLDEN.find((line) => line.includes('"requestId":10,"seq":0')) ?? '';
+    const golden = GOLDEN.find((line) => line.includes('"requestId":11,"seq":0')) ?? '';
     const message = JSON.parse(golden) as { nodes: InspectorNode[] };
     const withView = (view: Record<string, unknown>) =>
       parseDeviceMessage(

@@ -32,7 +32,7 @@ class DeviceMessagesTest {
         assertEquals(
             setOf(
                 "hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree",
-                "inspectBegin", "inspectNodes", "inspectError", "httpRequest", "httpResponse", "mocksApplied",
+                "inspectBegin", "inspectNodes", "inspectError", "httpRequest", "httpResponse", "mocksApplied", "viewPropertyResult",
             ),
             types,
         )
@@ -62,9 +62,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionSeven() {
-        assertEquals(7, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V7, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionEight() {
+        assertEquals(8, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V8, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -109,6 +109,53 @@ class DeviceMessagesTest {
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to false), composable(false))
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to true), composable(true))
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0), composable(null))
+    }
+
+    @Test
+    fun aV8ViewStateIsWrittenLastWithHexColorsAndItsEditsInWireOrder() {
+        val state = ViewState(
+            key = 7,
+            translationX = 1e9,
+            translationY = Double.NaN,
+            elevation = 2.25,
+            backgroundColor = 0x00FF0000,
+            textSize = 16.0,
+            textColor = 0xDE000000.toInt(),
+            password = false,
+            edited = listOf(ViewProperty.TEXT, ViewProperty.PADDING_LEFT, ViewProperty.TEXT),
+        )
+        val node = TestJson.parse(DeviceMessages.inspectNode(InspectorFixtures.plainNode(0, null).copy(view = state))) as Map<*, *>
+        assertServerAcceptsNode(node)
+        assertEquals("view", node.keys.last())
+        assertEquals(
+            mapOf(
+                "key" to 7.0,
+                "translationX" to 100_000.0,
+                "translationY" to 0.0,
+                "elevation" to 2.25,
+                "backgroundColor" to "#00FF0000",
+                "textSize" to 16.0,
+                "textColor" to "#DE000000",
+                "password" to false,
+                "edited" to listOf("paddingLeft", "text"),
+            ),
+            node["view"],
+        )
+        val plain = TestJson.parse(
+            DeviceMessages.inspectNode(InspectorFixtures.plainNode(0, null).copy(view = state.copy(textSize = null, textColor = null, backgroundColor = null, edited = emptyList()))),
+        ) as Map<*, *>
+        val view = plain["view"] as Map<*, *>
+        assertFalse(view.containsKey("edited"))
+        assertEquals(null, view["textSize"])
+        assertEquals(null, view["backgroundColor"])
+    }
+
+    @Test
+    fun aViewPropertyResultSaysOkOrWhyNot() {
+        assertEquals(
+            "{\"type\":\"viewPropertyResult\",\"requestId\":3,\"ok\":false,\"error\":\"password\",\"liveEdits\":256}",
+            DeviceMessages.viewPropertyResult(3, EditResult(EditError.PASSWORD, 9999)),
+        )
     }
 
     @Test
@@ -370,7 +417,7 @@ class DeviceMessagesTest {
     @Test
     fun goldenInspectorNodesAreChunkedIntoTheGoldenLine() {
         val goldens = goldenLines.filter { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
-        assertEquals(3, goldens.size) // A v4 (views) and two v6 (Compose) ones, the second with draws.
+        assertEquals(4, goldens.size) // A v4 (views), two v6 (Compose, the second with draws) and a v8 (editable views) one.
         for (golden in goldens) {
             val message = TestJson.parse(golden) as Map<*, *>
             val nodes = (message["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
@@ -420,6 +467,18 @@ class DeviceMessagesTest {
             assertTrue((source["line"] as Double) >= 1)
             val layout = source["layout"] as String
             assertTrue(layout.isNotEmpty() && layout.length <= 200)
+        }
+        // v8 (viewStateSchema): key ≥ 1, px ±100 000, colors #AARRGGBB, text size 0..10 000 sp, known properties.
+        (node["view"] as Map<*, *>?)?.let { view ->
+            val key = view["key"] as Double
+            assertTrue("key $key", key >= 1 && key == Math.floor(key))
+            for (px in listOf("translationX", "translationY", "elevation")) assertTrue(Math.abs(view[px] as Double) <= 100_000)
+            for (color in listOf("backgroundColor", "textColor")) {
+                (view[color] as String?)?.let { assertTrue(it, Regex("^#[0-9A-F]{8}$").matches(it)) }
+            }
+            (view["textSize"] as Double?)?.let { assertTrue(it in 0.0..10_000.0) }
+            assertTrue(view["password"] is Boolean)
+            (view["edited"] as List<*>?)?.forEach { wire -> assertTrue("$wire", ViewProperty.of(wire as String) != null) }
         }
     }
 
@@ -563,6 +622,7 @@ class DeviceMessagesTest {
                 truncated = message["truncated"] as Boolean,
                 captureMs = message.num("captureMs"),
                 compose = message["compose"] as Boolean,
+                liveEdits = (message["liveEdits"] as Double?)?.toInt(),
             )
         }
         "inspectNodes" -> DeviceMessages.inspectNodes(
@@ -601,6 +661,13 @@ class DeviceMessagesTest {
             },
         )
         "mocksApplied" -> HttpMessages.mocksApplied(message.num("rev").toInt(), message.num("count").toInt())
+        "viewPropertyResult" -> DeviceMessages.viewPropertyResult(
+            requestId = message.num("requestId").toInt(),
+            result = EditResult(
+                error = (message["error"] as String?)?.let { wire -> EditError.values().single { it.wire == wire } },
+                liveEdits = message.num("liveEdits").toInt(),
+            ),
+        )
         else -> error("Unknown type in golden line: $message")
     }
 

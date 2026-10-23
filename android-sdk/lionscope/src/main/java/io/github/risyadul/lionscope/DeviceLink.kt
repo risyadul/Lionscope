@@ -67,6 +67,7 @@ internal class DeviceLink(
     private val configListeners = CopyOnWriteArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = CopyOnWriteArrayList<(Int) -> Unit>()
     private val mocksListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
+    private val viewEditListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -100,6 +101,12 @@ internal class DeviceLink(
         }
     }
 
+    override fun sendV8(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && speaks(negotiatedVersion, DEVICE_PROTOCOL_V8)) {
+            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V8, encode))
+        }
+    }
+
     /** Records the top screen (re-sent after every reconnect); encoding happens on the link thread. */
     override fun onScreen(ts: Long, screen: ScreenRef?) {
         currentScreen = screen
@@ -129,6 +136,10 @@ internal class DeviceLink(
 
     override fun addMocksListener(listener: (GatewayMessage) -> Unit) {
         mocksListeners.add(listener)
+    }
+
+    override fun addViewEditListener(listener: (GatewayMessage) -> Unit) {
+        viewEditListeners.add(listener)
     }
 
     private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
@@ -265,6 +276,7 @@ internal class DeviceLink(
                 is GatewayMessage.Config -> onConfig(message.options)
                 is GatewayMessage.Inspect -> onInspect(message.requestId)
                 is GatewayMessage.Mocks, is GatewayMessage.Mock -> onMocks(message)
+                is GatewayMessage.SetViewProperty, is GatewayMessage.RevertViewProperties -> onViewEdit(message)
             }
         }
 
@@ -273,6 +285,13 @@ internal class DeviceLink(
         private fun onMocks(message: GatewayMessage) {
             if (!welcomed || closed || !isNetworkAuthenticated || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
             dispatch(mocksListeners, message)
+        }
+
+        /** Ignored before `welcome`, after close, and on a link negotiated below v8. */
+        @Synchronized
+        private fun onViewEdit(message: GatewayMessage) {
+            if (!welcomed || closed || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V8)) return
+            dispatch(viewEditListeners, message)
         }
 
         /** Ignored before `welcome`, after close, and on a link negotiated below v4. */

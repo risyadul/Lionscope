@@ -37,6 +37,7 @@ internal class FakeLink : LinkPort {
     private val configListeners = ArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = ArrayList<(Int) -> Unit>()
     private val mocksListeners = ArrayList<(GatewayMessage) -> Unit>()
+    private val viewEditListeners = ArrayList<(GatewayMessage) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
     val v2Lines = ArrayList<String>()
@@ -44,6 +45,7 @@ internal class FakeLink : LinkPort {
     val v4Lines = ArrayList<String>()
     /** Network lines arrive from OkHttp's threads too. */
     val v7Lines = CopyOnWriteArrayList<String>()
+    val v8Lines = ArrayList<String>()
     var failure: Throwable? = null
     /** Thrown by [sendV7] (a link that fails while the interceptor records). */
     var v7Failure: Throwable? = null
@@ -112,8 +114,21 @@ internal class FakeLink : LinkPort {
         mocksListeners.forEach { it(message) }
     }
 
+    override fun addViewEditListener(listener: (GatewayMessage) -> Unit) {
+        viewEditListeners += listener
+    }
+
+    /** Encodes right away, as the link thread would; dropped below v8 like the real link. */
+    override fun sendV8(sizeHint: Int, encode: () -> String?) {
+        if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V8) encode()?.let { v8Lines += it }
+    }
+
     fun inspect(requestId: Int) {
         inspectListeners.forEach { it(requestId) }
+    }
+
+    fun viewEdit(message: GatewayMessage) {
+        viewEditListeners.forEach { it(message) }
     }
 
     /**
