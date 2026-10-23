@@ -12,6 +12,7 @@ import {
   tapTool,
 } from './deviceTools.ts';
 import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
+import { revertViewPropertiesTool, setViewPropertyTool } from './viewEditTools.ts';
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
 import { logcatTool } from './logTools.ts';
 import { screensTool, summaryTool } from './metricTools.ts';
@@ -48,6 +49,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   screenshotTool,
   uiTreeTool,
   inspectScreenTool,
+  setViewPropertyTool,
+  revertViewPropertiesTool,
   tapElementTool,
   waitForTool,
   scrollToTool,

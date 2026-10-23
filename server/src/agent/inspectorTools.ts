@@ -6,7 +6,7 @@
  * line they are called from).
  */
 import { z } from 'zod';
-import { MAX_INSPECTOR_NODES } from '@lionscope/protocol';
+import { editableProperties, MAX_INSPECTOR_NODES } from '@lionscope/protocol';
 import type { InspectorNode, InspectorSnapshot, PixelRect } from '@lionscope/protocol';
 import { optionalSerial, targetSerial } from './deviceTools.ts';
 import { cropPng, pngSize } from './png.ts';
@@ -87,6 +87,29 @@ function snapshotView(snapshot: InspectorSnapshot, ctx: AgentContext) {
     nodes: snapshot.nodes.length,
     truncated: snapshot.truncated,
     captureMs: snapshot.captureMs,
+    ...(snapshot.liveEdits === undefined ? {} : { liveEdits: snapshot.liveEdits }),
+  };
+}
+
+/** The node's editable state as the tools show it. */
+export function editView(node: InspectorNode) {
+  const view = node.view;
+  return {
+    editable: editableProperties(node),
+    ...(view
+      ? {
+          viewState: {
+            translationX: view.translationX,
+            translationY: view.translationY,
+            elevation: view.elevation,
+            backgroundColor: view.backgroundColor,
+            textSize: view.textSize,
+            textColor: view.textColor,
+            password: view.password,
+          },
+          edited: view.edited ?? [],
+        }
+      : {}),
   };
 }
 
@@ -131,6 +154,7 @@ function elementView(snapshot: InspectorSnapshot, node: InspectorNode, withText:
     activity: node.activity,
     ...(node.destination ? { destination: node.destination } : {}),
     ...(node.composition ? { composition: node.composition } : {}),
+    ...editView(node),
   };
 }
 
@@ -170,7 +194,7 @@ function crop(
 export const inspectorSelectionTool = defineTool({
   name: 'get_inspector_selection',
   title: 'Inspector selection',
-  description: `The element the user selected in the dashboard's Layout Inspector: call this when the user says "this element", "the one I selected", "this button" or similar. Returns its attributes (class, resource id, text, content description, bounds and visible bounds in device pixels, visibility, alpha, flags, padding, margins, layout width/height), its source: for a view the XML layout file and line it was inflated from (the line is where the start tag ENDS, its \`>\`), for a composable (kind composable: its name as class, its testTag as resource id) the Kotlin file and line it is CALLED from, the owning Fragment and Activity (and navigation destination), its ancestor path (Class#id, root first), its children, the snapshot it belongs to (device, app, screen, age, source sdk or uiautomator and why) and a cropped screenshot of the element (at most ${CROP_MAX_EDGE} px; none for window roots or elements covering more than half of the screen). When the selection was made by an agent (select_inspector_node) only its structure comes back: no text, content description or image. SDK-only fields (source, owners, padding, margins, layout params) are null for uiautomator snapshots. Fails when nothing is selected. ${UNTRUSTED_DESCRIPTION}`,
+  description: `The element the user selected in the dashboard's Layout Inspector: call this when the user says "this element", "the one I selected", "this button" or similar. Returns its attributes (class, resource id, text, content description, bounds and visible bounds in device pixels, visibility, alpha, flags, padding, margins, layout width/height), its source: for a view the XML layout file and line it was inflated from (the line is where the start tag ENDS, its \`>\`), for a composable (kind composable: its name as class, its testTag as resource id) the Kotlin file and line it is CALLED from, the owning Fragment and Activity (and navigation destination), its ancestor path (Class#id, root first), its children, what can be edited live (\`editable\`: the properties set_view_property accepts, with \`viewState\` for the ones the attributes above lack and \`edited\` for live edits in effect; SDK 0.8.0+ views only), the snapshot it belongs to (device, app, screen, age, source sdk or uiautomator and why, liveEdits in the app) and a cropped screenshot of the element (at most ${CROP_MAX_EDGE} px; none for window roots or elements covering more than half of the screen). When the selection was made by an agent (select_inspector_node) only its structure comes back: no text, content description or image. SDK-only fields (source, owners, padding, margins, layout params) are null for uiautomator snapshots. Fails when nothing is selected. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({}),
   annotations: READ_ONLY,
@@ -229,6 +253,8 @@ function compactNode(node: InspectorNode) {
     ...(sourceText(node) !== null ? { source: sourceText(node) } : {}),
     ...(node.composition && node.composition !== 'read' ? { composition: node.composition } : {}),
     ...(flags.length > 0 ? { flags } : {}),
+    ...(node.view ? { editable: true } : {}),
+    ...(node.view?.edited ? { edited: node.view.edited } : {}),
   };
 }
 
@@ -247,7 +273,7 @@ function matchesQuery(node: InspectorNode, needle: string): boolean {
 export const inspectScreenTool = defineTool({
   name: 'inspect_screen',
   title: 'Inspect the screen',
-  description: `Captures a Layout Inspector snapshot of the device screen now (the dashboard shows it too) and lists its visible nodes: nodeId, parent, label (Class#id, or a composable's name#testTag), text, content description, visible bounds in device pixels, the source (a view's XML layout file:line, where the start tag ends; a composable's Kotlin file:line, where it is called) and flags. From the in-app SDK when its app is on top, with or without a profiling session (SDK 0.5.2+; 0.5.0-0.5.1 only during a session), with sources and owners (composables from SDK 0.6.0); or else uiautomator (fallbackReason says why: sdk_linking = the SDK is still connecting, call it again; sdk_needs_session = the app's SDK is older than 0.5.2, start a session; sdk_link_busy = another Lionscope server holds the device link; compose* = a Compose screen the SDK could not read). query keeps nodes whose class, id, text, description, source file or destination contains it. Pass a nodeId to select_inspector_node to point the user at it. It replaces the snapshot every dashboard shows and may clear the user's selection: when the user means an element they selected, call get_inspector_selection first. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Captures a Layout Inspector snapshot of the device screen now (the dashboard shows it too) and lists its visible nodes: nodeId, parent, label (Class#id, or a composable's name#testTag), text, content description, visible bounds in device pixels, the source (a view's XML layout file:line, where the start tag ends; a composable's Kotlin file:line, where it is called), flags, \`editable: true\` for views set_view_property can change (SDK 0.8.0+) and \`edited\` for their live edits. From the in-app SDK when its app is on top, with or without a profiling session (SDK 0.5.2+; 0.5.0-0.5.1 only during a session), with sources and owners (composables from SDK 0.6.0); or else uiautomator (fallbackReason says why: sdk_linking = the SDK is still connecting, call it again; sdk_needs_session = the app's SDK is older than 0.5.2, start a session; sdk_link_busy = another Lionscope server holds the device link; compose* = a Compose screen the SDK could not read). query keeps nodes whose class, id, text, description, source file or destination contains it. Pass a nodeId to select_inspector_node to point the user at it. It replaces the snapshot every dashboard shows and may clear the user's selection: when the user means an element they selected, call get_inspector_selection first. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     serial: optionalSerial,
