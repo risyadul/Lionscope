@@ -452,6 +452,25 @@ describe('review fixes', () => {
     ).toEqual(['gone', 'visible']);
   });
 
+  it('sends a value again after a revert of its field is on its way', () => {
+    const { edits } = setup(editableSnapshot({ liveEdits: 1 }));
+    const input = field('elevation');
+    type(input, '9');
+    enter(input);
+    fireEvent.click(screen.getByRole('button', { name: 'Revert all' }));
+    const again = field('elevation');
+    type(again, '8');
+    enter(again);
+    type(again, '9');
+    enter(again);
+    expect(edits().map((m) => (m.type === 'setViewProperty' ? m.value : 'revert'))).toEqual([
+      9,
+      'revert',
+      8,
+      9,
+    ]);
+  });
+
   it('says in the head why an edit of an older snapshot failed', async () => {
     const { push, answer } = setup();
     const input = field('elevation');

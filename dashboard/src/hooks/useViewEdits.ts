@@ -268,13 +268,18 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
         setEdits((prev) => ({ ...prev, errors: withError(prev.errors, key, 'Not a valid value.') }));
         return 'refused';
       }
-      // While a change of this field is on its way, the snapshot still shows the value before it.
-      const inFlight = pending.findLast(
+      // While a change of this field is on its way the snapshot still shows the value before it: compare with what
+      // was sent. After a revert of it (of the field, its group, the view or the app) its value is unknown: send.
+      const latestChange = pending.findLast(
         (r) =>
-          r.snapshotId === shot.id && r.nodeId === nodeId && r.name === property && r.value !== undefined,
+          r.snapshotId === shot.id &&
+          (r.nodeId === null || r.nodeId === nodeId) &&
+          (r.name === null || covers(r.name, property)),
       );
       const isUnchanged =
-        inFlight === undefined ? isCurrentValue(node, property, normalized) : inFlight.value === normalized;
+        latestChange === undefined
+          ? isCurrentValue(node, property, normalized)
+          : latestChange.value !== undefined && latestChange.value === normalized;
       if (isUnchanged) {
         setEdits((prev) => ({ ...prev, errors: withError(prev.errors, key, null) }));
         return 'unchanged';

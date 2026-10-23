@@ -255,7 +255,7 @@ right after, keeping the view selected. It works on the session link and on the 
   text size.
 - **A background color replaces the background.** Until it is reverted the view has a plain color instead of its
   shape, ripple or image, and its background tint is off (else it would tint the color). Revert puts the original
-  drawable, its tint and the view's padding back. An edited text loses its styling until reverted; styled text is
+  drawable and its tint back and keeps the view's padding as it is then. An edited text loses its styling until reverted; styled text is
   restored with its spans, or as plain text when the app's own spans (a clickable link) styled it.
 - **It runs the app's own code.** Only the platform setters are called (`setPadding`, `setText`, ...), but they can
   trigger the app's listeners: a `TextWatcher` sees edited text, a custom view's `setPadding` override runs. Values

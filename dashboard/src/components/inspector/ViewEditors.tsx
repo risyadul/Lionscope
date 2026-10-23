@@ -439,7 +439,8 @@ export function AlphaRow({ edits, node, resetKey }: EditorProps) {
             onKeyUp={release}
             onBlur={release}
             onKeyDown={(event) => {
-              if (event.key !== 'Escape' || slide === null) return;
+              // Only a drag not sent yet is cancelled.
+              if (event.key !== 'Escape' || slide === null || isSent.current) return;
               swallowEscape(event);
               cancelTimer();
               isSent.current = true;

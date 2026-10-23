@@ -23,14 +23,17 @@ import java.lang.reflect.Method
  * margin when the params are relative, so the side edited is the side that moves in either layout direction.
  *
  * A background color is a new ColorDrawable with the view's background tints cleared (else they would tint it); the
- * revert puts back the original Drawable, its tints and the padding the view had, as setting a Drawable resets the
- * padding to the Drawable's own. Text size is set in sp and restored in px; an autosizing TextView's is not set
- * (autosizing decides it). Styled text is restored with its spans when they are the framework's, else as plain text;
+ * revert puts back the original Drawable and its tints, keeping the padding the view has then, as setting a Drawable
+ * resets the padding to the Drawable's own. Text size is set in sp and restored in px; an autosizing TextView's is
+ * not set (autosizing decides it). Styled text is restored with its spans when they are the framework's, else as plain text;
  * a field's editable text (selection, IME and spell-check spans that change as it is used) is compared and kept as
  * plain text.
  */
 internal object AndroidViewEdits : ViewEditAccess<View> {
     private val supportTints = HashMap<Class<*>, Pair<Method, Method>?>()
+    private val autoSizeTypes = HashMap<Class<*>, Method?>()
+    /** `TextView.AUTO_SIZE_TEXT_TYPE_NONE` (API 26) and AppCompat's own constant alike. */
+    private const val AUTO_SIZE_NONE = 0
 
     override fun isAttached(view: View): Boolean = view.isAttachedToWindow
 
@@ -52,7 +55,6 @@ internal object AndroidViewEdits : ViewEditAccess<View> {
             tint = view.backgroundTintList,
             tintMode = view.backgroundTintMode,
             supportTint = supportTint(view)?.let { (get, _) -> invokeQuietly(get, view) },
-            padding = padding(view),
         )
         ViewProperty.TEXT_COLOR -> (view as TextView).textColors
         ViewProperty.TEXT -> savedText((view as TextView).text)
@@ -146,22 +148,23 @@ internal object AndroidViewEdits : ViewEditAccess<View> {
         )
     }
 
-    /** What a background edit restores: the Drawable and tints as they were, and the padding the view had then. */
+    /** What a background edit restores: the Drawable and tints as they were. */
     private class BackgroundSave(
         val drawable: Drawable?,
         val tint: ColorStateList?,
         val tintMode: PorterDuff.Mode?,
         val supportTint: Any?,
-        val padding: PaddingState,
     )
 
     private fun restoreBackground(view: View, saved: BackgroundSave) {
+        // A Drawable with padding (a 9-patch, an inset) replaces the view's own: keep what the view has now (a padding
+        // edit made after the background one, or the app's).
+        val padding = padding(view)
         view.background = saved.drawable
         view.backgroundTintList = saved.tint
         view.backgroundTintMode = saved.tintMode
         supportTint(view)?.let { (_, set) -> invokeQuietly(set, view, saved.supportTint) }
-        // A Drawable with padding (a 9-patch, an inset) has just replaced the view's own.
-        setPadding(view, saved.padding)
+        setPadding(view, padding)
     }
 
     private fun padding(view: View) =
@@ -211,8 +214,25 @@ internal object AndroidViewEdits : ViewEditAccess<View> {
             text.getSpans(0, text.length, ParagraphStyle::class.java).size
     }
 
-    private fun isAutosizing(view: TextView): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && view.autoSizeTextType != TextView.AUTO_SIZE_TEXT_TYPE_NONE
+    /**
+     * `getAutoSizeTextType()` is not NONE: the platform's (API 26+) or AppCompat's (AppCompatTextView, every level),
+     * looked up by name once per class.
+     */
+    private fun isAutosizing(view: TextView): Boolean {
+        val type = view.javaClass
+        val method = if (autoSizeTypes.containsKey(type)) {
+            autoSizeTypes[type]
+        } else {
+            try {
+                type.getMethod("getAutoSizeTextType").takeIf { it.returnType == Int::class.javaPrimitiveType }
+            } catch (e: NoSuchMethodException) {
+                null
+            } catch (e: SecurityException) {
+                null
+            }.also { autoSizeTypes[type] = it }
+        }
+        return method != null && (invokeQuietly(method, view) as? Int ?: AUTO_SIZE_NONE) != AUTO_SIZE_NONE
+    }
 
     /**
      * AppCompat's `getSupportBackgroundTintList` / `setSupportBackgroundTintList` (TintableBackgroundView) when the
