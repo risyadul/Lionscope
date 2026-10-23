@@ -8,6 +8,7 @@ import { droppedFramesMessage } from '../src/device/sdkBridge.ts';
 import type { DeviceGateway } from '../src/device/deviceGateway.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
 import { DeviceClient } from './helpers/deviceClient.ts';
+import { mockInput } from './helpers/networkFixtures.ts';
 import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const GOLDEN = readFileSync(
@@ -79,7 +80,10 @@ describe('golden device messages through the gateway', () => {
     await sessions.startSession('emulator-5554', HELLO.packageName);
     await waitUntil(() => sessions.getSessionState().status === 'running');
     clock = laptop(DEVICE_START_MS);
-    return { adb, device, manager: sessions, port, ofType };
+    const setClock = (ms: number) => {
+      clock = ms;
+    };
+    return { adb, device, manager: sessions, port, ofType, clock: { set: setClock } };
   }
 
   it('produces screen spans, SDK frame samples and a breakdown', async () => {
@@ -310,6 +314,53 @@ describe('golden device messages through the gateway', () => {
     client.send({ ...golden('inspectError'), requestId: requests()[1] });
     await expect(failing).rejects.toEqual(new SdkInspectError('background'));
     expect(manager.getSessionState().sdk?.connected).toBe(true);
+    client.close();
+  });
+
+  it('on a v7 link: HTTP exchanges on the laptop clock, and the mock rules sent after the welcome and confirmed', async () => {
+    const { manager, port, ofType, clock } = await startSession();
+    // Rev 3 with two rules, like the golden `mocksApplied`.
+    manager.setNetworkMock(mockInput(), 'user');
+    manager.setNetworkMock(mockInput({ url: 'https://api.example.com/v1/cart', method: 'POST' }), 'user');
+    manager.setNetworkMock({ ...mockInput({ status: 503 }), id: 'm1' }, 'user');
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 7 });
+    await client.waitFor((message) => message.type === 'mock');
+    await waitUntil(() => manager.getSessionState().sdk?.connected === true);
+    const sent = client.rawLines.map((line) => JSON.parse(line) as { type: string });
+    expect(sent.map((message) => message.type)).toEqual(['welcome', 'config', 'mocks', 'mock', 'mock']);
+    expect(sent[2]).toEqual({ type: 'mocks', rev: 3, count: 2 });
+
+    clock.set(laptop(1792516396000));
+    for (const line of GOLDEN.filter((candidate) => /"type":"(http|mocks)/.test(candidate)))
+      client.send(line);
+    await waitUntil(() => manager.getNetworkMocks().appliedRev === 3);
+    const http = manager.getSnapshot().http ?? [];
+    // Responses 3 and 4 have no request in the fixture: dropped.
+    expect(http).toHaveLength(2);
+    expect(http[0]).toMatchObject({
+      ts: laptop(1792516381000),
+      endTs: laptop(1792516381000) + 182.7,
+      method: 'GET',
+      url: 'https://api.example.com/v1/items?page=2&token=‹redacted›',
+      state: 'complete',
+      status: 200,
+      headersMs: 120.4,
+      responseSize: 58,
+      responseType: 'application/json; charset=utf-8',
+      mockId: null,
+    });
+    expect(http[1]).toMatchObject({ method: 'POST', status: 503, mockId: 'm1', requestSize: 21 });
+    expect(manager.getHttpExchange(http[0]?.id ?? -1)).toMatchObject({
+      protocol: 'h2',
+      requestHeaders: [
+        ['Accept', 'application/json'],
+        ['Authorization', '‹redacted›'],
+      ],
+      responseBody: { size: 58, text: '{"items":[{"id":42,"name":"Coffee beans"}],"next":"page3"}' },
+    });
+    expect(ofType('http').length).toBeGreaterThanOrEqual(4);
+    expect(ofType('networkMocks').at(-1)?.mocks).toMatchObject({ rev: 3, appliedRev: 3 });
     client.close();
   });
 

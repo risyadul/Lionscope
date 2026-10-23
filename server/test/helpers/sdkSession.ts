@@ -1,4 +1,4 @@
-import type { ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
+import type { NetworkMockRule, ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
 import { vi } from 'vitest';
 import { SdkInspectError } from '../../src/device/sdkLink.ts';
 import type {
@@ -39,6 +39,11 @@ export class FakeLink implements SdkLink {
   }
   sendConfig(options: SdkOptions): void {
     this.configs.push(options);
+  }
+  /** Every rule set sent (`sendMocks`), as given. */
+  readonly mockSets: { rev: number; rules: readonly NetworkMockRule[] }[] = [];
+  sendMocks(rev: number, rules: readonly NetworkMockRule[]): void {
+    this.mockSets.push({ rev, rules });
   }
   /** What inspect() answers; unset, it fails as `unsupported`. */
   answerInspect: (() => Promise<SdkInspection>) | null = null;

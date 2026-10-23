@@ -15,15 +15,18 @@ import { buildAllowedOrigins, isAllowedOrigin } from '../http/wsGateway.ts';
 import { createAgentMcpServer, MAX_MCP_SUBSCRIPTIONS } from './mcpServer.ts';
 import { availableTools, callTool } from './registry.ts';
 import type { ToolFailure } from './registry.ts';
-import type { AgentContext } from './tool.ts';
+import type { AgentBaseContext } from './tool.ts';
 
 export const MCP_PATH = '/mcp';
 export const AGENT_API_PREFIX = '/api/agent/';
 export const AGENT_HEADER = 'x-lionscope-agent';
 /** Per-request device-control opt-in, honoured by the JSON API only (it is what `lionscope mcp --allow-device-control` sends). */
 export const DEVICE_CONTROL_HEADER = 'x-lionscope-device-control';
-export const MAX_AGENT_BODY_BYTES = 64 * 1024;
+/** Per-request network-bodies opt-in, honoured by the JSON API only (what `--allow-network-bodies` clients send). */
+export const NETWORK_BODIES_HEADER = 'x-lionscope-network-bodies';
 export const MAX_MCP_BODY_BYTES = 1024 * 1024;
+/** As large as /mcp: a set_network_mock body (up to 256 KB of text, JSON-escaped) comes through here too. */
+export const MAX_AGENT_BODY_BYTES = MAX_MCP_BODY_BYTES;
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
 const TOOL_NAME = /^[a-z][a-z_]{0,63}$/;
@@ -144,9 +147,11 @@ async function sendWebResponse(res: ServerResponse, response: Response): Promise
 }
 
 export interface AgentHttpOptions {
-  ctx: Omit<AgentContext, 'deviceControl'>;
+  ctx: AgentBaseContext;
   /** --allow-device-control: device tools on both endpoints (the JSON API's header can also enable them). */
   deviceControl: boolean;
+  /** --allow-network-bodies: HTTP body texts on both endpoints (the JSON API's header can also enable them). */
+  networkBodies?: boolean;
   /** The bound dashboard port (null before listen). */
   port: () => number | null;
 }
@@ -159,6 +164,7 @@ export interface AgentHttp {
 
 export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
   const { ctx, deviceControl } = options;
+  const networkBodies = options.networkBodies ?? false;
   // Stateless per request: a fresh MCP server over the same tool layer each time.
   const mcp = createMcpHandler(
     () =>
@@ -166,7 +172,7 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
         version: ctx.serverVersion,
         tools: availableTools(deviceControl),
         deviceControl,
-        invoke: (name, args) => callTool(ctx, name, args, deviceControl),
+        invoke: (name, args) => callTool(ctx, name, args, deviceControl, { networkBodies }),
       }),
     { maxSubscriptions: MAX_MCP_SUBSCRIPTIONS },
   );
@@ -197,7 +203,8 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
     if (!TOOL_NAME.test(name)) throw new HttpError(404, 'Unknown tool');
     const args = parseArguments(await readBody(req, MAX_AGENT_BODY_BYTES));
     const allowDevice = deviceControl || req.headers[DEVICE_CONTROL_HEADER] === '1';
-    const outcome = await callTool(ctx, name, args, allowDevice);
+    const allowBodies = networkBodies || req.headers[NETWORK_BODIES_HEADER] === '1';
+    const outcome = await callTool(ctx, name, args, allowDevice, { networkBodies: allowBodies });
     sendJson(res, outcome.ok ? 200 : FAILURE_STATUS[outcome.code], outcome);
   };
 

@@ -14,6 +14,7 @@ import type {
   TimelineEvent,
   ViewTreeSample,
 } from '@lionscope/protocol';
+import { NetworkStore } from './networkStore.ts';
 import { TimeWindowBuffer } from './timeWindowBuffer.ts';
 import type { ByteLimit } from './timeWindowBuffer.ts';
 
@@ -128,7 +129,7 @@ type Arrays = { [S in SampleStream]: StreamItems[S][] };
 
 export function emptySnapshot(): Required<Snapshot> {
   const streams = Object.fromEntries(SAMPLE_STREAMS.map((stream) => [stream, []])) as unknown as Arrays;
-  return { ...streams, screens: [] };
+  return { ...streams, screens: [], http: [] };
 }
 
 export interface SessionStoreOptions {
@@ -143,6 +144,8 @@ export interface SessionStoreOptions {
  * resync always contains the item that triggered it.
  */
 export class SessionStore {
+  /** The session's HTTP exchanges (in the snapshot as `http` summaries). */
+  readonly http: NetworkStore;
   private readonly buffers: Buffers;
   private readonly screens: TimeWindowBuffer<ScreenEntry>;
 
@@ -162,6 +165,12 @@ export class SessionStore {
       viewTrees: buffer('viewTrees'),
     };
     this.screens = new TimeWindowBuffer(options.windowMs, MAX_SCREEN_SPANS);
+    this.http = new NetworkStore({
+      windowMs: options.windowMs,
+      emit: options.emit,
+      now: options.now,
+      topScreenAt: (ts) => this.topScreenAt(ts),
+    });
   }
 
   append<S extends SampleStream>(stream: S, ...items: StreamItems[S][]): void {
@@ -223,7 +232,7 @@ export class SessionStore {
       .toArray()
       .map((entry) => entry.span)
       .filter((span) => (span.end ?? Infinity) >= cutoff);
-    return { ...streams, screens };
+    return { ...streams, screens, http: this.http.summaries() };
   }
 
   /** Returns the span it closed, or null when none was open. */

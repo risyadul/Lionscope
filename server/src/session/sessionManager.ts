@@ -2,6 +2,9 @@ import { DEVICE_LINK_PORT, isValidPackageName, isValidSerial } from '@lionscope/
 import type {
   AppInfo,
   DeviceInfo,
+  HttpExchangeDetail,
+  NetworkMockRule,
+  NetworkMocksState,
   SdkOptions,
   ServerMessage,
   SessionState,
@@ -20,6 +23,8 @@ import { buildAppList, parsePackageList } from '../parsers/packages.ts';
 import { parsePs } from '../parsers/ps.ts';
 import { parsePidList } from '../parsers/shellValues.ts';
 import { emptySnapshot } from '../store/sessionStore.ts';
+import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
+import type { MockOrigin } from './mockRules.ts';
 import { ProfilingSession } from './profilingSession.ts';
 import type { CollectorIntervals } from './profilingSession.ts';
 
@@ -215,6 +220,33 @@ export class SessionManager implements SdkLinkTarget {
     return true;
   }
 
+  /** Headers and bodies of one HTTP exchange of the current (or last) session; null when it is not kept. */
+  getHttpExchange(id: number): HttpExchangeDetail | null {
+    return this.session?.httpExchange(id) ?? null;
+  }
+
+  /** The session's mock rules; none without a session (they end with it). */
+  getNetworkMocks(): NetworkMocksState {
+    return this.session?.networkMocks ?? EMPTY_MOCKS;
+  }
+
+  /**
+   * Create or replace a mock rule of the running session (announced with a `networkMocks` broadcast). Throws a
+   * PublicError without a session, or for a rule MockRules refuses.
+   */
+  setNetworkMock(input: unknown, origin: MockOrigin): NetworkMockRule {
+    const session = this.session;
+    if (!session || session.isStopped) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+    return session.setNetworkMock(input, origin);
+  }
+
+  /** Remove one rule (`id`) or all; a no-op without a session. false: there was nothing to remove. */
+  clearNetworkMocks(id?: string): boolean {
+    const session = this.session;
+    if (!session || session.isStopped) return false;
+    return session.clearNetworkMocks(id);
+  }
+
   /** Poll `adb devices -l` every devicePollMs until close(). */
   startDevicePolling(): void {
     const poll = async (): Promise<void> => {
@@ -274,6 +306,7 @@ export class SessionManager implements SdkLinkTarget {
       this.session = session;
       this.broadcast({ type: 'session', session: session.state });
       this.broadcast({ type: 'snapshot', snapshot: emptySnapshot() });
+      this.broadcast({ type: 'networkMocks', mocks: session.networkMocks });
       log.info(`Profiling ${packageName} on ${serial}`);
       // Not awaited: the first device round-trips must not hold up a following stop/start request.
       session.start().catch((error: unknown) => log.error('session start failed:', errorMessage(error)));

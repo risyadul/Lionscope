@@ -1,4 +1,4 @@
-import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS, HTTP_EXCHANGES_PER_SECOND } from '@lionscope/protocol';
 import type { DeviceMessageType, SdkFrame, SdkOptions, SdkStatus } from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
@@ -26,6 +26,8 @@ export const MAX_FRAME_DURATION_MS = 60_000;
 export const MAX_HELD_MESSAGES = 16;
 export const droppedFramesMessage = (count: number): string =>
   `SDK reported ${count} dropped frames (device busy); frame counts may read low`;
+export const droppedHttpMessage = (count: number): string =>
+  `SDK skipped ${count} HTTP calls (over ${HTTP_EXCHANGES_PER_SECOND} per second); the Network list is incomplete`;
 export const SDK_CLOCK_MESSAGE = 'SDK frames dropped: the device clock does not match the laptop clock';
 /**
  * Accepted stall / StrictMode times (after the offset). Looser than frames on purpose: these are rare, discrete
@@ -67,6 +69,10 @@ export interface SdkBridgeOptions {
   /** A throttled, client-facing problem report. */
   notify: (key: string, message: string) => void;
   logPrefix: string;
+  /** The live, verified link changed (null: none is live anymore); the session's mock rules follow it. */
+  onLiveLink?: (link: SdkLink | null) => void;
+  /** The live link's SDK applied mock rule set `rev`. */
+  onMocksApplied?: (rev: number) => void;
 }
 
 interface LinkEntry {
@@ -91,6 +97,8 @@ export class SdkBridge {
   private lastFramesAt = 0;
   /** Frames FrameMetrics dropped before the SDK saw them, summed over the session. */
   private droppedFrames = 0;
+  /** HTTP calls the SDK did not record (its rate cap), summed over the session. */
+  private droppedHttp = 0;
   private drainTimer: ReturnType<typeof setInterval> | null = null;
   private configTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -156,7 +164,9 @@ export class SdkBridge {
         if (this.active !== entry || this.stopped) return;
         this.active = null;
         this.release();
+        this.options.store.http.linkClosed(link);
         this.update({ connected: false, framesActive: false, protocolVersion: null });
+        this.options.onLiveLink?.(null);
       },
     };
   }
@@ -172,6 +182,7 @@ export class SdkBridge {
     const active = this.active;
     this.active = null;
     this.release();
+    this.options.store.http.end();
     active?.link.close('no_session');
     this.current = { ...this.current, connected: false, framesActive: false, protocolVersion: null };
   }
@@ -208,6 +219,8 @@ export class SdkBridge {
     this.active = entry;
     // The app reconnected (or restarted): the screen span and gfxinfo pause carry over to the new link.
     previous?.link.close();
+    // Calls still open on the old link get no response anymore.
+    if (previous) this.options.store.http.linkClosed(previous.link);
     this.update({
       connected: true,
       sdkVersion: entry.hello.sdkVersion,
@@ -215,6 +228,7 @@ export class SdkBridge {
       apiLevel: entry.hello.apiLevel,
       protocolVersion: entry.link.protocolVersion,
     });
+    this.options.onLiveLink?.(entry.link);
     for (const message of entry.held.splice(0)) this.onMessage(message);
   }
 
@@ -235,14 +249,9 @@ export class SdkBridge {
 
   private onMessage(message: SdkLinkMessage): void {
     switch (message.type) {
-      case 'screen': {
-        const start = Math.max(
-          this.options.startedAt,
-          Math.min(this.toLaptop(message.ts), this.options.now()),
-        );
-        this.options.store.appendScreen(start, message.screen);
+      case 'screen':
+        this.options.store.appendScreen(this.sessionTime(message.ts), message.screen);
         return;
-      }
       case 'frames':
         this.onFrames(message);
         return;
@@ -302,6 +311,23 @@ export class SdkBridge {
         });
         return;
       }
+      case 'httpRequest': {
+        if (message.dropped > 0) {
+          this.droppedHttp += message.dropped;
+          this.options.notify('sdk:dropped-http', droppedHttpMessage(this.droppedHttp));
+        }
+        const link = this.active?.link;
+        if (link) this.options.store.http.request(link, this.sessionTime(message.ts), message);
+        return;
+      }
+      case 'httpResponse': {
+        const link = this.active?.link;
+        if (link) this.options.store.http.response(link, message);
+        return;
+      }
+      case 'mocksApplied':
+        this.options.onMocksApplied?.(message.rev);
+        return;
       case 'viewtree': {
         const ts = this.eventTime('viewtree', message.ts, 0);
         if (ts === null) return;
@@ -434,5 +460,10 @@ export class SdkBridge {
 
   private toLaptop(deviceMs: number): number {
     return deviceMs + this.options.clockOffsetMs();
+  }
+
+  /** Laptop time of a device timestamp, clamped into [session start, now]. */
+  private sessionTime(deviceMs: number): number {
+    return Math.max(this.options.startedAt, Math.min(this.toLaptop(deviceMs), this.options.now()));
   }
 }

@@ -140,6 +140,7 @@ describe('SessionStore', () => {
       inflates: [],
       viewTrees: [],
       screens: [],
+      http: [],
     });
     expect(setup().store.snapshot()).toEqual(emptySnapshot());
     expect(SAMPLE_STREAMS).toContain('breakdown');

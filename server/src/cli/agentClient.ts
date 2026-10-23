@@ -1,7 +1,12 @@
 /** Client of a running server's JSON tool API (`lionscope query`, and `lionscope mcp` when it attaches). */
 import { HOST } from '../config.ts';
 import { errorMessage } from '../log.ts';
-import { AGENT_API_PREFIX, AGENT_HEADER, DEVICE_CONTROL_HEADER } from '../agent/http.ts';
+import {
+  AGENT_API_PREFIX,
+  AGENT_HEADER,
+  DEVICE_CONTROL_HEADER,
+  NETWORK_BODIES_HEADER,
+} from '../agent/http.ts';
 import type { ToolOutcome } from '../agent/registry.ts';
 
 export const PROBE_TIMEOUT_MS = 2000;
@@ -20,13 +25,26 @@ function isConnectionRefused(error: unknown): boolean {
   return cause?.code === 'ECONNREFUSED';
 }
 
-async function post(port: number, tool: string, args: unknown, deviceControl: boolean, timeoutMs: number) {
+/** The per-call opt-ins a client sends (`lionscope query`'s and `lionscope mcp`'s flags). */
+export interface CallPermissions {
+  deviceControl?: boolean;
+  networkBodies?: boolean;
+}
+
+async function post(
+  port: number,
+  tool: string,
+  args: unknown,
+  permissions: CallPermissions,
+  timeoutMs: number,
+) {
   return fetch(`http://${HOST}:${port}${AGENT_API_PREFIX}${tool}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       [AGENT_HEADER]: '1',
-      ...(deviceControl ? { [DEVICE_CONTROL_HEADER]: '1' } : {}),
+      ...(permissions.deviceControl ? { [DEVICE_CONTROL_HEADER]: '1' } : {}),
+      ...(permissions.networkBodies ? { [NETWORK_BODIES_HEADER]: '1' } : {}),
     },
     body: JSON.stringify(args ?? {}),
     signal: AbortSignal.timeout(timeoutMs),
@@ -41,7 +59,7 @@ function isOutcome(value: unknown): value is ToolOutcome {
 export async function probeServer(port: number, timeoutMs = PROBE_TIMEOUT_MS): Promise<ProbeResult> {
   let response: Response;
   try {
-    response = await post(port, 'status', {}, false, timeoutMs);
+    response = await post(port, 'status', {}, {}, timeoutMs);
   } catch (error) {
     if (isConnectionRefused(error)) return { kind: 'none' };
     return { kind: 'other', detail: `no answer from port ${port} (${errorMessage(error)})` };
@@ -62,17 +80,11 @@ export async function callRemoteTool(
   port: number,
   tool: string,
   args: unknown,
-  options: { deviceControl?: boolean; timeoutMs?: number } = {},
+  options: CallPermissions & { timeoutMs?: number } = {},
 ): Promise<ToolOutcome> {
   let response: Response;
   try {
-    response = await post(
-      port,
-      tool,
-      args,
-      options.deviceControl ?? false,
-      options.timeoutMs ?? CALL_TIMEOUT_MS,
-    );
+    response = await post(port, tool, args, options, options.timeoutMs ?? CALL_TIMEOUT_MS);
   } catch (error) {
     if (isConnectionRefused(error)) {
       return {

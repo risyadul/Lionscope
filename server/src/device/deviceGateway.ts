@@ -4,12 +4,21 @@ import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V5,
+  DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
+  maxDeviceLineBytes,
   parseDeviceMessage,
+  peekLineType,
 } from '@lionscope/protocol';
-import type { GatewayMessage, InspectorNode, SdkOptions } from '@lionscope/protocol';
+import type {
+  GatewayMessage,
+  HttpHeader,
+  InspectorNode,
+  NetworkMockRule,
+  SdkOptions,
+} from '@lionscope/protocol';
 import { HOST } from '../config.ts';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
@@ -238,6 +247,43 @@ function configMessage(options: SdkOptions): GatewayMessage {
   };
 }
 
+/** `Name: value` lines joined by `\n` (names are tokens, values hold no CR / LF): the SDK splits them back. */
+function encodeMockHeaders(headers: readonly HttpHeader[]): string {
+  return headers.map(([name, value]) => `${name}: ${value}`).join('\n');
+}
+
+/**
+ * A mock rule set as the SDK reads it: `mocks`, then one flat `mock` per rule in precedence order (keys in the
+ * order of protocol/fixtures/gateway-messages.ndjson; method `*` = any; failures carry no response).
+ */
+function mockMessages(rev: number, rules: readonly NetworkMockRule[]): GatewayMessage[] {
+  return [
+    { type: 'mocks', rev, count: rules.length },
+    ...rules.map((rule, index): GatewayMessage => {
+      const respond = rule.action === 'respond';
+      return {
+        type: 'mock',
+        rev,
+        index,
+        id: rule.id,
+        method: rule.method ?? '*',
+        match: rule.match,
+        url: rule.url,
+        action: rule.action,
+        status: respond ? rule.status : 0,
+        headers: respond ? encodeMockHeaders(rule.headers) : '',
+        bodyBase64: respond ? Buffer.from(rule.body, 'utf8').toString('base64') : '',
+        delayMs: rule.delayMs,
+      };
+    }),
+  ];
+}
+
+/** The lines `mockMessages` sends, as written to the socket. */
+export function encodeMocks(rev: number, rules: readonly NetworkMockRule[]): string {
+  return mockMessages(rev, rules).map(gatewayLine).join('');
+}
+
 const INSPECT_TYPES: ReadonlySet<string> = new Set(['inspectBegin', 'inspectNodes', 'inspectError']);
 /** Dropped (counted) rather than fatal when over the line budget. */
 const SHEDDABLE_TYPES: ReadonlySet<string> = new Set([
@@ -246,6 +292,9 @@ const SHEDDABLE_TYPES: ReadonlySet<string> = new Set([
   'inflate',
   'viewtree',
   ...INSPECT_TYPES,
+  'httpRequest',
+  'httpResponse',
+  'mocksApplied',
 ]);
 
 function isInspectMessage(message: { type: string }): message is SdkInspectMessage {
@@ -284,16 +333,8 @@ function assembleNodes(pending: PendingInspect, begin: SdkInspectBegin): Inspect
   );
   return consistent ? nodes : null;
 }
-const TYPE_PREFIX = '{"type":"';
-const MAX_PEEKED_TYPE_LENGTH = 16;
-
-/** The `type` of a line without parsing it: the SDK writes it first. Null when the line does not start so. */
-function peekType(line: string): string | null {
-  if (!line.startsWith(TYPE_PREFIX)) return null;
-  const end = line.indexOf('"', TYPE_PREFIX.length);
-  if (end === -1 || end - TYPE_PREFIX.length > MAX_PEEKED_TYPE_LENGTH) return null;
-  return line.slice(TYPE_PREFIX.length, end);
-}
+/** Bytes of a line's start that hold its `type` (`{"type":"httpResponse"`), whatever the chunking. */
+const LINE_HEAD_BYTES = 64;
 
 function endSocket(socket: Socket, message?: GatewayMessage): void {
   if (message) socket.end(gatewayLine(message));
@@ -328,6 +369,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   let protocolVersion = 0;
   /** A `config` asked for before the `welcome` went out. */
   let pendingConfig: GatewayMessage | null = null;
+  /** The latest mock rule set asked for before the `welcome` went out (sent after it, on a session link). */
+  let pendingMocks: string | null = null;
   let mode: SdkLinkMode = 'session';
   /** The hello is being checked by the target: later lines are held (up to MAX_HELD_LINES) until it decided. */
   let attaching = false;
@@ -467,6 +510,12 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         if (handler) socket.write(gatewayLine(configMessage(options)));
         else pendingConfig = configMessage(options);
       },
+      sendMocks: (rev, rules) => {
+        // Mocks belong to a profiling session: inspect-only links never get them.
+        if (protocolVersion < DEVICE_PROTOCOL_V7 || closing) return;
+        if (!handler) pendingMocks = encodeMocks(rev, rules);
+        else if (mode === 'session') socket.write(encodeMocks(rev, rules));
+      },
       inspect,
     };
     let result: SdkAttachResult | Promise<SdkAttachResult>;
@@ -513,7 +562,9 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       ),
     );
     if (pendingConfig && mode === 'session') socket.write(gatewayLine(pendingConfig));
+    if (pendingMocks !== null && mode === 'session') socket.write(pendingMocks);
     pendingConfig = null;
+    pendingMocks = null;
     try {
       for (const message of pending) {
         if (closing || !handler) return;
@@ -548,7 +599,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   const onLine = (raw: string, rawBytes: number): void => {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     const helloSeen = handler !== null || attaching;
-    const type = helloSeen ? peekType(line) : null;
+    const type = helloSeen ? peekLineType(line) : null;
     // A snapshot's chunks come in a burst: while a request waits for them, its answer lines don't count against
     // the line budget, up to the announced node count and MAX_INSPECT_ANSWER_BYTES (they still go through every
     // other check). Whether a line really is such an answer is only known once parsed.
@@ -594,13 +645,30 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     deliver(parsed.value);
   };
 
+  /**
+   * The size cap of the line being read, decided once it grows past MAX_DEVICE_LINE_BYTES: by then its start (and
+   * so its `type`) has arrived, however the chunks split it. `httpRequest` / `httpResponse` lines on a v7 link
+   * may be larger.
+   */
+  let lineCap: number | null = null;
+  const capOf = (parts: Buffer[], bytes: number): number => {
+    const head = Buffer.concat(parts, Math.min(bytes, LINE_HEAD_BYTES)).toString('utf8');
+    return maxDeviceLineBytes(peekLineType(head), protocolVersion);
+  };
+
   socket.on('data', (chunk: Buffer) => {
     let start = 0;
     while (!closing) {
       const newline = chunk.indexOf(NEWLINE, start);
       const piece = chunk.subarray(start, newline === -1 ? chunk.length : newline);
       // Lines are split on raw bytes: `\n` never occurs inside a multi-byte UTF-8 sequence.
-      if (partialBytes + piece.length > MAX_DEVICE_LINE_BYTES) return abort('line too long');
+      const lineBytes = partialBytes + piece.length;
+      if (
+        lineBytes > MAX_DEVICE_LINE_BYTES &&
+        lineBytes > (lineCap ??= capOf([...partial, piece], lineBytes))
+      ) {
+        return abort('line too long');
+      }
       if (newline === -1) {
         if (piece.length > 0) partial.push(piece);
         partialBytes += piece.length;
@@ -610,6 +678,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       const line = Buffer.concat([...partial, piece]).toString('utf8');
       partial = [];
       partialBytes = 0;
+      lineCap = null;
       start = newline + 1;
       try {
         onLine(line, bytes);

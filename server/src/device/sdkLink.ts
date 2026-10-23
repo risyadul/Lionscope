@@ -1,4 +1,10 @@
-import type { DeviceMessage, GatewayMessage, InspectorNode, SdkOptions } from '@lionscope/protocol';
+import type {
+  DeviceMessage,
+  GatewayMessage,
+  InspectorNode,
+  NetworkMockRule,
+  SdkOptions,
+} from '@lionscope/protocol';
 
 export type SdkHello = Extract<DeviceMessage, { type: 'hello' }>;
 /** The answers to a gateway `inspect`: the gateway consumes them itself (SdkLink.inspect). */
@@ -25,6 +31,12 @@ export interface SdkLink {
    * before the `welcome` went out, it is sent right after it.
    */
   sendConfig(options: SdkOptions): void;
+  /**
+   * Send a complete mock rule set (`mocks`, then one `mock` per rule, in the order given: the first match answers).
+   * Only session links at protocol ≥ 7 get it (a no-op otherwise); called before the `welcome` went out, the latest
+   * set is sent right after it. The SDK answers `mocksApplied`.
+   */
+  sendMocks(rev: number, rules: readonly NetworkMockRule[]): void;
   /**
    * Ask for an Inspector snapshot (links at protocol ≥ 4): resolves with the reassembled answer, rejects with an
    * SdkInspectError.

@@ -422,7 +422,7 @@ describe('UI dumps with the helper', () => {
     const fake = fakeAgent({}, { adb });
     const manager = helpers(adb);
     fake.ctx.uiHelper = manager;
-    const ctx = { ...fake.ctx, deviceControl: true };
+    const ctx = { ...fake.ctx, deviceControl: true, networkBodies: false };
     await dumpUi(ctx, SERIAL, { deadline: performance.now() + 2000 });
     expect(adb.helpers).toHaveLength(0);
     expect(manager.unavailable(SERIAL)).toBeNull();

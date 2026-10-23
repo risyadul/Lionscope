@@ -31,6 +31,7 @@ const link: SdkLink = {
   protocolVersion: 1,
   close: () => undefined,
   sendConfig: () => undefined,
+  sendMocks: () => undefined,
   inspect: () => Promise.reject(new Error('unsupported')),
 };
 

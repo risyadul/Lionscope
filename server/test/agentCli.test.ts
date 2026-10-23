@@ -83,6 +83,18 @@ describe('lionscope query and lionscope mcp against a running server', () => {
       expect(layouts).toMatchObject({ code: 0, value: { total: 0 } });
     });
 
+    it('asks for network bodies with --allow-network-bodies', async () => {
+      expect((await query('status', '--port', String(port))).value.server.networkBodies).toBe(false);
+      const allowed = await query('status', '--allow-network-bodies', '--port', String(port));
+      expect(allowed).toMatchObject({
+        code: 0,
+        value: { server: { networkBodies: true, deviceControl: false } },
+      });
+      expect(
+        await query('network-request', '--id', '1', '--allow-network-bodies', '--port', String(port)),
+      ).toMatchObject({ code: 1, value: { error: expect.stringContaining('No HTTP exchange 1') } });
+    });
+
     it('never lets a bare boolean flag swallow the next word', async () => {
       const layouts = await query('--include-library', 'layouts', '--port', String(port));
       expect(layouts).toMatchObject({ code: 0, value: { total: 0 } });
@@ -107,8 +119,8 @@ describe('lionscope query and lionscope mcp against a running server', () => {
     });
   });
 
-  it('mcp attaches to the running server and forwards tool calls', async () => {
-    const { client, stderr } = await connectStdio(['--port', String(port)]);
+  it('mcp attaches to the running server and forwards tool calls (with its --allow-network-bodies)', async () => {
+    const { client, stderr } = await connectStdio(['--port', String(port), '--allow-network-bodies']);
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       expect(names).toContain('get_summary');
@@ -117,6 +129,7 @@ describe('lionscope query and lionscope mcp against a running server', () => {
       // The attached server's fake adb lists emulator-5554; a server of its own would see no device.
       expect(status.devices.map((device: { serial: string }) => device.serial)).toContain('emulator-5554');
       expect(status.server.dashboardUrl).toBe(`http://localhost:${port}`);
+      expect(status.server.networkBodies).toBe(true);
       expect(stderr()).toContain('Attached to the Lionscope');
     } finally {
       await client.close();
@@ -182,7 +195,7 @@ describe('lionscope mcp when the server comes and goes', () => {
 });
 
 describe('lionscope mcp without a running server', () => {
-  it('starts one in-process; --allow-device-control adds the device tools for this client only', async () => {
+  it('starts one in-process; --allow-device-control and --allow-network-bodies apply to this client only', async () => {
     const port = await freePort();
     const { client, stderr } = await connectStdio([
       '--port',
@@ -192,12 +205,19 @@ describe('lionscope mcp without a running server', () => {
       '--adb',
       '/nonexistent/adb',
       '--allow-device-control',
+      '--allow-network-bodies',
     ]);
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(names).toEqual(expect.arrayContaining(['screenshot', 'tap', 'boot_emulator']));
+      expect(names).toEqual(
+        expect.arrayContaining(['screenshot', 'tap', 'boot_emulator', 'set_network_mock']),
+      );
       const status = json(await client.callTool({ name: 'status', arguments: {} }));
-      expect(status.server).toMatchObject({ dashboardUrl: `http://localhost:${port}`, deviceControl: true });
+      expect(status.server).toMatchObject({
+        dashboardUrl: `http://localhost:${port}`,
+        deviceControl: true,
+        networkBodies: true,
+      });
       expect(status.devices).toEqual([]);
       const summary = await client.callTool({ name: 'get_summary', arguments: { window: '5m' } });
       expect(json(summary).window.label).toBe('5m');
@@ -207,7 +227,10 @@ describe('lionscope mcp without a running server', () => {
         headers: { 'Content-Type': 'application/json', 'X-Lionscope-Agent': '1' },
         body: '{}',
       });
-      expect(((await response.json()) as Json).result.server.deviceControl).toBe(false);
+      expect(((await response.json()) as Json).result.server).toMatchObject({
+        deviceControl: false,
+        networkBodies: false,
+      });
       expect(stderr()).toContain(`Lionscope running at http://localhost:${port}`);
     } finally {
       await client.close();

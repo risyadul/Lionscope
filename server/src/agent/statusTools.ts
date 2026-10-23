@@ -1,6 +1,6 @@
 /** `status` and `list_apps`: what is connected, what is being profiled, and what can be. */
 import { z } from 'zod';
-import { isValidSerial } from '@lionscope/protocol';
+import { DEVICE_PROTOCOL_V7, isValidSerial } from '@lionscope/protocol';
 import type { DeviceInfo, EmulatorInfo, SessionState } from '@lionscope/protocol';
 import { isEmulatorSerial } from '../emulator/screenGateway.ts';
 import { defineTool, READ_ONLY, ToolError, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
@@ -53,6 +53,24 @@ function sdkView(session: SessionState) {
   };
 }
 
+/** HTTP capture (and mocking) runs while the session's SDK link is live at device protocol v7. */
+export function networkCapture(session: SessionState): boolean {
+  return session.sdk?.connected === true && (session.sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V7;
+}
+
+function networkView(ctx: AgentContext, session: SessionState) {
+  const mocks = ctx.sessions.getNetworkMocks();
+  return {
+    capture: networkCapture(session),
+    exchanges: ctx.sessions.getSnapshot().http?.length ?? 0,
+    mocks: {
+      total: mocks.rules.length,
+      enabled: mocks.rules.filter((rule) => rule.enabled).length,
+      applied: mocks.appliedRev !== null && mocks.appliedRev === mocks.rev,
+    },
+  };
+}
+
 export function statusData(ctx: AgentContext) {
   const emulators = ctx.emulators.getEmulators();
   const session = ctx.sessions.getSessionState();
@@ -65,6 +83,7 @@ export function statusData(ctx: AgentContext) {
       sdkGatewayPort: ctx.sdkGatewayPort(),
       bufferWindowMinutes: ctx.bufferWindowMs / 60_000,
       deviceControl: ctx.deviceControl,
+      networkBodies: ctx.networkBodies,
     },
     devices: ctx.sessions.getDevices().map((device) => deviceView(device, emulators)),
     emulators: emulators.map((emulator) => ({
@@ -78,6 +97,7 @@ export function statusData(ctx: AgentContext) {
     })),
     session: sessionView(session),
     sdk: sdkView(session),
+    network: networkView(ctx, session),
   };
 }
 
@@ -85,7 +105,7 @@ export const statusTool = defineTool({
   name: 'status',
   title: 'Lionscope status',
   description:
-    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options); and whether device-control tools are enabled. Use the serials it lists for list_apps and start_session. ' +
+    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options); HTTP capture (network: capture on while the SDK link is at protocol 7, exchanges kept, mock rules total/enabled/applied); and whether device-control tools and network bodies are enabled. Use the serials it lists for list_apps and start_session. ' +
     UNTRUSTED_DESCRIPTION,
   access: 'read',
   input: z.object({}),
