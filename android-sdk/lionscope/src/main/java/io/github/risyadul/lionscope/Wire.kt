@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 6
+internal const val DEVICE_PROTOCOL_VERSION = 7
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -18,8 +18,17 @@ internal const val DEVICE_PROTOCOL_V5 = 5
  * `composition`, `destination`) and `screen.kind` `destination`, on session and inspect links alike.
  */
 internal const val DEVICE_PROTOCOL_V6 = 6
+/**
+ * First version with the network inspector (session links only): `httpRequest` / `httpResponse` / `mocksApplied`
+ * (SDK → server) and `mocks` / `mock` (server → SDK).
+ */
+internal const val DEVICE_PROTOCOL_V7 = 7
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
+/** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link; every other line keeps [MAX_DEVICE_LINE_BYTES]. */
+internal const val MAX_HTTP_LINE_BYTES = 256 * 1024
+/** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); longer lines are skipped. */
+internal const val MAX_GATEWAY_LINE_BYTES = 512 * 1024
 internal const val MAX_SDK_FRAMES_PER_BATCH = 256
 /** Max frames per captured stack (innermost first); longer stacks are cut and flagged `truncated`. */
 internal const val MAX_STACK_FRAMES = 64
@@ -176,3 +185,89 @@ internal enum class InspectError(val wire: String) {
     DISABLED("disabled"),
     FAILED("failed"),
 }
+
+// Network (0.7.0), mirrors protocol/src/wire.ts, section "Network (0.7.0)".
+
+/** What replaces a redacted header value, query parameter value or form field value. */
+internal const val HTTP_REDACTED = "‹redacted›"
+/** Max UTF-8 bytes of a captured body's text (and of the raw bytes kept for it); longer bodies are cut. */
+internal const val MAX_HTTP_BODY_BYTES = 64 * 1024
+internal const val MAX_HTTP_URL_CHARS = 4096
+internal const val MAX_HTTP_METHOD_CHARS = 16
+/** Headers per request or response side; the SDK keeps the first ones that fit [MAX_HTTP_HEADER_BYTES]. */
+internal const val MAX_HTTP_HEADERS = 64
+internal const val MAX_HTTP_HEADER_NAME_CHARS = 256
+internal const val MAX_HTTP_HEADER_VALUE_CHARS = 4096
+/** UTF-8 bytes of all header names and values of one side. */
+internal const val MAX_HTTP_HEADER_BYTES = 16 * 1024
+internal const val MAX_HTTP_CONTENT_TYPE_CHARS = 256
+internal const val MAX_HTTP_ERROR_CHARS = 256
+/** Exchanges recorded per second at most (a token bucket with [HTTP_EXCHANGE_BURST]); the rest are counted. */
+internal const val HTTP_EXCHANGES_PER_SECOND = 20
+internal const val HTTP_EXCHANGE_BURST = 50
+/** `httpRequest.dropped` at most. */
+internal const val MAX_HTTP_DROPPED = 1_000_000
+/** `headersMs` / `durationMs` at most (the server's MAX_SDK_DURATION_MS). */
+internal const val MAX_HTTP_DURATION_MS = 3_600_000.0
+internal const val MAX_NETWORK_MOCKS = 32
+internal const val MAX_MOCK_DELAY_MS = 30_000
+
+/**
+ * Why a body's text was not captured: [TYPE] not a text type, [STREAMING] SSE / WebSocket upgrade / duplex,
+ * [ENCODING] a Content-Encoding the SDK can't decode, [ONE_SHOT] a request body that can be written only once,
+ * [ERROR] reading it for the capture failed (the app's call was unaffected).
+ */
+internal enum class HttpBodyOmission(val wire: String) {
+    TYPE("type"),
+    STREAMING("streaming"),
+    ENCODING("encoding"),
+    ONE_SHOT("one_shot"),
+    ERROR("error"),
+}
+
+/** A body as sent (`HttpBody`): [size] in bytes as the app sent or read it, null when unknown. */
+internal data class HttpBody(
+    val size: Long?,
+    val contentType: String?,
+    val text: String?,
+    val truncated: Boolean,
+    val omitted: HttpBodyOmission?,
+)
+
+internal enum class HttpFailureKind(val wire: String) {
+    TIMEOUT("timeout"),
+    CONNECTION("connection"),
+    CANCELED("canceled"),
+    IO("io"),
+}
+
+/** Why an exchange failed; [message] is `SimpleClassName: message`, cleaned when encoded. */
+internal data class HttpFailure(val kind: HttpFailureKind, val message: String?)
+
+internal enum class MockMatch(val wire: String) {
+    EXACT("exact"),
+    PREFIX("prefix"),
+    GLOB("glob"),
+}
+
+internal enum class MockAction(val wire: String) {
+    RESPOND("respond"),
+    TIMEOUT("timeout"),
+    CONNECTION_ERROR("connection_error"),
+}
+
+/**
+ * One mock rule as the server sends it (`mock`): [method] null = any; [headers] in order; [body] the UTF-8 body
+ * (respond only); [delayMs] clamped to 0..[MAX_MOCK_DELAY_MS].
+ */
+internal class MockRule(
+    val id: String,
+    val method: String?,
+    val match: MockMatch,
+    val url: String,
+    val action: MockAction,
+    val status: Int,
+    val headers: List<Pair<String, String>>,
+    val body: ByteArray,
+    val delayMs: Int,
+)

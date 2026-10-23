@@ -11,3 +11,8 @@
 -keepclassmembers class androidx.appcompat.app.AppCompatDelegate {
     public android.view.View createView(android.view.View, java.lang.String, android.content.Context, android.util.AttributeSet);
 }
+
+# OkHttp is compileOnly: only Lionscope.okHttpInterceptor() and its classes use it, so apps without OkHttp (which never
+# call it) must still shrink without missing-class errors.
+-dontwarn okhttp3.**
+-dontwarn okio.**

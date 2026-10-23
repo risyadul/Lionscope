@@ -57,4 +57,13 @@ internal interface LinkPort {
 
     /** [sendV2] for v4 messages: dropped unless the connection negotiated v4. */
     fun sendV4(sizeHint: Int, encode: () -> String?)
+
+    /** [sendV2] for v7 (network) messages: dropped unless the connection is a session that negotiated v7. */
+    fun sendV7(sizeHint: Int, encode: () -> String?)
+
+    /**
+     * Each v7 `mocks` / `mock` line ([GatewayMessage.Mocks], [GatewayMessage.Mock]) of a welcomed v7 session link, in
+     * order, on the link's reader thread; it must only hand off or do a little bookkeeping.
+     */
+    fun addMocksListener(listener: (GatewayMessage) -> Unit)
 }

@@ -58,6 +58,7 @@ internal class DeviceLink(
     private val sessionListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
     private val configListeners = CopyOnWriteArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = CopyOnWriteArrayList<(Int) -> Unit>()
+    private val mocksListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -82,6 +83,12 @@ internal class DeviceLink(
     override fun sendV4(sizeHint: Int, encode: () -> String?) {
         if (isConnected && speaks(negotiatedVersion, DEVICE_PROTOCOL_V4)) {
             queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V4, encode))
+        }
+    }
+
+    override fun sendV7(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && isSession && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
+            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V7, encode))
         }
     }
 
@@ -110,6 +117,10 @@ internal class DeviceLink(
 
     override fun addInspectListener(listener: (requestId: Int) -> Unit) {
         inspectListeners.add(listener)
+    }
+
+    override fun addMocksListener(listener: (GatewayMessage) -> Unit) {
+        mocksListeners.add(listener)
     }
 
     private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
@@ -243,7 +254,15 @@ internal class DeviceLink(
                 }
                 is GatewayMessage.Config -> onConfig(message.options)
                 is GatewayMessage.Inspect -> onInspect(message.requestId)
+                is GatewayMessage.Mocks, is GatewayMessage.Mock -> onMocks(message)
             }
+        }
+
+        /** Ignored before `welcome`, after close, on `inspect`-mode links and on a link negotiated below v7. */
+        @Synchronized
+        private fun onMocks(message: GatewayMessage) {
+            if (!welcomed || closed || !isSession || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
+            dispatch(mocksListeners, message)
         }
 
         /** Ignored before `welcome`, after close, and on a link negotiated below v4. */

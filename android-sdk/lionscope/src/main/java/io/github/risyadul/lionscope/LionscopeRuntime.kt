@@ -134,6 +134,7 @@ internal object LionscopeRuntime {
         frames?.let(app::registerActivityLifecycleCallbacks)
         diagnostics?.let(app::registerActivityLifecycleCallbacks)
         layouts?.let(app::registerActivityLifecycleCallbacks)
+        NetworkCapture.shared.attach(deviceLink)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.
         deviceLink.start()
         Lionscope.installed = true

@@ -1,6 +1,7 @@
 package io.github.risyadul.lionscope
 
 import java.util.ArrayDeque
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** Main-thread stand-in: tasks run only when the test says so. */
 internal class FakeScheduler : MainScheduler {
@@ -35,12 +36,18 @@ internal class FakeLink : LinkPort {
     private val sessionListeners = ArrayList<(Boolean) -> Unit>()
     private val configListeners = ArrayList<(SdkOptions) -> Unit>()
     private val inspectListeners = ArrayList<(Int) -> Unit>()
+    private val mocksListeners = ArrayList<(GatewayMessage) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
     val v2Lines = ArrayList<String>()
     val v3Lines = ArrayList<String>()
     val v4Lines = ArrayList<String>()
+    /** Network lines arrive from OkHttp's threads too. */
+    val v7Lines = CopyOnWriteArrayList<String>()
     var failure: Throwable? = null
+    /** Thrown by [sendV7] (a link that fails while the interceptor records). */
+    var v7Failure: Throwable? = null
+    private var session = false
 
     override var isWelcomed = false
         private set
@@ -88,6 +95,21 @@ internal class FakeLink : LinkPort {
         if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V4) encode()?.let { v4Lines += it }
     }
 
+    /** Encodes right away, as the link thread would; dropped unless a v7 session, like the real link. */
+    override fun sendV7(sizeHint: Int, encode: () -> String?) {
+        v7Failure?.let { throw it }
+        if (session && (negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V7) encode()?.let { v7Lines += it }
+    }
+
+    override fun addMocksListener(listener: (GatewayMessage) -> Unit) {
+        mocksListeners += listener
+    }
+
+    /** A `mocks` / `mock` line from the server (the real link forwards them only on v7 session links). */
+    fun gateway(message: GatewayMessage) {
+        mocksListeners.forEach { it(message) }
+    }
+
     fun inspect(requestId: Int) {
         inspectListeners.forEach { it(requestId) }
     }
@@ -96,6 +118,7 @@ internal class FakeLink : LinkPort {
     fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION, inspectOnly: Boolean = false) {
         isWelcomed = welcomed
         negotiatedVersion = if (welcomed) version else null
+        session = welcomed && !inspectOnly
         listeners.forEach { it(welcomed) }
         if (!inspectOnly) sessionListeners.forEach { it(welcomed) }
     }

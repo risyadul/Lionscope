@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope
 
 import android.content.Context
 import androidx.navigation.NavController
+import okhttp3.Interceptor
 
 /**
  * Lionscope in-app SDK (debug artifact).
@@ -43,4 +44,36 @@ object Lionscope {
     fun trackNavigation(navController: NavController) {
         LionscopeRuntime.trackNavigation(navController)
     }
+
+    /**
+     * The network inspector's OkHttp interceptor (one instance per process). Add it LAST among the application
+     * interceptors, so the capture sees what the app's own interceptors (auth, logging) send and mocks go through
+     * them on the way back:
+     *
+     * ```
+     * // Retrofit
+     * val client = OkHttpClient.Builder()
+     *     .addInterceptor(authInterceptor)
+     *     .addInterceptor(Lionscope.okHttpInterceptor())
+     *     .build()
+     * val retrofit = Retrofit.Builder().baseUrl("https://api.example.com/").client(client).build()
+     *
+     * // Ktor on Android (OkHttp engine, androidMain)
+     * val http = HttpClient(OkHttp) { engine { addInterceptor(Lionscope.okHttpInterceptor()) } }
+     * ```
+     *
+     * It does nothing but `chain.proceed(chain.request())` unless a Lionscope profiling session runs (server and SDK
+     * on device protocol v7). During a session it records each exchange for the dashboard's Network tab: method,
+     * URL, headers, timings and, for text types (JSON, XML, forms, GraphQL, `text/`), the first 64 KB of each body.
+     * Values of `Authorization`, `Cookie`, `Set-Cookie` and of headers, query parameters and form fields whose names
+     * look like tokens, secrets, keys, sessions or passwords are redacted on the device; JSON and XML bodies are not.
+     * The response body is never read by Lionscope: it copies what the app reads. Mock rules set in the dashboard
+     * answer matching requests without a network call (one `Lionscope` logcat line per mocked request); they apply
+     * only during the session that set them. Added with `addNetworkInterceptor` it records but never mocks.
+     *
+     * Needs OkHttp 4.x or 5.x on the app's classpath (Lionscope does not bring it); never called, it never loads
+     * OkHttp classes. Not covered: Ktor CIO / Darwin engines, `HttpURLConnection`, WebView, gRPC. `lionscope-noop`
+     * returns a pass-through interceptor, so release builds keep the same code.
+     */
+    fun okHttpInterceptor(): Interceptor = LionscopeOkHttpInterceptor.shared
 }
