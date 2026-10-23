@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- The network demo talks to sample-api.mjs on the laptop (10.0.2.2 from an emulator). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -23,5 +26,9 @@
             android:name=".ComposeShopActivity"
             android:exported="true"
             android:theme="@style/Theme.LionscopeSample.Compose" />
+        <activity
+            android:name=".NetworkActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
     </application>
 </manifest>
