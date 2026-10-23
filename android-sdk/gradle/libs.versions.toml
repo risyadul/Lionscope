@@ -13,6 +13,9 @@ recyclerview = "1.2.1"
 viewpager = "1.0.0"
 asynclayoutinflater = "1.0.0"
 junit = "4.13.2"
+# The SDK compiles against the oldest Compose UI / Navigation it reads (compileOnly, detected at runtime).
+composeUiSdk = "1.6.8"
+navigationSdk = "2.7.7"
 
 [libraries]
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlinStdlib" }
@@ -26,6 +29,8 @@ androidx-viewpager = { module = "androidx.viewpager:viewpager", version.ref = "v
 androidx-asynclayoutinflater = { module = "androidx.asynclayoutinflater:asynclayoutinflater", version.ref = "asynclayoutinflater" }
 material = { module = "com.google.android.material:material", version.ref = "material" }
 junit = { module = "junit:junit", version.ref = "junit" }
+compose-ui-sdk = { module = "androidx.compose.ui:ui", version.ref = "composeUiSdk" }
+navigation-runtime-sdk = { module = "androidx.navigation:navigation-runtime", version.ref = "navigationSdk" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

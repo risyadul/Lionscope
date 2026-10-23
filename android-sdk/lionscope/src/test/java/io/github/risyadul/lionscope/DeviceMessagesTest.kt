@@ -62,9 +62,41 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionFive() {
-        assertEquals(5, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V5, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionSix() {
+        assertEquals(6, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V6, DEVICE_PROTOCOL_VERSION)
+    }
+
+    @Test
+    fun aDestinationIsAFragmentToServersBelowV6() {
+        val destination = ScreenRef("product/{id}", "product/{id}?tab={tab}", ScreenKind.DESTINATION)
+        fun kind(version: Int?) = ((TestJson.parse(DeviceMessages.screen(1, destination, version)) as Map<*, *>)["screen"] as Map<*, *>)["kind"]
+        assertEquals("fragment", kind(4))
+        assertEquals("fragment", kind(null))
+        assertEquals("destination", kind(6))
+        val dialog = ScreenRef("promo", "promo", ScreenKind.DIALOG)
+        assertEquals("dialog", ((TestJson.parse(DeviceMessages.screen(1, dialog, 4)) as Map<*, *>)["screen"] as Map<*, *>)["kind"])
+    }
+
+    @Test
+    fun aViewNodeHasNoComposeFieldsAndAComposableHasNoViewFields() {
+        val view = TestJson.parse(DeviceMessages.inspectNode(InspectorFixtures.plainNode(0, null))) as Map<*, *>
+        assertFalse(view.containsKey("composable") || view.containsKey("composition") || view.containsKey("destination"))
+        val composable = InspectorFixtures.plainNode(1, 0, className = "Button").copy(
+            alpha = null,
+            padding = null,
+            layoutWidth = null,
+            layoutHeight = null,
+            composable = ComposableSource("HomeScreen.kt\n", 0),
+            destination = " \u200E ",
+        )
+        val node = TestJson.parse(DeviceMessages.inspectNode(composable)) as Map<*, *>
+        assertServerAcceptsNode(node)
+        assertEquals(null, node["alpha"])
+        assertEquals(null, node["padding"])
+        assertEquals(mapOf("file" to "HomeScreen.kt", "line" to null), node["composable"]) // Line 0 is unknown.
+        assertFalse(node.containsKey("destination")) // Nothing left after cleaning.
+        assertEquals(listOf("activity", "composable"), node.keys.toList().takeLast(2))
     }
 
     @Test
@@ -325,9 +357,13 @@ class DeviceMessagesTest {
 
     @Test
     fun goldenInspectorNodesAreChunkedIntoTheGoldenLine() {
-        val golden = goldenLines.single { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
-        val nodes = ((TestJson.parse(golden) as Map<*, *>)["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
-        assertEquals(listOf(golden), DeviceMessages.inspectChunks(7, nodes))
+        val goldens = goldenLines.filter { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
+        assertEquals(2, goldens.size) // A v4 (views) and a v6 (Compose) one.
+        for (golden in goldens) {
+            val message = TestJson.parse(golden) as Map<*, *>
+            val nodes = (message["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
+            assertEquals(listOf(golden), DeviceMessages.inspectChunks((message["requestId"] as Double).toInt(), nodes))
+        }
     }
 
     /** The server's v4 rules (protocol/src/index.ts): text ≤ 500 / names ≤ 200, pixels ±100 000, line ≥ 1. */
@@ -355,7 +391,14 @@ class DeviceMessagesTest {
         text("fragment", 200)
         text("activity", 200)
         listOf("bounds", "visibleBounds", "padding", "margin").forEach(::rect)
-        assertTrue((node["alpha"] as Double) in 0.0..1.0)
+        (node["alpha"] as Double?)?.let { assertTrue(it in 0.0..1.0) }
+        text("destination", 200)
+        (node["composable"] as Map<*, *>?)?.let { composable ->
+            assertEquals(listOf("file", "line"), composable.keys.toList())
+            (composable["file"] as String?)?.let { assertTrue(it.isNotEmpty() && it.length <= 200) }
+            (composable["line"] as Double?)?.let { assertTrue(it >= 1) }
+        }
+        (node["composition"] as String?)?.let { assertTrue(it in setOf("read", "disabled", "no_source", "failed")) }
         for (key in listOf("layoutWidth", "layoutHeight")) {
             val value = node[key] as String? ?: continue
             assertTrue(value, Regex("^(match_parent|wrap_content|-?\\d{1,6}px)$").matches(value))

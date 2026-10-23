@@ -53,11 +53,15 @@ kotlin {
 dependencies {
     implementation(libs.androidx.startup)
     compileOnly(libs.androidx.fragment)
+    // Read when the app has them (detected at runtime); an app without Compose / Navigation never loads that code.
+    compileOnly(libs.compose.ui.sdk)
+    compileOnly(libs.navigation.runtime.sdk)
     compileOnly(libs.kotlin.stdlib)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.stdlib)
     testImplementation(libs.androidx.fragment)
+    testImplementation(libs.compose.ui.sdk)
 }
 
 afterEvaluate {

@@ -20,6 +20,19 @@ import androidx.annotation.RequiresApi
 import java.lang.reflect.Method
 import java.util.IdentityHashMap
 
+private const val MAX_CONTEXT_DEPTH = 16
+
+/** The Activity [context] is, or wraps (a ContextThemeWrapper, a Fragment's context, ...), else null. */
+internal fun activityOf(context: Context?): Activity? {
+    var current = context
+    var depth = 0
+    while (current is ContextWrapper && depth++ < MAX_CONTEXT_DEPTH) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
+
 /** The windows the SDK tracks itself, for the Inspector below API 29 (main thread). */
 internal interface KnownWindows {
     val hasStartedActivity: Boolean
@@ -80,16 +93,17 @@ internal object WindowRoots {
         (if (sdkInt >= Build.VERSION_CODES.Q) global() else known()).filter(isShown)
 }
 
-/** [InspectorScene] over the app's real windows. */
+/** [InspectorScene] over the app's real windows (Views, and composables when [compose] can read them). */
 internal class ViewScene(
     private val known: KnownWindows,
     private val origins: ViewOrigins?,
     private val sdkInt: Int = Build.VERSION.SDK_INT,
-) : InspectorScene<View> {
+    private val compose: () -> ComposeReading? = { ComposeSupport.reading },
+) : InspectorScene<Any> {
     override val isForeground: Boolean
         get() = known.hasStartedActivity
 
-    override fun prepare(): PreparedScene<View>? {
+    override fun prepare(readCompose: Boolean): PreparedScene<Any>? {
         val global = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) globalWindows() else emptyList() }
         val roots = WindowRoots.select(sdkInt, global, known::knownRoots, ::isShownWindow)
         if (roots.isEmpty()) return null
@@ -99,15 +113,16 @@ internal class ViewScene(
             val activity = windowActivity(root)
             if (activity != null && activities.put(activity, Unit) == null) fragmentRoots(activity, fragments)
             val location = IntArray(2).also(root::getLocationOnScreen)
-            WindowRoot(
+            WindowRoot<Any>(
                 root = root,
                 type = (root.layoutParams as? WindowManager.LayoutParams)?.type,
                 bounds = PixelRect(location[0], location[1], location[0] + root.width, location[1] + root.height),
                 activity = activity?.javaClass?.name,
             )
         }
-        val access = ViewInspectorAccess(if (sdkInt >= Build.VERSION_CODES.Q) origins else null, fragments)
-        return PreparedScene(windows, display(roots.last()), access)
+        val views = ViewInspectorAccess(if (sdkInt >= Build.VERSION_CODES.Q) origins else null, fragments)
+        val reading = if (readCompose) compose()?.also { it.beginCapture() } else null
+        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading))
     }
 
     @RequiresApi(29)
@@ -129,7 +144,6 @@ internal class ViewScene(
 
     private companion object {
         const val DEGREES_PER_ROTATION = 90
-        const val MAX_CONTEXT_DEPTH = 16
         const val MAX_DESCENT = 8
 
         /** A DecorView's context is a DecorContext (app context): its content's views know the Activity. */
@@ -140,16 +154,6 @@ internal class ViewScene(
             while (view is ViewGroup && view.childCount > 0 && depth++ < MAX_DESCENT) {
                 view = view.getChildAt(0)
                 activityOf(view?.context)?.let { return it }
-            }
-            return null
-        }
-
-        fun activityOf(context: Context?): Activity? {
-            var current = context
-            var depth = 0
-            while (current is ContextWrapper && depth++ < MAX_CONTEXT_DEPTH) {
-                if (current is Activity) return current
-                current = current.baseContext
             }
             return null
         }
@@ -176,6 +180,90 @@ internal class ViewScene(
                 // A fragment tree in transition: owners stay unknown for this capture.
             }
         }
+    }
+}
+
+/**
+ * Views and composables as one tree. An AndroidComposeView whose composition [compose] read has its composables as
+ * children (then the AndroidViewsHandler, only while it still holds an AndroidView that no composable claimed); its
+ * other internal views (draw layers) are left out. Any other node is read by [views]; without [compose] (a link
+ * below v6, Compose inspection off) the tree is exactly the View tree.
+ */
+internal class SceneTreeAccess(
+    private val views: InspectorTreeAccess<View>,
+    private val compose: ComposeReading?,
+) : InspectorTreeAccess<Any> {
+    private val reads = IdentityHashMap<View, ComposeRead>()
+    private val claimed = IdentityHashMap<View, Unit>()
+    private val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
+    private var cut = false
+
+    override val truncated: Boolean
+        get() = cut
+
+    override fun children(node: Any): List<Any> = when (node) {
+        is ComposeNode -> node.children
+        is View -> {
+            val read = composeRead(node)
+            val children = views.children(node).filter { it !in claimed }
+            if (read?.status != CompositionStatus.READ) {
+                children
+            } else {
+                read.roots + children.filter { views.className(it) == VIEWS_HANDLER && views.children(it).any { holder -> holder !in claimed } }
+            }
+        }
+        else -> emptyList()
+    }
+
+    override fun className(node: Any): String = if (node is ComposeNode) node.name else views.className(node as View)
+
+    override fun fragmentRootOf(node: Any): String? = (node as? View)?.let(views::fragmentRootOf)
+
+    override fun read(node: Any): NodeAttributes {
+        if (node is View) {
+            val attributes = views.read(node)
+            return reads[node]?.let { attributes.copy(composition = it.status) } ?: attributes
+        }
+        val composable = node as ComposeNode
+        val read = semantics[composable] ?: ComposeSemantics.NONE
+        return NodeAttributes(
+            className = composable.name,
+            resourceId = read.testTag,
+            text = if (read.secret) null else read.text,
+            contentDescription = if (read.secret) null else read.contentDescription,
+            bounds = composable.bounds ?: PixelRect(0, 0, 0, 0),
+            visibility = ViewVisibility.VISIBLE,
+            alpha = null,
+            enabled = read.enabled,
+            clickable = read.clickable,
+            focused = read.focused,
+            selected = read.selected,
+            checked = read.checked,
+            padding = null,
+            margin = null,
+            layoutWidth = null,
+            layoutHeight = null,
+            source = null,
+            composable = composable.source,
+            destination = composable.destination,
+        )
+    }
+
+    /** Read once per capture, when first walked into. */
+    private fun composeRead(view: View): ComposeRead? {
+        val reading = compose ?: return null
+        reads[view]?.let { return it }
+        if (views.className(view) != InspectorWalker.COMPOSE_VIEW) return null
+        val read = reading.read(view)
+        reads[view] = read
+        for (holder in read.claimed) claimed[holder] = Unit
+        semantics.putAll(read.semantics)
+        if (read.truncated) cut = true
+        return read
+    }
+
+    private companion object {
+        const val VIEWS_HANDLER = "androidx.compose.ui.platform.AndroidViewsHandler"
     }
 }
 

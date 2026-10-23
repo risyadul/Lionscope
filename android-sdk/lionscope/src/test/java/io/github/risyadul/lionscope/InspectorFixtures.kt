@@ -15,19 +15,24 @@ internal object InspectorFixtures {
         bounds = rect(json["bounds"])!!,
         visibleBounds = rect(json["visibleBounds"]),
         visibility = ViewVisibility.values().single { it.wire == json["visibility"] },
-        alpha = json["alpha"] as Double,
+        alpha = json["alpha"] as Double?,
         enabled = json["enabled"] as Boolean,
         clickable = json["clickable"] as Boolean,
         focused = json["focused"] as Boolean,
         selected = json["selected"] as Boolean,
         checked = json["checked"] as Boolean?,
-        padding = rect(json["padding"])!!,
+        padding = rect(json["padding"]),
         margin = rect(json["margin"]),
         layoutWidth = json["layoutWidth"] as String?,
         layoutHeight = json["layoutHeight"] as String?,
         source = (json["source"] as Map<*, *>?)?.let { ViewSource(it["layout"] as String, (it["line"] as Double).toInt()) },
         fragment = json["fragment"] as String?,
         activity = json["activity"] as String?,
+        composable = (json["composable"] as Map<*, *>?)?.let {
+            ComposableSource(it["file"] as String?, (it["line"] as Double?)?.toInt())
+        },
+        composition = json["composition"]?.let { wire -> CompositionStatus.values().single { it.wire == wire } },
+        destination = json["destination"] as String?,
     )
 
     fun window(json: Map<*, *>): InspectorWindow =

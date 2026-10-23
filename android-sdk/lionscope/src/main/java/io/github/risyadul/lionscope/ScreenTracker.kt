@@ -24,6 +24,11 @@ internal interface LayoutEvents {
     fun onScreenChanged(screen: ScreenRef?, target: Any?)
 }
 
+/** The current navigation destination shown in an Activity, if any (main thread). */
+internal interface DestinationScreens {
+    fun screenFor(activity: Any): ScreenRef?
+}
+
 /**
  * Feeds Activity (and, when androidx.fragment is present, Fragment) lifecycle events into [ScreenResolver].
  * Resolution is coalesced into one main-thread post, so a whole transition (pause A → resume B → resume B's

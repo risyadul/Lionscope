@@ -39,6 +39,8 @@ internal object LionscopeRuntime {
     @Synchronized
     private fun install(app: Application) {
         if (link != null) return
+        // First: a composition can only be inspected if inspection was on when it was first composed.
+        ComposeSupport.install(app)
         val processName = ProcessInfo.currentProcessName() ?: app.packageName
         val deviceLink = DeviceLink(helloLine = {
             DeviceMessages.hello(
