@@ -104,6 +104,13 @@ const TreeRow = memo(function TreeRow({
   );
 });
 
+/** The default shape, with the path to `selectedId` open (a selection that came with the snapshot or the page). */
+function openedFor(index: InspectorIndex, selectedId: number | null): Set<number> {
+  const opened = new Set(defaultExpanded(index));
+  if (selectedId !== null) for (const id of ancestorsOf(index, selectedId)) opened.add(id);
+  return opened;
+}
+
 type Props = {
   controller: InspectorController;
   snapshot: InspectorSnapshot;
@@ -115,17 +122,18 @@ type Props = {
 export const InspectorTree = memo(function InspectorTree({ controller, snapshot, index, query }: Props) {
   const { selectedId } = controller;
   const hoverId = useHoverId(controller);
-  const [expanded, setExpanded] = useState(() => new Set(defaultExpanded(index)));
+  const [expanded, setExpanded] = useState(() => openedFor(index, selectedId));
   const [focusId, setFocusId] = useState<number | null>(selectedId);
   const [forSnapshot, setForSnapshot] = useState(snapshot.id);
   const [forSelection, setForSelection] = useState(selectedId);
   const shouldFocus = useRef(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  // A new snapshot starts from its default shape; a new selection opens the path to it (adjusting state while rendering).
+  // A new snapshot starts from its default shape plus the path to a selection it already has; a new selection
+  // opens the path to it (adjusting state while rendering).
   if (forSnapshot !== snapshot.id) {
     setForSnapshot(snapshot.id);
-    setExpanded(new Set(defaultExpanded(index)));
+    setExpanded(openedFor(index, selectedId));
     setFocusId(selectedId);
   }
   if (forSelection !== selectedId) {

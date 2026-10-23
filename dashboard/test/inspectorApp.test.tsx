@@ -275,6 +275,17 @@ describe('Inspector tab', () => {
     expect(within(attrs).getByText('clickable').getAttribute('data-on')).toBe('true');
   });
 
+  it('opens the path to a selection that was already there when the tree mounts (a reloaded page)', async () => {
+    // Node 5 sits under the invisible View 4, which the default shape (depth < 2) leaves closed.
+    setup([...BASE, snapshotMsg(), selectedOn(5)]);
+    openTab();
+    const tree = screen.getByRole('tree', { name: 'View hierarchy' });
+    const row = within(tree)
+      .getAllByRole('treeitem')
+      .find((r) => r.getAttribute('data-node') === '5');
+    expect(row?.getAttribute('aria-selected')).toBe('true');
+  });
+
   it('selects a view from the tree and an ancestor from the path', async () => {
     const { push, sent } = setup();
     await push(snapshotMsg());

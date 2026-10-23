@@ -624,6 +624,19 @@
   color: var(--ink-muted);
 }
 
+/* Wide (the Inspector view, or the full-width tab of a stacked page): the tree and the attributes side by side. */
+@container inspector (min-width: 760px) {
+  .inspect-body {
+    grid-template-columns: minmax(0, 1.2fr) minmax(320px, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .inspect-attrs {
+    border-top: 0;
+    border-left: 1px solid var(--rule-strong);
+  }
+}
+
 /* Narrow side column: the attributes stack tighter. */
 @container inspector (max-width: 320px) {
   .attr-row {

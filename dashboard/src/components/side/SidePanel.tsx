@@ -26,6 +26,8 @@ type Props = {
   stalls: ReactNode;
   layouts: ReactNode;
   inspector: ReactNode;
+  /** Only this tab, under a heading instead of the tab list (the Inspector view); the others stay mounted. */
+  lockedTab?: SideTab;
 };
 
 /** The right-hand column: the per-screen table and stalls share it as tabs (both stay mounted). */
@@ -40,6 +42,7 @@ export function SidePanel({
   stalls,
   layouts,
   inspector,
+  lockedTab,
 }: Props) {
   const counts: Record<SideTab, number> = {
     screens: screenCount,
@@ -63,6 +66,29 @@ export function SidePanel({
     onTabChange(next.id);
     event.currentTarget.querySelector<HTMLButtonElement>(`#side-tab-${next.id}`)?.focus();
   };
+
+  if (lockedTab !== undefined) {
+    const locked = TABS.find((t) => t.id === lockedTab);
+    return (
+      <aside className="side" data-locked={lockedTab} aria-labelledby={`side-title-${lockedTab}`}>
+        <div className="side-tabs">
+          <h2 id={`side-title-${lockedTab}`} className="side-tab side-title">
+            {locked?.label}
+            {counts[lockedTab] > 0 && (
+              <span className="side-tab-count mono" data-tab={lockedTab}>
+                {formatInteger(counts[lockedTab])}
+              </span>
+            )}
+          </h2>
+        </div>
+        {TABS.map((t) => (
+          <div key={t.id} id={`side-panel-${t.id}`} className="side-panel" hidden={t.id !== lockedTab}>
+            {panels[t.id]}
+          </div>
+        ))}
+      </aside>
+    );
+  }
 
   return (
     <aside className="side" aria-label="Screens, stalls, layouts and inspector">

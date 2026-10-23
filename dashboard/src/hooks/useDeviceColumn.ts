@@ -16,18 +16,41 @@ export interface DeviceColumnState {
   setOpen: (isOpen: boolean) => void;
   /** Open and the tab in front: the only time the screen streams. */
   isVisible: boolean;
+  /** Pinned open (the Inspector and Device views): no collapse, no drawer. */
+  isPinned: boolean;
 }
 
-/** Docked: collapsed or not, remembered per viewer. Overlay: a drawer that starts closed on every load. */
-export function useDeviceColumn(): DeviceColumnState {
+/**
+ * Docked: collapsed or not, remembered per viewer. Overlay: a drawer that starts closed on every load.
+ * Pinned (`isPinned`, the views built around the device): always docked and open; the remembered collapse
+ * comes back in the Profiler view.
+ */
+export function useDeviceColumn(isPinned = false): DeviceColumnState {
   const isOverlay = useMediaQuery(DEVICE_OVERLAY_QUERY);
   const isPageVisible = useDocumentVisible();
   const [isCollapsed, setIsCollapsed] = useStoredState(LAYOUT_KEYS.deviceCollapsed, parseCollapsed);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const isOpen = isOverlay ? isDrawerOpen : !isCollapsed;
+  // Pinning closes the drawer for good: back in the Profiler it starts closed again (adjusting state while rendering).
+  const [wasPinned, setWasPinned] = useState(isPinned);
+  if (wasPinned !== isPinned) {
+    setWasPinned(isPinned);
+    if (isPinned) setIsDrawerOpen(false);
+  }
   const setOpen = useCallback(
-    (open: boolean) => (isOverlay ? setIsDrawerOpen(open) : setIsCollapsed(!open)),
-    [isOverlay, setIsCollapsed],
+    (open: boolean) => {
+      if (isPinned) return;
+      if (isOverlay) setIsDrawerOpen(open);
+      else setIsCollapsed(!open);
+    },
+    [isPinned, isOverlay, setIsCollapsed],
   );
-  return { mode: isOverlay ? 'overlay' : 'docked', isOpen, setOpen, isVisible: isOpen && isPageVisible };
+  if (isPinned) return { mode: 'docked', isOpen: true, setOpen, isVisible: isPageVisible, isPinned };
+  const isOpen = isOverlay ? isDrawerOpen : !isCollapsed;
+  return {
+    mode: isOverlay ? 'overlay' : 'docked',
+    isOpen,
+    setOpen,
+    isVisible: isOpen && isPageVisible,
+    isPinned,
+  };
 }

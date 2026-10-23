@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { Activity, memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SdkOptions } from '@lionscope/protocol/wire';
 import { DEFAULT_SDK_OPTIONS, isValidSerial, STALL_THRESHOLDS_MS } from '@lionscope/protocol/wire';
 import { useDashboardState, useServices } from './app/services.ts';
+import { AgentPanel } from './components/device/AgentPanel.tsx';
 import { DeviceColumn, DeviceToggle } from './components/device/DeviceColumn.tsx';
 import { DevicePanel } from './components/device/DevicePanel.tsx';
 import { LogcatDrawer } from './components/layout/LogcatDrawer.tsx';
@@ -20,6 +21,7 @@ import { EmptyState } from './components/states/EmptyState.tsx';
 import { Timeline } from './components/timeline/Timeline.tsx';
 import { EmulatorActions } from './components/topbar/EmulatorActions.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
+import { ViewSwitch } from './components/topbar/ViewSwitch.tsx';
 import { useAppList } from './hooks/useAppList.ts';
 import { useDeviceColumn } from './hooks/useDeviceColumn.ts';
 import { useDeviceTarget } from './hooks/useDeviceTarget.ts';
@@ -28,6 +30,8 @@ import { useEscape } from './hooks/useEscape.ts';
 import { useInspector } from './hooks/useInspector.ts';
 import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
+import { useViewMode } from './hooks/useViewMode.ts';
+import type { ViewMode } from './lib/viewMode.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
 import { inflatesInWindow, inflateByScreen, latestViewTrees } from './lib/layouts.ts';
@@ -62,6 +66,17 @@ interface PendingRequest {
 
 const OFFLINE_OPTIONS_HINT = 'Offline — waiting for the server.';
 
+/**
+ * Holds its children's last render while `isFrozen`: inside a hidden `<Activity>` the charts would otherwise
+ * still re-render (at low priority) on every clock tick with nothing on screen. Thawing renders the latest.
+ */
+const Frozen = memo(
+  function Frozen({ children }: { isFrozen: boolean; children: ReactNode }) {
+    return children;
+  },
+  (_prev, next) => next.isFrozen,
+);
+
 function isStallThreshold(value: number): boolean {
   return (STALL_THRESHOLDS_MS as readonly number[]).includes(value);
 }
@@ -81,7 +96,8 @@ export function App() {
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
   const now = useNow(windowMs <= 60_000 ? 250 : 1000);
   const chartsRef = useRef<HTMLDivElement>(null);
-  const deviceColumn = useDeviceColumn();
+  const [viewMode, setViewMode] = useViewMode();
+  const deviceColumn = useDeviceColumn(viewMode !== 'profile');
 
   const isOpen = state.connection.status === 'open';
   const isActive = isSessionActive(state);
@@ -161,11 +177,23 @@ export function App() {
   const viewStalls = useCallback(() => setSideTab('stalls'), []);
   const viewLayouts = useCallback(() => setSideTab('layouts'), []);
   const { isActive: isInspecting, toggle: toggleInspect, exit: exitInspect } = inspector;
-  // Pressing Inspect also brings its tree forward; Esc leaves inspect mode before anything else.
+  // Pressing Inspect also brings its tree forward (from the Device view, the Inspector view);
+  // Esc leaves inspect mode before anything else.
+  // The Device view is for watching the live screen: leaving for it ends inspect mode.
+  const changeView = useCallback(
+    (next: ViewMode) => {
+      if (next === 'device') exitInspect();
+      setViewMode(next);
+    },
+    [exitInspect, setViewMode],
+  );
   const toggleInspector = useCallback(() => {
-    if (!isInspecting) setSideTab('inspector');
+    if (!isInspecting) {
+      setSideTab('inspector');
+      if (viewMode === 'device') setViewMode('inspect');
+    }
     toggleInspect();
-  }, [isInspecting, toggleInspect]);
+  }, [isInspecting, toggleInspect, viewMode, setViewMode]);
   useEscape(isInspecting, exitInspect);
   const inspectorValue = useMemo(
     () => ({ ...inspector, toggle: toggleInspector }),
@@ -312,6 +340,7 @@ export function App() {
               <DeviceToggle isOpen={deviceColumn.isOpen} onOpenChange={deviceColumn.setOpen} />
             )
           }
+          viewSwitch={<ViewSwitch value={viewMode} onChange={changeView} />}
           onRefreshDevices={() => send({ type: 'refreshDevices' })}
           apps={apps}
           packageName={packageName}
@@ -339,12 +368,13 @@ export function App() {
             deviceLabel={emulator !== null && isSoftwareRendered(emulator) ? emulatorLabel(emulator) : null}
           />
         </div>
-        <main className="workspace" data-device={deviceColumn.mode}>
+        <main className="workspace" data-device={deviceColumn.mode} data-view={viewMode}>
           <DeviceColumn
             mode={deviceColumn.mode}
             isOpen={deviceColumn.isOpen}
             onOpenChange={deviceColumn.setOpen}
             subtitle={emulator !== null ? emulatorLabel(emulator) : serial}
+            isPinned={deviceColumn.isPinned}
           >
             <DevicePanel
               target={selection.target}
@@ -358,106 +388,118 @@ export function App() {
               onShutdown={emulatorActions.shutdown}
             />
           </DeviceColumn>
-          <div className="instrument">
-            <StatStrip stats={stats} />
-            {/* What the timeline and the logcat drawer share: the drawer's height is bounded by this box. */}
-            <div ref={chartsRef} className="instrument-charts">
-              <Timeline
-                cpu={series.cpu}
-                memory={series.memory}
-                frames={series.frames}
-                events={series.events}
-                screens={series.screens}
-                breakdown={series.breakdown}
-                stalls={series.stalls}
-                strictMode={series.strictMode}
-                inflates={series.inflates}
-                showScreens={showScreens}
-                showBreakdown={showBreakdown}
-                showMainThread={showMainThread}
-                stallThresholdMs={sdkOptions.stallThresholdMs}
-                isStrictModeOn={isActive && sdkOptions.strictMode}
-                selectedStall={selectedStall}
-                onSelectStall={selectStall}
-                onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
-                onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
-                isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
-                isSdkConnected={isSdkConnected}
-                selectedScreen={selectedScreen}
-                onSelectScreen={setSelectedScreen}
-                onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
-                endTs={endTs}
-                windowMs={windowMs}
-                probeTs={probeTs}
-                cursorX={cursorX}
-                toolbar={
-                  <WindowControls
+          {/* The Inspector and Device views hide the charts: effects torn down (no plots), renders frozen (no
+              work per clock tick), state kept (logcat filters, Clear, the CPU mode are there when you come back). */}
+          <Activity mode={viewMode === 'profile' ? 'visible' : 'hidden'}>
+            <Frozen isFrozen={viewMode !== 'profile'}>
+              <div className="instrument">
+                <StatStrip stats={stats} />
+                {/* What the timeline and the logcat drawer share: the drawer's height is bounded by this box. */}
+                <div ref={chartsRef} className="instrument-charts">
+                  <Timeline
+                    cpu={series.cpu}
+                    memory={series.memory}
+                    frames={series.frames}
+                    events={series.events}
+                    screens={series.screens}
+                    breakdown={series.breakdown}
+                    stalls={series.stalls}
+                    strictMode={series.strictMode}
+                    inflates={series.inflates}
+                    showScreens={showScreens}
+                    showBreakdown={showBreakdown}
+                    showMainThread={showMainThread}
+                    stallThresholdMs={sdkOptions.stallThresholdMs}
+                    isStrictModeOn={isActive && sdkOptions.strictMode}
+                    selectedStall={selectedStall}
+                    onSelectStall={selectStall}
+                    onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
+                    onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
+                    isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
+                    isSdkConnected={isSdkConnected}
+                    selectedScreen={selectedScreen}
+                    onSelectScreen={setSelectedScreen}
+                    onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
+                    endTs={endTs}
                     windowMs={windowMs}
-                    onWindowChange={setWindowMs}
-                    isPaused={paused !== null}
-                    pausedAt={paused?.at ?? null}
-                    onPause={pause}
-                    onResume={() => setPaused(null)}
+                    probeTs={probeTs}
                     cursorX={cursorX}
+                    toolbar={
+                      <WindowControls
+                        windowMs={windowMs}
+                        onWindowChange={setWindowMs}
+                        isPaused={paused !== null}
+                        pausedAt={paused?.at ?? null}
+                        onPause={pause}
+                        onResume={() => setPaused(null)}
+                        cursorX={cursorX}
+                      />
+                    }
+                    overlay={overlay}
+                    notice={notice && <p className="timeline-notice">{notice}</p>}
+                  />
+                  <LogcatDrawer columnRef={chartsRef}>
+                    <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} />
+                  </LogcatDrawer>
+                </div>
+              </div>
+            </Frozen>
+          </Activity>
+          {viewMode === 'device' && <AgentPanel />}
+          <Activity mode={viewMode === 'device' ? 'hidden' : 'visible'}>
+            <Frozen isFrozen={viewMode === 'device'}>
+              <SidePanel
+                tab={sideTab}
+                lockedTab={viewMode === 'inspect' ? 'inspector' : undefined}
+                onTabChange={setSideTab}
+                screenCount={screenRows.length}
+                stallCount={stallTabCount}
+                layoutCount={layoutTabCount}
+                inspectorCount={inspector.snapshot?.nodes.length ?? 0}
+                screens={
+                  <ScreenPanel
+                    rows={screenRows}
+                    empty={screensEmpty}
+                    selected={selectedScreen}
+                    onSelect={setSelectedScreen}
+                    showStalls={showMainThread}
+                    showLayouts={showLayouts}
                   />
                 }
-                overlay={overlay}
-                notice={notice && <p className="timeline-notice">{notice}</p>}
-              />
-              <LogcatDrawer columnRef={chartsRef}>
-                <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} />
-              </LogcatDrawer>
-            </div>
-          </div>
-          <SidePanel
-            tab={sideTab}
-            onTabChange={setSideTab}
-            screenCount={screenRows.length}
-            stallCount={stallTabCount}
-            layoutCount={layoutTabCount}
-            inspectorCount={inspector.snapshot?.nodes.length ?? 0}
-            screens={
-              <ScreenPanel
-                rows={screenRows}
-                empty={screensEmpty}
-                selected={selectedScreen}
-                onSelect={setSelectedScreen}
-                showStalls={showMainThread}
-                showLayouts={showLayouts}
-              />
-            }
-            stalls={
-              <StallsPanel
-                stalls={series.stalls}
-                strictMode={series.strictMode}
-                fromTs={startTs}
-                toTs={endTs}
-                empty={stallsEmpty}
-                options={optionsControl.shown}
-                optionsBlocker={optionsBlocker}
-                isOptionsPending={optionsControl.isPending}
-                onOptionsChange={changeOptions}
-                inflateBlocker={inflateBlocker}
-                selectedKey={selectedStall}
-                onSelect={setSelectedStall}
-              />
-            }
-            inspector={<InspectorPanel />}
-            layouts={
-              <LayoutsPanel
-                inflates={series.inflates}
-                fromTs={startTs}
-                toTs={endTs}
-                empty={layoutsEmpty}
-                isTrackingOff={isActive && isLayoutCapable(sdk) && !sdkOptions.inflateTracking}
-                onEnableTracking={
-                  optionsBlocker === null && isLayoutCapable(sdk)
-                    ? () => changeOptions({ inflateTracking: true })
-                    : undefined
+                stalls={
+                  <StallsPanel
+                    stalls={series.stalls}
+                    strictMode={series.strictMode}
+                    fromTs={startTs}
+                    toTs={endTs}
+                    empty={stallsEmpty}
+                    options={optionsControl.shown}
+                    optionsBlocker={optionsBlocker}
+                    isOptionsPending={optionsControl.isPending}
+                    onOptionsChange={changeOptions}
+                    inflateBlocker={inflateBlocker}
+                    selectedKey={selectedStall}
+                    onSelect={setSelectedStall}
+                  />
+                }
+                inspector={<InspectorPanel />}
+                layouts={
+                  <LayoutsPanel
+                    inflates={series.inflates}
+                    fromTs={startTs}
+                    toTs={endTs}
+                    empty={layoutsEmpty}
+                    isTrackingOff={isActive && isLayoutCapable(sdk) && !sdkOptions.inflateTracking}
+                    onEnableTracking={
+                      optionsBlocker === null && isLayoutCapable(sdk)
+                        ? () => changeOptions({ inflateTracking: true })
+                        : undefined
+                    }
+                  />
                 }
               />
-            }
-          />
+            </Frozen>
+          </Activity>
         </main>
       </div>
     </InspectorContext.Provider>

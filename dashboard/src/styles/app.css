@@ -25,6 +25,29 @@
   grid-template-columns: minmax(0, 2fr) minmax(360px, 1fr);
 }
 
+/* The Inspector and Device views: the (pinned) device column, then one panel taking the rest. */
+.workspace[data-view='inspect'],
+.workspace[data-view='device'] {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* A larger screen when it is what you came for. */
+.workspace[data-view='inspect'] .device-col:not([data-collapsed]) {
+  --device-col-w: clamp(320px, 26vw, 420px);
+}
+
+.workspace[data-view='inspect'] .device-col:has(.device-bezel[data-orientation='landscape']) {
+  --device-col-w: clamp(420px, 36vw, 620px);
+}
+
+.workspace[data-view='device'] .device-col:not([data-collapsed]) {
+  --device-col-w: clamp(340px, 32vw, 480px);
+}
+
+.workspace[data-view='device'] .device-col:has(.device-bezel[data-orientation='landscape']) {
+  --device-col-w: clamp(520px, 52vw, 960px);
+}
+
 .instrument {
   display: flex;
   flex-direction: column;
@@ -52,11 +75,17 @@
   }
 
   .workspace,
-  .workspace[data-device='overlay'] {
+  .workspace[data-device='overlay'],
+  .workspace[data-view] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .side {
     height: min(72vh, 680px);
+  }
+
+  /* Stacked, the pinned device column spans the page like the panels under it (the Profiler's drawer keeps its width). */
+  .workspace:is([data-view='inspect'], [data-view='device']) .device-col {
+    width: auto;
   }
 }

@@ -904,3 +904,66 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
     transform-origin: top right;
   }
 }
+
+/* View switch ------------------------------------------------------------------ */
+
+/* Profiler · Inspector · Device, pushed right beside the server link. Names show from 1800 px; below that the
+   one-row bar gives its room to the session cluster (icons only; names in tooltips and to assistive tech).
+   Below 1280 px it sits on the brand's row. */
+.view-switch {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+}
+
+.view-switch + .topbar-link {
+  margin-left: 0;
+}
+
+.view-switch > .view-switch-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: var(--text-small);
+}
+
+@media (min-width: 1280px) and (max-width: 1799px) {
+  .view-switch > .view-switch-option {
+    min-width: 30px;
+    padding: 0 8px;
+  }
+
+  .view-switch-label {
+    display: none;
+  }
+}
+
+/* The tight one-row range: a little less air between groups, and the server link keeps only its dot (its state
+   stays in the tooltip and to assistive tech), so Start / Stop keeps its label down to 1280 px. */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  .topbar {
+    gap: var(--space-4);
+  }
+
+  .topbar-link {
+    min-width: 0;
+  }
+
+  .link-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .view-switch-label {
+    display: none;
+  }
+}

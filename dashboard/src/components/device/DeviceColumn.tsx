@@ -15,11 +15,13 @@ type Props = {
   onOpenChange: (isOpen: boolean) => void;
   /** Name of the selected device, under the heading. */
   subtitle: string | null;
+  /** Pinned open by the view: no collapse button. */
+  isPinned?: boolean;
   children: ReactNode;
 };
 
 /** The left-hand Device column. Collapsed it is a slim rail; on narrow screens a drawer opened from the top bar. */
-export function DeviceColumn({ mode, isOpen, onOpenChange, subtitle, children }: Props) {
+export function DeviceColumn({ mode, isOpen, onOpenChange, subtitle, isPinned = false, children }: Props) {
   const ref = useRef<HTMLElement>(null);
   const isOverlay = mode === 'overlay';
 
@@ -93,17 +95,19 @@ export function DeviceColumn({ mode, isOpen, onOpenChange, subtitle, children }:
             </h2>
             {subtitle && <p className="device-head-name">{subtitle}</p>}
           </div>
-          <button
-            type="button"
-            className="btn btn--icon device-collapse"
-            aria-expanded={true}
-            aria-controls={DEVICE_COLUMN_ID}
-            aria-label={isOverlay ? 'Close the device screen' : 'Collapse the device column'}
-            title={isOverlay ? 'Close' : 'Collapse'}
-            onClick={() => onOpenChange(false)}
-          >
-            {isOverlay ? <CloseIcon /> : <CollapseIcon />}
-          </button>
+          {!isPinned && (
+            <button
+              type="button"
+              className="btn btn--icon device-collapse"
+              aria-expanded={true}
+              aria-controls={DEVICE_COLUMN_ID}
+              aria-label={isOverlay ? 'Close the device screen' : 'Collapse the device column'}
+              title={isOverlay ? 'Close' : 'Collapse'}
+              onClick={() => onOpenChange(false)}
+            >
+              {isOverlay ? <CloseIcon /> : <CollapseIcon />}
+            </button>
+          )}
         </header>
         <div className="device-body">{children}</div>
       </aside>

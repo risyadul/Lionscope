@@ -39,7 +39,21 @@ emulator's screen on the left; stacked timeline charts in the middle that share 
 minutes) and can be paused, with the app's logcat in a drawer below them (drag its bar to resize it,
 double-click the bar to maximise it; click, shift-click or Cmd/Ctrl-click lines and press Cmd/Ctrl+C to copy
 them); and, with the SDK, the Screens, Stalls and Layouts tabs on the right. Below 1280 px the screen opens as a
-drawer from the top bar.
+drawer from the top bar (in the Profiler view; the other two keep it on the page).
+
+The switch at the right of the top bar picks what the page is for:
+
+- **Profiler** (the default): everything above.
+- **Inspector**: only the device and the [Layout Inspector](#layout-inspector-pick-a-view-see-where-it-came-from),
+  which gets the room to show its tree and the attributes side by side.
+- **Device**: only the device screen, larger, with how to let an AI agent operate it (see
+  [Use with AI agents](#use-with-ai-agents)).
+
+The Inspector and Device views hide the charts and logcat and stop drawing them, so nothing hidden keeps
+redrawing in the browser; a running session keeps recording, and the charts and logcat (with its filters) are
+there as you left them when you switch back. The
+view is part of the address (`http://localhost:8701/?view=inspect`, `?view=device`), so you can bookmark it, and
+the page remembers the last one you used.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |

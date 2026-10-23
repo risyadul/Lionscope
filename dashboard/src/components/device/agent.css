@@ -1,0 +1,71 @@
+/* The Device view's companion panel: how an AI agent gets to operate the device beside it. */
+
+.agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  overflow: auto;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+
+.agent-panel > * {
+  max-width: 62ch;
+  margin: 0;
+}
+
+.agent-panel-title {
+  color: var(--ink);
+  font-size: var(--text-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.agent-panel a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--ink-muted);
+  text-underline-offset: 2px;
+}
+
+.agent-panel a:hover {
+  text-decoration-color: currentColor;
+}
+
+.agent-snippet {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+}
+
+.agent-snippet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 4px 4px var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.agent-snippet pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-panel-note {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--jank);
+  color: var(--ink-muted);
+}

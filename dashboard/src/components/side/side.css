@@ -91,3 +91,14 @@
 .side-panel[hidden] {
   display: none;
 }
+
+/* One locked tab (the Inspector view): the same strip, as a heading. */
+.side-title,
+.side-title:hover {
+  margin: 0;
+  color: var(--ink);
+}
+
+.side-title::after {
+  transform: scaleX(1);
+}

@@ -6,10 +6,27 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Dashboard views: a **Profiler · Inspector · Device** switch at the right of the top bar. **Inspector** shows
+  only the device and the Layout Inspector, with the tree and the attributes side by side; **Device** shows only
+  the device screen, larger, beside how to let an AI agent operate it (the `--allow-device-control` command to
+  copy). Neither renders the charts or logcat, so nothing hidden keeps redrawing; a running session keeps
+  recording. The view is in the address (`?view=inspect`, `?view=device`) and remembered per browser, the
+  device column stays open in both, and pressing Inspect in the Device view switches to the Inspector view.
+
 ### Changed
 
 - The README, the npm description and keywords, and the SDK's POM description now present Lionscope as a
   lightweight Android profiler and Layout Inspector in your browser that AI agents can use (MCP and CLI).
+- Between 1280 and 1599 px the one-row top bar sits a little tighter and the server link shows only its status
+  dot (the state stays in its tooltip and to screen readers), so Start / Stop keeps its label beside the new
+  view switch.
+
+### Fixed
+
+- The Inspector tree now opens the path to a selection that was already there when it appeared (after reloading
+  the page, or when a new snapshot keeps the selected view), instead of leaving it inside a closed branch.
 
 ## [0.5.0] - 2026-10-23
 

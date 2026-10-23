@@ -102,6 +102,14 @@ export const StopIcon = () => (
   </Icon>
 );
 
+/** A trace over a baseline: the profiler's charts. */
+export const ChartIcon = () => (
+  <Icon>
+    <path d="M1.75 12.25h10.5" />
+    <path d="M2 9.5l2.75-3.25 2.25 2 2.5-4.5 2.5 2.75" />
+  </Icon>
+);
+
 /** A dashed frame with a pointer: pick a view on the frozen screen. */
 export const InspectIcon = () => (
   <Icon>

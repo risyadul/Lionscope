@@ -22,6 +22,8 @@ type Props = {
   emulatorActions: ReactNode;
   /** Opens the device drawer on narrow screens. */
   deviceToggle: ReactNode;
+  /** Profiler · Inspector · Device, beside the server link. */
+  viewSwitch: ReactNode;
   onRefreshDevices: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
@@ -50,6 +52,7 @@ export function TopBar({
   onAvdChange,
   emulatorActions,
   deviceToggle,
+  viewSwitch,
   onRefreshDevices,
   apps,
   packageName,
@@ -119,6 +122,7 @@ export function TopBar({
           <SdkStatus sdk={session.sdk} linkError={sdkLinkError} isSessionActive={isSessionActive} />
         </div>
       </div>
+      {viewSwitch}
       <div className="topbar-link" data-state={connection} title={`Server connection: ${connection}`}>
         <span className="link-dot" aria-hidden="true" />
         <span className="link-label">{connection === 'open' ? 'Connected' : 'Offline'}</span>
