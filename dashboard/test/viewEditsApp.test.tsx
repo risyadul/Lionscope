@@ -230,10 +230,9 @@ describe('committing', () => {
     expect(elevation.value).toBe('2');
     fireEvent.blur(elevation);
     expect(edits()).toHaveLength(1);
-    fireEvent.keyDown(within(attrs()).getByRole('radio', { name: 'visible' }), { key: 'Escape' });
-    fireEvent.keyDown(within(attrs()).getByRole('switch', { name: 'enabled' }), { key: 'Escape' });
     expect(inspect.getAttribute('aria-pressed')).toBe('true');
-    fireEvent.keyDown(document.body, { key: 'Escape' });
+    // With nothing to cancel, Esc in a control leaves inspect mode as anywhere else.
+    fireEvent.keyDown(within(attrs()).getByRole('radio', { name: 'visible' }), { key: 'Escape' });
     expect(inspect.getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -338,7 +337,12 @@ describe('applying', () => {
     type(input, '8');
     enter(input);
     expect(busy(input)).toBe(true);
-    expect(within(attrs()).getByRole('status', { name: 'Applying' })).toBeTruthy();
+    // A live region that is always there, so the change is announced.
+    expect(
+      within(attrs())
+        .getAllByRole('status')
+        .map((region) => region.textContent),
+    ).toContain('Applying elevation');
     await answer(true, { liveEdits: 1 });
     expect(busy(field('elevation'))).toBe(true);
     expect(screen.getByText('1 live edit (temporary)')).toBeTruthy();
@@ -432,6 +436,57 @@ describe('applying', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('sends a toggle back while the first change is still applying', () => {
+    const { edits } = setup();
+    const toggle = within(attrs()).getByRole('switch', { name: 'enabled' });
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(edits().map((m) => m.type === 'setViewProperty' && m.value)).toEqual([false, true]);
+    fireEvent.click(within(attrs()).getByRole('radio', { name: 'gone' }));
+    fireEvent.click(within(attrs()).getByRole('radio', { name: 'visible' }));
+    expect(
+      edits()
+        .slice(2)
+        .map((m) => m.type === 'setViewProperty' && m.value),
+    ).toEqual(['gone', 'visible']);
+  });
+
+  it('says in the head why an edit of an older snapshot failed', async () => {
+    const { push, answer } = setup();
+    const input = field('elevation');
+    type(input, '9');
+    enter(input);
+    await push(inspection(editableSnapshot({ id: 'snap-2' })), selected(2, 'snap-2'));
+    await answer(false, { error: 'limit', message: 'Revert some first.' });
+    expect(document.querySelector('.inspect-failure')?.textContent).toBe('Revert some first.');
+  });
+
+  it('drops the head notice after the snapshot the server takes, and on another device', async () => {
+    const { push, answer } = setup();
+    const input = field('elevation');
+    type(input, '9');
+    enter(input);
+    await answer(false, { error: 'stale', message: 'Gone.' });
+    await push(inspection(editableSnapshot({ id: 'snap-2' })), selected(2, 'snap-2'));
+    expect(document.querySelector('.inspect-failure')?.textContent).toBe('Gone.');
+    await push(inspection(editableSnapshot({ id: 'snap-3' })), selected(2, 'snap-3'));
+    expect(document.querySelector('.inspect-failure')).toBeNull();
+  });
+
+  it('sends a resting slider to the view in the snapshot that came meanwhile', async () => {
+    vi.useFakeTimers();
+    const { edits, push } = setup();
+    fireEvent.change(within(attrs()).getByRole('slider', { name: 'alpha' }), { target: { value: '0.3' } });
+    // A snapshot with another node order: the same view (same key) is now node 3.
+    const moved = editableSnapshot({ id: 'snap-2' });
+    const nodes = moved.nodes.map((n) => (n.id === 2 ? { ...n, id: 3 } : n.id === 3 ? { ...n, id: 2 } : n));
+    await push(inspection({ ...moved, nodes }), selected(3, 'snap-2'));
+    act(() => vi.advanceTimersByTime(SLIDER_IDLE_MS));
+    expect(edits().at(-1)).toMatchObject({ snapshotId: 'snap-2', nodeId: 3, property: 'alpha', value: 0.3 });
+  });
+});
+
 describe('reverting', () => {
   const edited = () =>
     editableSnapshot({ liveEdits: 3 }, { 2: { edited: ['alpha', 'paddingLeft', 'paddingTop'] } });
@@ -439,9 +494,22 @@ describe('reverting', () => {
   it('marks edited properties and reverts one, or the padding group', () => {
     const { edits } = setup(edited());
     expect(within(attrs()).getAllByText('edited')).toHaveLength(2);
-    fireEvent.click(within(attrs()).getByRole('button', { name: 'Revert alpha' }));
-    fireEvent.click(within(attrs()).getByRole('button', { name: 'Revert padding' }));
     fireEvent.click(within(attrs()).getByRole('button', { name: 'Revert this view' }));
+    // While the view reverts, its other reverts wait.
+    expect(
+      (within(attrs()).getByRole('button', { name: 'Revert alpha' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(edits()).toEqual([
+      { type: 'revertViewProperties', requestId: expect.any(Number), snapshotId: 'snap-1', nodeId: 2 },
+    ]);
+  });
+
+  it('reverts one property or the padding group, keeping the focus on the field', () => {
+    const { edits } = setup(edited());
+    fireEvent.click(within(attrs()).getByRole('button', { name: 'Revert alpha' }));
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('alpha');
+    fireEvent.click(within(attrs()).getByRole('button', { name: 'Revert padding' }));
+    expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Padding /);
     expect(edits()).toEqual([
       {
         type: 'revertViewProperties',
@@ -457,9 +525,8 @@ describe('reverting', () => {
         nodeId: 2,
         property: 'padding',
       },
-      { type: 'revertViewProperties', requestId: expect.any(Number), snapshotId: 'snap-1', nodeId: 2 },
     ]);
-    expect(new Set(edits().map((m) => m.requestId)).size).toBe(3);
+    expect(new Set(edits().map((m) => m.requestId)).size).toBe(2);
     expect(field('Padding left').getAttribute('aria-busy')).toBe('true');
   });
 

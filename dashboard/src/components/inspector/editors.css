@@ -170,7 +170,8 @@ textarea.attr-input {
   width: 24px;
   height: 14px;
   border-radius: var(--radius-pill);
-  background: var(--rule-strong);
+  /* Off still reads as a control: at least 3:1 against the pane in both themes. */
+  background: var(--ink-muted);
   transition: background-color var(--dur-fast) linear;
 }
 
@@ -182,7 +183,7 @@ textarea.attr-input {
   height: 10px;
   border-radius: 50%;
   background: var(--surface-raised);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--ink) 25%, transparent);
   content: '';
   transition: transform var(--dur-fast) var(--ease-out);
 }
@@ -286,7 +287,8 @@ textarea.attr-input {
   width: 5ch;
   height: 18px;
   padding: 0 2px;
-  border: 1px solid transparent;
+  /* A faint edge says it is a field before it is hovered or focused. */
+  border: 1px solid var(--rule-strong);
   border-radius: 2px;
   background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
   color: var(--ink);

@@ -1,10 +1,12 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
 import type { InspectorNode, ViewProperty, ViewPropertyGroup } from '@lionscope/protocol/wire';
@@ -73,6 +75,8 @@ type DraftInputProps = {
   disabled: boolean;
   isInvalid: boolean;
   isBusy: boolean;
+  /** Id of the error shown for this field, while there is one. */
+  describedBy?: string;
 };
 
 /**
@@ -94,6 +98,7 @@ function DraftInput({
   disabled,
   isInvalid,
   isBusy,
+  describedBy,
 }: DraftInputProps) {
   // `isCommitted`: sent already, so Enter and then leaving the field send it once.
   const [draft, setDraft] = useState<{ text: string; isCommitted: boolean } | null>(null);
@@ -114,6 +119,8 @@ function DraftInput({
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (event.key === 'Escape') {
+      // Nothing to cancel: Esc goes on (it leaves inspect mode).
+      if (draft === null && !isInvalid) return;
       swallowEscape(event);
       setDraft(null);
       onCancel();
@@ -130,6 +137,7 @@ function DraftInput({
     'aria-label': label,
     'aria-invalid': isInvalid || undefined,
     'aria-busy': isBusy || undefined,
+    'aria-describedby': describedBy,
     disabled,
     placeholder,
     spellCheck: false,
@@ -154,9 +162,23 @@ function errorOf(status: EditStatus): string | null {
   return status.kind === 'error' ? status.message : null;
 }
 
+/** The field a revert button belongs to: focus goes there, as the button itself goes away once reverted. */
+const FIELDS = 'input, textarea, [role="radio"][tabindex="0"], [role="switch"]';
+
+/** Moves focus from a button that is about to disappear to the first of `selector` around it (or in `scope`). */
+export function keepFocusNear(event: MouseEvent<HTMLElement>, scope: string, selector = FIELDS): void {
+  event.currentTarget.closest(scope)?.querySelector<HTMLElement>(selector)?.focus();
+}
+
 /** "edited" and a Revert button, for a property (or group) changed live and still in effect. */
 export function EditedMark({ edits, node, name }: { edits: ViewEdits; node: InspectorNode; name: EditName }) {
   const words = propertyWords(name);
+  const isBusy = edits.status(node.id, name).kind === 'applying';
+  // A box-model group's fields are named after it ("Padding top").
+  const field =
+    name === 'padding' || name === 'margin'
+      ? `input[aria-label^="${name === 'padding' ? 'Padding' : 'Margin'}"]`
+      : FIELDS;
   return (
     <span className="attr-edited-wrap">
       <span className="attr-edited" title="Changed live from the Inspector: lasts until reverted">
@@ -167,8 +189,11 @@ export function EditedMark({ edits, node, name }: { edits: ViewEdits; node: Insp
         className="attr-revert"
         aria-label={`Revert ${words}`}
         title={`Back to the app’s own ${words}`}
-        disabled={!edits.canEdit}
-        onClick={() => edits.revert(node.id, name)}
+        disabled={!edits.canEdit || isBusy}
+        onClick={(event) => {
+          keepFocusNear(event, '.attr-row, .attr-box-edit, .attr-switch-wrap', field);
+          edits.revert(node.id, name);
+        }}
       >
         Revert
       </button>
@@ -176,7 +201,10 @@ export function EditedMark({ edits, node, name }: { edits: ViewEdits; node: Insp
   );
 }
 
-/** A row of an editable property: its label, the editor, the applying state, the edited mark and any error. */
+/**
+ * A row of an editable property: its label, the editor, the applying state, the edited mark and any error. `children`
+ * gets the id of the error while there is one, for its control's aria-describedby.
+ */
 export function EditRow({
   name,
   htmlFor,
@@ -189,26 +217,26 @@ export function EditRow({
   status: EditStatus;
   /** The mark and Revert, when the property is edited. */
   edited: ReactNode;
-  children: ReactNode;
+  children: (describedBy: string | undefined) => ReactNode;
 }) {
+  const errorId = useId();
   const error = errorOf(status);
   const isBusy = status.kind === 'applying';
   return (
     <div className="attr-row" data-editable="true">
       <dt>{htmlFor === undefined ? name : <label htmlFor={htmlFor}>{name}</label>}</dt>
       <dd>
-        <div
-          className="attr-edit"
-          data-applying={isBusy || undefined}
-          aria-busy={isBusy || undefined}
-          onKeyDown={swallowEscape}
-        >
-          {children}
-          {isBusy && <span className="banner-spinner attr-spinner" role="status" aria-label="Applying" />}
+        <div className="attr-edit" data-applying={isBusy || undefined} aria-busy={isBusy || undefined}>
+          {children(error === null ? undefined : errorId)}
+          {isBusy && <span className="banner-spinner attr-spinner" aria-hidden="true" />}
+          {/* Always there, so a screen reader hears it change. */}
+          <span className="sr-only" role="status">
+            {isBusy ? `Applying ${name.toLowerCase()}` : ''}
+          </span>
           {edited}
         </div>
         {error !== null && (
-          <p className="attr-error" role="alert">
+          <p id={errorId} className="attr-error" role="alert">
             {error}
           </p>
         )}
@@ -245,21 +273,26 @@ export function TypedRow({
   const isText = property === 'text';
   return (
     <EditRow name={name} htmlFor={id} status={status} edited={editedMark(edits, node, property)}>
-      <DraftInput
-        id={id}
-        value={text}
-        resetKey={resetKey}
-        label={propertyWords(property)}
-        onCommit={(draft) => commitTyped(edits, node, property, draft)}
-        onCancel={() => edits.dismiss(node.id, property)}
-        multiline={isText && text.includes('\n')}
-        inputMode={property === 'textSize' || property === 'elevation' ? 'decimal' : undefined}
-        className={isText ? 'attr-input attr-input--text' : 'attr-input mono'}
-        disabled={!edits.canEdit}
-        isInvalid={status.kind === 'error'}
-        isBusy={status.kind === 'applying'}
-      />
-      {unit !== undefined && <span className="attr-unit">{unit}</span>}
+      {(describedBy) => (
+        <>
+          <DraftInput
+            id={id}
+            value={text}
+            resetKey={resetKey}
+            label={propertyWords(property)}
+            onCommit={(draft) => commitTyped(edits, node, property, draft)}
+            onCancel={() => edits.dismiss(node.id, property)}
+            multiline={isText && text.includes('\n')}
+            inputMode={property === 'textSize' || property === 'elevation' ? 'decimal' : undefined}
+            className={isText ? 'attr-input attr-input--text' : 'attr-input mono'}
+            disabled={!edits.canEdit}
+            isInvalid={status.kind === 'error'}
+            isBusy={status.kind === 'applying'}
+            describedBy={describedBy}
+          />
+          {unit !== undefined && <span className="attr-unit">{unit}</span>}
+        </>
+      )}
     </EditRow>
   );
 }
@@ -292,20 +325,23 @@ export function ColorRow({
   };
   return (
     <EditRow name={name} htmlFor={id} status={status} edited={editedMark(edits, node, property)}>
-      <DraftInput
-        id={id}
-        value={color ?? ''}
-        resetKey={resetKey}
-        label={propertyWords(property)}
-        onCommit={(draft) => commitTyped(edits, node, property, draft)}
-        onCancel={() => edits.dismiss(node.id, property)}
-        before={swatch}
-        placeholder={color === null ? 'not a solid color' : '#AARRGGBB'}
-        className="attr-input attr-input--color mono"
-        disabled={!edits.canEdit}
-        isInvalid={status.kind === 'error'}
-        isBusy={status.kind === 'applying'}
-      />
+      {(describedBy) => (
+        <DraftInput
+          id={id}
+          value={color ?? ''}
+          resetKey={resetKey}
+          label={propertyWords(property)}
+          onCommit={(draft) => commitTyped(edits, node, property, draft)}
+          onCancel={() => edits.dismiss(node.id, property)}
+          before={swatch}
+          placeholder={color === null ? 'not a solid color' : '#AARRGGBB'}
+          className="attr-input attr-input--color mono"
+          disabled={!edits.canEdit}
+          isInvalid={status.kind === 'error'}
+          isBusy={status.kind === 'applying'}
+          describedBy={describedBy}
+        />
+      )}
     </EditRow>
   );
 }
@@ -323,17 +359,20 @@ export function VisibilityRow({ edits, node, resetKey }: EditorProps) {
   const value = status.kind === 'applying' && chosen !== null ? chosen : node.visibility;
   return (
     <EditRow name="Visibility" status={status} edited={editedMark(edits, node, 'visibility')}>
-      <Segmented
-        className="attr-segmented"
-        options={VISIBILITY}
-        value={value}
-        label="Visibility"
-        disabled={!edits.canEdit}
-        ignoreRepeat
-        onChange={(next) => {
-          if (edits.edit(node.id, 'visibility', next) === 'sent') setChosen(next);
-        }}
-      />
+      {(describedBy) => (
+        <Segmented
+          className="attr-segmented"
+          options={VISIBILITY}
+          value={value}
+          label="Visibility"
+          disabled={!edits.canEdit}
+          describedBy={describedBy}
+          ignoreRepeat
+          onChange={(next) => {
+            if (edits.edit(node.id, 'visibility', next) === 'sent') setChosen(next);
+          }}
+        />
+      )}
     </EditRow>
   );
 }
@@ -341,8 +380,14 @@ export function VisibilityRow({ edits, node, resetKey }: EditorProps) {
 /** A slider and a number: the slider sends on release or when it rests, the number on Enter or leaving it. */
 export function AlphaRow({ edits, node, resetKey }: EditorProps) {
   const id = useId();
-  // `isSent`: the release after the slider rested must not send the same value again.
-  const [slide, setSlide] = useResettable<{ value: number; isSent: boolean }>(resetKey);
+  const [slide, setSlide] = useResettable<{ value: number }>(resetKey);
+  // Read by the idle timer and the release, which may run after a new snapshot renewed the node (and its id), and
+  // before React re-renders: the release after the slider rested must not send the same value again.
+  const nodeRef = useRef(node);
+  const isSent = useRef(true);
+  useLayoutEffect(() => {
+    nodeRef.current = node;
+  });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const status = edits.status(node.id, 'alpha');
   const shown = slide?.value ?? node.alpha ?? 1;
@@ -360,85 +405,97 @@ export function AlphaRow({ edits, node, resetKey }: EditorProps) {
 
   const send = (value: number) => {
     cancelTimer();
-    edits.edit(node.id, 'alpha', value);
-    setSlide({ value, isSent: true });
+    isSent.current = true;
+    edits.edit(nodeRef.current.id, 'alpha', value);
+    setSlide({ value });
   };
   const release = () => {
-    if (slide !== null && !slide.isSent) send(slide.value);
+    if (slide !== null && !isSent.current) send(slide.value);
   };
   return (
     <EditRow name="Alpha" htmlFor={id} status={status} edited={editedMark(edits, node, 'alpha')}>
-      <input
-        id={id}
-        className="attr-range"
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={shown}
-        aria-label="alpha"
-        aria-valuetext={formatNumber(shown)}
-        disabled={!edits.canEdit}
-        onChange={(event) => {
-          const value = Number(event.target.value);
-          setSlide({ value, isSent: false });
-          cancelTimer();
-          timer.current = setTimeout(() => send(value), SLIDER_IDLE_MS);
-        }}
-        onPointerUp={release}
-        onKeyUp={release}
-        onBlur={release}
-        onKeyDown={(event) => {
-          if (event.key !== 'Escape') return;
-          swallowEscape(event);
-          cancelTimer();
-          setSlide(null);
-          edits.dismiss(node.id, 'alpha');
-        }}
-      />
-      <DraftInput
-        value={formatNumber(shown)}
-        resetKey={resetKey}
-        label="alpha value"
-        onCommit={(draft) => {
-          const outcome = commitTyped(edits, node, 'alpha', draft);
-          const parsed = parseDraft('alpha', draft);
-          if (outcome === 'keep' && parsed.ok && typeof parsed.value === 'number') {
-            setSlide({ value: parsed.value, isSent: true });
-          }
-          return outcome;
-        }}
-        onCancel={() => {
-          setSlide(null);
-          edits.dismiss(node.id, 'alpha');
-        }}
-        inputMode="decimal"
-        className="attr-input attr-input--short mono"
-        disabled={!edits.canEdit}
-        isInvalid={status.kind === 'error'}
-        isBusy={status.kind === 'applying'}
-      />
+      {(describedBy) => (
+        <>
+          <input
+            id={id}
+            className="attr-range"
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={shown}
+            aria-label="alpha"
+            aria-valuetext={formatNumber(shown)}
+            aria-describedby={describedBy}
+            disabled={!edits.canEdit}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              isSent.current = false;
+              setSlide({ value });
+              cancelTimer();
+              timer.current = setTimeout(() => send(value), SLIDER_IDLE_MS);
+            }}
+            onPointerUp={release}
+            onKeyUp={release}
+            onBlur={release}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || slide === null) return;
+              swallowEscape(event);
+              cancelTimer();
+              isSent.current = true;
+              setSlide(null);
+              edits.dismiss(node.id, 'alpha');
+            }}
+          />
+          <DraftInput
+            value={formatNumber(shown)}
+            resetKey={resetKey}
+            label="alpha value"
+            onCommit={(draft) => {
+              const outcome = commitTyped(edits, node, 'alpha', draft);
+              const parsed = parseDraft('alpha', draft);
+              if (outcome === 'keep' && parsed.ok && typeof parsed.value === 'number') {
+                isSent.current = true;
+                setSlide({ value: parsed.value });
+              }
+              return outcome;
+            }}
+            onCancel={() => {
+              setSlide(null);
+              edits.dismiss(node.id, 'alpha');
+            }}
+            inputMode="decimal"
+            className="attr-input attr-input--short mono"
+            disabled={!edits.canEdit}
+            isInvalid={status.kind === 'error'}
+            isBusy={status.kind === 'applying'}
+            describedBy={describedBy}
+          />
+        </>
+      )}
     </EditRow>
   );
 }
 
-/** `enabled` as a switch, with the read-only flags after it. */
-export function EnabledSwitch({ edits, node, resetKey }: EditorProps) {
+/** `enabled` as a switch, with the read-only flags after it; `describedBy`: its error's id while there is one. */
+export function EnabledSwitch({
+  edits,
+  node,
+  resetKey,
+  describedBy,
+}: EditorProps & { describedBy?: string }) {
   const [chosen, setChosen] = useResettable<boolean>(resetKey);
   const status = edits.status(node.id, 'enabled');
   const isOn = status.kind === 'applying' && chosen !== null ? chosen : node.enabled === true;
   return (
-    <span
-      className="attr-switch-wrap"
-      data-applying={status.kind === 'applying' || undefined}
-      onKeyDown={swallowEscape}
-    >
+    <span className="attr-switch-wrap" data-applying={status.kind === 'applying' || undefined}>
       <button
         type="button"
         role="switch"
         className="attr-switch"
         aria-checked={isOn}
         aria-busy={status.kind === 'applying' || undefined}
+        aria-describedby={describedBy}
         disabled={!edits.canEdit}
         onClick={() => {
           if (edits.edit(node.id, 'enabled', !isOn) === 'sent') setChosen(!isOn);
@@ -486,35 +543,41 @@ export function LayoutSizeRow({
       status={status}
       edited={editedMark(edits, node, property)}
     >
-      <Segmented
-        className="attr-segmented"
-        options={SIZE_MODES}
-        value={mode}
-        label={`Layout ${propertyWords(property)}`}
-        disabled={!edits.canEdit}
-        ignoreRepeat
-        onChange={(next) => {
-          if (next === mode) return;
-          const value = next === 'px' ? measured : next;
-          if (edits.edit(node.id, property, value) === 'sent') setChosen(next);
-        }}
-      />
-      {mode === 'px' && (
+      {(describedBy) => (
         <>
-          <DraftInput
-            id={id}
-            value={px}
-            resetKey={resetKey}
-            label={`${propertyWords(property)} in px`}
-            onCommit={(draft) => commitTyped(edits, node, property, draft)}
-            onCancel={() => edits.dismiss(node.id, property)}
-            inputMode="numeric"
-            className="attr-input attr-input--short mono"
+          <Segmented
+            className="attr-segmented"
+            options={SIZE_MODES}
+            value={mode}
+            label={`Layout ${propertyWords(property)}`}
             disabled={!edits.canEdit}
-            isInvalid={status.kind === 'error'}
-            isBusy={status.kind === 'applying'}
+            describedBy={describedBy}
+            ignoreRepeat
+            onChange={(next) => {
+              if (next === mode) return;
+              const value = next === 'px' ? measured : next;
+              if (edits.edit(node.id, property, value) === 'sent') setChosen(next);
+            }}
           />
-          <span className="attr-unit">px</span>
+          {mode === 'px' && (
+            <>
+              <DraftInput
+                id={id}
+                value={px}
+                resetKey={resetKey}
+                label={`${propertyWords(property)} in px`}
+                onCommit={(draft) => commitTyped(edits, node, property, draft)}
+                onCancel={() => edits.dismiss(node.id, property)}
+                inputMode="numeric"
+                className="attr-input attr-input--short mono"
+                disabled={!edits.canEdit}
+                isInvalid={status.kind === 'error'}
+                isBusy={status.kind === 'applying'}
+                describedBy={describedBy}
+              />
+              <span className="attr-unit">px</span>
+            </>
+          )}
         </>
       )}
     </EditRow>
@@ -530,7 +593,13 @@ function BoxSides({
   resetKey,
   group,
   isEditable,
-}: EditorProps & { group: ViewPropertyGroup; isEditable: boolean }) {
+  describedBy,
+}: EditorProps & {
+  group: ViewPropertyGroup;
+  isEditable: boolean;
+  /** The id of the error shown for a side, while there is one. */
+  describedBy: (property: ViewProperty) => string | undefined;
+}) {
   return SIDES.map((side) => {
     const property = `${group}${side}` as ViewProperty;
     const value = currentValue(node, property);
@@ -556,6 +625,7 @@ function BoxSides({
           disabled={!edits.canEdit}
           isInvalid={status.kind === 'error'}
           isBusy={status.kind === 'applying'}
+          describedBy={describedBy(property)}
         />
       </span>
     );
@@ -570,6 +640,7 @@ export function EditableBoxModel({
   canEditMargin,
 }: EditorProps & { canEditMargin: boolean }) {
   const { width, height } = rectSize(node.bounds);
+  const baseId = useId();
   const groups: ViewPropertyGroup[] = canEditMargin ? ['margin', 'padding'] : ['padding'];
   const errors = groups.flatMap((group) => {
     const names: EditName[] = [group, ...SIDES.map((side) => `${group}${side}` as ViewProperty)];
@@ -579,6 +650,14 @@ export function EditableBoxModel({
     });
   });
   const isBusy = groups.some((group) => edits.status(node.id, group).kind === 'applying');
+  const errorId = (name: EditName) => `${baseId}-${name}`;
+  // A side's own error, else its group's (a failed revert).
+  const describedBy = (property: ViewProperty) => {
+    const group = groups.find((candidate) => property.startsWith(candidate));
+    const own =
+      errors.find((error) => error.name === property) ?? errors.find((error) => error.name === group);
+    return own === undefined ? undefined : errorId(own.name);
+  };
   return (
     <div className="attr-box-edit">
       <figure
@@ -589,10 +668,24 @@ export function EditableBoxModel({
       >
         <div className="attr-box-margin">
           <span className="attr-box-name">margin</span>
-          <BoxSides edits={edits} node={node} resetKey={resetKey} group="margin" isEditable={canEditMargin} />
+          <BoxSides
+            edits={edits}
+            node={node}
+            resetKey={resetKey}
+            group="margin"
+            isEditable={canEditMargin}
+            describedBy={describedBy}
+          />
           <div className="attr-box-padding">
             <span className="attr-box-name">padding</span>
-            <BoxSides edits={edits} node={node} resetKey={resetKey} group="padding" isEditable />
+            <BoxSides
+              edits={edits}
+              node={node}
+              resetKey={resetKey}
+              group="padding"
+              isEditable
+              describedBy={describedBy}
+            />
             <div className="attr-box-content mono">
               {width} × {height}
             </div>
@@ -612,7 +705,7 @@ export function EditableBoxModel({
         </p>
       )}
       {errors.map(({ name, message }) => (
-        <p key={name} className="attr-error" role="alert">
+        <p key={name} id={errorId(name)} className="attr-error" role="alert">
           {propertyWords(name)}: {message}
         </p>
       ))}

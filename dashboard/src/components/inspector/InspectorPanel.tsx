@@ -6,6 +6,7 @@ import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
 import { InspectorTree } from './InspectorTree.tsx';
 import { NodeAttributes } from './NodeAttributes.tsx';
+import { keepFocusNear } from './ViewEditors.tsx';
 import './inspector.css';
 
 function Empty({
@@ -102,9 +103,13 @@ export const InspectorPanel = memo(function InspectorPanel() {
               <button
                 type="button"
                 className="btn inspect-revert-all"
-                disabled={!edits.canEdit}
+                disabled={!edits.canEdit || revertAll.kind === 'applying'}
                 aria-busy={revertAll.kind === 'applying' || undefined}
-                onClick={() => edits.revert(null)}
+                onClick={(event) => {
+                  // The count and this button go away once all is reverted: Refresh takes the focus.
+                  keepFocusNear(event, '.inspect-badges', '.inspect-refresh');
+                  edits.revert(null);
+                }}
               >
                 {revertAll.kind === 'applying' ? 'Reverting…' : 'Revert all'}
               </button>

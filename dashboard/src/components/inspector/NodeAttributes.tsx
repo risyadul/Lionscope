@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import {
   editableProperties,
   type InspectorNode,
@@ -13,6 +13,7 @@ import {
   ColorRow,
   EditableBoxModel,
   EnabledSwitch,
+  keepFocusNear,
   LayoutSizeRow,
   TypedRow,
   VisibilityRow,
@@ -187,6 +188,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
   const isEdited = (node.view?.edited?.length ?? 0) > 0;
   const viewStatus = edits.status(node.id);
   const enabledStatus = edits.status(node.id, 'enabled');
+  const enabledErrorId = useId();
 
   return (
     <div className="attrs">
@@ -216,9 +218,13 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
             <button
               type="button"
               className="attr-revert"
-              disabled={!edits.canEdit}
+              disabled={!edits.canEdit || viewStatus.kind === 'applying'}
               aria-busy={viewStatus.kind === 'applying' || undefined}
-              onClick={() => edits.revert(node.id)}
+              onClick={(event) => {
+                // The button goes away once reverted: the view's first field takes the focus.
+                keepFocusNear(event, '.attrs');
+                edits.revert(node.id);
+              }}
             >
               Revert this view
             </button>
@@ -350,7 +356,12 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
         {can('textColor') && <ColorRow {...editor} property="textColor" name="Text color" />}
         <Row name="Flags">
           <span className="attr-flags">
-            {can('enabled') && <EnabledSwitch {...editor} />}
+            {can('enabled') && (
+              <EnabledSwitch
+                {...editor}
+                describedBy={enabledStatus.kind === 'error' ? enabledErrorId : undefined}
+              />
+            )}
             {FLAGS.map(({ key, label }) => {
               const value = node[key];
               if (key === 'enabled' && can('enabled')) return null;
@@ -362,7 +373,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
             })}
           </span>
           {enabledStatus.kind === 'error' && (
-            <p className="attr-error" role="alert">
+            <p id={enabledErrorId} className="attr-error" role="alert">
               {enabledStatus.message}
             </p>
           )}

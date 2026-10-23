@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   editableProperties,
   normalizeViewValue,
@@ -55,6 +55,8 @@ interface Request {
   snapshotId: string;
   nodeId: number | null;
   name: EditName | null;
+  /** What a `setViewProperty` sent (a second change of the same field compares with it, not the snapshot). */
+  value?: ViewPropertyValue;
   /** `sent`: waiting for the answer; `applied`: done, waiting for the snapshot that shows it. */
   phase: 'sent' | 'applied';
 }
@@ -66,6 +68,10 @@ interface EditsState {
   errors: ReadonlyMap<string, string>;
   liveEdits: number | null;
   notice: string | null;
+  /** Snapshot changes the notice has lived through: it outlasts the one the server takes after a refusal, no more. */
+  noticeAge: number;
+  /** The device of the snapshot: another one drops the notice. */
+  serial: string | null;
   /** `viewEditSeq` of the last answer read. */
   seenSeq: number;
 }
@@ -94,17 +100,22 @@ function withError(errors: ReadonlyMap<string, string>, key: string, message: st
 }
 
 function settle(state: EditsState, answers: readonly ViewEditAnswer[]): EditsState {
-  let { requests, errors, liveEdits, notice } = state;
+  let { requests, errors, liveEdits, notice, noticeAge } = state;
   for (const answer of answers) {
     const request = requests.find((r) => r.id === answer.requestId && r.phase === 'sent');
     if (request === undefined) continue;
     requests = requests.filter((r) => r !== request);
-    if (!answer.ok && answer.error !== undefined && SNAPSHOT_ERRORS.has(answer.error)) {
+    const isCurrent = request.snapshotId === state.snapshotId;
+    // An answer about an older snapshot can't be shown at its field (node ids are per capture): a refusal goes to
+    // the head, like one saying the view is gone.
+    const isNotice =
+      !answer.ok && (!isCurrent || (answer.error !== undefined && SNAPSHOT_ERRORS.has(answer.error)));
+    if (isNotice) {
       notice = editErrorMessage(answer.error, answer.message);
+      noticeAge = 0;
       continue;
     }
-    // Answers about an older snapshot can't be shown on this one (node ids are per capture).
-    if (request.snapshotId !== state.snapshotId) continue;
+    if (!isCurrent) continue;
     if (answer.liveEdits !== undefined) liveEdits = answer.liveEdits;
     if (answer.ok) {
       requests = [...requests, { ...request, phase: 'applied' }];
@@ -113,7 +124,7 @@ function settle(state: EditsState, answers: readonly ViewEditAnswer[]): EditsSta
       errors = withError(errors, errorKey(request.nodeId, request.name), message);
     }
   }
-  return { ...state, requests, errors, liveEdits, notice };
+  return { ...state, requests, errors, liveEdits, notice, noticeAge };
 }
 
 interface Options {
@@ -136,6 +147,8 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
     errors: new Map(),
     liveEdits: null,
     notice: null,
+    noticeAge: 0,
+    serial: snapshot?.serial ?? null,
     seenSeq: state.viewEditSeq,
   }));
 
@@ -147,19 +160,25 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
   }
   if (current.snapshotId !== snapshotId) {
     // A new snapshot shows what was applied; errors named nodes of the old one.
+    const serial = snapshot?.serial ?? null;
+    const keepsNotice = current.notice !== null && current.noticeAge < 1 && serial === current.serial;
     current = {
       ...current,
       snapshotId,
+      serial,
       requests: current.requests.filter((r) => r.phase === 'sent'),
       errors: new Map(),
       liveEdits: null,
+      notice: keepsNotice ? current.notice : null,
+      noticeAge: current.noticeAge + 1,
     };
   }
   if (current !== edits) setEdits(current);
 
-  const latest = useRef({ snapshot, index, isEnabled });
-  useEffect(() => {
-    latest.current = { snapshot, index, isEnabled };
+  const latest = useRef({ snapshot, index, isEnabled, requests: edits.requests });
+  // Before any event or timer can read it: a commit right after a new snapshot must see that snapshot.
+  useLayoutEffect(() => {
+    latest.current = { snapshot, index, isEnabled, requests: edits.requests };
   });
   const nextId = useRef(1);
 
@@ -213,6 +232,7 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
       nodeId: number | null,
       name: EditName | null,
       msg: (requestId: number) => ClientMessage,
+      value?: ViewPropertyValue,
     ) => {
       const id = nextId.current;
       nextId.current = id >= MAX_REQUEST_ID ? 1 : id + 1;
@@ -223,7 +243,10 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
       }
       setEdits((prev) => ({
         ...prev,
-        requests: [...prev.requests, { id, snapshotId: target, nodeId, name, phase: 'sent' }],
+        requests: [
+          ...prev.requests,
+          { id, snapshotId: target, nodeId, name, phase: 'sent', ...(value === undefined ? {} : { value }) },
+        ],
         errors: withError(prev.errors, key, null),
         notice: null,
       }));
@@ -234,7 +257,7 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
 
   const edit = useCallback(
     (nodeId: number, property: ViewProperty, value: ViewPropertyValue): EditResult => {
-      const { snapshot: shot, index: idx, isEnabled: enabled } = latest.current;
+      const { snapshot: shot, index: idx, isEnabled: enabled, requests: pending } = latest.current;
       const node = idx?.byId.get(nodeId);
       if (shot === null || node === undefined || !enabled || !editableProperties(node).includes(property)) {
         return 'refused';
@@ -245,18 +268,31 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
         setEdits((prev) => ({ ...prev, errors: withError(prev.errors, key, 'Not a valid value.') }));
         return 'refused';
       }
-      if (isCurrentValue(node, property, normalized)) {
+      // While a change of this field is on its way, the snapshot still shows the value before it.
+      const inFlight = pending.findLast(
+        (r) =>
+          r.snapshotId === shot.id && r.nodeId === nodeId && r.name === property && r.value !== undefined,
+      );
+      const isUnchanged =
+        inFlight === undefined ? isCurrentValue(node, property, normalized) : inFlight.value === normalized;
+      if (isUnchanged) {
         setEdits((prev) => ({ ...prev, errors: withError(prev.errors, key, null) }));
         return 'unchanged';
       }
-      const sent = request(shot.id, nodeId, property, (requestId) => ({
-        type: 'setViewProperty',
-        requestId,
-        snapshotId: shot.id,
+      const sent = request(
+        shot.id,
         nodeId,
         property,
-        value: normalized,
-      }));
+        (requestId) => ({
+          type: 'setViewProperty',
+          requestId,
+          snapshotId: shot.id,
+          nodeId,
+          property,
+          value: normalized,
+        }),
+        normalized,
+      );
       return sent ? 'sent' : 'refused';
     },
     [request],
