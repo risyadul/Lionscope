@@ -1011,6 +1011,11 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
   animation: mocks-wait 1.4s ease-in-out infinite alternate;
 }
 
+.mocks-pill[data-state='unreachable'] .mocks-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-muted);
+}
+
 @keyframes mocks-wait {
   to {
     opacity: 0.35;

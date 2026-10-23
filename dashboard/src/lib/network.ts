@@ -13,12 +13,14 @@ import type {
   NetworkMockInput,
   NetworkMockRule,
   NetworkMocksState,
+  SdkNetworkState,
 } from '@lionscope/protocol/wire';
 import {
   MAX_HTTP_BODY_BYTES,
   MAX_HTTP_HEADER_NAME_CHARS,
   MAX_HTTP_HEADER_VALUE_CHARS,
   MAX_MOCK_BODY_BYTES,
+  MAX_MOCK_CLIENT_MESSAGE_BYTES,
   MAX_MOCK_DELAY_MS,
   MAX_MOCK_GLOB_STARS,
   MAX_MOCK_HEADER_BYTES,
@@ -252,8 +254,9 @@ export interface DraftFromExchange {
 }
 
 /**
- * "Mock this response": the same method and URL (without its query, matched exactly), the status, the response's
- * Content-Type and its captured body. A failed call is mocked as the same failure where there is one.
+ * "Mock this response": the same method and URL (without its query, matched exactly; the detail's whole URL, as the
+ * summary's may be cut), the status, the response's Content-Type and its captured body. A failed call is mocked as
+ * the same failure where there is one.
  */
 export function draftFromExchange(
   exchange: HttpExchange,
@@ -271,7 +274,7 @@ export function draftFromExchange(
   const draft: MockDraft = {
     method: exchange.method,
     match: 'exact',
-    url: urlWithoutQuery(exchange.url),
+    url: urlWithoutQuery(detail?.url ?? exchange.url),
     action,
     status: String(exchange.status ?? 200),
     headers: contentType === null ? '' : `Content-Type: ${contentType}`,
@@ -396,7 +399,16 @@ export function validateDraft(draft: MockDraft): DraftCheck {
     delayMs: delay ?? 0,
     enabled: draft.enabled,
   };
-  return { input: draft.id === undefined ? input : { id: draft.id, ...input }, errors };
+  const rule = draft.id === undefined ? input : { id: draft.id, ...input };
+  // The frame is JSON: a body of control characters escapes to 6× its bytes.
+  const frameBytes = utf8Bytes(JSON.stringify({ type: 'setNetworkMock', rule }));
+  if (frameBytes > MAX_MOCK_CLIENT_MESSAGE_BYTES) {
+    errors.body =
+      `Too large to send: JSON-escaped, the rule is over ${formatBytes(MAX_MOCK_CLIENT_MESSAGE_BYTES)} ` +
+      '(a control character takes 6 bytes).';
+    return { input: null, errors };
+  }
+  return { input: rule, errors };
 }
 
 /** A stored rule as a replacement input (`setNetworkMock` with its id), with `patch` applied. */
@@ -412,17 +424,22 @@ export function ruleInput(rule: NetworkMockRule, patch: Partial<NetworkMockInput
 export interface MocksIndicatorState {
   /** Enabled rules. */
   count: number;
-  /** `applied`: the app confirmed this set; `waiting`: a session runs and the app hasn't yet. */
-  state: 'applied' | 'waiting' | 'idle';
+  /**
+   * `applied`: the app confirmed this set; `waiting`: a session runs and the app hasn't yet; `unreachable`: the
+   * linked SDK has capture and mocks off (an older SDK, or a link it doesn't trust), so the rules can't reach it.
+   */
+  state: 'applied' | 'waiting' | 'unreachable' | 'idle';
 }
 
-/** Null while no enabled rule exists (the indicator is hidden). */
+/** Null while no enabled rule exists (the indicator is hidden). `network`: the live link's SdkStatus.network. */
 export function mocksIndicator(
   mocks: NetworkMocksState | null,
   isSessionActive: boolean,
+  network: SdkNetworkState | null = null,
 ): MocksIndicatorState | null {
   const count = mocks?.rules.filter((rule) => rule.enabled).length ?? 0;
   if (mocks === null || count === 0) return null;
+  if (isSessionActive && network !== null && network !== 'active') return { count, state: 'unreachable' };
   if (mocks.appliedRev !== null && mocks.appliedRev === mocks.rev) return { count, state: 'applied' };
   return { count, state: isSessionActive ? 'waiting' : 'idle' };
 }

@@ -334,17 +334,11 @@ export function normalizeStalls(stalls: readonly StallSample[]): StallSample[] {
 }
 
 /**
- * Drops leading exchanges that ended before `cutoff`; a pending one (no end yet) and everything after it stay, so
- * a long call that started before the window's left edge is still listed while it runs.
+ * Drops leading exchanges that started before `cutoff`, like the server's window: a pending one goes too, so an
+ * old call that never ended can't pin every newer exchange behind it.
  */
 export function pruneExchangesBefore(exchanges: HttpExchange[], cutoff: number): HttpExchange[] {
-  let first = 0;
-  while (first < exchanges.length) {
-    const end = exchanges[first]?.endTs;
-    if (end === null || end === undefined || end >= cutoff) break;
-    first++;
-  }
-  return first === 0 ? exchanges : exchanges.slice(first);
+  return pruneBefore(exchanges, cutoff);
 }
 
 /** Sorted by start (then id), one entry per id (the last report wins), capped. */

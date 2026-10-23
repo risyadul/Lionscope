@@ -8,7 +8,11 @@ import type {
   SdkStatus,
   ServerMessage,
 } from '@lionscope/protocol/wire';
-import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
+import {
+  MAX_HTTP_SUMMARY_URL_CHARS,
+  MAX_MOCK_CLIENT_MESSAGE_BYTES,
+  PROTOCOL_VERSION,
+} from '@lionscope/protocol/wire';
 import { App } from '../src/App.tsx';
 import { ServicesContext, type DashboardServices } from '../src/app/services.ts';
 import { DETAIL_REQUEST_GAP_MS } from '../src/hooks/useHttpDetail.ts';
@@ -363,6 +367,24 @@ describe('Network tab: empty states', () => {
   });
 });
 
+describe('Network tab: an unverified link', () => {
+  it('says capture is off and why, with no lane', () => {
+    setup(running({ ...SDK_V7, network: 'unverified' }, Date.now()));
+    expect(screen.queryByRole('figure', { name: 'Network' })).toBeNull();
+    openNetwork();
+    expect(within(netPanel()).getByText('Network capture is off')).toBeTruthy();
+    expect(netPanel().textContent).toContain('couldn’t hand the app its link key over adb');
+    expect(netPanel().textContent).toContain('Restart the session');
+    expect(netPanel().textContent).toContain('LinkKeyReceiver');
+  });
+
+  it('SdkStatus.network wins over the protocol version', () => {
+    setup(running({ ...SDK_V7, network: 'needs_sdk' }, Date.now()));
+    openNetwork();
+    expect(within(netPanel()).getByText('Network capture needs the SDK')).toBeTruthy();
+  });
+});
+
 describe('Mock editor', () => {
   it('“Mock this response” pre-fills from the call and sends the rule; it closes on the next networkMocks', async () => {
     const now = Date.now();
@@ -398,6 +420,64 @@ describe('Mock editor', () => {
     expect(within(dialog()).getByRole('button', { name: 'Saving…' })).toBeTruthy();
     await push({ type: 'networkMocks', mocks: { rules: [mockRule('m1')], rev: 1, appliedRev: 0 } });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('uses the detail’s whole URL where the summary’s was cut, to mock and to copy', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      const now = Date.now();
+      const whole = `https://api.example.com/v1/${'p'.repeat(MAX_HTTP_SUMMARY_URL_CHARS)}`;
+      const summary = exchange(4, now - 5000, { url: `${whole.slice(0, MAX_HTTP_SUMMARY_URL_CHARS - 1)}…` });
+      const { push } = setup(running(SDK_V7, now, http(summary)));
+      openNetwork();
+      fireEvent.click(row(4));
+      await push({ type: 'httpExchange', id: 4, exchange: exchangeDetail(summary, { url: whole }) });
+      expect(netPanel().querySelector('.net-full-url')?.textContent).toBe(whole);
+      fireEvent.click(within(netPanel()).getByRole('button', { name: 'Copy URL' }));
+      expect(writeText).toHaveBeenCalledWith(whole);
+      fireEvent.click(within(netPanel()).getByRole('button', { name: 'Mock this response' }));
+      expect((within(dialog()).getByLabelText('URL') as HTMLInputElement).value).toBe(whole);
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('a re-open while open starts from the new draft', async () => {
+    const now = Date.now();
+    const first = exchange(4, now - 5000, { url: 'https://api.example.com/v1/items' });
+    const second = exchange(5, now - 4000, { url: 'https://api.example.com/v1/cart', method: 'POST' });
+    const { push } = setup(running(SDK_V7, now, http(first, second)));
+    openNetwork();
+    fireEvent.click(row(4));
+    await push({ type: 'httpExchange', id: 4, exchange: exchangeDetail(first) });
+    fireEvent.click(within(netPanel()).getByRole('button', { name: 'Mock this response' }));
+    fireEvent.change(within(dialog()).getByLabelText('Delay (ms)'), { target: { value: '800' } });
+    fireEvent.click(row(5));
+    await push({ type: 'httpExchange', id: 5, exchange: exchangeDetail(second) });
+    fireEvent.click(within(netPanel()).getByRole('button', { name: 'Mock this response' }));
+    expect((within(dialog()).getByLabelText('URL') as HTMLInputElement).value).toBe(
+      'https://api.example.com/v1/cart',
+    );
+    expect((within(dialog()).getByLabelText('Method') as HTMLSelectElement).value).toBe('POST');
+    expect((within(dialog()).getByLabelText('Delay (ms)') as HTMLInputElement).value).toBe('0');
+  });
+
+  it('refuses a body too large once JSON-escaped, inline', () => {
+    const { sent } = setup(running(SDK_V7, Date.now()));
+    openNetwork();
+    fireEvent.click(within(netPanel()).getByRole('radio', { name: 'Mocks' }));
+    fireEvent.click(within(netPanel()).getByRole('button', { name: 'New mock' }));
+    fireEvent.change(within(dialog()).getByLabelText('URL'), {
+      target: { value: 'https://api.example.com/v1/promo' },
+    });
+    fireEvent.change(within(dialog()).getByLabelText('Body'), {
+      target: { value: '\u0001'.repeat(Math.ceil(MAX_MOCK_CLIENT_MESSAGE_BYTES / 6) + 1) },
+    });
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Save mock' }));
+    expect(within(dialog()).getByText(/^Too large to send: JSON-escaped/)).toBeTruthy();
+    expect(within(dialog()).getByLabelText('Body').getAttribute('aria-invalid')).toBe('true');
+    expect(mockMessages(sent)).toEqual([]);
   });
 
   it('formats a JSON body and counts its bytes', () => {
@@ -519,6 +599,17 @@ describe('Mocks indicator', () => {
     expect(indicator()?.dataset.state).toBe('applied');
     await push({ type: 'networkMocks', mocks: NO_MOCKS });
     expect(indicator()).toBeNull();
+  });
+
+  it('says the rules can’t reach the app while the link is unverified', () => {
+    setup(
+      running({ ...SDK_V7, network: 'unverified' }, Date.now(), [
+        { type: 'networkMocks', mocks: { rules: [mockRule('m1')], rev: 1, appliedRev: 0 } },
+      ]),
+    );
+    expect(indicator()?.textContent).toBe('1 mock activenot reaching the app');
+    expect(indicator()?.dataset.state).toBe('unreachable');
+    expect(indicator()?.getAttribute('title')).toMatch(/^The rules can’t reach the app/);
   });
 
   it('stays in the Device view, and opens Profiler → Network → Mocks', () => {

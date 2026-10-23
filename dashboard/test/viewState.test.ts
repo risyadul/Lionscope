@@ -3,7 +3,10 @@ import { createInitialState, type DashboardState } from '../src/lib/store.ts';
 import {
   hasSeries,
   isSessionActive,
+  isNetworkCapable,
   isStallCapable,
+  networkEmptyState,
+  networkLinkState,
   screensEmptyState,
   SDK_UPDATE_HINT,
   sdkOptionsBlocker,
@@ -11,7 +14,7 @@ import {
   timelineNotice,
   timelineState,
 } from '../src/lib/viewState.ts';
-import { cpu, SDK_V2, session, T0 } from './fixtures.ts';
+import { cpu, SDK_V2, SDK_V3, SDK_V7, session, T0 } from './fixtures.ts';
 
 function connected(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -166,5 +169,29 @@ describe('stall view state', () => {
       kind: 'link-failed',
       message: 'closed',
     });
+  });
+});
+
+describe('network view state', () => {
+  const empty = (sdk: Parameters<typeof networkLinkState>[0]) =>
+    networkEmptyState({ hasItems: false, hasAnyData: false, isSessionActive: true, sdk, sdkLinkError: null });
+
+  it('reads SdkStatus.network, falling back to the protocol version on older servers', () => {
+    expect(networkLinkState(undefined)).toBeNull();
+    expect(networkLinkState({ ...SDK_V7, connected: false, network: null })).toBeNull();
+    expect(networkLinkState(SDK_V7)).toBe('active');
+    expect(networkLinkState(SDK_V3)).toBe('needs_sdk');
+    expect(networkLinkState({ ...SDK_V7, network: 'unverified' })).toBe('unverified');
+    expect(networkLinkState({ ...SDK_V7, network: 'needs_sdk' })).toBe('needs_sdk');
+    expect(isNetworkCapable({ ...SDK_V7, network: 'active' })).toBe(true);
+    expect(isNetworkCapable({ ...SDK_V7, network: 'unverified' })).toBe(false);
+  });
+
+  it('picks the Network tab state from it', () => {
+    expect(empty(SDK_V7)).toEqual({ kind: 'waiting' });
+    expect(empty({ ...SDK_V7, network: 'active' })).toEqual({ kind: 'waiting' });
+    expect(empty({ ...SDK_V7, network: 'unverified' })).toEqual({ kind: 'unverified' });
+    expect(empty({ ...SDK_V7, network: 'needs_sdk' })).toEqual({ kind: 'needs-sdk', sdkVersion: '0.7.0' });
+    expect(empty(SDK_V3)).toEqual({ kind: 'needs-sdk', sdkVersion: '0.4.0' });
   });
 });

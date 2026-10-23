@@ -9,6 +9,8 @@ import { ruleInput, type MockDraft } from '../lib/network.ts';
 import type { ServerError } from '../lib/store.ts';
 
 export interface MockEditorState {
+  /** Counts openings: the editor's React key, so a re-open while open starts from the new draft. */
+  openId: number;
   draft: MockDraft;
   /** About the pre-filled values (a cut body, one that wasn't captured). */
   note: string | null;
@@ -93,9 +95,11 @@ export function useMockRules({
 
   const blocker = mockBlocker(isOpen, isSessionActive, mocks);
 
+  const openCount = useRef(0);
   const openEditor = useCallback((draft: MockDraft, note: string | null = null) => {
+    openCount.current += 1;
     setPending(null);
-    setEditor({ draft, note, isSaving: false, error: null });
+    setEditor({ openId: openCount.current, draft, note, isSaving: false, error: null });
   }, []);
 
   const closeEditor = useCallback(() => {

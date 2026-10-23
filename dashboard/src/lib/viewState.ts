@@ -9,6 +9,7 @@ import type {
   InflateSample,
   MemorySample,
   ScreenSpan,
+  SdkNetworkState,
   SdkStatus,
   StallSample,
   StrictModeSample,
@@ -232,9 +233,19 @@ export function layoutsEmptyState(input: LayoutsEmptyInput): LayoutsEmpty | null
   return input.isTrackingOn ? { kind: 'waiting' } : { kind: 'off' };
 }
 
-/** The live SDK link speaks protocol v7 (HTTP capture and mocks, on session links). */
+/**
+ * Network capture on the live SDK link (`SdkStatus.network`); null while no SDK is linked. A server that doesn't
+ * report it (before the link proof) is read from the protocol version: a v7 link captures.
+ */
+export function networkLinkState(sdk: SdkStatus | undefined): SdkNetworkState | null {
+  if (sdk?.connected !== true) return null;
+  if (sdk.network != null) return sdk.network;
+  return (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V7 ? 'active' : 'needs_sdk';
+}
+
+/** The live SDK link captures HTTP and takes mock rules (a v7 session link the SDK trusts). */
 export function isNetworkCapable(sdk: SdkStatus | undefined): boolean {
-  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V7;
+  return networkLinkState(sdk) === 'active';
 }
 
 /** Why the Network tab has no requests to list. */
@@ -247,6 +258,8 @@ export type NetworkEmpty =
   | { kind: 'disconnected'; sdkVersion: string }
   | { kind: 'link-failed'; message: string }
   | { kind: 'old-server' }
+  /** A v7 link the SDK doesn't trust (the server couldn't hand the app its link key): capture is off. */
+  | { kind: 'unverified' }
   /** A v7 link and no request yet: the interceptor may not be installed. */
   | { kind: 'waiting' };
 
@@ -273,7 +286,9 @@ export function networkEmptyState(input: NetworkEmptyInput): NetworkEmpty | null
       : { kind: 'disconnected', sdkVersion: sdk.sdkVersion };
   }
   if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
-  if (!isNetworkCapable(sdk)) return { kind: 'needs-sdk', sdkVersion: sdk.sdkVersion };
+  const network = networkLinkState(sdk);
+  if (network === 'needs_sdk') return { kind: 'needs-sdk', sdkVersion: sdk.sdkVersion };
+  if (network === 'unverified') return { kind: 'unverified' };
   return { kind: 'waiting' };
 }
 

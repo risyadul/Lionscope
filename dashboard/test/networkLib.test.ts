@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_MOCK_BODY_BYTES, MAX_MOCK_DELAY_MS } from '@lionscope/protocol/wire';
+import {
+  MAX_HTTP_SUMMARY_URL_CHARS,
+  MAX_MOCK_BODY_BYTES,
+  MAX_MOCK_CLIENT_MESSAGE_BYTES,
+  MAX_MOCK_DELAY_MS,
+} from '@lionscope/protocol/wire';
 import {
   bodyNote,
   draftFromExchange,
@@ -142,6 +147,19 @@ describe('mock drafts', () => {
     );
   });
 
+  it('refuses a rule whose JSON-encoded setNetworkMock frame is over the limit', () => {
+    // Under the body's byte limit, but each control character escapes to \u00XX: 6 bytes.
+    const controls = '\u0001'.repeat(Math.ceil(MAX_MOCK_CLIENT_MESSAGE_BYTES / 6) + 1);
+    expect(controls.length).toBeLessThan(MAX_MOCK_BODY_BYTES);
+    const check = validateDraft(draft({ body: controls }));
+    expect(check.input).toBeNull();
+    expect(check.errors.body).toBe(
+      'Too large to send: JSON-escaped, the rule is over 1.0 MB (a control character takes 6 bytes).',
+    );
+    // The same length of plain text fits.
+    expect(validateDraft(draft({ body: 'x'.repeat(controls.length) })).input).not.toBeNull();
+  });
+
   it('a failure answer ignores the response fields and still sends a valid status', () => {
     const check = validateDraft(draft({ action: 'timeout', status: '', headers: 'broken', body: 'x' }));
     expect(check.errors).toEqual({});
@@ -175,6 +193,13 @@ describe('mock drafts', () => {
       body: '{"items":[1,2,3]}',
     });
     expect(note).toBeNull();
+  });
+
+  it('pre-fills the detail’s whole URL, not the summary’s cut one', () => {
+    const whole = `https://api.example.com/v1/${'p'.repeat(MAX_HTTP_SUMMARY_URL_CHARS)}?page=2`;
+    const summary = exchange(3, T0, { url: `${whole.slice(0, MAX_HTTP_SUMMARY_URL_CHARS - 1)}…` });
+    const { draft: filled } = draftFromExchange(summary, exchangeDetail(summary, { url: whole }));
+    expect(filled.url).toBe(whole.slice(0, whole.indexOf('?')));
   });
 
   it('says when the captured body was cut or not captured', () => {
@@ -229,6 +254,18 @@ describe('mocks indicator', () => {
     expect(mocksIndicator({ rules, rev: 3, appliedRev: 2 }, true)).toEqual({ count: 2, state: 'waiting' });
     expect(mocksIndicator({ rules, rev: 3, appliedRev: null }, true)).toEqual({ count: 2, state: 'waiting' });
     expect(mocksIndicator({ rules, rev: 3, appliedRev: null }, false)).toEqual({ count: 2, state: 'idle' });
+  });
+
+  it('says the rules can’t reach the app while the link’s capture isn’t active', () => {
+    const mocks = { rules: [mockRule('m1')], rev: 3, appliedRev: 3 };
+    expect(mocksIndicator(mocks, true, 'active')).toEqual({ count: 1, state: 'applied' });
+    expect(mocksIndicator(mocks, true, 'unverified')).toEqual({ count: 1, state: 'unreachable' });
+    expect(mocksIndicator(mocks, true, 'needs_sdk')).toEqual({ count: 1, state: 'unreachable' });
+    // No SDK linked: the rules wait for it.
+    expect(mocksIndicator({ ...mocks, appliedRev: null }, true, null)).toEqual({
+      count: 1,
+      state: 'waiting',
+    });
   });
 });
 

@@ -90,24 +90,30 @@ describe('HTTP exchanges in the store', () => {
     expect(state.httpDetail).toEqual({ id: 3, exchange: null });
   });
 
-  it('prunes exchanges that ended before the window, but never a pending one', () => {
+  it('prunes exchanges that started before the window, like the server', () => {
     const state = apply(
       { ...createInitialState(), bufferWindowMs: 5 * MIN },
       { type: 'http', exchange: exchange(1, NOW - 9 * MIN) },
-      {
-        type: 'http',
-        exchange: exchange(2, NOW - 8 * MIN, {
-          state: 'pending',
-          status: null,
-          endTs: null,
-          durationMs: null,
-        }),
-      },
-      { type: 'http', exchange: exchange(3, NOW - 7 * MIN) },
+      // Started before the window but ended inside it: gone, as on the server.
+      { type: 'http', exchange: exchange(2, NOW - 6 * MIN, { endTs: NOW - 4 * MIN, durationMs: 2 * MIN }) },
+      { type: 'http', exchange: exchange(3, NOW - 4 * MIN) },
       { type: 'cpu', sample: cpu(NOW) },
     );
-    // 1 ended before the window; 2 is still running, so it and everything after it stay.
-    expect(state.http.map((e) => e.id)).toEqual([2, 3]);
+    expect(state.http.map((e) => e.id)).toEqual([3]);
+  });
+
+  it('an old pending exchange no longer pins the newer ones', () => {
+    const pending = { state: 'pending', status: null, endTs: null, durationMs: null } as const;
+    const state = apply(
+      { ...createInitialState(), bufferWindowMs: 5 * MIN },
+      { type: 'http', exchange: exchange(1, NOW - 9 * MIN, pending) },
+      { type: 'http', exchange: exchange(2, NOW - 8 * MIN) },
+      { type: 'http', exchange: exchange(3, NOW - 7 * MIN) },
+      { type: 'http', exchange: exchange(4, NOW - 2 * MIN, pending) },
+      { type: 'cpu', sample: cpu(NOW) },
+    );
+    // 1 never ended, yet it and everything before the window go; the pending call inside the window stays.
+    expect(state.http.map((e) => e.id)).toEqual([4]);
   });
 
   it('a laptop clock step back clears the exchanges with the rest of the timeline', () => {
@@ -153,7 +159,7 @@ describe('exchange helpers', () => {
     expect(list[0]?.id).toBe(2);
   });
 
-  it('pruneExchangesBefore returns the same array when nothing ended before the cutoff', () => {
+  it('pruneExchangesBefore returns the same array when nothing started before the cutoff', () => {
     const list = [exchange(1, T0)];
     expect(pruneExchangesBefore(list, T0 - 1)).toBe(list);
   });

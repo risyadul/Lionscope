@@ -3,12 +3,15 @@ import type { MocksIndicatorState } from '../../lib/network.ts';
 const STATE_LABELS: Record<MocksIndicatorState['state'], string | null> = {
   applied: 'applied',
   waiting: 'waiting for the app',
+  unreachable: 'not reaching the app',
   idle: null,
 };
 
 const STATE_TITLES: Record<MocksIndicatorState['state'], string> = {
   applied: 'The app runs with these rules: matching requests never reach the network.',
   waiting: 'The app hasn’t confirmed the latest rules yet (it applies them while its SDK is linked).',
+  unreachable:
+    'The rules can’t reach the app: its SDK link has network capture and mocks off (an SDK before 0.7.0, or a link it doesn’t trust). Its requests go to the real network.',
   idle: 'Rules are kept for the session.',
 };
 

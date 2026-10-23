@@ -193,6 +193,8 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
   const { host, path } = urlParts(exchange.url);
   const statusClass = statusClassOf(exchange);
   const full = detail.detail;
+  // The summary's URL may be cut (MAX_HTTP_SUMMARY_URL_CHARS); the detail's is whole.
+  const url = full?.url ?? exchange.url;
 
   const handleTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -218,8 +220,8 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
               <span className="mono">{exchange.method}</span>
             </Fact>
             <Fact label="URL">
-              <span className="net-full-url mono">{exchange.url}</span>
-              <CopyButton text={() => exchange.url} label="Copy URL" />
+              <span className="net-full-url mono">{url}</span>
+              <CopyButton text={() => url} label="Copy URL" />
             </Fact>
             <Fact label="Status">
               <span className="net-status mono" data-class={statusClass}>

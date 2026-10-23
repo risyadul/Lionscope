@@ -110,6 +110,17 @@ function EmptyPanel({ empty }: { empty: NetworkEmpty }) {
           <p>Update Lionscope to 0.7.0: network capture needs a matching server and SDK.</p>
         </div>
       );
+    case 'unverified':
+      return (
+        <div className="net-empty" data-tone="critical">
+          <p className="net-empty-title">Network capture is off</p>
+          <p>
+            Lionscope couldn’t hand the app its link key over adb, so the SDK doesn’t trust this link and
+            keeps capture and mocks off. Restart the session; if it persists, check that the app has SDK
+            0.7.0’s <code>LinkKeyReceiver</code>.
+          </p>
+        </div>
+      );
     case 'waiting':
       return (
         <div className="net-empty">

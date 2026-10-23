@@ -56,6 +56,7 @@ import {
   isStallCapable,
   layoutsEmptyState,
   networkEmptyState,
+  networkLinkState,
   screensEmptyState,
   sdkOptionsBlocker,
   stallsEmptyState,
@@ -341,7 +342,7 @@ export function App() {
     isOpen,
     isSessionActive: isActive,
   });
-  const mocksState = mocksIndicator(state.networkMocks, isActive);
+  const mocksState = mocksIndicator(state.networkMocks, isActive, networkLinkState(sdk));
   const networkTabCount = useMemo(
     () => exchangesInWindow(series.http, startTs, endTs, endTs).length,
     [series.http, startTs, endTs],
@@ -589,7 +590,12 @@ export function App() {
           </Activity>
         </main>
         {mockRules.editor && (
-          <MockEditor editor={mockRules.editor} onSave={mockRules.save} onCancel={mockRules.closeEditor} />
+          <MockEditor
+            key={mockRules.editor.openId}
+            editor={mockRules.editor}
+            onSave={mockRules.save}
+            onCancel={mockRules.closeEditor}
+          />
         )}
       </div>
     </InspectorContext.Provider>
