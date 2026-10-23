@@ -1,7 +1,7 @@
 {
   "name": "lionscope",
   "version": "0.5.0",
-  "description": "Lightweight Android profiler with a web dashboard: CPU, memory, frames, screens and logcat for one app over adb",
+  "description": "Lightweight Android profiler and Layout Inspector in your browser, with MCP tools for AI agents: CPU, memory, frames, stalls, layouts and logcat over adb",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -23,7 +23,18 @@
     "cpu",
     "memory",
     "logcat",
-    "dashboard"
+    "dashboard",
+    "layout-inspector",
+    "ui-inspector",
+    "view-hierarchy",
+    "emulator",
+    "uiautomator",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ai-agents",
+    "claude-code",
+    "cursor"
   ],
   "type": "module",
   "bin": {

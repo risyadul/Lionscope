@@ -7,7 +7,7 @@ plugins {
     `maven-publish`
 }
 
-description = "Lionscope in-app SDK: screen tracking, FrameMetrics and main-thread stalls for debug builds."
+description = "Lionscope in-app SDK for debug builds: screen tracking, FrameMetrics, main-thread stalls, layout inflation and the Layout Inspector view tree."
 
 android {
     namespace = "io.github.risyadul.lionscope"

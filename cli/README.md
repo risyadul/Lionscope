@@ -1,7 +1,10 @@
 # lionscope
 
-Lightweight Android profiler with a web dashboard. It shows CPU, memory, frame rendering and logcat for one app
-on a connected device, on a single shared time axis, without opening Android Studio.
+Lightweight Android profiler and Layout Inspector in your browser, and your AI agent can use it too. It shows CPU,
+memory, frame rendering, main-thread stalls, layout inflation and logcat for one app on a connected device, on a
+single shared time axis. Click a view to inspect it; with the SDK in the app you also see the XML layout and line it came from. Emulators and USB devices can be
+operated from the dashboard, and AI agents get the same data as tools over MCP (`lionscope mcp`) or the CLI
+(`lionscope query`). No Android Studio needed.
 
 ```bash
 npx lionscope@latest

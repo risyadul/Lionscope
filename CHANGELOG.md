@@ -6,6 +6,11 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- The README, the npm description and keywords, and the SDK's POM description now present Lionscope as a
+  lightweight Android profiler and Layout Inspector in your browser that AI agents can use (MCP and CLI).
+
 ## [0.5.0] - 2026-10-23
 
 ### Added

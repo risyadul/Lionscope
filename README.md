@@ -1,17 +1,27 @@
 # Lionscope
 
-Lionscope is a lightweight Android profiler with a web dashboard. It shows CPU, memory, frame rendering and
-logcat for one app on a connected device, on a single shared time axis, without opening Android Studio.
+Lionscope is a lightweight Android profiler and Layout Inspector in your browser, and your AI agent can use it
+too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an app.
+
+- **Profile**: CPU, memory, frame rendering, main-thread stalls, layout inflation and logcat for one app, on a
+  single shared time axis.
+- **Inspect**: freeze the screen, click a view, and see its attributes; with the SDK, also the XML layout and
+  line it came from and the Fragment that owns it.
+- **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
+  charts.
+- **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
+  in the Inspector and ask your agent about "this element".
+
+It stays light. Measured with the sample app on an emulator, the server uses under 1% of one CPU core while the
+app is idle and about 4% while it scrolls, with 100–150 MB of memory. The SDK adds about 0.5% CPU in the app.
 
 It works in two modes:
 
 - **ADB-only** (no app changes): everything is collected through `adb shell` (`/proc`, `dumpsys`, `logcat`).
 - **With the optional SDK** in the app's **debug** build: adds which screen is on top (Activity, Fragment,
   DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
-  stalls with the app code line that caused them (plus opt-in StrictMode violations).
-
-You can also see and operate the device's screen right next to the charts: emulators (0.3.0+, which you can
-also boot headless from the dashboard) and physical devices over USB (0.3.1+).
+  stalls with the app code line that caused them (plus opt-in StrictMode violations), layout inflation timing,
+  and the Layout Inspector's own view tree with layout sources and owners.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">

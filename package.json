@@ -2,7 +2,7 @@
   "name": "lionscope-workspace",
   "version": "0.5.0",
   "private": true,
-  "description": "Lionscope — lightweight Android profiler with a web dashboard",
+  "description": "Lionscope — lightweight Android profiler and Layout Inspector in your browser, with MCP tools for AI agents",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
