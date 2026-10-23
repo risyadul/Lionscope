@@ -72,13 +72,16 @@ describe('ProfilingSession network capture', () => {
     session.stop();
   });
 
-  it('ignores network messages from a link without the link proof', async () => {
-    const { session, connect } = await setup();
+  it('drops and counts network messages from a link without the link proof', async () => {
+    const { session, connect, messages } = await setup();
     const { handler } = await connect(V7_HELLO);
     expect(session.state.sdk?.network).toBe('unverified');
     handler.onMessage(request(1, deviceNow()));
     handler.onMessage(response(1));
+    handler.onMessage({ type: 'mocksApplied', rev: 1, count: 0 });
     expect(session.snapshot().http ?? []).toEqual([]);
+    expect(messages.filter((message) => message.type === 'http')).toEqual([]);
+    expect(session.unprovenNetworkMessages).toBe(3);
     session.stop();
   });
 

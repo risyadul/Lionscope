@@ -116,6 +116,8 @@ export class SdkBridge {
   private droppedFrames = 0;
   /** HTTP calls the SDK did not record (its rate cap), summed over the session. */
   private droppedHttp = 0;
+  /** Network messages from a link without the link proof: dropped, never stored or forwarded. */
+  private unprovenHttp = 0;
   private drainTimer: ReturnType<typeof setInterval> | null = null;
   private configTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -271,8 +273,21 @@ export class SdkBridge {
     this.options.notify('sdk:clock', SDK_CLOCK_MESSAGE);
   }
 
-  private refuse(reason: string): void {
-    if (this.refusals.shouldReport(reason)) log.warn(`${this.options.logPrefix} ${reason}`);
+  /** Network messages dropped because their link has no link proof (an old, foreign or forged SDK). */
+  get unprovenNetworkMessages(): number {
+    return this.unprovenHttp;
+  }
+
+  private dropUnproven(type: string): void {
+    this.unprovenHttp += 1;
+    this.refuse(
+      `dropped SDK ${type} messages from a link without the link proof, ${this.unprovenHttp} so far`,
+      'unproven-http',
+    );
+  }
+
+  private refuse(reason: string, key = reason): void {
+    if (this.refusals.shouldReport(key)) log.warn(`${this.options.logPrefix} ${reason}`);
   }
 
   private onMessage(message: SdkLinkMessage): void {
@@ -341,7 +356,7 @@ export class SdkBridge {
       }
       case 'httpRequest': {
         // Network data counts only from a link that got the link proof (a proven SDK sends nothing else).
-        if (this.current.network !== 'active') return;
+        if (this.current.network !== 'active') return this.dropUnproven(message.type);
         if (message.dropped > 0) {
           this.droppedHttp += message.dropped;
           this.options.notify('sdk:dropped-http', droppedHttpMessage(this.droppedHttp));
@@ -351,13 +366,14 @@ export class SdkBridge {
         return;
       }
       case 'httpResponse': {
-        if (this.current.network !== 'active') return;
+        if (this.current.network !== 'active') return this.dropUnproven(message.type);
         const link = this.active?.link;
         if (link) this.options.store.http.response(link, message);
         return;
       }
       case 'mocksApplied':
-        if (this.current.network === 'active') this.options.onMocksApplied?.(message.rev);
+        if (this.current.network !== 'active') return this.dropUnproven(message.type);
+        this.options.onMocksApplied?.(message.rev);
         return;
       case 'viewtree': {
         const ts = this.eventTime('viewtree', message.ts, 0);

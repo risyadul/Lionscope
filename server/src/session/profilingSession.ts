@@ -190,6 +190,11 @@ export class ProfilingSession {
     this.sdk.setOptions(changes);
   }
 
+  /** Network messages dropped because their link had no link proof. */
+  get unprovenNetworkMessages(): number {
+    return this.sdk.unprovenNetworkMessages;
+  }
+
   /** The live, verified SDK link of this session (null while none is), for Inspector snapshots. */
   get sdkLink(): SdkLink | null {
     return this.sdk.liveLink;
