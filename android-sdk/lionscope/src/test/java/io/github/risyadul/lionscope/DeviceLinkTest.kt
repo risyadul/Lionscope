@@ -314,6 +314,28 @@ class DeviceLinkTest {
     }
 
     @Test(timeout = 20_000)
+    fun aDestinationScreenWaitsForWelcomeAndIsAFragmentBelowV6() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            link.onScreen(1, ScreenRef("product/{id}", "product/{id}", ScreenKind.DESTINATION))
+            link.start()
+            for ((version, kind) in listOf(4 to "fragment", 6 to "destination")) {
+                server.accept().use { client ->
+                    val input = client.reader()
+                    assertEquals(hello, input.readLine())
+                    link.send("{\"type\":\"marker\"}")
+                    assertEquals("marker", input.readUntil { it["type"] != "heartbeat" }["type"]) // No screen before welcome.
+                    client.reply("{\"type\":\"welcome\",\"protocolVersion\":$version}")
+                    val screen = input.readUntil { it["type"] == "screen" }["screen"] as Map<*, *>
+                    assertEquals(kind, screen["kind"])
+                    assertEquals("product/{id}", screen["name"])
+                }
+                waitFor { !link.isConnected }
+            }
+        }
+    }
+
+    @Test(timeout = 20_000)
     fun reconnectsAfterTheServerDisappears() {
         val first = localServer()
         val port = first.localPort

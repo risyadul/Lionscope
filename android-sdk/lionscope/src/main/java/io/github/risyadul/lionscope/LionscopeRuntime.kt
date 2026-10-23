@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.Process
 import android.util.Log
 import android.view.Display
+import androidx.navigation.NavController
 
 internal const val LOG_TAG = "Lionscope"
 internal const val DEFAULT_REFRESH_RATE_HZ = 60.0
@@ -19,6 +20,15 @@ private const val INSPECT_ERROR_SIZE_HINT = 64
 internal object LionscopeRuntime {
 
     private var link: DeviceLink? = null
+
+    @Volatile
+    private var screenTracker: ScreenTracker? = null
+
+    @Volatile
+    private var mainScheduler: MainScheduler? = null
+
+    /** Created on the main thread by the first [trackNavigation]. */
+    private var navigation: NavigationTracker? = null
 
     /** Entry point for the initializer and [Lionscope.install]. Contains every failure, including errors. */
     fun installIfEligible(context: Context, processName: () -> String? = ProcessInfo::currentProcessName) {
@@ -34,6 +44,21 @@ internal object LionscopeRuntime {
                 // Logging itself failed; stay silent.
             }
         }
+    }
+
+    /** Main thread soon; ignored until the SDK is installed. [navController] is a NavController. */
+    fun trackNavigation(navController: Any) {
+        val screens = screenTracker ?: return
+        val main = mainScheduler ?: return
+        main.post(Runnable {
+            guarded {
+                val tracker = navigation ?: NavigationTracker(screens::requestResolve).also {
+                    navigation = it
+                    screens.destinations = it
+                }
+                tracker.track(navController as NavController)
+            }
+        })
     }
 
     @Synchronized
@@ -97,6 +122,8 @@ internal object LionscopeRuntime {
             Log.w(LOG_TAG, "Lionscope diagnostics disabled: $t")
             null
         }
+        screenTracker = screens
+        mainScheduler = main
         app.registerActivityLifecycleCallbacks(screens)
         frames?.let(app::registerActivityLifecycleCallbacks)
         diagnostics?.let(app::registerActivityLifecycleCallbacks)
