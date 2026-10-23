@@ -168,7 +168,9 @@ describe('live view edits', () => {
     const { edits, link, setCurrent } = setup(snapshot([viewNode(0), viewNode(1), composable, old]));
     const refused = await edits.set({ nodeId: 2, property: 'alpha', value: 0.5 });
     expect(refused).toMatchObject({ ok: false, error: 'not_editable' });
-    expect(!refused.ok && refused.message).toContain('CartScreen.kt:87');
+    // No app strings in messages (they reach agents unmarked): the dashboard shows the call site itself.
+    expect(!refused.ok && refused.message).toContain('call site');
+    expect(!refused.ok && refused.message).not.toContain('CartScreen');
     expect(failed(await edits.set({ nodeId: 3, property: 'alpha', value: 0.5 }))).toBe('old_sdk');
     expect(failed(await edits.set({ nodeId: 0, property: 'text', value: 'x' }))).toBe('not_editable');
     expect(failed(await edits.set({ nodeId: 0, property: 'layoutWidth', value: 'wrap_content' }))).toBe(
@@ -252,6 +254,58 @@ describe('live view edits', () => {
       { kind: 'revert', viewKey: undefined, property: undefined },
     ]);
     expect(failed(await edits.revert({ property: 'padding' }))).toBe('not_editable');
+  });
+
+  it('checks every value of a multi-property request before sending any, and says which were set when one fails', async () => {
+    const { edits, link } = setup();
+    const invalid = await edits.setAll({
+      nodeId: 1,
+      values: [
+        { property: 'paddingLeft', value: 8 },
+        { property: 'paddingTop', value: -1 },
+      ],
+    });
+    expect(failed(invalid)).toBe('invalid_value');
+    expect(link.edits).toEqual([]);
+    let answered = 0;
+    link.answerEdit = () =>
+      (answered += 1) === 2
+        ? Promise.resolve({
+            type: 'viewPropertyResult',
+            requestId: 1,
+            ok: false,
+            error: 'failed',
+            liveEdits: 1,
+          })
+        : ok(answered);
+    const partly = await edits.setAll({
+      nodeId: 1,
+      values: ['paddingLeft', 'paddingTop', 'paddingRight'].map((property) => ({
+        property: property as 'paddingLeft',
+        value: 4,
+      })),
+    });
+    expect(partly).toMatchObject({ ok: false, error: 'failed', applied: ['paddingLeft'] });
+    expect(link.edits.map((edit) => edit.kind === 'set' && edit.viewKey)).toEqual([502, 502]);
+  });
+
+  it('takes a new snapshot after an edit that timed out or failed: the app may have changed', async () => {
+    const { edits, link, fresh } = setup();
+    link.answerEdit = () => Promise.reject(new SdkEditError('timeout'));
+    expect(failed(await edits.set({ nodeId: 1, property: 'alpha', value: 0.5 }))).toBe('timeout');
+    await vi.advanceTimersByTimeAsync(RESNAPSHOT_DELAY_MS);
+    expect(fresh).toEqual([SERIAL]);
+    link.answerEdit = () =>
+      Promise.resolve({
+        type: 'viewPropertyResult',
+        requestId: 1,
+        ok: false,
+        error: 'invalid',
+        liveEdits: 0,
+      });
+    await edits.set({ nodeId: 1, property: 'alpha', value: 0.5 });
+    await vi.advanceTimersByTimeAsync(RESNAPSHOT_DELAY_MS);
+    expect(fresh).toEqual([SERIAL]); // Nothing changed: no new snapshot.
   });
 
   it('settles a pending follow-up snapshot when closed', async () => {

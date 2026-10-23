@@ -44,6 +44,10 @@ internal class DeviceLink(
     override var negotiatedVersion: Int? = null
         private set
 
+    @Volatile
+    override var connection = 0
+        private set
+
     /** True while the current connection is a profiling session (not an `inspect`-only link). */
     @Volatile
     var isSession = false
@@ -313,6 +317,7 @@ internal class DeviceLink(
         private fun onWelcome(welcome: GatewayMessage.Welcome) {
             if (welcomed || closed) return
             welcomed = true
+            connection++
             // Nothing below MIN exists while MIN is 1. Once MIN > 1, a welcome below MIN must close the link
             // (unsupported server) instead of being clamped up.
             val version = welcome.protocolVersion.coerceIn(MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION)

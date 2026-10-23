@@ -81,7 +81,8 @@ class ViewValuesTest {
         assertEquals("x".repeat(500), parse(ViewProperty.TEXT, "x".repeat(500)))
         assertNull(parse(ViewProperty.TEXT, "x".repeat(501)))
         assertNull(parse(ViewProperty.TEXT, 5.0))
-        assertTrue(ViewValues.isEditableText("Zero‍width joiner and ‮bidi stay"))
+        assertTrue(ViewValues.isEditableText("Zero\u200Dwidth joiners\u200C stay"))
+        for (bidi in listOf('\u202A', '\u202E', '\u2066', '\u2069')) assertFalse("$bidi", ViewValues.isEditableText("a${bidi}b"))
         for (bad in listOf("a\u0000b", "a\rb", "a\u001Bb", "a\u007Fb", "a\u0085b", "lone \uD83D", "lone \uDED2 low")) {
             assertFalse(bad, ViewValues.isEditableText(bad))
         }

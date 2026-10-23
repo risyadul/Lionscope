@@ -372,6 +372,26 @@ function assembleNodes(pending: PendingInspect, begin: SdkInspectBegin): Inspect
 /** Bytes of a line's start that hold its `type` (`{"type":"httpResponse"`), whatever the chunking. */
 const LINE_HEAD_BYTES = 64;
 
+/** Java's `int`: the SDK reads request ids into one. */
+const MAX_REQUEST_ID = 2_147_483_647;
+let lastRequestId = 0;
+
+/**
+ * Request ids (inspect and edits) are unique across every link of this process, so a late answer that reaches another
+ * connection can never settle one of its requests.
+ */
+function nextRequestId(): number {
+  lastRequestId = lastRequestId >= MAX_REQUEST_ID ? 1 : lastRequestId + 1;
+  return lastRequestId;
+}
+
+/** The `type` a parse found: the parsed message's, or the one its failure names. */
+function parsedTypeOf(parsed: ReturnType<typeof parseDeviceMessage>): string | null {
+  return parsed.ok
+    ? parsed.value.type
+    : (parsed.invalidDiagnostic ?? parsed.unknownType ?? parsed.unnegotiated?.type ?? null);
+}
+
 function endSocket(socket: Socket, message?: GatewayMessage): void {
   if (message) socket.end(gatewayLine(message));
   else socket.end();
@@ -418,8 +438,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   let closing = false;
   const inspects = new Map<number, PendingInspect>();
   const edits = new Map<number, PendingEdit>();
-  /** Shared by `inspect` and the edits: an answer can only ever match its own request. */
-  let nextRequestId = 1;
+  /** Edit answers that may still bypass the line budget: one per edit sent; reset when none is pending. */
+  let editAllowance = 0;
   /**
    * Inspector answer lines (and bytes) of pending requests that may still bypass the line budget: one line per
    * request sent (its begin or error) and, once a begin arrived, one per announced node (a chunk holds at least
@@ -456,6 +476,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     if (!pending) return null;
     edits.delete(requestId);
     clearTimeout(pending.timer);
+    if (edits.size === 0) editAllowance = 0;
     return pending;
   };
   const failAllEdits = (reason: SdkEditFailure): void => {
@@ -472,12 +493,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       if (protocolVersion < DEVICE_PROTOCOL_V8) return reject(new SdkEditError('unsupported'));
       if (closing || !handler) return reject(new SdkEditError('closed'));
       if (edits.size >= limits.maxPendingEdits) return reject(new SdkEditError('busy'));
-      const requestId = nextRequestId++;
+      const requestId = nextRequestId();
       const timer = setTimeout(
         () => settleEdit(requestId)?.reject(new SdkEditError('timeout')),
         limits.viewEditTimeoutMs,
       );
       edits.set(requestId, { timer, resolve, reject });
+      editAllowance += 1;
       socket.write(gatewayLine(line(requestId)));
     });
 
@@ -485,7 +507,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     new Promise((resolve, reject) => {
       if (protocolVersion < DEVICE_PROTOCOL_V4) return reject(new SdkInspectError('unsupported'));
       if (closing || !handler) return reject(new SdkInspectError('closed'));
-      const requestId = nextRequestId++;
+      const requestId = nextRequestId();
       const pending: PendingInspect = {
         begin: null,
         chunks: new Map(),
@@ -691,18 +713,18 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       inspects.size > 0 &&
       inspectAllowance > 0 &&
       rawBytes <= inspectBytesAllowance;
-    if (!exempt && !bucket.take()) return overBudget(type);
+    // An edit's answer is one line: the edits waiting for one may bypass the budget by that many lines.
+    const exemptEdit = type === 'viewPropertyResult' && edits.size > 0 && editAllowance > 0;
+    if (!exempt && !exemptEdit && !bucket.take()) return overBudget(type);
     if (!helloSeen) return onHello(line);
     const parsed = parseDeviceMessage(line, protocolVersion);
+    // JSON.parse keeps the last of duplicate keys: the type peeked at must be the type parsed.
+    if ((exempt || exemptEdit) && parsedTypeOf(parsed) !== type) {
+      warn('answer of another type');
+      return close('protocol_error');
+    }
+    if (exemptEdit) editAllowance -= 1;
     if (exempt) {
-      // JSON.parse keeps the last of duplicate keys: the type peeked at must be the type parsed.
-      const parsedType = parsed.ok
-        ? parsed.value.type
-        : (parsed.invalidDiagnostic ?? parsed.unknownType ?? parsed.unnegotiated?.type ?? null);
-      if (parsedType !== type) {
-        warn('inspect answer of another type');
-        return close('protocol_error');
-      }
       // Only answers to a pending request are exempt; a stale one spends the budget like any line.
       const requestId = parsed.ok && isInspectMessage(parsed.value) ? parsed.value.requestId : null;
       if (requestId === null || inspects.has(requestId)) {

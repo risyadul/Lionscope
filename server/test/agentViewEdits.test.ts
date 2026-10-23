@@ -225,14 +225,14 @@ describe('live view edit tools', () => {
       true,
     )) as Json;
     expect(composable.ok).toBe(false);
-    expect(composable.error).toContain('CartScreen.kt:87');
+    expect(composable.error).toContain('call site');
     const root = (await callTool(
       agent.ctx,
       'set_view_property',
       { nodeId: 0, property: 'layoutWidth', value: 'wrap_content' },
       true,
     )) as Json;
-    expect(root.error).toContain('layoutWidth does not apply to FrameLayout');
+    expect(root.error).toContain('layoutWidth does not apply to this element');
     const stale = (await callTool(
       agent.ctx,
       'set_view_property',

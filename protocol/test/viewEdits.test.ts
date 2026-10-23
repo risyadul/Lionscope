@@ -116,7 +116,9 @@ describe('normalizeViewValue', () => {
     expect(valid('text', '')).toBe('');
     expect(valid('text', 'x'.repeat(MAX_EDIT_TEXT_CHARS))).not.toBeNull();
     expect(valid('text', 'x'.repeat(MAX_EDIT_TEXT_CHARS + 1))).toBeNull();
-    expect(valid('text', 'a‍b ‮')).not.toBeNull();
+    expect(valid('text', 'a\u200db\u200c')).not.toBeNull();
+    for (const bidi of ['\u202a', '\u202e', '\u2066', '\u2069'])
+      expect(valid('text', `a${bidi}b`)).toBeNull();
     for (const bad of ['a\u0000b', 'a\rb', 'a\u001bb', 'a\u007fb', 'a\u0085b', 'lone \ud83d', 'low \ude00']) {
       expect(valid('text', bad)).toBeNull();
     }

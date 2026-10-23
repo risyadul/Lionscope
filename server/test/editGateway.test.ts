@@ -207,6 +207,41 @@ describe('device gateway edit requests', () => {
     await expect(link.revertViewProperties()).rejects.toEqual(new SdkEditError('closed'));
   });
 
+  it('never gives two links the same request id', async () => {
+    const first = await linked();
+    const firstGateway = gateway;
+    const second = await linked();
+    first.link.setViewProperty(1, 'alpha', 0.5).catch(() => undefined);
+    second.link.setViewProperty(1, 'alpha', 0.5).catch(() => undefined);
+    await waitUntil(() => edits(first.client).length === 1 && edits(second.client).length === 1);
+    const id = (client: DeviceClient) => (edits(client)[0] as { requestId: number }).requestId;
+    expect(id(first.client)).not.toBe(id(second.client));
+    await firstGateway?.close();
+  });
+
+  it('lets the answers of pending edits through a spent line budget, and only them', async () => {
+    const { client, link } = await linked({ lineBurst: 2, linesPerSecond: 0.001 });
+    client.send({ type: 'heartbeat', ts: 1792516380000, droppedMessages: 0 }); // With the hello: the budget is spent.
+    const answer = link.setViewProperty(1, 'alpha', 0.5);
+    await waitUntil(() => edits(client).length === 1);
+    const requestId = (edits(client)[0] as { requestId: number }).requestId;
+    client.send({ type: 'viewPropertyResult', requestId, ok: true, liveEdits: 1 });
+    await expect(answer).resolves.toMatchObject({ ok: true });
+    // A second answer with no edit pending is a line like any other: over the budget it is shed.
+    client.send({ type: 'viewPropertyResult', requestId, ok: true, liveEdits: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(client.isClosed).toBe(false);
+  });
+
+  it('closes a link whose exempt answer is another type in disguise', async () => {
+    const { client, link } = await linked({ lineBurst: 2, linesPerSecond: 0.001 });
+    client.send({ type: 'heartbeat', ts: 1792516380000, droppedMessages: 0 });
+    link.setViewProperty(1, 'alpha', 0.5).catch(() => undefined);
+    await waitUntil(() => edits(client).length === 1);
+    client.send('{"type":"viewPropertyResult","type":"screen","ts":1792516380000,"screen":null}');
+    await client.closed;
+  });
+
   it('skips a viewPropertyResult with invalid fields without closing the link', async () => {
     const { client, link } = await linked({ viewEditTimeoutMs: 100 });
     const answer = link.setViewProperty(1, 'alpha', 0.5);

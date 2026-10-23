@@ -56,8 +56,8 @@ internal object ViewValues {
     }
 
     /**
-     * At most [MAX_TEXT_CHARS] UTF-16 units; no control character but tab and line feed (C0, DEL and C1), no lone
-     * surrogate.
+     * At most [MAX_TEXT_CHARS] UTF-16 units; no control character but tab and line feed (C0, DEL and C1), no bidi
+     * embedding, override or isolate control (U+202A-U+202E, U+2066-U+2069), no lone surrogate.
      */
     fun isEditableText(value: String): Boolean {
         if (value.length > MAX_TEXT_CHARS) return false
@@ -65,6 +65,7 @@ internal object ViewValues {
         while (i < value.length) {
             val c = value[i]
             if ((c < ' ' && c != '\t' && c != '\n') || c in '\u007F'..'\u009F') return false
+            if (c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069') return false
             if (Character.isHighSurrogate(c)) {
                 if (i + 1 >= value.length || !Character.isLowSurrogate(value[i + 1])) return false
                 i++

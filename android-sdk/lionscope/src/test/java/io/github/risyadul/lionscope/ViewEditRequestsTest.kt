@@ -58,6 +58,33 @@ class ViewEditRequestsTest {
     }
 
     @Test
+    fun aRequestFromAConnectionThatEndedIsDroppedUnapplied() {
+        ViewEditRequests(link, main, editor)
+        val view = FakeEditView()
+        val key = key(view)
+        link.viewEdit(GatewayMessage.SetViewProperty(1, key, ViewProperty.ALPHA, 0.5))
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V8) // The next connection may reuse request id 1.
+        main.runPosted()
+        assertTrue(link.v8Lines.isEmpty())
+        assertTrue(access.writes.isEmpty())
+        link.viewEdit(GatewayMessage.SetViewProperty(1, key, ViewProperty.ALPHA, 0.5))
+        main.runPosted()
+        assertEquals(1, link.v8Lines.size)
+    }
+
+    @Test
+    fun aFloodWaitsForTheMainThreadOnlyUpToTheCap() {
+        ViewEditRequests(link, main, editor, maxQueued = 3)
+        repeat(10) { link.viewEdit(GatewayMessage.RevertViewProperties(it, null, null)) }
+        assertEquals(3, main.pendingCount)
+        main.runPosted()
+        assertEquals(3, link.v8Lines.size)
+        link.viewEdit(GatewayMessage.RevertViewProperties(11, null, null))
+        assertEquals(1, main.pendingCount)
+    }
+
+    @Test
     fun nothingIsAnsweredBelowV8() {
         val old = FakeLink().apply { welcome(true, DEVICE_PROTOCOL_V6) }
         ViewEditRequests(old, main, editor)

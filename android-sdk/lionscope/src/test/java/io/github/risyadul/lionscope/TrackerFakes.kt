@@ -58,6 +58,8 @@ internal class FakeLink : LinkPort {
 
     override var isNetworkAuthenticated = false
         private set
+    override var connection = 0
+        private set
 
     override fun onScreen(ts: Long, screen: ScreenRef?) {
         failure?.let { throw it }
@@ -144,6 +146,7 @@ internal class FakeLink : LinkPort {
         isWelcomed = welcomed
         negotiatedVersion = if (welcomed) version else null
         isNetworkAuthenticated = welcomed && !inspectOnly && proven && version >= DEVICE_PROTOCOL_V7
+        if (welcomed) connection++
         listeners.forEach { it(welcomed) }
         if (!inspectOnly) sessionListeners.forEach { it(welcomed) }
     }

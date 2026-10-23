@@ -62,7 +62,7 @@ export type AgentEmulators = Pick<EmulatorManager, 'getEmulators' | 'refresh' | 
 export type AgentInspector = Pick<InspectorService, 'inspect' | 'select' | 'current' | 'selection' | 'png'>;
 
 /** Live view edits through the current snapshot's SDK link (the dashboard's own). */
-export type AgentViewEdits = Pick<ViewEdits, 'set' | 'revert'>;
+export type AgentViewEdits = Pick<ViewEdits, 'set' | 'setAll' | 'revert'>;
 
 /** The last screenshot of a device: tap / swipe coordinates are in `shot` pixels, adb input wants `device` ones. */
 export interface ScreenshotSize {

@@ -24,13 +24,17 @@ internal class FakeEditView(
     }
 }
 
-/** A Drawable stand-in: compared by identity, like the real one. */
-internal class Background(val color: Int)
+/** A ColorDrawable stand-in: compared by identity, its color changeable in place (as setBackgroundColor does). */
+internal class Background(var color: Int)
 
 internal class FakeEditAccess : ViewEditAccess<FakeEditView> {
     val writes = ArrayList<Pair<ViewProperty, Any>>()
+    val restores = ArrayList<ViewProperty>()
+    val reads = HashMap<ViewProperty, Int>()
     var refreshes = 0
     var failing: ViewProperty? = null
+    /** Reads of this property throw once it has been written. */
+    var unreadableAfterWrite: ViewProperty? = null
 
     override fun isAttached(view: FakeEditView) = view.attached
 
@@ -42,7 +46,13 @@ internal class FakeEditAccess : ViewEditAccess<FakeEditView> {
 
     override fun isPassword(view: FakeEditView) = view.password
     override fun save(view: FakeEditView, property: ViewProperty): Any? = view.values[property]
-    override fun read(view: FakeEditView, property: ViewProperty): Any? = view.values[property]
+    override fun read(view: FakeEditView, property: ViewProperty): Any? {
+        reads[property] = (reads[property] ?: 0) + 1
+        if (property == unreadableAfterWrite && writes.any { it.first == property }) throw IllegalStateException("odd")
+        val value = view.values[property]
+        // As AndroidViewEdits reads a background: the object and, for a color one, its color.
+        return if (property == ViewProperty.BACKGROUND_COLOR) BackgroundState(value, (value as Background?)?.color) else value
+    }
 
     override fun write(view: FakeEditView, property: ViewProperty, value: Any) {
         writes += property to value
@@ -51,6 +61,7 @@ internal class FakeEditAccess : ViewEditAccess<FakeEditView> {
     }
 
     override fun restore(view: FakeEditView, property: ViewProperty, saved: Any?) {
+        restores += property
         view.values[property] = saved
     }
 
@@ -204,6 +215,56 @@ class ViewEditorTest {
         assertNull(editor.set(key, ViewProperty.PADDING_LEFT, 5.0).error)
         editor.revert(key, listOf(ViewProperty.PADDING_TOP))
         assertNull(editor.set(key, ViewProperty.ALPHA, 0.5).error)
+    }
+
+    @Test
+    fun aBackgroundTheAppRecoloredInPlaceIsTheAppsNow() {
+        val view = FakeEditView()
+        val (key) = capture(view)
+        editor.set(key, ViewProperty.BACKGROUND_COLOR, "#FF3366CC")
+        // A rebind calls setBackgroundColor: it changes the ColorDrawable the edit put there, in place.
+        (view.values[ViewProperty.BACKGROUND_COLOR] as Background).color = 0xFFFFEB3B.toInt()
+        assertEquals(emptyList<ViewProperty>(), edited(view))
+        editor.revert(null, null)
+        assertEquals(0xFFFFEB3B.toInt(), (view.values[ViewProperty.BACKGROUND_COLOR] as Background).color)
+    }
+
+    @Test
+    fun aTextEditInWhatBecameAPasswordFieldIsForgottenUnread() {
+        val view = FakeEditView()
+        val (key) = capture(view)
+        editor.set(key, ViewProperty.TEXT, "Edited")
+        editor.set(key, ViewProperty.ALPHA, 0.5)
+        view.password = true
+        view.values[ViewProperty.TEXT] = "hunter2"
+        val readsBefore = access.reads[ViewProperty.TEXT]
+        assertEquals(listOf(ViewProperty.ALPHA), edited(view))
+        editor.revert(key, null)
+        assertEquals(readsBefore, access.reads[ViewProperty.TEXT])
+        assertTrue(ViewProperty.TEXT !in access.restores)
+        assertEquals("hunter2", view.values[ViewProperty.TEXT])
+    }
+
+    @Test
+    fun theBackgroundIsRevertedBeforeThePaddingItWouldReset() {
+        val view = FakeEditView()
+        val (key) = capture(view)
+        editor.set(key, ViewProperty.PADDING_LEFT, 40.0)
+        editor.set(key, ViewProperty.BACKGROUND_COLOR, "#FF000000")
+        editor.set(key, ViewProperty.ALPHA, 0.5)
+        editor.revert(key, null)
+        assertEquals(listOf(ViewProperty.BACKGROUND_COLOR, ViewProperty.ALPHA, ViewProperty.PADDING_LEFT), access.restores)
+    }
+
+    @Test
+    fun aValueThatCannotBeReadBackIsPutBackAndFails() {
+        val view = FakeEditView()
+        val (key) = capture(view)
+        access.unreadableAfterWrite = ViewProperty.ALPHA
+        val failed = editor.set(key, ViewProperty.ALPHA, 0.5)
+        assertEquals(EditError.FAILED, failed.error)
+        assertEquals(1f, view.values[ViewProperty.ALPHA])
+        assertEquals(0, failed.liveEdits)
     }
 
     @Test

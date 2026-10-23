@@ -30,10 +30,19 @@ export const RESNAPSHOT_DELAY_MS = 250;
 /** Devices whose edit rate is tracked at most (the oldest is forgotten first). */
 const MAX_TRACKED_DEVICES = 32;
 
-/** `next`: the snapshot taken after the change (null when it failed or the server is closing). */
+/**
+ * `next`: the snapshot taken after the change (null when it failed or the server is closing). `applied`: for a
+ * request of several properties that failed part way, the ones that were set before it.
+ */
 export type ViewEditOutcome =
   | { ok: true; liveEdits: number; next: Promise<InspectorSnapshot | null> }
-  | { ok: false; error: ViewEditError; message: string; liveEdits?: number };
+  | {
+      ok: false;
+      error: ViewEditError;
+      message: string;
+      liveEdits?: number;
+      applied?: ViewProperty[];
+    };
 
 export interface SetViewPropertyRequest {
   /** The snapshot the caller looked at; omitted: the current one (agents). */
@@ -41,6 +50,13 @@ export interface SetViewPropertyRequest {
   nodeId: number;
   property: ViewProperty;
   value: ViewPropertyValue;
+}
+
+/** Several properties of one node, set in order as one request (an agent's padding or margins). */
+export interface SetViewPropertiesRequest {
+  snapshotId?: string;
+  nodeId: number;
+  values: readonly { property: ViewProperty; value: ViewPropertyValue }[];
 }
 
 export interface RevertViewPropertiesRequest {
@@ -76,7 +92,7 @@ const LINK_ERRORS: Readonly<Record<SdkEditFailure, ViewEditError>> = {
 /** What each failure tells the user (the dashboard shows it next to the field; agents get it as the error). */
 export const VIEW_EDIT_MESSAGES: Readonly<Record<ViewEditError, string>> = {
   stale:
-    'The view is not in the latest snapshot any more (it was recreated or removed): inspect again and retry.',
+    'The view is not in the app’s latest capture any more (recreated or removed): a new snapshot is being taken, retry in it.',
   not_editable: 'This property cannot be edited live on this element.',
   password: 'The text of a password field is never read or changed.',
   invalid_value: 'That value is out of range or malformed for this property.',
@@ -84,9 +100,12 @@ export const VIEW_EDIT_MESSAGES: Readonly<Record<ViewEditError, string>> = {
   no_link: "The app's SDK link is gone (it reconnected or closed): inspect again and retry.",
   rate_limited: 'Too many edits at once on this device: wait a moment and retry.',
   limit: 'The app already has the most live edits it keeps: revert some first.',
-  timeout: 'The app did not answer the edit in time.',
+  timeout: 'The app did not answer the edit in time; it may still apply it: a new snapshot is being taken.',
   failed: 'The app could not apply the edit.',
 };
+
+/** Outcomes after which the app may have changed although nothing says so: a new snapshot shows what it has. */
+const UNCERTAIN: ReadonlySet<ViewEditError> = new Set(['stale', 'timeout', 'failed']);
 
 function failure(
   error: ViewEditError,
@@ -94,12 +113,6 @@ function failure(
   liveEdits?: number,
 ): ViewEditOutcome {
   return liveEdits === undefined ? { ok: false, error, message } : { ok: false, error, message, liveEdits };
-}
-
-/** `Class#id` of a node, for messages. */
-function label(node: InspectorNode): string {
-  const name = node.className.slice(node.className.lastIndexOf('.') + 1);
-  return node.resourceId === null ? name : `${name}#${node.resourceId}`;
 }
 
 interface Target {
@@ -114,10 +127,10 @@ function editableNode(
 ): { node: InspectorNode; key: number } | ViewEditOutcome {
   const node = snapshot.nodes[nodeId];
   if (!node) return failure('stale', `The snapshot has no node ${nodeId}: inspect again.`);
+  // Messages carry no app strings (class names, ids, files): they reach agents as tool errors, which are not marked
+  // as untrusted app data.
   if (node.composable) {
-    const site =
-      node.composable.file === null ? '' : ` (${node.composable.file}:${node.composable.line ?? '?'})`;
-    return failure('not_editable', `A composable cannot be edited live: change it in code${site}.`);
+    return failure('not_editable', 'A composable cannot be edited live: change it in code at its call site.');
   }
   // An SDK View node without its view state: an SDK before 0.8.0.
   if (!node.view) return failure('old_sdk');
@@ -142,19 +155,39 @@ export class ViewEdits {
     this.delayMs = options.resnapshotDelayMs ?? RESNAPSHOT_DELAY_MS;
   }
 
-  async set(request: SetViewPropertyRequest): Promise<ViewEditOutcome> {
+  set(request: SetViewPropertyRequest): Promise<ViewEditOutcome> {
+    const { snapshotId, nodeId, property, value } = request;
+    return this.setAll({ snapshotId, nodeId, values: [{ property, value }] });
+  }
+
+  /**
+   * Every value is checked first, then they are sent in order to the node's view (by its key, through the link of the
+   * snapshot that was current at the start), stopping at the first that fails.
+   */
+  async setAll(request: SetViewPropertiesRequest): Promise<ViewEditOutcome> {
     const found = this.target(request.snapshotId);
     if ('ok' in found) return found;
     const editable = editableNode(found.snapshot, request.nodeId);
     if ('ok' in editable) return editable;
     const { node, key } = editable;
-    if (!editableProperties(node).includes(request.property)) {
-      if (request.property === 'text' && node.view?.password) return failure('password');
-      return failure('not_editable', `${request.property} does not apply to ${label(node)}.`);
+    const steps: { property: ViewProperty; value: ViewPropertyValue }[] = [];
+    for (const { property, value } of request.values) {
+      if (!editableProperties(node).includes(property)) {
+        if (property === 'text' && node.view?.password) return failure('password');
+        return failure('not_editable', `${property} does not apply to this element.`);
+      }
+      const normalized = normalizeViewValue(property, value);
+      if (normalized === null) return failure('invalid_value', `That is not a valid ${property}.`);
+      steps.push({ property, value: normalized });
     }
-    const value = normalizeViewValue(request.property, request.value);
-    if (value === null) return failure('invalid_value', `That is not a valid ${request.property}.`);
-    return this.send(found, () => found.link.setViewProperty(key, request.property, value));
+    const applied: ViewProperty[] = [];
+    let outcome: ViewEditOutcome = failure('invalid_value', 'Nothing to set.');
+    for (const { property, value } of steps) {
+      outcome = await this.send(found, () => found.link.setViewProperty(key, property, value));
+      if (!outcome.ok) return applied.length > 0 ? { ...outcome, applied } : outcome;
+      applied.push(property);
+    }
+    return outcome;
   }
 
   async revert(request: RevertViewPropertiesRequest): Promise<ViewEditOutcome> {
@@ -206,12 +239,14 @@ export class ViewEdits {
       result = await request();
     } catch (error) {
       if (!(error instanceof SdkEditError)) throw error;
-      return failure(LINK_ERRORS[error.reason]);
+      const reason = LINK_ERRORS[error.reason];
+      if (UNCERTAIN.has(reason)) void this.resnapshot(serial);
+      return failure(reason);
     }
     if (!result.ok) {
       const error = SDK_ERRORS[result.error ?? 'failed'];
-      // A view the app recreated: a new snapshot gives the dashboard its new key.
-      if (error === 'stale') void this.resnapshot(serial);
+      // A view the app recreated (a new snapshot gives the dashboard its new key), or a change half made.
+      if (UNCERTAIN.has(error)) void this.resnapshot(serial);
       return failure(error, VIEW_EDIT_MESSAGES[error], result.liveEdits);
     }
     return { ok: true, liveEdits: result.liveEdits, next: this.resnapshot(serial) };

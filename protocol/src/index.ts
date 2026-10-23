@@ -864,7 +864,8 @@ export type DeviceParseResult =
     };
 
 const TYPE_PREFIX = '{"type":"';
-const MAX_PEEKED_TYPE_LENGTH = 16;
+/** Longer than any known type (`viewPropertyResult` is 18). */
+const MAX_PEEKED_TYPE_LENGTH = 32;
 
 /** The `type` of an SDK line without parsing it (the SDK writes it first); null when the line does not start so. */
 export function peekLineType(line: string): string | null {

@@ -138,19 +138,20 @@ export const setViewPropertyTool = defineTool({
     if (group === null && Array.isArray(value)) throw new ToolError(`${property} takes a single value`);
     const steps: [ViewProperty, ViewPropertyValue][] =
       group === null ? [[property as ViewProperty, value as ViewPropertyValue]] : sides(group, value);
-    const key = ctx.inspector.current?.nodes[nodeId]?.view?.key ?? null;
-    let outcome: ViewEditOutcome | null = null;
-    const done: ViewProperty[] = [];
-    for (const [step, stepValue] of steps) {
-      outcome = await service.set({ snapshotId, nodeId, property: step, value: stepValue });
-      if (!outcome.ok) {
-        const partly =
-          done.length > 0 ? ` (${done.join(', ')} ${done.length === 1 ? 'was' : 'were'} set)` : '';
-        throw new ToolError(`${step}: ${outcome.message}${partly}`);
-      }
-      done.push(step);
+    // Every step goes to the node of the snapshot current now (the first one makes the server take a new snapshot).
+    const current = ctx.inspector.current;
+    const pinned = snapshotId ?? current?.id;
+    const key = current?.id === pinned ? (current?.nodes[nodeId]?.view?.key ?? null) : null;
+    const outcome = await service.setAll({
+      snapshotId: pinned,
+      nodeId,
+      values: steps.map(([step, stepValue]) => ({ property: step, value: stepValue })),
+    });
+    if (!outcome.ok) {
+      const done = outcome.applied ?? [];
+      const partly = done.length > 0 ? ` (${done.join(', ')} ${done.length === 1 ? 'was' : 'were'} set)` : '';
+      throw new ToolError(`${outcome.message}${partly}`);
     }
-    if (!outcome?.ok) throw new ToolError('Nothing to set');
     return {
       data: {
         untrusted: UNTRUSTED_NOTE,

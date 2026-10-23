@@ -32,6 +32,9 @@ internal interface LinkPort {
      */
     val isNetworkAuthenticated: Boolean
 
+    /** Counts welcomed connections (the current one's number): an answer must go out on its request's connection. */
+    val connection: Int
+
     fun onScreen(ts: Long, screen: ScreenRef?)
 
     fun setForeground(foreground: Boolean)
