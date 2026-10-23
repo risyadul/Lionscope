@@ -148,7 +148,15 @@ export interface SdkStatus {
   protocolVersion?: number | null;
   /** SDK options for this session (applied to protocol ≥ 2 links); absent on older servers. */
   options?: SdkOptions;
+  /**
+   * 0.7.0. Network capture on the live link: `active` (a v7 session link whose welcome carries the link proof, see
+   * LINK_KEY_RECEIVER), `needs_sdk` (the SDK is older than device protocol v7), `unverified` (the link key could not
+   * be handed to the app, so the SDK keeps capture and mocks off). Null or absent while not connected.
+   */
+  network?: SdkNetworkState | null;
 }
+
+export type SdkNetworkState = 'active' | 'needs_sdk' | 'unverified';
 
 /** Per-session SDK options, set from the dashboard (`setSdkOptions`) and pushed to the SDK as `config`. */
 export interface SdkOptions {
@@ -702,6 +710,8 @@ export const HTTP_REDACTED = '‹redacted›';
 /** Max UTF-8 bytes of a captured body's text; longer bodies are cut (`HttpBody.truncated`). */
 export const MAX_HTTP_BODY_BYTES = 64 * 1024;
 export const MAX_HTTP_URL_CHARS = 4096;
+/** Summaries (`http`, snapshots) carry at most this much of the URL, so a snapshot of 5000 stays small. */
+export const MAX_HTTP_SUMMARY_URL_CHARS = 1024;
 /** An HTTP method token (`GET`, `PROPFIND`, …). */
 export const MAX_HTTP_METHOD_CHARS = 16;
 /** Headers per request or response side; the SDK keeps the first ones that fit MAX_HTTP_HEADER_BYTES. */
@@ -757,7 +767,7 @@ export interface HttpExchange {
   /** ts + durationMs once it ended, null while pending. */
   endTs: number | null;
   method: string;
-  /** Redacted. */
+  /** Redacted; cut to MAX_HTTP_SUMMARY_URL_CHARS (ending in `…`) here, whole in HttpExchangeDetail. */
   url: string;
   state: HttpExchangeState;
   /** HTTP status, null while pending or when it failed before a response. */
@@ -779,6 +789,8 @@ export interface HttpExchange {
 
 /** An exchange with its headers and bodies (`httpExchange`, get_network_request). */
 export interface HttpExchangeDetail extends HttpExchange {
+  /** The whole (redacted) URL. */
+  url: string;
   /** `http/1.1`, `h2`, … as OkHttp names it; null for mocks and failures. */
   protocol: string | null;
   requestHeaders: HttpHeader[];
@@ -1013,6 +1025,23 @@ export const DEVICE_PROTOCOL_V7 = 7;
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
 export const MAX_GATEWAY_LINE_BYTES = 512 * 1024;
+/**
+ * v7 link proof. Anything on the phone can listen on 127.0.0.1:8700 while no `adb reverse` maps it, and the SDK can't
+ * tell that listener from the server; network capture and mocks therefore need proof that the server is the one
+ * adb trusts. Before welcoming a v7 `session` link whose hello carries a `nonce`, the server makes a fresh random
+ * key (LINK_KEY_BYTES) and hands it to the app over adb: `am broadcast -n <package>/<LINK_KEY_RECEIVER> --es key
+ * <hex> --ei pid <hello.pid>`. The receiver is exported but guarded by `android.permission.DUMP`, which only the
+ * shell and the system hold, so no other app can set the key; it keeps the key only when `pid` is its own process.
+ * Once the broadcast completed, the welcome carries `proof` = hex(HMAC-SHA256(key, `<nonce>:<protocolVersion>:<mode>`)).
+ * The SDK turns capture and mocks on only when the proof matches the key it holds. Frames, screens, stalls, layouts
+ * and Inspector trees don't need the proof (as before 0.7.0).
+ */
+export const LINK_KEY_RECEIVER = 'io.github.risyadul.lionscope.LinkKeyReceiver';
+export const LINK_KEY_BYTES = 32;
+/** `hello.nonce`: 16 random bytes, lower-case hex. */
+export const LINK_NONCE_PATTERN = /^[0-9a-f]{32}$/;
+/** `welcome.proof`: an HMAC-SHA256, lower-case hex. */
+export const LINK_PROOF_PATTERN = /^[0-9a-f]{64}$/;
 /** An inspect-only link stays mapped this long after the last `inspect` of its device (and while a client focuses it). */
 export const INSPECT_LINK_LINGER_MS = 5 * 60_000;
 /**
@@ -1070,6 +1099,8 @@ export type DeviceMessage =
       apiLevel: number;
       deviceWallMs: number;
       refreshRateHz: number;
+      /** v7. A fresh random challenge for the link proof (LINK_NONCE_PATTERN); absent from older SDKs. */
+      nonce?: string;
     }
   /** The top screen changed; `screen: null` when the app went to background. */
   | { type: 'screen'; ts: number; screen: ScreenRef | null }
@@ -1203,7 +1234,13 @@ export type DeviceMessageType = DeviceMessage['type'];
  */
 export type GatewayMessage =
   /** v5 adds `mode` (sent on v5 links only; absent = `session`). */
-  | { type: 'welcome'; protocolVersion: number; mode?: 'session' | 'inspect' }
+  | {
+      type: 'welcome';
+      protocolVersion: number;
+      mode?: 'session' | 'inspect';
+      /** v7 session links: the link proof over the hello's nonce (LINK_KEY_RECEIVER); absent when no key was handed over. */
+      proof?: string;
+    }
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */

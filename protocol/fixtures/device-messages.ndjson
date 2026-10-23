@@ -24,3 +24,4 @@
 {"type":"httpResponse","id":3,"ts":1792516394004,"status":null,"protocol":null,"headers":[],"body":null,"headersMs":null,"durationMs":10003.5,"error":{"kind":"timeout","message":"SocketTimeoutException: timeout"}}
 {"type":"httpResponse","id":4,"ts":1792516395250,"status":200,"protocol":"http/1.1","headers":[["Content-Type","image/png"],["Content-Length","48213"]],"body":{"size":48213,"contentType":"image/png","text":null,"truncated":false,"omitted":"type"},"headersMs":88,"durationMs":250.25,"error":null}
 {"type":"mocksApplied","rev":3,"count":2}
+{"type":"hello","protocolVersion":7,"sdkVersion":"0.7.0","packageName":"com.example.shop","processName":"com.example.shop","pid":20340,"apiLevel":36,"deviceWallMs":1792516380500,"refreshRateHz":120,"nonce":"9f86d081884c7d659a2feaa0c55ad015"}

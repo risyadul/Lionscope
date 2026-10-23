@@ -15,6 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # A rebase or merge must never leave conflict markers behind (Markdown may use `=======` underlines).
+      - name: No merge conflict markers
+        run: |
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)' -- ':!*.md'; then echo "conflict markers committed"; exit 1; fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -16,6 +16,7 @@ import {
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
+  LINK_NONCE_PATTERN,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_HTTP_BODY_BYTES,
   MAX_HTTP_CONTENT_TYPE_CHARS,
@@ -549,6 +550,7 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       apiLevel: z.number().int().positive().max(1000),
       deviceWallMs: epochMs,
       refreshRateHz: z.number().min(1).max(1000),
+      nonce: z.string().regex(LINK_NONCE_PATTERN, 'invalid nonce').optional(),
     })
     .strip(),
   z.object({ type: z.literal('screen'), ts: epochMs, screen: screenRefSchema.nullable() }).strip(),
@@ -793,10 +795,6 @@ function isSupportedProtocolVersion(version: number): boolean {
   );
 }
 
-/**
- * Parse one NDJSON line from the SDK (without its trailing newline). `protocolVersion` is the link's negotiated
- * version: types introduced later are not validated but reported as `unnegotiated`.
- */
 /** Lines of these types may be up to MAX_HTTP_LINE_BYTES on a v7 link; every other line, MAX_DEVICE_LINE_BYTES. */
 export const LARGE_DEVICE_MESSAGE_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'httpRequest',
@@ -812,6 +810,10 @@ export function maxDeviceLineBytes(type: string | null, protocolVersion: number)
     : MAX_DEVICE_LINE_BYTES;
 }
 
+/**
+ * Parse one NDJSON line from the SDK (without its trailing newline). `protocolVersion` is the link's negotiated
+ * version: types introduced later are not validated but reported as `unnegotiated`.
+ */
 export function parseDeviceMessage(
   line: string,
   protocolVersion: number = DEVICE_PROTOCOL_VERSION,

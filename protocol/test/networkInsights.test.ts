@@ -10,9 +10,13 @@ import {
   NO_HTTP_FILTER,
   normalizeMockUrl,
   orderMocks,
+  redactBodyText,
+  redactFreeText,
   redactHeaders,
+  redactJsonText,
   redactPairs,
   redactUrl,
+  redactXmlText,
   statusClassOf,
   urlParts,
 } from '../src/insights/index.ts';
@@ -36,10 +40,32 @@ describe('redaction', () => {
       'SESSION',
       'password',
       'access_token',
+      'key',
+      'code',
+      'sig',
+      'X-Amz-Signature',
+      'X-Amz-Credential',
+      'jwt',
+      'pwd',
+      'passwd',
+      'Ocp-Apim-Subscription-Key',
+      'X-Firebase-AppCheck',
+      'private_key',
+      'accessKey',
+      'credentials',
     ]) {
       expect(isSensitiveName(name), name).toBe(true);
     }
-    for (const name of ['Accept', 'Content-Type', 'page', 'X-Request-Id', 'key']) {
+    for (const name of [
+      'Accept',
+      'Content-Type',
+      'page',
+      'X-Request-Id',
+      'monkey',
+      'keyboard',
+      'zipcode',
+      'Location',
+    ]) {
       expect(isSensitiveName(name), name).toBe(false);
     }
   });
@@ -67,6 +93,68 @@ describe('redaction', () => {
     expect(redactUrl('https://api.example.com/v1/items')).toBe('https://api.example.com/v1/items');
     expect(redactUrl(`https://a.example.com/?token=${R}`)).toBe(`https://a.example.com/?token=${R}`);
     expect(redactUrl('https://a.example.com/?%E0%A4%A=1')).toBe('https://a.example.com/?%E0%A4%A=1');
+  });
+
+  it('redacts userinfo and fragment parameters', () => {
+    expect(redactUrl('https://ana:hunter2@api.example.com/v1?page=1#access_token=abc&state=x')).toBe(
+      `https://${R}@api.example.com/v1?page=1#access_token=${R}&state=x`,
+    );
+    expect(redactUrl('https://api.example.com/a@b')).toBe('https://api.example.com/a@b');
+  });
+
+  it('redacts URLs inside URL-valued headers', () => {
+    expect(
+      redactHeaders([
+        ['Location', 'app://callback?code=abc&state=1'],
+        ['Link', '<https://api.example.com/p?sig=1>; rel="next"'],
+        ['X-Other', 'https://api.example.com/?token=kept-in-a-non-url-header'],
+      ]),
+    ).toEqual([
+      ['Location', `app://callback?code=${R}&state=1`],
+      ['Link', `<https://api.example.com/p?sig=${R}>; rel="next"`],
+      ['X-Other', 'https://api.example.com/?token=kept-in-a-non-url-header'],
+    ]);
+  });
+
+  it('redacts JSON keys at any depth, whatever the value, also in text cut short', () => {
+    expect(
+      redactJsonText(
+        '{"user":"ana","password":"hunter2","nested":{"refresh_token":{"v":1},"list":[{"apiKey":42}]},"ok":true}',
+      ),
+    ).toBe(
+      `{"user":"ana","password":"${R}","nested":{"refresh_token":"${R}","list":[{"apiKey":"${R}"}]},"ok":true}`,
+    );
+    expect(redactJsonText('{"a" : "x", "secret" :  "s\\"q"}')).toBe(`{"a" : "x", "secret" :  "${R}"}`);
+    expect(redactJsonText('[{"token":"abc')).toBe(`[{"token":"${R}"`);
+    expect(redactJsonText('{"token":')).toBe('{"token":');
+    expect(redactJsonText('{"items":["token","x"],"note":"password: kept"}')).toBe(
+      '{"items":["token","x"],"note":"password: kept"}',
+    );
+    expect(redactJsonText('not json')).toBe('not json');
+  });
+
+  it('redacts XML elements and attributes', () => {
+    expect(
+      redactXmlText(
+        '<login user="ana" auth:token=\'t\'><ns:password>hunter2</ns:password><name>Ana</name></login>',
+      ),
+    ).toBe(`<login user="ana" auth:token='${R}'><ns:password>${R}</ns:password><name>Ana</name></login>`);
+  });
+
+  it('picks the body redaction by content type', () => {
+    expect(redactBodyText('application/json; charset=utf-8', '{"jwt":"x"}')).toBe(`{"jwt":"${R}"}`);
+    expect(redactBodyText('application/problem+json', '{"code":"x"}')).toBe(`{"code":"${R}"}`);
+    expect(redactBodyText('text/xml', '<pwd>x</pwd>')).toBe(`<pwd>${R}</pwd>`);
+    expect(redactBodyText('application/x-www-form-urlencoded', 'pass=x')).toBe(`pass=${R}`);
+    expect(redactBodyText('text/plain', 'password=x')).toBe('password=x');
+  });
+
+  it('redacts free text: URLs, pairs and bearer credentials', () => {
+    expect(
+      redactFreeText(
+        'IOException: failed https://u:p@api.example.com/x?token=abc with token=def, Bearer xyz',
+      ),
+    ).toBe(`IOException: failed https://${R}@api.example.com/x?token=${R} with token=${R}, Bearer ${R}`);
   });
 
   it('redacts form fields the same way', () => {
@@ -174,7 +262,8 @@ describe('mock rules', () => {
     expect(normalizeMockUrl('HTTPS://API.Example.com:443/V1/Items?Q=A')).toBe(
       'https://api.example.com/V1/Items?Q=A',
     );
-    expect(normalizeMockUrl('http://Example.com:80')).toBe('http://example.com');
+    expect(normalizeMockUrl('http://Example.com:80')).toBe('http://example.com/');
+    expect(normalizeMockUrl('https://api.example.com?x=1')).toBe('https://api.example.com/?x=1');
     expect(normalizeMockUrl('http://example.com:8080/a')).toBe('http://example.com:8080/a');
     expect(normalizeMockUrl('*://*.Example.com/*')).toBe('*://*.example.com/*');
   });

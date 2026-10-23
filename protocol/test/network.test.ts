@@ -1,11 +1,15 @@
 // Test-only: the package itself stays free of Node types (it is shared with the browser dashboard).
 /// <reference types="node" />
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_V7,
   HTTP_REDACTED,
+  LINK_KEY_BYTES,
+  LINK_NONCE_PATTERN,
+  LINK_PROOF_PATTERN,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_HTTP_BODY_BYTES,
@@ -189,8 +193,26 @@ describe('gateway golden lines (server → SDK)', () => {
       expect(JSON.stringify(value)).toBe(line);
     }
     expect(new Set(GATEWAY_LINES.map((line) => (JSON.parse(line) as { type: string }).type))).toEqual(
-      new Set(['mocks', 'mock']),
+      new Set(['welcome', 'mocks', 'mock']),
     );
+  });
+
+  it('has a welcome whose proof is the HMAC of the golden hello nonce under the test key 00 01 … 1f', () => {
+    const hello = golden('hello', 1);
+    const welcome = JSON.parse(GATEWAY_LINES[0] ?? '{}') as Record<string, unknown>;
+    expect(hello.nonce).toMatch(LINK_NONCE_PATTERN);
+    expect(welcome.proof).toMatch(LINK_PROOF_PATTERN);
+    const key = Buffer.from(Array.from({ length: LINK_KEY_BYTES }, (_, i) => i));
+    const message = `${String(hello.nonce)}:${String(welcome.protocolVersion)}:${String(welcome.mode)}`;
+    expect(createHmac('sha256', key).update(message).digest('hex')).toBe(welcome.proof);
+  });
+
+  it('accepts a hello nonce only as 32 lower-case hex digits', () => {
+    const hello = golden('hello', 1);
+    expect(parseDeviceMessage(JSON.stringify(hello)).ok).toBe(true);
+    for (const nonce of ['', 'ABCDEF0123456789abcdef0123456789', '9f86d0', 'x'.repeat(32)]) {
+      expect(parseDeviceMessage(JSON.stringify({ ...hello, nonce })).ok).toBe(false);
+    }
   });
 });
 
