@@ -197,8 +197,8 @@ after the app changes its top screen (never continuously), and the refresh butto
   server falls back to the accessibility tree, read by its UI helper (see the agent tools' notes on its side
   effects) or `uiautomator dump`, and the badge says `uiautomator` with the reason. uiautomator has fewer nodes and
   no source, owner, padding or margin; those fields show a dash.
-- **Compose.** The SDK reads the composition of every `ComposeView` (a `setContent {}` Activity, a ComposeView in
-  an XML layout, a Compose dialog or popup window), the way Android Studio's Layout Inspector does: it turns
+- **Compose.** The SDK (0.6.0 or later, with or without a session) reads the composition of every `ComposeView` (a
+  `setContent {}` Activity, a ComposeView in an XML layout, a Compose dialog or popup window), the way Android Studio's Layout Inspector does: it turns
   Compose's tooling data on when it starts, before anything is composed. A node is a composable **called from your
   code**, so `Button` is one but the `Surface`, `Row` and `Layout` inside it are not (calls whose call site is in
   androidx Compose, Material or Navigation are folded into the nearest composable you called; a third-party
@@ -385,6 +385,9 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
 ### Cost when no dashboard is connected
 
 - Lifecycle callbacks only record the current top screen; nothing is sent while there is no connection.
+- In an app with Compose UI, Compose's tooling data is on from the start (so that the Inspector can read it later):
+  composition is a little slower and keeps a little more in memory, as under Android Studio's inspector. Opt out
+  with the `io.github.risyadul.lionscope.composeInspection` meta-data (the Inspector then uses uiautomator there).
 - `FrameMetrics` listeners are registered only while the dashboard has accepted the app (an active session for
   that package), so there is no per-frame work otherwise.
 - The SDK tries to reach `127.0.0.1:8700` every 1 → 2 → 5 s while the app is in the foreground (a refused
