@@ -272,7 +272,7 @@ const text = textOf(MAX_SDK_TEXT_LENGTH);
 // Objects strip unknown keys (`.strip()`) instead of rejecting them, so a newer SDK that adds an optional
 // field keeps working. Parsed values are fresh objects with known keys only (no `__proto__` carried over).
 const screenRefSchema = z
-  .object({ name: text, className: text, kind: z.enum(['activity', 'fragment', 'dialog']) })
+  .object({ name: text, className: text, kind: z.enum(['activity', 'fragment', 'dialog', 'destination']) })
   .strip();
 
 const sdkFrameSchema = z
@@ -384,6 +384,12 @@ const inspectorNodeSchema = z
       .nullable(),
     fragment: layoutText.nullable(),
     activity: layoutText.nullable(),
+    composable: z
+      .object({ file: layoutText.nullable(), line: z.number().int().min(1).max(MAX_JAVA_INT).nullable() })
+      .strip()
+      .optional(),
+    composition: z.enum(['read', 'disabled', 'no_source', 'failed']).optional(),
+    destination: layoutText.nullable().optional(),
   })
   .strip() satisfies z.ZodType<InspectorNode>;
 

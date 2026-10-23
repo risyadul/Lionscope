@@ -576,6 +576,17 @@ describe('parseDeviceMessage', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  it('accepts a navigation destination screen kind (v6), nothing else new', () => {
+    const screen = (kind: string) =>
+      JSON.stringify({
+        type: 'screen',
+        ts: 1,
+        screen: { name: 'product/{id}', className: 'product/{id}', kind },
+      });
+    expect(errorOf(screen('destination'))).toBeNull();
+    expect(errorOf(screen('route'))).not.toBeNull();
+  });
+
   it('rejects control and format characters in text fields', () => {
     const screen = (name: string) =>
       JSON.stringify({ type: 'screen', ts: 1, screen: { name, className: 'a.B', kind: 'fragment' } });
@@ -999,6 +1010,35 @@ describe('parseDeviceMessage', () => {
       const many = Array.from({ length: MAX_INSPECTOR_NODES + 1 }, () => decor);
       expect(error({ ...nodes, nodes: many })).not.toBeNull();
       expect(error({ ...nodes, seq: MAX_INSPECTOR_NODES })).not.toBeNull();
+    });
+
+    it('accepts the v6 Compose fields of a node, bounded', () => {
+      const composable = {
+        ...button,
+        className: 'Button',
+        alpha: null,
+        padding: null,
+        layoutWidth: null,
+        layoutHeight: null,
+        composable: { file: 'CartScreen.kt', line: 87 },
+        destination: 'product/{id}',
+      };
+      expect(error(chunk(composable))).toBeNull();
+      expect(
+        error(chunk({ ...composable, composable: { file: null, line: null }, destination: null })),
+      ).toBeNull();
+      expect(error(chunk({ ...decor, composition: 'read' }))).toBeNull();
+      for (const bad of [
+        { composable: { file: 'CartScreen.kt', line: 0 } },
+        { composable: { file: '', line: 3 } },
+        { composable: { file: 'f'.repeat(201), line: 3 } },
+        { composable: { line: 3 } },
+        { composition: 'unknown' },
+        { destination: 'd'.repeat(201) },
+        { destination: 'two\nlines' },
+      ]) {
+        expect(error(chunk({ ...composable, ...bad }))).not.toBeNull();
+      }
     });
 
     it('accepts only the listed error reasons', () => {

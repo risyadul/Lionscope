@@ -182,12 +182,16 @@ export interface SessionState {
   sdk?: SdkStatus;
 }
 
-export type ScreenKind = 'activity' | 'fragment' | 'dialog';
+/** `destination`: a navigation-compose destination tracked with `Lionscope.trackNavigation` (device protocol v6). */
+export type ScreenKind = 'activity' | 'fragment' | 'dialog' | 'destination';
 
 export interface ScreenRef {
-  /** Display name: the app's own screen alias (e.g. `ScreenName.getScreen().value`) or the simple class name. */
+  /**
+   * Display name: the app's own screen alias (e.g. `ScreenName.getScreen().value`) or the simple class name; for a
+   * navigation destination its route pattern (`product/{id}`) or, for a type-safe route, its class's simple name.
+   */
   name: string;
-  /** Fully-qualified class name of the Activity / Fragment. */
+  /** Fully-qualified class name of the Activity / Fragment; a destination's whole route pattern. */
   className: string;
   kind: ScreenKind;
 }
@@ -547,8 +551,9 @@ export type ScreenClientMessage =
 // Layout Inspector (0.5.0): a frozen snapshot of the device's view hierarchy, aligned with a screenshot
 //
 // Source `sdk`: the in-app SDK walks every window of the app (Android 10+), with the XML layout and line each view
-// was inflated from and its owning Fragment / Activity. Source `uiautomator`: the accessibility tree from
-// `uiautomator dump` (apps without the SDK, Compose screens, system UI); no layout source, owner or layout params.
+// was inflated from and its owning Fragment / Activity, and (0.6.0, device protocol v6) the composables of Compose
+// windows with the Kotlin file and line they are called from. Source `uiautomator`: the accessibility tree from
+// `uiautomator dump` (apps without the SDK, Compose it cannot read, system UI); no source, owner or layout params.
 // ---------------------------------------------------------------------------
 
 export type InspectorSource = 'sdk' | 'uiautomator';
@@ -576,9 +581,12 @@ export interface InspectorNode {
   /** Parent node id, null for a window's root. */
   parent: number | null;
   window: number;
-  /** Fully-qualified class (SDK) or the accessibility class name (uiautomator). */
+  /** Fully-qualified class (SDK) or the accessibility class name (uiautomator); a composable's name (`Button`). */
   className: string;
-  /** Resource id entry name for the app's own ids (`btn_checkout`), `package:id/name` for others, null if none. */
+  /**
+   * Resource id entry name for the app's own ids (`btn_checkout`), `package:id/name` for others, a composable's
+   * `testTag`, null if none.
+   */
   resourceId: string | null;
   /**
    * TextView text as set (not caps-transformed), or the accessibility text. Password fields (password input types,
@@ -615,6 +623,20 @@ export interface InspectorNode {
   /** Owning Fragment / Activity (fully-qualified class), SDK only. */
   fragment: string | null;
   activity: string | null;
+  /**
+   * 0.6.0 (SDK, device protocol v6). Set on composables only: the Kotlin file the composable is CALLED from
+   * (`HomeScreen.kt`, no path) and the 1-based line of that call, null when the compiler recorded none. A composable
+   * has its name as `className`, no alpha, padding, margin or layout params, and `source` null.
+   */
+  composable?: { file: string | null; line: number | null };
+  /**
+   * 0.6.0 (SDK, v6). Set on AndroidComposeView nodes: `read` when its composables follow as its children, else why
+   * not (`disabled`: composed before Lionscope enabled Compose inspection, or the app opted out; `no_source`: built
+   * without Compose source information; `failed`: reading threw).
+   */
+  composition?: 'read' | 'disabled' | 'no_source' | 'failed';
+  /** 0.6.0 (SDK, v6). The navigation destination (screen name) the node is drawn for, inherited by its subtree. */
+  destination?: string | null;
 }
 
 export interface InspectorSnapshot {
@@ -636,10 +658,11 @@ export interface InspectorSnapshot {
   /** Main-thread time the SDK spent capturing, ms (SDK source only). */
   captureMs: number | null;
   /**
-   * Why the SDK source was not used, when `source` is `uiautomator` (e.g. `no_sdk`, `compose`, `old_sdk`). 0.5.2 adds
+   * Why the SDK source was not used, when `source` is `uiautomator` (e.g. `no_sdk`, `old_sdk`). 0.5.2 adds
    * `sdk_linking` (the inspect-only link was just mapped and no SDK connected in time: inspect again),
    * `sdk_needs_session` (an SDK older than device protocol v5 is in the app: it links only during a session) and
-   * `sdk_link_busy` (another live Lionscope server holds the device's `adb reverse tcp:8700`).
+   * `sdk_link_busy` (another live Lionscope server holds the device's `adb reverse tcp:8700`). `compose`: a Compose
+   * top window the SDK cannot read; 0.6.0 says why with `compose_disabled` / `compose_no_source` / `compose_failed`.
    */
   fallbackReason: string | null;
 }
@@ -772,7 +795,7 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 5;
+export const DEVICE_PROTOCOL_VERSION = 6;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -785,6 +808,9 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * no FrameMetrics, watchdog, StrictMode, inflate or view-tree reports, and the server sends no `config`). A missing
  * `mode` means `session` (servers before v5 only link during a session). Links below v5 are never welcomed in
  * `inspect` mode.
+ * v6 (0.6.0): Inspector nodes may be composables (`composable`, `destination`) under AndroidComposeView nodes
+ * (`composition`), and `screen.kind` may be `destination`, in both modes. Both are SDK → server only; an SDK sends
+ * none of it on a link negotiated below 6 (a destination is then a `fragment`).
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -797,6 +823,7 @@ export const INSPECT_LINK_LINGER_MS = 5 * 60_000;
  * covers the SDK's 1 s / 2 s / 5 s reconnect backoff plus its connect timeout.
  */
 export const INSPECT_LINK_WAIT_MS = 6000;
+export const DEVICE_PROTOCOL_V6 = 6;
 /** Max serialized bytes of one `inspectNodes` line (well under MAX_DEVICE_LINE_BYTES). */
 export const MAX_INSPECT_CHUNK_BYTES = 32 * 1024;
 /** Max total bytes of one `inspect` answer (all its lines); the SDK sends `inspectError failed` instead of more. */
@@ -922,7 +949,10 @@ export type DeviceMessage =
       nodeCount: number;
       truncated: boolean;
       captureMs: number;
-      /** True when a window's content is Compose (the server may prefer uiautomator for it). */
+      /**
+       * True when a window holds an AndroidComposeView. On v6 its node says whether its composition was read
+       * (`composition`); before, the server prefers uiautomator for a Compose top window.
+       */
       compose: boolean;
     }
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
