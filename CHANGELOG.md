@@ -15,10 +15,8 @@ All notable changes to Lionscope are documented here. The format is based on
   with one `addInterceptor` line; OkHttp 4.x and 5.x are supported (`compileOnly` in the SDK). The response body is
   never read by Lionscope (it copies what the app reads), an SDK error never fails or changes the app's call, and
   outside a session the interceptor is a plain `chain.proceed`. At most 20 requests per second are recorded.
-- Redaction on the device and again on the server: the values of `Authorization`, `Proxy-Authorization`,
-  `Cookie`, `Set-Cookie` and of every header, query parameter and form field whose name looks like a token,
-  secret, API key, auth, session or password. Requests stay in the server's memory only (10 minutes, 5000
-  requests, 32 MB).
+- Redaction on the device and again on the server of credential-looking values in headers, URLs, forms, JSON and XML
+  (see Security). Requests stay in the server's memory only (10 minutes, 5000 requests, 32 MB).
 - Dashboard **Network** tab: the request list (filter by text, method and status class; mocked, failed and pending
   ones marked), a detail pane (overview, headers, bodies with JSON pretty-printing, timing) and a **Network** lane on
   the timeline (one bar per request, coloured by status; click to open it).
@@ -77,6 +75,17 @@ All notable changes to Lionscope are documented here. The format is based on
 - Sample app: a Compose card inside the XML More screen, and a navigation-compose shop (lazy catalog under an idle
   full-size toast host, a product with an `AndroidView`, a sign-in form with password fields, a dialog
   destination).
+
+### Security
+
+- Network capture and mocks need a link proof: the server hands the app a per-process key through the SDK's
+  `LinkKeyReceiver` (guarded by `android.permission.DUMP`, with `adb shell am broadcast`), and the SDK records
+  requests and accepts mock rules only after the welcome's HMAC over its hello nonce checks out (`hello.nonce`,
+  `welcome.proof`, `SdkStatus.network`). An app listening on `127.0.0.1:8700` in the server's place gets no network
+  data and can't inject mocks.
+- Redaction covers JSON keys at any depth, XML elements and attributes, fragment parameters, URL userinfo, URLs in
+  `Location` / `Content-Location` / `Referer` / `Link`, error messages, and more names (`key`, `code`, `sig`,
+  `signature`, `credential`, `jwt`, `pwd`, `*_key`, `X-Amz-*`, `X-Firebase-AppCheck`, …).
 
 ### Changed
 

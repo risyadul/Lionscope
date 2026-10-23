@@ -263,7 +263,8 @@ logging) send, and mocked responses go back through them. Added with `addNetwork
 but never mocks.
 
 **What it captures.** Only while a profiling session runs (not on the Inspector's session-free link, and not
-without a dashboard: then it is a plain `chain.proceed`). Bodies of text types (JSON, XML, `text/*`, forms,
+without a dashboard: then it is a plain `chain.proceed`), and only on a link the SDK has verified as the real
+server (see [Security model](#security-model); the dashboard says when it couldn't). Bodies of text types (JSON, XML, `text/*`, forms,
 GraphQL), the first 64 KB of each; other bodies (images, multipart, protobuf, downloads) only by size and type.
 Server-sent events and WebSocket upgrades are shown without their stream. A body the app sets
 `Accept-Encoding: gzip` for itself is unzipped for display; Brotli and other encodings are flagged, not decoded.
@@ -271,11 +272,15 @@ The response body is never read by Lionscope: it copies what the app reads, so t
 request ends (in the list) when the app finishes reading it. An error inside Lionscope never fails or changes the
 app's call. At most 20 requests per second are recorded; the rest are counted.
 
-**Privacy.** The values of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, and of every header,
-query parameter and form field whose name contains `token`, `secret`, `api-key` / `api_key` / `apikey`, `auth`,
-`session` or `password`, are replaced with `‹redacted›` on the device (and again by the server). JSON and XML
-bodies are not redacted. Requests stay in the server's memory only (the last 10 minutes, at most 5000 requests or
-32 MB) and are never written to disk. AI agents get the list, headers and timings, but bodies only when you opt in
+**Privacy.** Values are replaced with `‹redacted›` on the device, and again by the server: `Authorization`,
+`Proxy-Authorization`, `Cookie` and `Set-Cookie`, and every header, query or fragment parameter, form field, JSON key
+(at any depth) and XML element or attribute whose name contains `token`, `secret`, `api-key` / `api_key` / `apikey`,
+`auth`, `session`, `password` / `passwd`, `credential`, `signature`, `jwt` or `appcheck`, is `key`, `code`, `sig`,
+`pass` or `pwd`, or ends in `-key`, `_key`, `Key` (and the like for `sig`, `pass`, `pwd`). User names and passwords
+in URLs (`user:pass@`) and the query of URLs in `Location`, `Content-Location`, `Referer` and `Link` headers are
+redacted too, and so are URLs and such pairs inside error messages. Redaction goes by name: a secret under an
+innocent name (`"data": "<token>"`) or in a GraphQL query's text is not caught. Requests stay in the server's
+memory only (the last 10 minutes, at most 5000 requests or 32 MB) and are never written to disk. AI agents get the list, headers and timings, but bodies only when you opt in
 with `--allow-network-bodies` (see [Use with AI agents](#use-with-ai-agents)).
 
 **Mocks.** **Mock this response** on a request (or **New mock** in the Mocks list) opens the mock editor: a method
@@ -671,8 +676,8 @@ holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` 
   marked **AI** in the dashboard) gives it structure only: class, id, layout source, owner and bounds. Password
   fields are never read, and screenshots are never cached by the browser.
 - URLs, headers and bodies of HTTP requests come from the app and its servers and are marked as untrusted data too.
-  Credentials in headers, query parameters and form fields are redacted before they leave the device; bodies reach
-  an agent only with `--allow-network-bodies`.
+  Credential-looking values in headers, URLs, forms, JSON and XML are redacted before they leave the device; bodies
+  reach an agent only with `--allow-network-bodies`.
 - `--allow-device-control` keeps an AI from operating a device unasked; it is not a security boundary, since
   any local process can already use adb. The same goes for `--allow-network-bodies` (any local process can read
   the dashboard socket); it keeps request and response bodies out of an AI's context unless you want them there.
@@ -764,8 +769,15 @@ at most 512 KB.
   inspect with Lionscope.
 - With `Lionscope.okHttpInterceptor()` in the app, the SDK also sends, during a profiling session only, each HTTP
   request's method, URL, headers, timings and up to 64 KB of each text body, after redacting credential-looking
-  header values, query parameters and form fields; the same `adb reverse` caveat applies. The server checks every
-  field's size and redacts again. Requests are kept in memory only (10 minutes, 32 MB) and never written to disk;
+  values (see [Network](#network-requests-and-mocks)). The server checks every field's size and redacts again.
+  Unlike the other SDK data, network capture and mocks need proof that the listener on `127.0.0.1:8700` is the
+  Lionscope server adb trusts: before welcoming the session's link, the server makes a random key for that app
+  process and hands it over with `adb shell am broadcast` to the SDK's `LinkKeyReceiver`, which is guarded by
+  `android.permission.DUMP` (only the shell and the system hold it, so no other app can set the key). The welcome
+  then carries an HMAC-SHA256 of a fresh nonce from the SDK's hello under that key, and the SDK records requests and
+  accepts mock rules only when it checks out. An app listening on that port in place of the server therefore gets
+  no network data and can't inject mocks; it can still receive the screens, frames, stalls and Inspector view trees
+  described above. Requests are kept in memory only (10 minutes, 32 MB) and never written to disk;
   bodies go to AI agents only with `--allow-network-bodies`. Mock rules are sent to the app only on its session link,
   are cleared when the session stops, and need `--allow-device-control` when an agent sets them (they change what
   the app sees).
@@ -816,7 +828,9 @@ at most 512 KB.
 
 - **Network capture needs OkHttp.** Only requests made through an `OkHttpClient` with `Lionscope.okHttpInterceptor()`
   are seen (Retrofit, Ktor's OkHttp engine, Coil/Glide's OkHttp integrations); `HttpURLConnection`, Ktor's CIO
-  engine, WebView, gRPC's own transports and native code are not. OkHttp 4.x and 5.x are supported, 3.x is not.
+  engine, WebView, gRPC's own transports and native code are not. OkHttp 4.x and 5.x are supported (tested with
+  4.12 and 5.4), 3.x is not. A request body is captured only when it can safely be written twice (not one-shot or
+  duplex, with a known length up to 1 MB); a response the app closes before its end is shown as truncated.
   Bodies are captured up to 64 KB and only for text types; Brotli and zstd bodies are not decoded. A response whose
   body the app never reads to the end or closes stays pending. Mocks are applied by the interceptor itself, so they
   answer only requests that go through it, and never when it was added with `addNetworkInterceptor`.
