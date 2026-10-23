@@ -24,6 +24,8 @@ type Props = {
   deviceToggle: ReactNode;
   /** Profiler · Inspector · Device, beside the server link. */
   viewSwitch: ReactNode;
+  /** "N mocks active", after the SDK pill (every view), while enabled mock rules exist. */
+  mocksIndicator?: ReactNode;
   onRefreshDevices: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
@@ -53,6 +55,7 @@ export function TopBar({
   emulatorActions,
   deviceToggle,
   viewSwitch,
+  mocksIndicator,
   onRefreshDevices,
   apps,
   packageName,
@@ -120,6 +123,7 @@ export function TopBar({
           />
           <StatusPill session={session} now={now} />
           <SdkStatus sdk={session.sdk} linkError={sdkLinkError} isSessionActive={isSessionActive} />
+          {mocksIndicator}
         </div>
       </div>
       {viewSwitch}

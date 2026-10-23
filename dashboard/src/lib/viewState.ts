@@ -5,6 +5,7 @@ import type {
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
+  HttpExchange,
   InflateSample,
   MemorySample,
   ScreenSpan,
@@ -14,7 +15,12 @@ import type {
   TimelineEvent,
   ViewTreeSample,
 } from '@lionscope/protocol/wire';
-import { DEVICE_PROTOCOL_V2, DEVICE_PROTOCOL_V3, isValidPackageName } from '@lionscope/protocol/wire';
+import {
+  DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_V3,
+  DEVICE_PROTOCOL_V7,
+  isValidPackageName,
+} from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
 import type { DashboardState } from './store.ts';
 
@@ -226,6 +232,51 @@ export function layoutsEmptyState(input: LayoutsEmptyInput): LayoutsEmpty | null
   return input.isTrackingOn ? { kind: 'waiting' } : { kind: 'off' };
 }
 
+/** The live SDK link speaks protocol v7 (HTTP capture and mocks, on session links). */
+export function isNetworkCapable(sdk: SdkStatus | undefined): boolean {
+  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V7;
+}
+
+/** Why the Network tab has no requests to list. */
+export type NetworkEmpty =
+  /** Exchanges are buffered, just not in the visible window. */
+  | { kind: 'window' }
+  | { kind: 'no-session' }
+  /** No SDK link, or one below protocol v7: capture needs SDK 0.7.0 and the interceptor. */
+  | { kind: 'needs-sdk'; sdkVersion: string | null }
+  | { kind: 'disconnected'; sdkVersion: string }
+  | { kind: 'link-failed'; message: string }
+  | { kind: 'old-server' }
+  /** A v7 link and no request yet: the interceptor may not be installed. */
+  | { kind: 'waiting' };
+
+export interface NetworkEmptyInput {
+  hasItems: boolean;
+  /** Any exchange in the buffer (not just the window). */
+  hasAnyData: boolean;
+  isSessionActive: boolean;
+  sdk: SdkStatus | undefined;
+  sdkLinkError: string | null;
+}
+
+/** Picks the Network tab empty state, most specific first; null when there are requests. */
+export function networkEmptyState(input: NetworkEmptyInput): NetworkEmpty | null {
+  if (input.hasItems) return null;
+  if (input.hasAnyData) return { kind: 'window' };
+  if (!input.isSessionActive) return { kind: 'no-session' };
+  const { sdk } = input;
+  if (sdk === undefined) return { kind: 'old-server' };
+  if (!sdk.connected) {
+    if (input.sdkLinkError !== null) return { kind: 'link-failed', message: input.sdkLinkError };
+    return sdk.sdkVersion === null
+      ? { kind: 'needs-sdk', sdkVersion: null }
+      : { kind: 'disconnected', sdkVersion: sdk.sdkVersion };
+  }
+  if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
+  if (!isNetworkCapable(sdk)) return { kind: 'needs-sdk', sdkVersion: sdk.sdkVersion };
+  return { kind: 'waiting' };
+}
+
 export interface StartHintInput {
   isOpen: boolean;
   serial: string | null;
@@ -269,9 +320,24 @@ export interface PausedView {
   strictMode: readonly StrictModeSample[];
   inflates: readonly InflateSample[];
   viewTrees: readonly ViewTreeSample[];
+  http: readonly HttpExchange[];
 }
 
 export function captureView(state: DashboardState, at: number): PausedView {
-  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode, inflates, viewTrees } = state;
-  return { at, cpu, memory, frames, events, screens, breakdown, stalls, strictMode, inflates, viewTrees };
+  const { cpu, memory, frames, events, screens, breakdown, stalls, strictMode, inflates, viewTrees, http } =
+    state;
+  return {
+    at,
+    cpu,
+    memory,
+    frames,
+    events,
+    screens,
+    breakdown,
+    stalls,
+    strictMode,
+    inflates,
+    viewTrees,
+    http,
+  };
 }

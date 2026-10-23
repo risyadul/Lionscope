@@ -9,11 +9,14 @@ import type {
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
+  HttpExchange,
+  HttpExchangeDetail,
   InflateSample,
   InspectorSelection,
   InspectorSnapshot,
   LogEntry,
   MemorySample,
+  NetworkMocksState,
   ScreenSpan,
   ServerMessage,
   SessionState,
@@ -93,9 +96,17 @@ export interface DashboardState {
   inspection: InspectorSnapshot | null;
   /** The element picked in the Inspector (by the user or an AI agent), for `inspection` only. */
   inspectorSelection: InspectorSelection | null;
+  /** HTTP exchange summaries (0.7.0), ascending by `ts`; ids are unique (a later report of an id replaces it). */
+  http: HttpExchange[];
+  /** The latest `getHttpExchange` answer (`exchange` null: the server no longer keeps it); null until one. */
+  httpDetail: HttpDetailAnswer | null;
+  /** The session's mock rules (0.7.0); null until the server sends them (older servers never do). */
+  networkMocks: NetworkMocksState | null;
+  /** The latest refused `setNetworkMock`, for the mock editor (it also shows as `lastError`). */
+  mockError: ServerError | null;
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
-   * StrictMode / inflations / view trees); the pruning reference.
+   * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
    * Logs never advance it: they carry the device clock, which can jump.
    */
   latestTs: number;
@@ -114,8 +125,15 @@ export interface DashboardState {
   sdkLinkError: string | null;
 }
 
+export interface HttpDetailAnswer {
+  id: number;
+  exchange: HttpExchangeDetail | null;
+}
+
 export const ADB_UNAVAILABLE_CODE = 'adb_unavailable';
 export const SDK_LINK_UNAVAILABLE_CODE = 'sdk_link_unavailable';
+/** The server refused a `setNetworkMock` (no session, too many rules, an unknown id, …). */
+export const SET_NETWORK_MOCK_FAILED_CODE = 'setNetworkMock_failed';
 /** Mirrors the server's span buffer cap; the oldest spans go first. */
 export const MAX_SCREEN_SPANS = 2000;
 /** Caps on the stall / StrictMode buffers (the oldest go first); the server's byte limits are tighter. */
@@ -124,6 +142,8 @@ export const MAX_STRICT_MODE = 2000;
 /** Inflations are coalesced per (layout, screen, second), so a busy list fills this faster than stalls do. */
 export const MAX_INFLATES = 5000;
 export const MAX_VIEW_TREES = 500;
+/** Mirrors the server's exchange cap (the oldest go first). */
+export const MAX_HTTP = 5000;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -159,6 +179,10 @@ export function createInitialState(): DashboardState {
     viewTrees: [],
     inspection: null,
     inspectorSelection: null,
+    http: [],
+    httpDetail: null,
+    networkMocks: null,
+    mockError: null,
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -309,6 +333,41 @@ export function normalizeStalls(stalls: readonly StallSample[]): StallSample[] {
   return capTail(byTs([...byStart.values()]), MAX_STALLS);
 }
 
+/**
+ * Drops leading exchanges that ended before `cutoff`; a pending one (no end yet) and everything after it stay, so
+ * a long call that started before the window's left edge is still listed while it runs.
+ */
+export function pruneExchangesBefore(exchanges: HttpExchange[], cutoff: number): HttpExchange[] {
+  let first = 0;
+  while (first < exchanges.length) {
+    const end = exchanges[first]?.endTs;
+    if (end === null || end === undefined || end >= cutoff) break;
+    first++;
+  }
+  return first === 0 ? exchanges : exchanges.slice(first);
+}
+
+/** Sorted by start (then id), one entry per id (the last report wins), capped. */
+export function normalizeExchanges(exchanges: readonly HttpExchange[]): HttpExchange[] {
+  const byId = new Map<number, HttpExchange>();
+  for (const exchange of exchanges) byId.set(exchange.id, exchange);
+  const sorted = [...byId.values()].sort((a, b) => a.ts - b.ts || a.id - b.id);
+  return capTail(sorted, MAX_HTTP);
+}
+
+/**
+ * A summary replaces the stored one with its id in place (a response arrived, it failed); a new id slots in by
+ * start. Ids are looked up from the end: updates are almost always for recent calls.
+ */
+export function upsertExchange(exchanges: HttpExchange[], exchange: HttpExchange): HttpExchange[] {
+  for (let i = exchanges.length - 1; i >= 0; i--) {
+    if (exchanges[i]?.id === exchange.id) {
+      return [...exchanges.slice(0, i), exchange, ...exchanges.slice(i + 1)];
+    }
+  }
+  return insertByTs(exchanges, exchange, MAX_HTTP, false);
+}
+
 function capLogs(logs: LogRecord[]): LogRecord[] {
   return logs.length > MAX_LOGS ? logs.slice(logs.length - MAX_LOGS) : logs;
 }
@@ -347,6 +406,7 @@ function pruneAll(state: DashboardState): DashboardState {
   const strictMode = pruneBefore(state.strictMode, cutoff);
   const inflates = pruneBefore(state.inflates, cutoff);
   const viewTrees = pruneBefore(state.viewTrees, cutoff);
+  const http = pruneExchangesBefore(state.http, cutoff);
   if (
     cpu === state.cpu &&
     memory === state.memory &&
@@ -358,7 +418,8 @@ function pruneAll(state: DashboardState): DashboardState {
     stalls === state.stalls &&
     strictMode === state.strictMode &&
     inflates === state.inflates &&
-    viewTrees === state.viewTrees
+    viewTrees === state.viewTrees &&
+    http === state.http
   ) {
     return state;
   }
@@ -375,6 +436,7 @@ function pruneAll(state: DashboardState): DashboardState {
     strictMode,
     inflates,
     viewTrees,
+    http,
   };
 }
 
@@ -391,6 +453,10 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
   // Older servers omit the 0.4.0 streams.
   const inflates = capTail(byTs((snapshot.inflates ?? []).filter((i) => i.ts <= horizon)), MAX_INFLATES);
   const viewTrees = capTail(byTs((snapshot.viewTrees ?? []).filter((v) => v.ts <= horizon)), MAX_VIEW_TREES);
+  // Older servers omit the 0.7.0 stream. A detail answer for an exchange the new list doesn't hold is dropped.
+  const http = normalizeExchanges((snapshot.http ?? []).filter((e) => e.ts <= horizon));
+  const detailId = state.httpDetail?.id;
+  const httpDetail = detailId !== undefined && http.some((e) => e.id === detailId) ? state.httpDetail : null;
   const next: DashboardState = {
     ...state,
     cpu: byTs(snapshot.cpu),
@@ -404,6 +470,8 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
     strictMode,
     inflates,
     viewTrees,
+    http,
+    httpDetail,
     nextLogSeq: state.nextLogSeq + logs.length,
     latestTs: Math.max(
       maxTs(
@@ -416,6 +484,7 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
         strictMode,
         inflates,
         viewTrees,
+        http,
       ),
       maxSpanTs(screens),
     ),
@@ -448,6 +517,8 @@ function resetTimeline(state: DashboardState, ts: number): DashboardState {
     strictMode: [],
     inflates: [],
     viewTrees: [],
+    http: [],
+    httpDetail: null,
     latestTs: ts,
   };
 }
@@ -512,6 +583,13 @@ function applyViewTree(state: DashboardState, sample: ViewTreeSample, now: numbe
   if (sample.ts > now + FUTURE_SLACK_MS) return state;
   const viewTrees = insertByTs(state.viewTrees, sample, MAX_VIEW_TREES, false);
   return pruneAll({ ...state, viewTrees, latestTs: advance(state, sample.ts) });
+}
+
+/** Exchanges start in the past (the server clamps them into the session): bogus futures are dropped like stalls. */
+function applyHttp(state: DashboardState, exchange: HttpExchange, now: number): DashboardState {
+  if (exchange.ts > now + FUTURE_SLACK_MS) return state;
+  const http = upsertExchange(state.http, exchange);
+  return pruneAll({ ...state, http, latestTs: advance(state, exchange.ts) });
 }
 
 // ---------------------------------------------------------------------------
@@ -594,13 +672,20 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
     }
     case 'inspectorSelection':
       return { ...state, inspectorSelection: msg.selection };
+    case 'http':
+      return applyHttp(state, msg.exchange, now);
+    case 'httpExchange':
+      return { ...state, httpDetail: { id: msg.id, exchange: msg.exchange } };
+    case 'networkMocks':
+      return { ...state, networkMocks: msg.mocks };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =
         msg.code === undefined ? { id, message: msg.message } : { id, message: msg.message, code: msg.code };
       const adbUnavailable = msg.code === ADB_UNAVAILABLE_CODE ? msg.message : state.adbUnavailable;
       const sdkLinkError = msg.code === SDK_LINK_UNAVAILABLE_CODE ? msg.message : state.sdkLinkError;
-      return { ...state, lastError, errorSeq: id, adbUnavailable, sdkLinkError };
+      const mockError = msg.code === SET_NETWORK_MOCK_FAILED_CODE ? lastError : state.mockError;
+      return { ...state, lastError, errorSeq: id, adbUnavailable, sdkLinkError, mockError };
     }
   }
 }

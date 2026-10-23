@@ -13,8 +13,12 @@
   flex: none;
   gap: var(--space-1);
   padding: 0 var(--space-3);
+  /* Five tabs with counts can outgrow the narrowest column: the strip scrolls instead of squeezing labels. */
+  overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 1px solid var(--rule);
   background: var(--surface);
+  scrollbar-width: none;
 }
 
 .side-tab {
@@ -30,14 +34,15 @@
   font-size: var(--text-small);
   font-weight: 600;
   letter-spacing: 0.01em;
+  white-space: nowrap;
   transition: color var(--dur-fast) linear;
 }
 
-/* Active indicator: a 2px ink rule that scales in from the center. */
+/* Active indicator: a 2px ink rule that scales in from the center (on the strip's rule: it scrolls, so it clips). */
 .side-tab::after {
   position: absolute;
   right: var(--space-2);
-  bottom: -1px;
+  bottom: 0;
   left: var(--space-2);
   height: 2px;
   border-radius: 1px;

@@ -1,5 +1,9 @@
 import type {
   CpuSample,
+  HttpBody,
+  HttpExchange,
+  HttpExchangeDetail,
+  NetworkMockRule,
   FrameBreakdownSample,
   FrameSample,
   FrameStage,
@@ -221,6 +225,82 @@ export function viewTree(ts: number, overrides: Partial<ViewTreeSample> = {}): V
       { className: 'TextView', id: 'title' },
     ],
     topClasses: [{ className: 'TextView', count: 40 }],
+    ...overrides,
+  };
+}
+
+/** A live protocol-v7 SDK link (network capture and mocks). */
+export const SDK_V7: SdkStatus = {
+  ...SDK_V3,
+  sdkVersion: '0.7.0',
+  protocolVersion: 7,
+};
+
+/** A completed GET of api.example.com that took 120 ms. */
+export function exchange(id: number, ts: number, overrides: Partial<HttpExchange> = {}): HttpExchange {
+  return {
+    id,
+    ts,
+    endTs: ts + 120,
+    method: 'GET',
+    url: `https://api.example.com/v1/items/${id}`,
+    state: 'complete',
+    status: 200,
+    headersMs: 80,
+    durationMs: 120,
+    requestSize: 0,
+    responseSize: 2048,
+    responseType: 'application/json',
+    mockId: null,
+    error: null,
+    screen: 'homepage',
+    ...overrides,
+  };
+}
+
+export function body(overrides: Partial<HttpBody> = {}): HttpBody {
+  return {
+    size: 17,
+    contentType: 'application/json',
+    text: '{"items":[1,2,3]}',
+    truncated: false,
+    omitted: null,
+    ...overrides,
+  };
+}
+
+export function exchangeDetail(
+  summary: HttpExchange,
+  overrides: Partial<HttpExchangeDetail> = {},
+): HttpExchangeDetail {
+  return {
+    ...summary,
+    protocol: 'h2',
+    requestHeaders: [
+      ['Accept', 'application/json'],
+      ['Authorization', '‹redacted›'],
+    ],
+    responseHeaders: [['Content-Type', 'application/json; charset=utf-8']],
+    requestBody: null,
+    responseBody: body(),
+    ...overrides,
+  };
+}
+
+export function mockRule(id: string, overrides: Partial<NetworkMockRule> = {}): NetworkMockRule {
+  return {
+    id,
+    method: 'GET',
+    match: 'prefix',
+    url: 'https://api.example.com/v1/items',
+    action: 'respond',
+    status: 200,
+    headers: [['Content-Type', 'application/json']],
+    body: '[]',
+    delayMs: 0,
+    enabled: true,
+    origin: 'user',
+    updatedAt: T0,
     ...overrides,
   };
 }

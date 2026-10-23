@@ -4,6 +4,7 @@ import type {
   FrameBreakdownSample,
   FrameSample,
   FrameSource,
+  HttpExchange,
   InflateSample,
   MemorySample,
   ScreenSpan,
@@ -50,6 +51,7 @@ import {
 } from './chartSpec.ts';
 import { Lane, type LegendItem } from './Lane.tsx';
 import { MainThreadLane } from './MainThreadLane.tsx';
+import { NetworkLane } from './NetworkLane.tsx';
 import { ScreensLane } from './ScreensLane.tsx';
 import type { Backdrop } from './uplotOptions.ts';
 import './timeline.css';
@@ -164,6 +166,7 @@ type Props = {
   stalls: readonly StallSample[];
   strictMode: readonly StrictModeSample[];
   inflates: readonly InflateSample[];
+  http: readonly HttpExchange[];
   /** Show the Screens lane (an SDK is connected or spans were recorded). */
   showScreens: boolean;
   /**
@@ -183,6 +186,12 @@ type Props = {
   /** Opens the Layouts tab (a click on an inflation marker). */
   onViewLayouts?: () => void;
   isInflateTrackingOn: boolean;
+  /** Show the Network lane (a v7 SDK is linked or exchanges are buffered). */
+  showNetwork: boolean;
+  selectedHttp: number | null;
+  onSelectHttp: (id: number) => void;
+  /** Reveals the Network tab; offered while it is hidden. */
+  onViewNetwork?: () => void;
   /** The in-app SDK is linked: it owns frame accounting, idle or not. */
   isSdkConnected: boolean;
   selectedScreen: string | null;
@@ -210,6 +219,7 @@ export function Timeline({
   stalls,
   strictMode,
   inflates,
+  http,
   showScreens,
   showBreakdown,
   showMainThread,
@@ -220,6 +230,10 @@ export function Timeline({
   onViewStalls,
   onViewLayouts,
   isInflateTrackingOn,
+  showNetwork,
+  selectedHttp,
+  onSelectHttp,
+  onViewNetwork,
   isSdkConnected,
   selectedScreen,
   onSelectScreen,
@@ -265,7 +279,8 @@ export function Timeline({
     [screens, endTs, selectedScreen],
   );
   const shared = { theme, xMin, xMax, backdrop, events, probeTs, cursorX };
-  const laneCount = 4 + Number(showScreens) + Number(showBreakdown) + Number(showMainThread);
+  const laneCount =
+    4 + Number(showScreens) + Number(showBreakdown) + Number(showMainThread) + Number(showNetwork);
 
   const cpuToggle = (
     <button
@@ -368,6 +383,19 @@ export function Timeline({
             showTimeAxis={!showBreakdown}
             weight={0.95}
             {...shared}
+          />
+        )}
+        {showNetwork && (
+          <NetworkLane
+            exchanges={http}
+            fromTs={startTs}
+            toTs={endTs}
+            openEnd={endTs}
+            selectedId={selectedHttp}
+            onSelect={onSelectHttp}
+            onViewList={onViewNetwork}
+            cursorX={cursorX}
+            probeTs={probeTs}
           />
         )}
         {showBreakdown && (

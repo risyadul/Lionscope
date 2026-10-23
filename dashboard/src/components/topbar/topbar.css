@@ -967,3 +967,78 @@ button.sdk-pill[data-state='failed'] .sdk-dot {
     display: none;
   }
 }
+
+/* Mocks ------------------------------------------------------------------------ */
+
+/* "N mocks active": the app's network is partly answered by rules. A violet edge (the mock accent), a solid dot
+   once the app confirmed the set, a hollow one while it hasn't. It never shrinks: the SDK pill gives way first. */
+.mocks-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--mock-accent) 60%, var(--rule-strong));
+  border-radius: var(--radius-pill);
+  background: var(--mock-wash);
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) linear,
+    border-color var(--dur-fast) linear;
+}
+
+.mocks-pill:hover {
+  border-color: var(--mock-accent);
+  background: color-mix(in srgb, var(--mock-accent) 18%, var(--surface));
+}
+
+.mocks-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--mock-accent);
+}
+
+.mocks-pill[data-state='waiting'] .mocks-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--mock-accent);
+  animation: mocks-wait 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes mocks-wait {
+  to {
+    opacity: 0.35;
+  }
+}
+
+.mocks-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mocks-meta {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.mocks-meta::before {
+  margin-right: 6px;
+  color: var(--rule-strong);
+  content: '·';
+}
+
+@container session (max-width: 560px) {
+  .mocks-meta {
+    display: none;
+  }
+}
