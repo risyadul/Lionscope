@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -650,6 +650,11 @@ export interface InspectorNode {
   composition?: 'read' | 'disabled' | 'no_source' | 'failed';
   /** 0.6.0 (SDK, v6). The navigation destination (screen name) the node is drawn for, inherited by its subtree. */
   destination?: string | null;
+  /**
+   * 0.8.0 (SDK, device protocol v8). Set on the app's own Views (never on composables): what editing it live needs.
+   * Without it a node is read-only (uiautomator, composables, SDKs before 0.8.0).
+   */
+  view?: ViewState;
 }
 
 export interface InspectorSnapshot {
@@ -678,6 +683,11 @@ export interface InspectorSnapshot {
    * top window the SDK cannot read; 0.6.0 says why with `compose_disabled` / `compose_no_source` / `compose_failed`.
    */
   fallbackReason: string | null;
+  /**
+   * 0.8.0 (SDK, v8). Live edits in effect in the app's process when captured (on any of its views, also ones not in
+   * this snapshot); absent for other snapshots.
+   */
+  liveEdits?: number;
 }
 
 /** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
@@ -859,6 +869,214 @@ export interface NetworkMocksState {
 }
 
 // ---------------------------------------------------------------------------
+// Live view edits (0.8.0): change a View's properties from the Inspector, temporarily
+//
+// Only Views of an SDK snapshot (device protocol v8) of the app on an SDK link of that app; composables and
+// uiautomator nodes are read-only. The SDK applies an edit on the main thread with the platform setter (which may
+// run the app's own listeners, e.g. a TextWatcher) and keeps the original value, so it can be reverted. An edit lasts
+// until it is reverted, the app sets the property itself (a RecyclerView row rebound) or the view is recreated.
+// ---------------------------------------------------------------------------
+
+/** What can be edited, in this order everywhere (`ViewState.edited`). Padding and margins are set side by side. */
+export const VIEW_PROPERTIES = [
+  'visibility',
+  'alpha',
+  'enabled',
+  'paddingLeft',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'marginLeft',
+  'marginTop',
+  'marginRight',
+  'marginBottom',
+  'layoutWidth',
+  'layoutHeight',
+  'translationX',
+  'translationY',
+  'elevation',
+  'backgroundColor',
+  'text',
+  'textSize',
+  'textColor',
+] as const;
+export type ViewProperty = (typeof VIEW_PROPERTIES)[number];
+/** Names a revert may use for the four sides of padding or margins at once. */
+export const VIEW_PROPERTY_GROUPS = {
+  padding: ['paddingLeft', 'paddingTop', 'paddingRight', 'paddingBottom'],
+  margin: ['marginLeft', 'marginTop', 'marginRight', 'marginBottom'],
+} as const satisfies Record<string, readonly ViewProperty[]>;
+export type ViewPropertyGroup = keyof typeof VIEW_PROPERTY_GROUPS;
+/**
+ * A property's value on the wire: `visibility` `visible` | `invisible` | `gone`; `alpha` 0-1; `enabled` a boolean;
+ * padding (px) 0..MAX_EDIT_PADDING_PX and margins (px) ±MAX_EDIT_MARGIN_PX, integers; `layoutWidth` / `layoutHeight`
+ * `match_parent`, `wrap_content` or `<n>px` (0..MAX_EDIT_SIZE_PX); `translationX` / `translationY` (px)
+ * ±MAX_EDIT_TRANSLATION_PX; `elevation` (px) 0..MAX_EDIT_ELEVATION_PX; colors `#AARRGGBB` (a solid color); `text` at
+ * most MAX_EDIT_TEXT_CHARS UTF-16 units, no control characters but line breaks and tabs; `textSize` (sp)
+ * MIN_EDIT_TEXT_SIZE_SP..MAX_EDIT_TEXT_SIZE_SP.
+ */
+export type ViewPropertyValue = string | number | boolean;
+
+export const MAX_EDIT_PADDING_PX = 2000;
+export const MAX_EDIT_MARGIN_PX = 2000;
+export const MAX_EDIT_SIZE_PX = 10_000;
+export const MAX_EDIT_TRANSLATION_PX = 10_000;
+export const MAX_EDIT_ELEVATION_PX = 1000;
+export const MIN_EDIT_TEXT_SIZE_SP = 1;
+export const MAX_EDIT_TEXT_SIZE_SP = 200;
+export const MAX_EDIT_TEXT_CHARS = 500;
+/** Live edits an app's process keeps at most (one per view and property); a further one is refused (`limit`). */
+export const MAX_LIVE_EDITS = 256;
+/** Edits (and reverts) per device: a burst, then this many per second, from every dashboard and agent together. */
+export const VIEW_EDIT_BURST = 10;
+export const VIEW_EDITS_PER_SECOND = 5;
+/** The server gives up on an SDK's answer to an edit after this long. */
+export const VIEW_EDIT_TIMEOUT_MS = 3000;
+
+/** 0.8.0 (SDK, v8). The editable state of one View in a snapshot (`InspectorNode.view`). */
+export interface ViewState {
+  /**
+   * The SDK's id of this View object in its app's process: the same in every snapshot while the object lives, never
+   * given to another one. Edits name the view by it.
+   */
+  key: number;
+  /** px */
+  translationX: number;
+  translationY: number;
+  elevation: number;
+  /** `#AARRGGBB` when the background is a single color (a ColorDrawable), else null (none, an image, a shape). */
+  backgroundColor: string | null;
+  /** TextView only (else null): its text size in sp and its current text color (`#AARRGGBB`). */
+  textSize: number | null;
+  textColor: string | null;
+  /** A password field: its text is never sent, read or set (its size and color may be). */
+  password: boolean;
+  /** Properties changed live and in effect (not reverted, not set by the app since), VIEW_PROPERTIES order. */
+  edited?: ViewProperty[];
+}
+
+/**
+ * Why an edit was refused or failed. `stale`: the snapshot is not the current one, or the view is not in the app's
+ * latest capture (recreated, removed): inspect again. `not_editable`: not an SDK View, or the property does not apply
+ * to it (margins without MarginLayoutParams, text on a non-TextView, layout size of a window root). `password`: the
+ * text of a password field. `invalid_value`: out of bounds or malformed. `old_sdk`: the app's SDK is older than 0.8.0.
+ * `no_link`: the app's SDK link is gone. `rate_limited`: too many edits on the device. `limit`: MAX_LIVE_EDITS are in
+ * effect: revert some. `timeout`: the SDK did not answer. `failed`: the setter threw, or anything else.
+ */
+export type ViewEditError =
+  | 'stale'
+  | 'not_editable'
+  | 'password'
+  | 'invalid_value'
+  | 'old_sdk'
+  | 'no_link'
+  | 'rate_limited'
+  | 'limit'
+  | 'timeout'
+  | 'failed';
+
+/** Integer px within ±max (or 0..max when `negative` is false). */
+function isPixels(value: ViewPropertyValue, max: number, negative: boolean): value is number {
+  return (
+    typeof value === 'number' && Number.isInteger(value) && value <= max && value >= (negative ? -max : 0)
+  );
+}
+
+function isFiniteIn(value: ViewPropertyValue, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+}
+
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const LAYOUT_PX = /^(\d{1,5})px$/;
+/** Control characters (C0, DEL, C1) other than tab and line feed, and lone surrogates. */
+const BAD_EDIT_TEXT = /[^\P{Cc}\t\n]|\p{Cs}/u;
+
+/** `#RRGGBB` / `#AARRGGBB` (any case) as `#AARRGGBB` upper case; null when it is not a hex color. */
+export function normalizeColor(value: string): string | null {
+  if (!HEX_COLOR.test(value)) return null;
+  const digits = value.slice(1).toUpperCase();
+  return `#${digits.length === 6 ? `FF${digits}` : digits}`;
+}
+
+/**
+ * `value` as the wire carries it for `property` (a color as `#AARRGGBB`, a layout size given as a number as `<n>px`),
+ * or null when it is not a valid value of that property. The server checks every edit with this, the SDK again.
+ */
+export function normalizeViewValue(
+  property: ViewProperty,
+  value: ViewPropertyValue,
+): ViewPropertyValue | null {
+  switch (property) {
+    case 'visibility':
+      return value === 'visible' || value === 'invisible' || value === 'gone' ? value : null;
+    case 'alpha':
+      return isFiniteIn(value, 0, 1) ? value : null;
+    case 'enabled':
+      return typeof value === 'boolean' ? value : null;
+    case 'paddingLeft':
+    case 'paddingTop':
+    case 'paddingRight':
+    case 'paddingBottom':
+      return isPixels(value, MAX_EDIT_PADDING_PX, false) ? value : null;
+    case 'marginLeft':
+    case 'marginTop':
+    case 'marginRight':
+    case 'marginBottom':
+      return isPixels(value, MAX_EDIT_MARGIN_PX, true) ? value : null;
+    case 'layoutWidth':
+    case 'layoutHeight': {
+      if (isPixels(value, MAX_EDIT_SIZE_PX, false)) return `${value}px`;
+      if (value === 'match_parent' || value === 'wrap_content') return value;
+      const px = typeof value === 'string' ? LAYOUT_PX.exec(value) : null;
+      return px && Number(px[1]) <= MAX_EDIT_SIZE_PX ? `${Number(px[1])}px` : null;
+    }
+    case 'translationX':
+    case 'translationY':
+      return isFiniteIn(value, -MAX_EDIT_TRANSLATION_PX, MAX_EDIT_TRANSLATION_PX) ? value : null;
+    case 'elevation':
+      return isFiniteIn(value, 0, MAX_EDIT_ELEVATION_PX) ? value : null;
+    case 'backgroundColor':
+    case 'textColor':
+      return typeof value === 'string' ? normalizeColor(value) : null;
+    case 'text':
+      return typeof value === 'string' && value.length <= MAX_EDIT_TEXT_CHARS && !BAD_EDIT_TEXT.test(value)
+        ? value
+        : null;
+    case 'textSize':
+      return isFiniteIn(value, MIN_EDIT_TEXT_SIZE_SP, MAX_EDIT_TEXT_SIZE_SP) ? value : null;
+  }
+}
+
+/**
+ * The properties `node` can be edited live by (VIEW_PROPERTIES order); none without `view`. Margins need
+ * MarginLayoutParams (`margin` set), the layout size layout params and a parent (not a window root), the text ones a
+ * TextView, and `text` one that is not a password field.
+ */
+export function editableProperties(node: InspectorNode): ViewProperty[] {
+  const view = node.view;
+  if (!view) return [];
+  return VIEW_PROPERTIES.filter((property) => {
+    switch (property) {
+      case 'marginLeft':
+      case 'marginTop':
+      case 'marginRight':
+      case 'marginBottom':
+        return node.margin !== null;
+      case 'layoutWidth':
+      case 'layoutHeight':
+        return node.parent !== null && node.layoutWidth !== null && node.layoutHeight !== null;
+      case 'text':
+        return view.textSize !== null && !view.password;
+      case 'textSize':
+      case 'textColor':
+        return view.textSize !== null;
+      default:
+        return true;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
@@ -900,6 +1118,19 @@ export type ServerMessage =
   | { type: 'httpExchange'; id: number; exchange: HttpExchangeDetail | null }
   /** 0.7.0. The session's mock rules; sent on connect and on every change (including the SDK's confirmation). */
   | { type: 'networkMocks'; mocks: NetworkMocksState }
+  /**
+   * 0.8.0. The answer to this client's `setViewProperty` or `revertViewProperties` (`requestId` is the client's own).
+   * `liveEdits`: the app's live edits in effect after it (when the SDK answered). After a change a new `inspection`
+   * of the device follows on its own, keeping the selection on the same view.
+   */
+  | {
+      type: 'viewEdit';
+      requestId: number;
+      ok: boolean;
+      error?: ViewEditError;
+      message?: string;
+      liveEdits?: number;
+    }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -921,6 +1152,7 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'inspectorSelection',
   'httpExchange',
   'networkMocks',
+  'viewEdit',
   'error',
 ]);
 
@@ -972,7 +1204,30 @@ export type ClientMessage =
    */
   | { type: 'setNetworkMock'; rule: NetworkMockInput }
   /** 0.7.0. Remove one rule (`id`), or every rule (`id` absent). Answered with `networkMocks`. */
-  | { type: 'clearNetworkMocks'; id?: string };
+  | { type: 'clearNetworkMocks'; id?: string }
+  /**
+   * 0.8.0. Edit a property of a View of the current snapshot live (`editableProperties`), until it is reverted, the app
+   * sets it itself or the view is recreated. `requestId` is the client's own (0..2^31-1), echoed in `viewEdit`.
+   */
+  | {
+      type: 'setViewProperty';
+      requestId: number;
+      snapshotId: string;
+      nodeId: number;
+      property: ViewProperty;
+      value: ViewPropertyValue;
+    }
+  /**
+   * 0.8.0. Revert live edits of the current snapshot's app: one property (or the four sides of `padding` / `margin`)
+   * of the view `nodeId`, every property of it (no `property`), or every edit in the app (no `nodeId`).
+   */
+  | {
+      type: 'revertViewProperties';
+      requestId: number;
+      snapshotId: string;
+      nodeId?: number;
+      property?: ViewProperty | ViewPropertyGroup;
+    };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -995,7 +1250,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 7;
+export const DEVICE_PROTOCOL_VERSION = 8;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1014,6 +1269,10 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * v7 adds the network inspector, on `session` links only: SDK → server `httpRequest`, `httpResponse` and
  * `mocksApplied`, and server → SDK `mocks` and `mock` (a rule set, see GatewayMessage). `httpRequest` /
  * `httpResponse` lines may be up to MAX_HTTP_LINE_BYTES.
+ * v8 (0.8.0): live view edits. Inspector View nodes carry `view` (their key and editable state) and `inspectBegin`
+ * `liveEdits`; server → SDK `setViewProperty` and `revertViewProperties`, answered by `viewPropertyResult`. The SDK
+ * applies edits only on a link with the link proof (a v7+ session link), else it answers `unauthenticated`. Below v8
+ * neither side sends any of it.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -1021,6 +1280,7 @@ export const DEVICE_PROTOCOL_V4 = 4;
 export const DEVICE_PROTOCOL_V5 = 5;
 export const DEVICE_PROTOCOL_V6 = 6;
 export const DEVICE_PROTOCOL_V7 = 7;
+export const DEVICE_PROTOCOL_V8 = 8;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -1181,6 +1441,8 @@ export type DeviceMessage =
        * (`composition`); before, the server prefers uiautomator for a Compose top window.
        */
       compose: boolean;
+      /** v8. Live edits in effect in the app's process (InspectorSnapshot.liveEdits). */
+      liveEdits?: number;
     }
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
   | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }
@@ -1220,7 +1482,20 @@ export type DeviceMessage =
       error: { kind: 'timeout' | 'connection' | 'canceled' | 'io'; message: string | null } | null;
     }
   /** v7. The mock rule set `rev` (with `count` rules) is now the active one. */
-  | { type: 'mocksApplied'; rev: number; count: number };
+  | { type: 'mocksApplied'; rev: number; count: number }
+  /**
+   * v8. The answer to `setViewProperty` / `revertViewProperties` with the same `requestId`; `liveEdits` is the
+   * number in effect after it. Errors: `stale` (no view with that key in the latest capture, or it is no longer
+   * attached), `unsupported` (the property does not apply to that view), `password`, `invalid` (a value out of
+   * bounds), `limit` (MAX_LIVE_EDITS in effect), `failed` (the setter threw), `disabled` (no editor in this SDK).
+   */
+  | {
+      type: 'viewPropertyResult';
+      requestId: number;
+      ok: boolean;
+      error?: 'stale' | 'unsupported' | 'password' | 'invalid' | 'limit' | 'failed' | 'disabled';
+      liveEdits: number;
+    };
 
 export type DeviceMessageType = DeviceMessage['type'];
 
@@ -1228,9 +1503,10 @@ export type DeviceMessageType = DeviceMessage['type'];
  * Server → SDK. Contract: each line is a flat JSON object serialised with `type` as its FIRST key and with no
  * nested objects that contain `type` or `protocolVersion` keys, because the SDK reads these lines with a
  * dependency-free top-level scan rather than a full JSON parser. New fields must be appended after `type`. The v7
- * `mocks` / `mock` lines are flat objects of strings, numbers and booleans only (their strings may hold any text,
- * JSON-escaped); golden lines: `protocol/fixtures/gateway-messages.ndjson`, reproduced byte for byte by the server.
- * Lines are at most MAX_GATEWAY_LINE_BYTES.
+ * `mocks` / `mock` lines and the v8 edit lines are flat objects of strings, numbers and booleans only (their strings
+ * may hold any text, JSON-escaped), read whole by the SDK's flat-object parser; golden lines:
+ * `protocol/fixtures/gateway-messages.ndjson`, reproduced byte for byte by the server. Lines are at most
+ * MAX_GATEWAY_LINE_BYTES.
  */
 export type GatewayMessage =
   /** v5 adds `mode` (sent on v5 links only; absent = `session`). */
@@ -1271,4 +1547,22 @@ export type GatewayMessage =
       headers: string;
       bodyBase64: string;
       delayMs: number;
+    }
+  /**
+   * v8. Set `property` of the view whose `ViewState.key` is `viewKey` (one of the latest capture) to `value`
+   * (normalizeViewValue); answered with `viewPropertyResult`. `value` is a string, number or boolean, never an object.
+   */
+  | {
+      type: 'setViewProperty';
+      requestId: number;
+      viewKey: number;
+      property: ViewProperty;
+      value: ViewPropertyValue;
+    }
+  /** v8. Revert live edits: `property` (or a group) of `viewKey`, all of `viewKey`, or all (neither); `viewPropertyResult`. */
+  | {
+      type: 'revertViewProperties';
+      requestId: number;
+      viewKey?: number;
+      property?: ViewProperty | ViewPropertyGroup;
     };

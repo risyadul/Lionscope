@@ -193,7 +193,16 @@ describe('gateway golden lines (server → SDK)', () => {
       expect(JSON.stringify(value)).toBe(line);
     }
     expect(new Set(GATEWAY_LINES.map((line) => (JSON.parse(line) as { type: string }).type))).toEqual(
-      new Set(['welcome', 'mocks', 'mock']),
+      new Set([
+        'welcome',
+        'mocks',
+        'mock',
+        'config',
+        'bye',
+        'inspect',
+        'setViewProperty',
+        'revertViewProperties',
+      ]),
     );
   });
 
