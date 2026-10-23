@@ -5,11 +5,13 @@ import {
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
   maxDeviceLineBytes,
   parseDeviceMessage,
+  VIEW_EDIT_TIMEOUT_MS,
   peekLineType,
 } from '@lionscope/protocol';
 import type {
@@ -23,9 +25,10 @@ import { HOST } from '../config.ts';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
-import { MAX_INSPECT_ANSWER_BYTES, SdkInspectError } from './sdkLink.ts';
+import { MAX_INSPECT_ANSWER_BYTES, SdkEditError, SdkInspectError } from './sdkLink.ts';
 import type {
   ByeReason,
+  SdkEditFailure,
   SdkInspectBegin,
   SdkInspection,
   SdkInspectFailure,
@@ -36,6 +39,7 @@ import type {
   SdkLinkMessage,
   SdkLinkMode,
   SdkLinkTarget,
+  SdkViewEditResult,
 } from './sdkLink.ts';
 
 export interface DeviceGatewayLimits {
@@ -61,6 +65,10 @@ export interface DeviceGatewayLimits {
   inspectTotalTimeoutMs: number;
   /** Bytes of one `inspect` answer at most (MAX_INSPECT_ANSWER_BYTES). */
   maxInspectAnswerBytes: number;
+  /** A v8 edit fails (`timeout`) without its answer this long after it was sent. */
+  viewEditTimeoutMs: number;
+  /** Edits waiting for their answer per link; one more is refused (`busy`). */
+  maxPendingEdits: number;
 }
 
 export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
@@ -75,6 +83,8 @@ export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
   inspectTimeoutMs: INSPECT_TIMEOUT_MS,
   inspectTotalTimeoutMs: 15_000,
   maxInspectAnswerBytes: MAX_INSPECT_ANSWER_BYTES,
+  viewEditTimeoutMs: VIEW_EDIT_TIMEOUT_MS,
+  maxPendingEdits: 8,
 };
 
 /** Browsers can send requests to localhost ports: a request line ends the connection at once. */
@@ -234,8 +244,11 @@ export function createDeviceGateway(options: DeviceGatewayOptions): DeviceGatewa
   };
 }
 
-/** One gateway line: `JSON.stringify` keeps insertion order, so `type` (written first) is the first key. */
-function gatewayLine(message: GatewayMessage): string {
+/**
+ * One gateway line: `JSON.stringify` keeps insertion order, so `type` (written first) is the first key, and leaves out
+ * fields that are `undefined`. The golden lines (protocol/fixtures/gateway-messages.ndjson) are its output.
+ */
+export function gatewayLine(message: GatewayMessage): string {
   return `${JSON.stringify(message)}\n`;
 }
 
@@ -301,12 +314,13 @@ export function encodeMocks(rev: number, rules: readonly NetworkMockRule[]): str
 }
 
 const INSPECT_TYPES: ReadonlySet<string> = new Set(['inspectBegin', 'inspectNodes', 'inspectError']);
-/** Dropped (counted) rather than fatal when over the line budget. */
+/** Dropped (counted) rather than fatal when over the line budget (a dropped edit answer times out). */
 const SHEDDABLE_TYPES: ReadonlySet<string> = new Set([
   'stall',
   'strictmode',
   'inflate',
   'viewtree',
+  'viewPropertyResult',
   ...INSPECT_TYPES,
   'httpRequest',
   'httpResponse',
@@ -330,6 +344,12 @@ interface PendingInspect {
   timer: ReturnType<typeof setTimeout> | undefined;
   resolve: (inspection: SdkInspection) => void;
   reject: (error: SdkInspectError) => void;
+}
+
+interface PendingEdit {
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (result: SdkViewEditResult) => void;
+  reject: (error: SdkEditError) => void;
 }
 
 /** The nodes of a complete answer in seq order, or null when they don't form the snapshot `begin` announced. */
@@ -397,6 +417,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   let gone = false;
   let closing = false;
   const inspects = new Map<number, PendingInspect>();
+  const edits = new Map<number, PendingEdit>();
+  /** Shared by `inspect` and the edits: an answer can only ever match its own request. */
   let nextRequestId = 1;
   /**
    * Inspector answer lines (and bytes) of pending requests that may still bypass the line budget: one line per
@@ -429,6 +451,35 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   const failAllInspects = (reason: SdkInspectFailure): void => {
     for (const requestId of [...inspects.keys()]) failInspect(requestId, reason);
   };
+  const settleEdit = (requestId: number): PendingEdit | null => {
+    const pending = edits.get(requestId);
+    if (!pending) return null;
+    edits.delete(requestId);
+    clearTimeout(pending.timer);
+    return pending;
+  };
+  const failAllEdits = (reason: SdkEditFailure): void => {
+    for (const requestId of [...edits.keys()]) settleEdit(requestId)?.reject(new SdkEditError(reason));
+  };
+  const failPending = (): void => {
+    failAllInspects('closed');
+    failAllEdits('closed');
+  };
+
+  /** Send one v8 edit request (built around its request id) and wait for its `viewPropertyResult`. */
+  const edit = (line: (requestId: number) => GatewayMessage): Promise<SdkViewEditResult> =>
+    new Promise((resolve, reject) => {
+      if (protocolVersion < DEVICE_PROTOCOL_V8) return reject(new SdkEditError('unsupported'));
+      if (closing || !handler) return reject(new SdkEditError('closed'));
+      if (edits.size >= limits.maxPendingEdits) return reject(new SdkEditError('busy'));
+      const requestId = nextRequestId++;
+      const timer = setTimeout(
+        () => settleEdit(requestId)?.reject(new SdkEditError('timeout')),
+        limits.viewEditTimeoutMs,
+      );
+      edits.set(requestId, { timer, resolve, reject });
+      socket.write(gatewayLine(line(requestId)));
+    });
 
   const inspect = (): Promise<SdkInspection> =>
     new Promise((resolve, reject) => {
@@ -492,13 +543,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     if (closing) return;
     closing = true;
     clearTimeout(helloTimer);
-    failAllInspects('closed');
+    failPending();
     endSocket(socket, bye && { type: 'bye', reason: bye });
   };
   const abort = (reason: string): void => {
     warn(reason);
     closing = true;
-    failAllInspects('closed');
+    failPending();
     socket.destroy();
   };
   const writeMocks = (rev: number, rules: readonly NetworkMockRule[]): void => {
@@ -550,6 +601,10 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         else if (mode === 'session') writeMocks(rev, rules);
       },
       inspect,
+      setViewProperty: (viewKey, property, value) =>
+        edit((requestId) => ({ type: 'setViewProperty', requestId, viewKey, property, value })),
+      revertViewProperties: (viewKey, property) =>
+        edit((requestId) => ({ type: 'revertViewProperties', requestId, viewKey, property })),
     };
     let result: SdkAttachResult | Promise<SdkAttachResult>;
     try {
@@ -669,6 +724,9 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       return close('protocol_error');
     }
     if (isInspectMessage(parsed.value)) return onInspectMessage(parsed.value, rawBytes);
+    // An answer after its edit timed out (or to none at all) is dropped quietly.
+    if (parsed.value.type === 'viewPropertyResult')
+      return settleEdit(parsed.value.requestId)?.resolve(parsed.value);
     deliver(parsed.value);
   };
 
@@ -721,7 +779,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     gone = true;
     closing = true;
     clearTimeout(helloTimer);
-    failAllInspects('closed');
+    failPending();
     const linked = handler;
     handler = null;
     linked?.onClose();

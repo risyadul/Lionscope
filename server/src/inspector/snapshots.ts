@@ -113,6 +113,7 @@ export function sdkSnapshot(inspection: SdkInspection, packageName: string): Sna
     truncated: begin.truncated,
     captureMs: begin.captureMs,
     fallbackReason: null,
+    ...(begin.liveEdits === undefined ? {} : { liveEdits: begin.liveEdits }),
   };
 }
 
@@ -159,10 +160,20 @@ export function composeFallback(inspection: SdkInspection): ComposeFallback | nu
 export const CARRY_TOLERANCE_PX = 24;
 
 /**
- * The same element in another snapshot: the only node with its class, resource id and (when it has one) text;
- * else the only node of its class whose edges are each within CARRY_TOLERANCE_PX of its own; else null.
+ * The same element in another snapshot. `sameApp` (both SDK snapshots of one app on one device): the node with its
+ * view key (`view.key`, the same View object, even with new text, size or position). Else, or when no node has the
+ * key: the only node with its class, resource id and (when it has one) text; else the only node of its class whose
+ * edges are each within CARRY_TOLERANCE_PX of its own; else null.
  */
-export function matchingNode(node: InspectorNode, snapshot: InspectorSnapshot): InspectorNode | null {
+export function matchingNode(
+  node: InspectorNode,
+  snapshot: InspectorSnapshot,
+  sameApp = false,
+): InspectorNode | null {
+  const key = sameApp ? node.view?.key : undefined;
+  const byKey =
+    key === undefined ? undefined : snapshot.nodes.find((candidate) => candidate.view?.key === key);
+  if (byKey) return byKey;
   const byIdentity = snapshot.nodes.filter(
     (candidate) =>
       candidate.className === node.className &&

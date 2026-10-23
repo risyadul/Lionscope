@@ -1,12 +1,22 @@
-import type { NetworkMockRule, ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
+import type {
+  NetworkMockRule,
+  ScreenRef,
+  SdkFrame,
+  SdkOptions,
+  ServerMessage,
+  ViewProperty,
+  ViewPropertyGroup,
+  ViewPropertyValue,
+} from '@lionscope/protocol';
 import { vi } from 'vitest';
-import { SdkInspectError } from '../../src/device/sdkLink.ts';
+import { SdkEditError, SdkInspectError } from '../../src/device/sdkLink.ts';
 import type {
   ByeReason,
   SdkHello,
   SdkInspection,
   SdkLink,
   SdkLinkHandler,
+  SdkViewEditResult,
 } from '../../src/device/sdkLink.ts';
 import { ProfilingSession } from '../../src/session/profilingSession.ts';
 import { FakeAdb, FakeDevice } from './fakes.ts';
@@ -30,6 +40,17 @@ export const HELLO: SdkHello = {
   refreshRateHz: 120,
 };
 
+/** The edit methods of a link below v8 (they fail as `unsupported`), for fake links. */
+export const NO_EDITS: Pick<SdkLink, 'setViewProperty' | 'revertViewProperties'> = {
+  setViewProperty: () => Promise.reject(new SdkEditError('unsupported')),
+  revertViewProperties: () => Promise.reject(new SdkEditError('unsupported')),
+};
+
+/** One edit a FakeLink was asked for. */
+export type EditRequest =
+  | { kind: 'set'; viewKey: number; property: ViewProperty; value: ViewPropertyValue }
+  | { kind: 'revert'; viewKey?: number; property?: ViewProperty | ViewPropertyGroup };
+
 export class FakeLink implements SdkLink {
   readonly configs: SdkOptions[] = [];
   closedWith: ByeReason | 'none' | null = null;
@@ -51,6 +72,26 @@ export class FakeLink implements SdkLink {
   inspect(): Promise<SdkInspection> {
     this.inspects += 1;
     return this.answerInspect?.() ?? Promise.reject(new SdkInspectError('unsupported'));
+  }
+  /** What the edits answer; unset, they fail as `unsupported`. */
+  answerEdit: ((request: EditRequest) => Promise<SdkViewEditResult>) | null = null;
+  readonly edits: EditRequest[] = [];
+  setViewProperty(
+    viewKey: number,
+    property: ViewProperty,
+    value: ViewPropertyValue,
+  ): Promise<SdkViewEditResult> {
+    return this.edit({ kind: 'set', viewKey, property, value });
+  }
+  revertViewProperties(
+    viewKey?: number,
+    property?: ViewProperty | ViewPropertyGroup,
+  ): Promise<SdkViewEditResult> {
+    return this.edit({ kind: 'revert', viewKey, property });
+  }
+  private edit(request: EditRequest): Promise<SdkViewEditResult> {
+    this.edits.push(request);
+    return this.answerEdit?.(request) ?? Promise.reject(new SdkEditError('unsupported'));
   }
 }
 

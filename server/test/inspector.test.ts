@@ -16,6 +16,7 @@ import type { InspectorLinks, InspectorServiceOptions } from '../src/inspector/i
 import type { InspectorSessionSource } from '../src/session/sessionManager.ts';
 import { fixture } from './helpers/fakes.ts';
 import { rgbPng } from './helpers/png.ts';
+import { NO_EDITS } from './helpers/sdkSession.ts';
 import { rawRequest } from './helpers/net.ts';
 
 const SERIAL = 'emulator-5554';
@@ -93,6 +94,7 @@ function fakeLink(
       link.calls += 1;
       return answer();
     },
+    ...NO_EDITS,
   };
   return link;
 }
@@ -416,6 +418,97 @@ describe('Inspector service', () => {
       await service.inspect(SERIAL);
       expect(service.selection).toBeNull();
     });
+
+    const keyed = (id: number, key: number, overrides: Partial<InspectorNode> = {}) =>
+      sdkNode(id, {
+        view: {
+          key,
+          translationX: 0,
+          translationY: 0,
+          elevation: 0,
+          backgroundColor: null,
+          textSize: 14,
+          textColor: '#FF000000',
+          password: false,
+        },
+        ...overrides,
+      });
+
+    it('follows the same View by its key, whatever an edit changed about it', async () => {
+      const { service, snapshot, link } = await selected();
+      link.inspect = async () =>
+        inspection([keyed(0, 10), keyed(1, 11), keyed(2, 12, { resourceId: 'btn_buy' })]);
+      const first = await service.inspect(SERIAL);
+      expect(first.id).not.toBe(snapshot.id);
+      service.select(first.id, 1, 'user');
+      // Its text, size and place changed, and an alike button now sits where it was.
+      link.inspect = async () =>
+        inspection([
+          keyed(0, 10),
+          keyed(1, 13),
+          keyed(2, 11, { text: 'Pay now', bounds: [0, 700, 1080, 900], resourceId: 'btn_share' }),
+        ]);
+      await service.inspect(SERIAL);
+      expect(service.selection).toMatchObject({ nodeId: 2 });
+    });
+
+    it('does not follow a key into another app, falling back to identity', async () => {
+      let source: InspectorSessionSource = {
+        packageName: PKG,
+        link: fakeLink(8, async () => inspection([keyed(0, 10), keyed(1, 11)])),
+        screen: null,
+      };
+      const { service } = setup({ sessions: { getDevices: () => DEVICES, inspectorSource: () => source } });
+      const first = await service.inspect(SERIAL);
+      service.select(first.id, 1, 'user');
+      // Another app on top: the same key number is another process's view.
+      source = {
+        packageName: OTHER,
+        link: fakeLink(8, async () =>
+          inspection([keyed(0, 11, { className: 'android.widget.FrameLayout' }), keyed(1, 40)]),
+        ),
+        screen: null,
+      };
+      await service.inspect(SERIAL);
+      expect(service.selection).toMatchObject({ nodeId: 1 });
+    });
+  });
+
+  it('keeps the link that answered the current SDK snapshot for its live edits, and the live edits count', async () => {
+    const link = fakeLink(8, async () => ({
+      ...inspection(),
+      begin: { ...inspection().begin, liveEdits: 3 },
+    }));
+    const source = { packageName: PKG, link, screen: 'homepage' };
+    const { service } = setup({ source });
+    const snapshot = await service.inspect(SERIAL);
+    expect(snapshot.liveEdits).toBe(3);
+    expect(service.editSource(snapshot.id)).toBe(source);
+    expect(service.editSource('0123456789abcdef')).toBeNull();
+    link.inspect = () => Promise.reject(new SdkInspectError('background'));
+    const fallback = await service.inspect(SERIAL);
+    expect(fallback.source).toBe('uiautomator');
+    expect(fallback.liveEdits).toBeUndefined();
+    expect(service.editSource(fallback.id)).toBeNull();
+    expect(service.editSource(snapshot.id)).toBeNull();
+  });
+
+  it('takes a fresh capture after one that was already running, instead of joining it', async () => {
+    let release: () => void = () => undefined;
+    const answers: Promise<SdkInspection>[] = [
+      new Promise((resolve) => (release = () => resolve(inspection()))),
+      Promise.resolve(inspection()),
+    ];
+    const link = fakeLink(8, () => answers.shift() ?? Promise.resolve(inspection()));
+    const { service } = setup({ source: { packageName: PKG, link, screen: null } });
+    const running = service.inspect(SERIAL);
+    const joined = service.inspect(SERIAL);
+    const fresh = service.inspectFresh(SERIAL);
+    release();
+    const [first, second, third] = await Promise.all([running, joined, fresh]);
+    expect(second).toBe(first);
+    expect(third.id).not.toBe(first.id);
+    expect(link.calls).toBe(2);
   });
 
   it('takes a new screenshot with the uiautomator dump when the SDK could not answer', async () => {

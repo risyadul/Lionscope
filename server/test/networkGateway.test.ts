@@ -25,10 +25,15 @@ import type {
 import { DeviceClient } from './helpers/deviceClient.ts';
 import { mockRule } from './helpers/networkFixtures.ts';
 
+/** The welcome and mock lines of the golden file (it also holds the v8 edit lines), each with its newline. */
 const GATEWAY_GOLDEN = readFileSync(
   new URL('../../protocol/fixtures/gateway-messages.ndjson', import.meta.url),
   'utf8',
-);
+)
+  .split('\n')
+  .filter((line) => /^\{"type":"(welcome|mocks|mock)"/.test(line))
+  .map((line) => `${line}\n`)
+  .join('');
 /** The fixtures' link key: bytes 0x00..0x1f. */
 const TEST_KEY = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
 const GOLDEN_NONCE = (
@@ -36,7 +41,7 @@ const GOLDEN_NONCE = (
     readFileSync(new URL('../../protocol/fixtures/device-messages.ndjson', import.meta.url), 'utf8')
       .trim()
       .split('\n')
-      .at(-1) ?? '{}',
+      .find((line) => line.startsWith('{"type":"hello"') && line.includes('"nonce"')) ?? '{}',
   ) as { nonce?: string }
 ).nonce;
 

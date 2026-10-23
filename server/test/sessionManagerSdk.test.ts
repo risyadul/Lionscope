@@ -10,6 +10,7 @@ import {
   SessionManager,
 } from '../src/session/sessionManager.ts';
 import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
+import { NO_EDITS } from './helpers/sdkSession.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
 const GATEWAY_PORT = 9123;
@@ -33,6 +34,7 @@ const link: SdkLink = {
   sendConfig: () => undefined,
   sendMocks: () => undefined,
   inspect: () => Promise.reject(new Error('unsupported')),
+  ...NO_EDITS,
 };
 
 function setup(

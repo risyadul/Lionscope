@@ -4,6 +4,9 @@ import type {
   InspectorNode,
   NetworkMockRule,
   SdkOptions,
+  ViewProperty,
+  ViewPropertyGroup,
+  ViewPropertyValue,
 } from '@lionscope/protocol';
 
 export type SdkHello = Extract<DeviceMessage, { type: 'hello' }>;
@@ -13,8 +16,13 @@ export type SdkInspectMessage = Extract<
   { type: 'inspectBegin' } | { type: 'inspectNodes' } | { type: 'inspectError' }
 >;
 export type SdkInspectBegin = Extract<DeviceMessage, { type: 'inspectBegin' }>;
-/** Everything the SDK may send after its hello, except the Inspector answers. */
-export type SdkLinkMessage = Exclude<DeviceMessage, { type: 'hello' } | SdkInspectMessage>;
+/** The answer to a v8 edit (`setViewProperty` / `revertViewProperties`): the gateway consumes it itself. */
+export type SdkViewEditResult = Extract<DeviceMessage, { type: 'viewPropertyResult' }>;
+/** Everything the SDK may send after its hello, except the answers the gateway consumes. */
+export type SdkLinkMessage = Exclude<
+  DeviceMessage,
+  { type: 'hello' } | SdkInspectMessage | SdkViewEditResult
+>;
 export type ByeReason = Extract<GatewayMessage, { type: 'bye' }>['reason'];
 
 /** The device gateway's side of one accepted SDK connection. */
@@ -43,6 +51,33 @@ export interface SdkLink {
    * SdkInspectError.
    */
   inspect(): Promise<SdkInspection>;
+  /**
+   * v8: set `property` of the view whose key is `viewKey` (one of the link's latest capture) to `value`, already valid
+   * (normalizeViewValue). Resolves with the SDK's answer, ok or why not; rejects with an SdkEditError.
+   */
+  setViewProperty(
+    viewKey: number,
+    property: ViewProperty,
+    value: ViewPropertyValue,
+  ): Promise<SdkViewEditResult>;
+  /** v8: revert live edits: `property` (or a group) of `viewKey`, all of `viewKey`, or every one (neither). */
+  revertViewProperties(
+    viewKey?: number,
+    property?: ViewProperty | ViewPropertyGroup,
+  ): Promise<SdkViewEditResult>;
+}
+
+/**
+ * Why an edit got no answer: `unsupported` (a link below v8), `closed` (the link went away), `timeout` (no answer
+ * within VIEW_EDIT_TIMEOUT_MS) or `busy` (too many edits waiting for their answer on that link).
+ */
+export type SdkEditFailure = 'unsupported' | 'closed' | 'timeout' | 'busy';
+
+export class SdkEditError extends Error {
+  override name = 'SdkEditError';
+  constructor(readonly reason: SdkEditFailure) {
+    super(`SDK edit failed: ${reason}`);
+  }
 }
 
 /** A complete SDK answer to `inspect`: nodes in id order, ids 0..nodeCount-1, parents before children. */

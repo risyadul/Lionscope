@@ -36,6 +36,8 @@ interface Built {
   payload: string;
   /** UTF-8 bytes of `payload`. */
   bytes: number;
+  /** The SDK link that answered, for an SDK snapshot. */
+  source?: InspectorSessionSource;
 }
 
 /** Why a snapshot came from uiautomator (`InspectorSnapshot.fallbackReason`). */
@@ -110,6 +112,8 @@ export class InspectorService {
   private readonly maxKeptBytes: number;
   /** Oldest first; the last one is current. */
   private kept: Kept[] = [];
+  /** The SDK link that answered the current snapshot (null for uiautomator): the only way to edit its views. */
+  private currentSource: InspectorSessionSource | null = null;
   private currentSelection: InspectorSelection | null = null;
   private readonly inFlight = new Map<string, Promise<InspectorSnapshot>>();
 
@@ -125,6 +129,14 @@ export class InspectorService {
 
   get selection(): InspectorSelection | null {
     return this.currentSelection;
+  }
+
+  /**
+   * The SDK link (and its app) that answered `snapshotId`, while it is the current snapshot; null otherwise and for
+   * uiautomator snapshots. Live edits of its views go through this link only.
+   */
+  editSource(snapshotId: string): InspectorSessionSource | null {
+    return this.current?.id === snapshotId ? this.currentSource : null;
   }
 
   /** A kept snapshot's screenshot, null once it is gone. */
@@ -145,6 +157,16 @@ export class InspectorService {
       this.inFlight.set(serial, pending);
     }
     return pending;
+  }
+
+  /**
+   * `inspect`, but never joining a capture that began before this call (it may predate a change on the device, e.g. a
+   * live edit): such a capture is waited for, then a new one is taken.
+   */
+  async inspectFresh(serial: string): Promise<InspectorSnapshot> {
+    const running = this.inFlight.get(serial);
+    if (running) await running.catch(() => undefined);
+    return this.inspect(serial);
   }
 
   /**
@@ -283,7 +305,7 @@ export class InspectorService {
     const compose = composeFallback(inspection);
     if (compose) return compose;
     const built = this.build(serial, ts, sdkSnapshot(inspection, source.packageName));
-    return built.bytes > MAX_SNAPSHOT_BYTES ? 'sdk_too_large' : built;
+    return built.bytes > MAX_SNAPSHOT_BYTES ? 'sdk_too_large' : { ...built, source };
   }
 
   /** `sources`: the session and inspect-only links of the device, whose screen names describe their own app. */
@@ -319,6 +341,7 @@ export class InspectorService {
   private keep(built: Built, png: Buffer): void {
     const previous = this.current;
     this.kept.push({ snapshot: built.snapshot, png, bytes: png.length + built.bytes });
+    this.currentSource = built.source ?? null;
     let bytes = this.kept.reduce((sum, entry) => sum + entry.bytes, 0);
     while (this.kept.length > 1 && (this.kept.length > MAX_KEPT_SNAPSHOTS || bytes > this.maxKeptBytes)) {
       bytes -= this.kept.shift()?.bytes ?? 0;
@@ -332,7 +355,13 @@ export class InspectorService {
     const selection = this.currentSelection;
     if (!selection) return;
     const node = previous?.id === selection.snapshotId ? previous.nodes[selection.nodeId] : undefined;
-    const match = node ? matchingNode(node, snapshot) : null;
+    // View keys only mean the same view within one app's snapshots.
+    const sameApp =
+      previous?.source === 'sdk' &&
+      snapshot.source === 'sdk' &&
+      previous.serial === snapshot.serial &&
+      previous.packageName === snapshot.packageName;
+    const match = node ? matchingNode(node, snapshot, sameApp) : null;
     this.setSelection(match ? { ...selection, snapshotId: snapshot.id, nodeId: match.id } : null);
   }
 
