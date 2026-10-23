@@ -4,7 +4,12 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
+
+// Compose compatibility checks: `-PsampleComposeBom=2024.06.00 -PsampleNavigationCompose=2.7.7` (defaults: the catalog).
+val composeBom = providers.gradleProperty("sampleComposeBom").getOrElse(libs.versions.composeBom.get())
+val navigationCompose = providers.gradleProperty("sampleNavigationCompose").getOrElse(libs.versions.navigationCompose.get())
 
 android {
     namespace = "io.github.risyadul.lionscope.sample"
@@ -32,6 +37,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+
+    buildFeatures {
+        compose = true
+    }
 }
 
 kotlin {
@@ -51,6 +60,12 @@ dependencies {
     implementation(libs.androidx.viewpager)
     implementation(libs.androidx.asynclayoutinflater)
     implementation(libs.material)
+    implementation(platform("androidx.compose:compose-bom:$composeBom"))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.activity.compose)
+    implementation("androidx.navigation:navigation-compose:$navigationCompose")
 
     debugImplementation(project(":lionscope"))
     releaseImplementation(project(":lionscope-noop"))
