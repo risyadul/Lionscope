@@ -2,6 +2,35 @@ package io.github.risyadul.lionscope
 
 import java.util.IdentityHashMap
 
+/**
+ * How much of the compositions one capture reads, shared by every AndroidComposeView in it: at most [maxGroups]
+ * groups (a group costs a few µs on a phone) and until [maxMs] of main-thread time have passed, checked every
+ * [CHECK_EVERY] groups.
+ */
+internal class ComposeBudget(
+    private val maxGroups: Int = MAX_GROUPS,
+    maxMs: Long = MAX_MS,
+    private val nanoTime: () -> Long = System::nanoTime,
+) {
+    private val deadline = nanoTime() + maxMs * NANOS_PER_MS
+    private var taken = 0
+    private var expired = false
+
+    /** False once the budget is spent. */
+    fun take(): Boolean {
+        if (expired || taken >= maxGroups) return false
+        if (++taken % CHECK_EVERY == 0 && nanoTime() >= deadline) expired = true
+        return !expired
+    }
+
+    internal companion object {
+        const val MAX_GROUPS = 100_000
+        const val MAX_MS = 200L
+        const val CHECK_EVERY = 1_024
+        private const val NANOS_PER_MS = 1_000_000L
+    }
+}
+
 /** One composition's slot table and layout nodes as [ComposeTreeBuilder] reads them, so it can be tested on fakes. */
 internal interface SlotTableAccess<G : Any, L : Any> {
     /** Child groups in slot order. */
@@ -58,16 +87,13 @@ internal class ComposeTree(
  * group with one, and whether it is shown from [ComposableFilter]. Sub-compositions are hung under the composable
  * owning the layout node their nodes are placed in; a composition whose nodes belong to another owner (a dialog's
  * content, recorded in its parent's table too) is left out, as are composables with nothing placed. At most
- * [maxGroups] groups are read in all ([truncated] beyond). Iterative: no recursion on deep slot tables.
+ * what [budget] allows is read ([truncated] beyond). Iterative: no recursion on deep slot tables.
  */
 internal class ComposeTreeBuilder<G : Any, L : Any>(
     private val access: SlotTableAccess<G, L>,
-    groupBudget: Int = MAX_GROUPS,
+    private val budget: ComposeBudget = ComposeBudget(),
+    private val filter: ComposableFilter = ComposableFilter(),
 ) {
-    /** What is left of the group budget after [build]. */
-    var groupsLeft = groupBudget
-        private set
-
     /** A group being walked: what its children inherit, how many calls they made so far, and the rest of them. */
     private class Frame<G>(
         val info: SourceInfo?,
@@ -133,11 +159,10 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
                 stack.removeAt(stack.size - 1)
                 continue
             }
-            if (groupsLeft <= 0) {
+            if (!budget.take()) {
                 truncated = true
                 break
             }
-            groupsLeft--
             val group = parent.children.next()
             val info = access.sourceInfo(group)?.let { parsed.getOrPut(it) { SourceInfo.parse(it) } }
             if (info != null) hasSourceInfo = true
@@ -145,8 +170,8 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
             var destination = parent.destination
             if (info?.isCall == true) {
                 val call = parent.calls++
-                ComposableFilter.learn(info, parent.packageHash)
-                if (ComposableFilter.isShown(info.name, parent.packageHash)) {
+                filter.learn(info, parent.packageHash)
+                if (filter.isShown(info.name, parent.packageHash)) {
                     val node = ComposeNode(info.name!!, ComposableSource(parent.file, parent.info?.lineOfCall(call)), destination)
                     if (owner == null) top += node else owner.children += node
                     owner = node
@@ -206,8 +231,6 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
     }
 
     internal companion object {
-        /** Groups read per capture at most (a group costs a few µs on a phone). */
-        const val MAX_GROUPS = 100_000
         const val NAVIGATION_OWNERS_PROVIDER = "LocalOwnersProvider"
 
         private val BY_POSITION = compareBy<ComposeNode>({ it.bounds?.top }, { it.bounds?.left })

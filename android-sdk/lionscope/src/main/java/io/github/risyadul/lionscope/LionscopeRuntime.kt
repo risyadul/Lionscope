@@ -56,14 +56,13 @@ internal object LionscopeRuntime {
         val screens = screenTracker ?: return
         val main = mainScheduler ?: return
         if (lastTracked.get() === navController) return
-        lastTracked = WeakReference(navController)
         main.post(Runnable {
             guarded {
                 val tracker = navigation ?: NavigationTracker(screens::requestResolve).also {
                     navigation = it
                     screens.destinations = it
                 }
-                tracker.track(navController as NavController)
+                if (tracker.track(navController as NavController)) lastTracked = WeakReference(navController)
             }
         })
     }

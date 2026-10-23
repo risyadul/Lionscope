@@ -11,6 +11,7 @@ class DestinationNamesTest {
         assertEquals(ScreenRef("product/{id}", "product/{id}?tab={tab}", ScreenKind.DESTINATION), DestinationNames.screen("product/{id}?tab={tab}", null, dialog = false))
         assertEquals("catalog", DestinationNames.nameOf("catalog"))
         assertEquals("settings/notifications", DestinationNames.nameOf("settings/notifications"))
+        assertEquals("settings.general", DestinationNames.nameOf("settings.general")) // Dotted, but no class.
     }
 
     @Test

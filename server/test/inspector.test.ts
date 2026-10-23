@@ -227,6 +227,11 @@ describe('Inspector service', () => {
       className: 'Button',
       composable: { file: 'CartScreen.kt', line: 87 },
     });
+    // Read, but not one composable found in it.
+    expect(await inspect([sdkNode(0), composeView('read')])).toMatchObject({
+      source: 'uiautomator',
+      fallbackReason: 'compose',
+    });
     for (const [status, reason] of [
       ['disabled', 'compose_disabled'],
       ['no_source', 'compose_no_source'],

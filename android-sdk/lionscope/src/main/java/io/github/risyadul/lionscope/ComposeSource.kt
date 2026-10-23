@@ -89,100 +89,109 @@ internal class SourceInfo(
  * `HomeScreen.kt` is a node but the Surface, Row and Layout inside Button are not (their call sites are in
  * androidx.compose). Calls whose site is in library code, helpers that emit nothing ([HIDDEN], `remember*`, property
  * getters such as `<get-typography>`) and lambdas (no name) are hidden; what they emit belongs to the nearest shown
- * ancestor. Library code is [LIBRARY_PACKAGES] (by package hash, all the compiler records) plus what [learn] adds:
- * library code only calls library functions by name (it reaches app code through lambdas, which have no name), so a
- * named function called from library code is library code too, wherever its package is. Main thread.
+ * ancestor. Library code is [LIBRARY_PACKAGES] (by package hash, all the compiler records) plus what [learn] adds
+ * during one capture: library code calls library functions by name (it reaches app code mostly through lambdas,
+ * which have no name), so a named function called from library code is taken for library code, wherever its
+ * package is, unless that package already made a shown call (an app's `@Composable override` called by a library
+ * stays the app's). One instance per capture, main thread.
  */
-internal object ComposableFilter {
-    private val HIDDEN = setOf(
-        "CompositionLocalProvider",
-        "key",
-        "ReusableContent",
-        "ReusableContentHost",
-        "Providers",
-        "ProvideTextStyle",
-        "ProvideContentColorTextStyle",
-        "LocalOwnersProvider",
-        "SaveableStateProvider",
-    )
-
-    /** The androidx packages whose composables call other composables internally (Compose UI, Material, Navigation). */
-    private val LIBRARY_PACKAGES = listOf(
-        "androidx.activity.compose",
-        "androidx.compose.animation",
-        "androidx.compose.animation.core",
-        "androidx.compose.foundation",
-        "androidx.compose.foundation.contextmenu",
-        "androidx.compose.foundation.gestures",
-        "androidx.compose.foundation.internal",
-        "androidx.compose.foundation.layout",
-        "androidx.compose.foundation.lazy",
-        "androidx.compose.foundation.lazy.grid",
-        "androidx.compose.foundation.lazy.layout",
-        "androidx.compose.foundation.lazy.staggeredgrid",
-        "androidx.compose.foundation.pager",
-        "androidx.compose.foundation.selection",
-        "androidx.compose.foundation.text",
-        "androidx.compose.foundation.text.contextmenu",
-        "androidx.compose.foundation.text.contextmenu.internal",
-        "androidx.compose.foundation.text.contextmenu.provider",
-        "androidx.compose.foundation.text.input",
-        "androidx.compose.foundation.text.input.internal",
-        "androidx.compose.foundation.text.modifiers",
-        "androidx.compose.foundation.text.selection",
-        "androidx.compose.foundation.window",
-        "androidx.compose.material",
-        "androidx.compose.material.internal",
-        "androidx.compose.material.navigation",
-        "androidx.compose.material.pullrefresh",
-        "androidx.compose.material.ripple",
-        "androidx.compose.material3",
-        "androidx.compose.material3.adaptive",
-        "androidx.compose.material3.adaptive.layout",
-        "androidx.compose.material3.adaptive.navigation",
-        "androidx.compose.material3.adaptive.navigationsuite",
-        "androidx.compose.material3.carousel",
-        "androidx.compose.material3.internal",
-        "androidx.compose.material3.pulltorefresh",
-        "androidx.compose.runtime",
-        "androidx.compose.runtime.internal",
-        "androidx.compose.runtime.livedata",
-        "androidx.compose.runtime.saveable",
-        "androidx.compose.ui",
-        "androidx.compose.ui.graphics.vector",
-        "androidx.compose.ui.layout",
-        "androidx.compose.ui.node",
-        "androidx.compose.ui.platform",
-        "androidx.compose.ui.res",
-        "androidx.compose.ui.text",
-        "androidx.compose.ui.tooling",
-        "androidx.compose.ui.viewinterop",
-        "androidx.compose.ui.window",
-        "androidx.lifecycle.compose",
-        "androidx.lifecycle.viewmodel.compose",
-        "androidx.navigation.compose",
-        "androidx.navigation.compose.internal",
-        "org.jetbrains.compose.resources",
-    )
-
-    /** Learned hashes are kept for the process (packages do not change), up to this many. */
-    private const val MAX_LIBRARY_HASHES = 1_024
-
-    private val libraryHashes: MutableSet<String> by lazy { LIBRARY_PACKAGES.mapTo(HashSet()) { SourceInfo.packageHash(it) } }
+internal class ComposableFilter {
+    private val learned = HashSet<String>()
+    private val app = HashSet<String>()
 
     /** [packageHash] is that of the code making a call; null (unknown) counts as the app's. */
-    fun isLibrary(packageHash: String?): Boolean = packageHash != null && packageHash in libraryHashes
+    fun isLibrary(packageHash: String?): Boolean =
+        packageHash != null && packageHash !in app && (packageHash in LIBRARY_HASHES || packageHash in learned)
 
-    /** [callSitePackageHash] is that of the code making the call. */
+    /** [callSitePackageHash] is that of the code making the call; a shown call marks it as app code. */
     fun isShown(name: String?, callSitePackageHash: String?): Boolean {
         if (name.isNullOrEmpty() || name[0] == '<' || name.startsWith("remember") || name in HIDDEN) return false
-        return !isLibrary(callSitePackageHash)
+        if (isLibrary(callSitePackageHash)) return false
+        if (callSitePackageHash != null) app += callSitePackageHash
+        return true
     }
 
     /** A named function [called] from library code: its own package (its [SourceInfo.packageHash]) is library code. */
     fun learn(called: SourceInfo, callSitePackageHash: String?) {
         val hash = called.packageHash ?: return
-        if (called.name == null || called.file == null || !isLibrary(callSitePackageHash)) return
-        if (libraryHashes.size < MAX_LIBRARY_HASHES + LIBRARY_PACKAGES.size) libraryHashes += hash
+        if (called.name == null || called.file == null || hash in app || !isLibrary(callSitePackageHash)) return
+        if (learned.size < MAX_LEARNED) learned += hash
+    }
+
+    private companion object {
+        const val MAX_LEARNED = 1_024
+
+        val HIDDEN = setOf(
+            "CompositionLocalProvider",
+            "key",
+            "ReusableContent",
+            "ReusableContentHost",
+            "Providers",
+            "ProvideTextStyle",
+            "ProvideContentColorTextStyle",
+            "LocalOwnersProvider",
+            "SaveableStateProvider",
+        )
+
+        /** The androidx packages whose composables call other composables internally (Compose UI, Material, Navigation). */
+        val LIBRARY_PACKAGES = listOf(
+            "androidx.activity.compose",
+            "androidx.compose.animation",
+            "androidx.compose.animation.core",
+            "androidx.compose.foundation",
+            "androidx.compose.foundation.contextmenu",
+            "androidx.compose.foundation.gestures",
+            "androidx.compose.foundation.internal",
+            "androidx.compose.foundation.layout",
+            "androidx.compose.foundation.lazy",
+            "androidx.compose.foundation.lazy.grid",
+            "androidx.compose.foundation.lazy.layout",
+            "androidx.compose.foundation.lazy.staggeredgrid",
+            "androidx.compose.foundation.pager",
+            "androidx.compose.foundation.selection",
+            "androidx.compose.foundation.text",
+            "androidx.compose.foundation.text.contextmenu",
+            "androidx.compose.foundation.text.contextmenu.internal",
+            "androidx.compose.foundation.text.contextmenu.provider",
+            "androidx.compose.foundation.text.input",
+            "androidx.compose.foundation.text.input.internal",
+            "androidx.compose.foundation.text.modifiers",
+            "androidx.compose.foundation.text.selection",
+            "androidx.compose.foundation.window",
+            "androidx.compose.material",
+            "androidx.compose.material.internal",
+            "androidx.compose.material.navigation",
+            "androidx.compose.material.pullrefresh",
+            "androidx.compose.material.ripple",
+            "androidx.compose.material3",
+            "androidx.compose.material3.adaptive",
+            "androidx.compose.material3.adaptive.layout",
+            "androidx.compose.material3.adaptive.navigation",
+            "androidx.compose.material3.adaptive.navigationsuite",
+            "androidx.compose.material3.carousel",
+            "androidx.compose.material3.internal",
+            "androidx.compose.material3.pulltorefresh",
+            "androidx.compose.runtime",
+            "androidx.compose.runtime.internal",
+            "androidx.compose.runtime.livedata",
+            "androidx.compose.runtime.saveable",
+            "androidx.compose.ui",
+            "androidx.compose.ui.graphics.vector",
+            "androidx.compose.ui.layout",
+            "androidx.compose.ui.node",
+            "androidx.compose.ui.platform",
+            "androidx.compose.ui.res",
+            "androidx.compose.ui.text",
+            "androidx.compose.ui.tooling",
+            "androidx.compose.ui.viewinterop",
+            "androidx.compose.ui.window",
+            "androidx.lifecycle.compose",
+            "androidx.lifecycle.viewmodel.compose",
+            "androidx.navigation.compose",
+            "androidx.navigation.compose.internal",
+            "org.jetbrains.compose.resources",
+        )
+
+        val LIBRARY_HASHES: Set<String> by lazy { LIBRARY_PACKAGES.mapTo(HashSet()) { SourceInfo.packageHash(it) } }
     }
 }

@@ -335,6 +335,17 @@ class DeviceLinkTest {
         }
     }
 
+    @Test
+    fun aDestinationQueuedBeforeWelcomeIsNotWrittenUntilTheVersionIsKnown() {
+        val destination = ScreenRef("product/{id}", "product/{id}", ScreenKind.DESTINATION)
+        val method = DeviceLink::class.java.declaredClasses.single { it.simpleName == "ScreenEvent" }
+            .getDeclaredConstructor(Long::class.javaPrimitiveType, ScreenRef::class.java).apply { isAccessible = true }
+        val event = method.newInstance(1L, destination)
+        assertEquals(null, DeviceLink.encode(event, null))
+        assertTrue(DeviceLink.encode(event, 6)!!.contains("\"kind\":\"destination\""))
+        assertTrue(DeviceLink.encode(method.newInstance(1L, null), null)!!.contains("\"screen\":null"))
+    }
+
     @Test(timeout = 20_000)
     fun reconnectsAfterTheServerDisappears() {
         val first = localServer()

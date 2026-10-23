@@ -8,7 +8,8 @@ package io.github.risyadul.lionscope
  * label, else not reported.
  */
 internal object DestinationNames {
-    private val QUALIFIED_NAME = Regex("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+")
+    /** A serializable class's name: dotted, its last segment capitalized (`settings.general` stays a path). */
+    private val QUALIFIED_NAME = Regex("([A-Za-z_$][A-Za-z0-9_$]*\\.)+[A-Z][A-Za-z0-9_$]*")
 
     fun screen(route: String?, label: String?, dialog: Boolean): ScreenRef? {
         val pattern = route?.takeIf { it.isNotBlank() } ?: label?.takeIf { it.isNotBlank() } ?: return null

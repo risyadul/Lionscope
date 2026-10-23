@@ -38,10 +38,14 @@ internal class NavigationTracker(private val onChange: () -> Unit) : Destination
     private val tracked = ArrayList<Tracked>()
     private var sequence = 0L
 
-    /** Idempotent per controller. */
-    fun track(controller: NavController) {
-        tracked.removeAll { it.controller.get() == null || it.activity.get() == null }
-        if (tracked.any { it.controller.get() === controller } || tracked.size >= MAX_CONTROLLERS) return
+    /** Idempotent per controller; false when it cannot be tracked (too many controllers alive). */
+    fun track(controller: NavController): Boolean {
+        tracked.removeAll { entry ->
+            val activity = entry.activity.get()
+            entry.controller.get() == null || activity == null || activity.isDestroyed
+        }
+        if (tracked.any { it.controller.get() === controller }) return true
+        if (tracked.size >= MAX_CONTROLLERS) return false
         val entry = Tracked(controller, activityOf(controller.context), ++sequence)
         tracked += entry
         // Called right away with the current destination, if any, then on every change (main thread).
@@ -51,6 +55,7 @@ internal class NavigationTracker(private val onChange: () -> Unit) : Destination
                 onChange()
             }
         }
+        return true
     }
 
     override fun screenFor(activity: Any): ScreenRef? {

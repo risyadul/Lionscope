@@ -71,25 +71,38 @@ class ComposeSourceTest {
     fun onlyNamedCallsFromAppCodeAreShown() {
         val app = SourceInfo.packageHash("com.example.shop")
         val material3 = SourceInfo.packageHash("androidx.compose.material3")
-        assertTrue(ComposableFilter.isShown("Button", app))
-        assertTrue(ComposableFilter.isShown("Button", null)) // Unknown package: the app's.
-        assertFalse(ComposableFilter.isShown("Surface", material3))
-        assertFalse(ComposableFilter.isShown(null, app))
-        assertFalse(ComposableFilter.isShown("rememberSaveable", app))
-        assertFalse(ComposableFilter.isShown("<get-typography>", app))
-        assertFalse(ComposableFilter.isShown("CompositionLocalProvider", app))
+        val filter = ComposableFilter()
+        assertTrue(filter.isShown("Button", app))
+        assertTrue(filter.isShown("Button", null)) // Unknown package: the app's.
+        assertFalse(filter.isShown("Surface", material3))
+        assertFalse(filter.isShown(null, app))
+        assertFalse(filter.isShown("rememberSaveable", app))
+        assertFalse(filter.isShown("<get-typography>", app))
+        assertFalse(filter.isShown("CompositionLocalProvider", app))
     }
 
     @Test
     fun aFunctionCalledFromLibraryCodeIsLibraryCode() {
         val material3 = SourceInfo.packageHash("androidx.compose.material3")
         val internal = SourceInfo.packageHash("androidx.compose.material3.newinternals")
-        assertTrue(ComposableFilter.isShown("Box", internal))
-        ComposableFilter.learn(SourceInfo.parse("C(Decoration)5@1L1:Decoration.kt#$internal")!!, material3)
-        assertFalse(ComposableFilter.isShown("Box", internal))
+        val filter = ComposableFilter()
+        filter.learn(SourceInfo.parse("C(Decoration)5@1L1:Decoration.kt#$internal")!!, material3)
+        assertFalse(filter.isShown("Box", internal))
+        assertTrue(ComposableFilter().isShown("Box", internal)) // Learned for one capture only.
         // App code calling into some package never makes it library code.
         val other = SourceInfo.packageHash("com.example.widgets")
-        ComposableFilter.learn(SourceInfo.parse("C(Chip)5@1L1:Chip.kt#$other")!!, SourceInfo.packageHash("com.example.shop"))
-        assertTrue(ComposableFilter.isShown("Box", other))
+        filter.learn(SourceInfo.parse("C(Chip)5@1L1:Chip.kt#$other")!!, SourceInfo.packageHash("com.example.shop"))
+        assertTrue(filter.isShown("Box", other))
+    }
+
+    @Test
+    fun anAppOverrideCalledByALibraryStaysTheApps() {
+        val app = SourceInfo.packageHash("com.example.shop")
+        val lazyLayout = SourceInfo.packageHash("androidx.compose.foundation.lazy.layout")
+        val filter = ComposableFilter()
+        assertTrue(filter.isShown("CatalogScreen", app)) // The app made a shown call: its package is the app's.
+        // foundation.lazy.layout calls the app's `@Composable override fun Item()` by name.
+        filter.learn(SourceInfo.parse("C(Item)5@1L1:CatalogItems.kt#$app")!!, lazyLayout)
+        assertTrue(filter.isShown("ProductCard", app))
     }
 }

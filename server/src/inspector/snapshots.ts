@@ -132,20 +132,23 @@ const COMPOSE_FALLBACKS: Readonly<
 /**
  * The top window is Compose the SDK did not read: an AndroidComposeView covers at least half of it and its
  * composition was not read (`composition` other than `read`; absent from an SDK below 0.6.0, which never reads
- * one). Null when the snapshot shows the top window as it is.
+ * one), or was read without finding a composable in it. Null when the snapshot shows the top window as it is.
  */
 export function composeFallback(inspection: SdkInspection): ComposeFallback | null {
   const { begin, nodes } = inspection;
   const top = begin.windows.at(-1);
   if (!begin.compose || !top) return null;
   const half = rectArea(top.bounds) / 2;
+  // Read but without a single composable (nothing app-made found in it): uiautomator shows more.
+  const hasComposables = (view: InspectorNode) =>
+    nodes.some((node) => node.parent === view.id && node.composable !== undefined);
   const unread = nodes.find(
     (node) =>
       node.window === top.id &&
       node.className.endsWith(COMPOSE_VIEW) &&
       node.visibility === 'visible' &&
       rectArea(node.visibleBounds) >= half &&
-      node.composition !== 'read',
+      (node.composition !== 'read' || !hasComposables(node)),
   );
   if (!unread) return null;
   const status = unread.composition;

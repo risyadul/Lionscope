@@ -101,6 +101,23 @@ class ComposeSemanticsTest {
     }
 
     @Test
+    fun aRevealedPasswordStaysSecretAtTheSameCallSite() {
+        val field = ComposeNode("OutlinedTextField", ComposableSource("Login.kt", 105), null)
+        val hidden = read(config {
+            set(SemanticsProperties.EditableText, AnnotatedString("hunter2"))
+            set(SemanticsProperties.Password, Unit)
+        })
+        assertTrue(ComposeSemanticsReader.remembered(field, hidden).secret)
+        // "Show password" drops the password semantics; the field is still a password field.
+        val shown = read(config { set(SemanticsProperties.EditableText, AnnotatedString("hunter2")) })
+        val remembered = ComposeSemanticsReader.remembered(ComposeNode("OutlinedTextField", ComposableSource("Login.kt", 105), null), shown)
+        assertTrue(remembered.secret)
+        assertNull(remembered.text)
+        val other = ComposeSemanticsReader.remembered(ComposeNode("OutlinedTextField", ComposableSource("Login.kt", 104), null), shown)
+        assertEquals("hunter2", other.text) // Another call site.
+    }
+
+    @Test
     fun longTextIsCappedBeforeTheWire() {
         val semantics = read(config { set(SemanticsProperties.Text, listOf(AnnotatedString("x".repeat(10_000)))) })
         assertEquals(InspectorText.MAX_RAW_TEXT, semantics.text!!.length)

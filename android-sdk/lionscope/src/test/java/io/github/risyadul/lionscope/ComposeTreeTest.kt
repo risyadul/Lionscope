@@ -56,7 +56,7 @@ class ComposeTreeTest {
         children = listOf(function("BasicText", "BasicText.kt", ui, 20, children = listOf(FakeGroup(layout = layout)))),
     )
 
-    private fun build(vararg compositions: List<FakeGroup>, budget: Int = ComposeTreeBuilder.MAX_GROUPS) =
+    private fun build(vararg compositions: List<FakeGroup>, budget: ComposeBudget = ComposeBudget()) =
         ComposeTreeBuilder(FakeSlots, budget).build(compositions.toList(), root)
 
     private fun names(node: ComposeNode): String =
@@ -199,9 +199,22 @@ class ComposeTreeTest {
         val full = build(listOf(many))
         assertEquals(10, full.roots.size)
         assertFalse(full.truncated)
-        val cut = build(listOf(many), budget = 7)
+        val cut = build(listOf(many), budget = ComposeBudget(maxGroups = 7))
         assertTrue(cut.truncated)
         assertTrue(cut.roots.size in 1..3)
+    }
+
+    @Test
+    fun theTimeBudgetCutsTheReadShortToo() {
+        var nanos = 0L
+        val budget = ComposeBudget(maxMs = 200, nanoTime = { nanos })
+        repeat(ComposeBudget.CHECK_EVERY - 1) { assertTrue(budget.take()) }
+        nanos = 199_000_000
+        assertTrue(budget.take()) // Checked: not yet.
+        nanos = 201_000_000
+        repeat(ComposeBudget.CHECK_EVERY - 1) { assertTrue(budget.take()) }
+        assertFalse(budget.take()) // Checked again: past the deadline, and spent from now on.
+        assertFalse(budget.take())
     }
 
     @Test

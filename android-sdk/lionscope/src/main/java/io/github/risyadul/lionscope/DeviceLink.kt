@@ -321,7 +321,12 @@ internal class DeviceLink(
          * dropped here. A failing v2 encoder drops that one message, never the connection.
          */
         fun encode(item: Any, negotiatedVersion: Int?): String? = when (item) {
-            is ScreenEvent -> DeviceMessages.screen(item.ts, item.screen, negotiatedVersion)
+            // A destination queued before `welcome` is offered again once the version is agreed (see onWelcome).
+            is ScreenEvent -> if (item.screen?.kind == ScreenKind.DESTINATION && negotiatedVersion == null) {
+                null
+            } else {
+                DeviceMessages.screen(item.ts, item.screen, negotiatedVersion)
+            }
             is V2Item -> if (speaks(negotiatedVersion, item.minVersion)) encodeContained(item) else null
             else -> item.toString()
         }

@@ -215,15 +215,16 @@ android:value="false" />`) cannot be read: the badge says why (restart the app).
   Compose source information. The tooling data makes composition a little slower and keeps a little more in
   memory (as under Android Studio's inspector), so debug frame timings of Compose screens lean slightly
   pessimistic. A capture runs on the main thread: about 10 ms for a 30-item lazy list on an emulator, several
-  times that on a slow phone.
+  times that on a slow phone; reading compositions stops after 200 ms (the snapshot is then marked truncated).
 - **The line number is where the start tag ends.** aapt2 records the line of the closing `>`, so a `Button` that
   spans lines 28 to 33 reports 33. Views built in code, ViewStubs and views inflated off the main thread have no
   source, and neither do the views of an Activity that was created while inflation tracking was off (or opted out
   of in the SDK) — turn it on and reopen the screen.
 - **Privacy.** The screenshot and the text on screen stay on your machine, and the snapshot is kept in the
   server's memory only (the last few). Password fields are never read: for Compose, text fields with password
-  semantics (`PasswordVisualTransformation`, secure text fields) or a password content type. A Compose field
-  that only sets `KeyboardType.Password` shows its text on screen and is read like any other. An AI agent sees text and a cropped image
+  semantics (`PasswordVisualTransformation`, secure text fields) or a password content type, and a field once
+  seen as one stays redacted when "show password" turns that off. A Compose field that only ever sets
+  `KeyboardType.Password` shows its text on screen and is read like any other. An AI agent sees text and a cropped image
   only for an element _you_ selected (never for a whole window or a large part of the screen); an element the
   agent selects itself gives it structure only (class, id, layout source, owner, bounds). A view an agent
   selected is marked **AI** in the dashboard. See "Use with AI agents".

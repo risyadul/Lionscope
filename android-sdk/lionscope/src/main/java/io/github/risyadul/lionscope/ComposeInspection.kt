@@ -4,7 +4,9 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.runtime.tooling.CompositionData
 import androidx.compose.runtime.tooling.CompositionGroup
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.LayoutInfo
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
@@ -13,7 +15,6 @@ import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.state.ToggleableState
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -36,10 +37,12 @@ internal object ComposeInspectionSwitch {
  * AndroidViewsHandler).
  */
 internal class ComposeViewReader : ComposeReading {
-    private var groupsLeft = ComposeTreeBuilder.MAX_GROUPS
+    private var budget = ComposeBudget()
+    private var filter = ComposableFilter()
 
     override fun beginCapture() {
-        groupsLeft = ComposeTreeBuilder.MAX_GROUPS
+        budget = ComposeBudget()
+        filter = ComposableFilter()
     }
 
     override fun read(view: View): ComposeRead = try {
@@ -61,20 +64,23 @@ internal class ComposeViewReader : ComposeReading {
         val screen = IntArray(2).also(view::getLocationOnScreen)
         val window = IntArray(2).also(view::getLocationInWindow)
         val access = LayoutAccess(screen[0] - window[0], screen[1] - window[1])
-        val builder = ComposeTreeBuilder(access, groupsLeft)
         val compositions = tables.filterIsInstance<CompositionData>().map { it.compositionGroups }
-        val tree = builder.build(compositions, rootSemantics.layoutInfo)
-        groupsLeft = builder.groupsLeft
+        val tree = ComposeTreeBuilder(access, budget, filter).build(compositions, rootSemantics.layoutInfo)
         if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
         val configs = ComposeSemanticsReader.byLayout(rootSemantics)
         val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
-        forEachNode(tree.roots) { node -> semantics[node] = ComposeSemanticsReader.of(node.layouts, configs) }
-        val claimed = claimInteropViews(view, tree)
+        forEachNode(tree.roots) { node ->
+            semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
+        }
+        val claimed = claimInteropViews(view, tree, semantics)
         return ComposeRead(CompositionStatus.READ, tree.roots, semantics, claimed, tree.truncated)
     }
 
-    /** AndroidView holders (children of AndroidViewsHandler) move under the composable owning their layout node. */
-    private fun claimInteropViews(view: View, tree: ComposeTree): Set<View> {
+    /**
+     * AndroidView holders (children of AndroidViewsHandler) move under the composable owning their layout node, if
+     * that composable is in the tree ([shown]); else they stay under the handler.
+     */
+    private fun claimInteropViews(view: View, tree: ComposeTree, shown: Map<ComposeNode, *>): Set<View> {
         val claimed = HashSet<View>()
         val group = view as? ViewGroup ?: return claimed
         for (i in 0 until group.childCount) {
@@ -83,7 +89,7 @@ internal class ComposeViewReader : ComposeReading {
             for (j in 0 until handler.childCount) {
                 val holder = handler.getChildAt(j) ?: continue
                 val layout = layoutNodeOf(holder) ?: continue
-                val owner = tree.ownerOf(layout) ?: continue
+                val owner = tree.ownerOf(layout)?.takeIf { it in shown } ?: continue
                 owner.children += holder
                 claimed += holder
             }
@@ -99,8 +105,8 @@ internal class ComposeViewReader : ComposeReading {
         /** A node mid-transform can report a non-finite position: it counts as not placed rather than failing the read. */
         override fun isPlaced(node: LayoutInfo): Boolean {
             if (!node.isPlaced || !node.isAttached || !node.coordinates.isAttached) return false
-            val position = node.coordinates.positionInWindow()
-            return position.x.isFinite() && position.y.isFinite()
+            val box = boxInRoot(node.coordinates)
+            return box.left.isFinite() && box.top.isFinite() && box.right.isFinite() && box.bottom.isFinite()
         }
 
         /**
@@ -108,27 +114,38 @@ internal class ComposeViewReader : ComposeReading {
          * group's slots: it is captured by the restart lambda of the group's recompose scope (as Compose tooling
          * reads parameters).
          */
-        override fun destination(group: CompositionGroup): String? {
-            for (value in group.data) {
-                val entry = when {
+        override fun destination(group: CompositionGroup): String? = try {
+            group.data.firstNotNullOfOrNull { value ->
+                when {
                     value == null -> null
                     value.javaClass.name == NAV_BACK_STACK_ENTRY -> value
                     else -> capturedEntry(value)
                 }
-                if (entry != null) return NavigationScreens.destinationName(entry)
-            }
-            return null
+            }?.let(NavigationScreens::destinationName)
+        } catch (e: LinkageError) {
+            null // A Navigation version without an API used here: no destinations, the rest is read.
+        } catch (e: RuntimeException) {
+            null
         }
 
-        /** The content box (inside the node's padding modifiers), like accessibility and Compose tooling report. */
+        /**
+         * The content box (inside the node's padding modifiers), like accessibility and Compose tooling report, as
+         * drawn: through any scale or rotation of a graphics layer (the box around its corners), not clipped.
+         */
         override fun bounds(node: LayoutInfo): PixelRect {
             val coordinates = node.coordinates
-            val position = coordinates.positionInWindow()
-            val size = coordinates.size
-            val left = position.x.roundToInt() + dx
-            val top = position.y.roundToInt() + dy
-            return PixelRect(left, top, left + size.width, top + size.height)
+            val box = boxInRoot(coordinates)
+            val root = coordinates.findRootCoordinates().positionInWindow()
+            return PixelRect(
+                (box.left + root.x).roundToInt() + dx,
+                (box.top + root.y).roundToInt() + dy,
+                (box.right + root.x).roundToInt() + dx,
+                (box.bottom + root.y).roundToInt() + dy,
+            )
         }
+
+        private fun boxInRoot(coordinates: LayoutCoordinates) =
+            coordinates.findRootCoordinates().localBoundingBoxOf(coordinates, false)
     }
 
     private companion object {
@@ -215,6 +232,33 @@ internal object ComposeSemanticsReader {
     private const val CONTENT_TYPE = "ContentType"
     private const val PASSWORD_HINT = "password"
 
+    /** Call sites (`name@file:line`) seen with password semantics, kept for the process: at most this many. */
+    private const val MAX_SECRET_SITES = 256
+    private val secretSites = HashSet<String>()
+
+    /**
+     * [semantics] of [node], kept secret when its call site was a password field before: a "show password" toggle
+     * drops the password semantics (a visible password is a password all the same, as for TextViews).
+     */
+    fun remembered(node: ComposeNode, semantics: ComposeSemantics): ComposeSemantics {
+        val file = node.source.file ?: return semantics
+        val site = "${node.name}@$file:${node.source.line}"
+        if (semantics.secret) {
+            if (secretSites.size < MAX_SECRET_SITES) secretSites += site
+            return semantics
+        }
+        if (site !in secretSites) return semantics
+        return ComposeSemantics(null, null, semantics.testTag, semantics.enabled, semantics.clickable, semantics.focused,
+            semantics.selected, semantics.checked, secret = true)
+    }
+
+    /** By name, so a state a later Compose adds reads as unknown instead of failing. */
+    private fun checkedOf(state: Any): Boolean? = when (state.toString()) {
+        "On" -> true
+        "Off" -> false
+        else -> null
+    }
+
     /** The unmerged semantics configuration of every layout node that has one. */
     fun byLayout(root: SemanticsNode): Map<Any, SemanticsConfiguration> {
         val configs = IdentityHashMap<Any, SemanticsConfiguration>()
@@ -242,13 +286,7 @@ internal object ComposeSemanticsReader {
             clickable = own.any { SemanticsActions.OnClick in it },
             focused = own.any { it.getOrNull(SemanticsProperties.Focused) == true },
             selected = own.any { it.getOrNull(SemanticsProperties.Selected) == true },
-            checked = own.firstNotNullOfOrNull { it.getOrNull(SemanticsProperties.ToggleableState) }?.let {
-                when (it) {
-                    ToggleableState.On -> true
-                    ToggleableState.Off -> false
-                    ToggleableState.Indeterminate -> null
-                }
-            },
+            checked = own.firstNotNullOfOrNull { it.getOrNull(SemanticsProperties.ToggleableState) }?.let(::checkedOf),
             secret = secret,
         )
     }
