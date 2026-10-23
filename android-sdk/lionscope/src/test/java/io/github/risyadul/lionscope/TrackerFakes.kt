@@ -33,10 +33,12 @@ internal class FakeScheduler : MainScheduler {
 internal class FakeLink : LinkPort {
     private val listeners = ArrayList<(Boolean) -> Unit>()
     private val configListeners = ArrayList<(SdkOptions) -> Unit>()
+    private val inspectListeners = ArrayList<(Int) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
     val v2Lines = ArrayList<String>()
     val v3Lines = ArrayList<String>()
+    val v4Lines = ArrayList<String>()
     var failure: Throwable? = null
 
     override var isWelcomed = false
@@ -70,6 +72,19 @@ internal class FakeLink : LinkPort {
     /** Encodes right away, as the link thread would. */
     override fun sendV3(sizeHint: Int, encode: () -> String?) {
         encode()?.let { v3Lines += it }
+    }
+
+    override fun addInspectListener(listener: (requestId: Int) -> Unit) {
+        inspectListeners += listener
+    }
+
+    /** Encodes right away, as the link thread would; dropped below v4 like the real link. */
+    override fun sendV4(sizeHint: Int, encode: () -> String?) {
+        if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V4) encode()?.let { v4Lines += it }
+    }
+
+    fun inspect(requestId: Int) {
+        inspectListeners.forEach { it(requestId) }
     }
 
     fun welcome(welcomed: Boolean, version: Int = DEVICE_PROTOCOL_VERSION) {

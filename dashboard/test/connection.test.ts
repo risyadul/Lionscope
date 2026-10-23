@@ -96,6 +96,8 @@ describe('parseServerMessage', () => {
       strictmode: true,
       inflate: true,
       viewtree: true,
+      inspection: true,
+      inspectorSelection: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

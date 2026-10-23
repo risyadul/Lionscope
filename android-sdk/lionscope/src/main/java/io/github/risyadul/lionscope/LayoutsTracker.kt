@@ -5,11 +5,10 @@ import android.app.Application
 import android.os.Bundle
 import android.view.View
 import android.view.Window
-import java.util.IdentityHashMap
 
 /**
  * The v3 layout features (main thread only): inflation timing through [InflateTracer] (API 29+, null below) and one
- * view tree snapshot per screen visit. Snapshots are only taken on a link welcomed at v3. Inflation tracking follows
+ * view tree snapshot per screen visit. It also knows the windows the Inspector walks below API 29 ([KnownWindows]). Snapshots are only taken on a link welcomed at v3. Inflation tracking follows
  * the last `inflateTracking` a server sent in this process (on until then): it is not reset when the link drops, so
  * Activities created after it was turned off get no factory until a session turns it on again.
  */
@@ -19,11 +18,12 @@ internal class LayoutsTracker(
     private val reporter: InflateReporter,
     private val tracer: InflateHooks?,
     private val snapshotter: ViewTreeSnapshotter,
-) : Application.ActivityLifecycleCallbacks, LayoutEvents {
+) : Application.ActivityLifecycleCallbacks, LayoutEvents, KnownWindows {
     private class Dialog(val window: Window, val name: String)
 
     private val started = ArrayList<Activity>()
-    private val dialogs = IdentityHashMap<Any, Dialog>()
+    /** In show order; keys are DialogFragments, whose `equals` is identity (final in Fragment). */
+    private val dialogs = LinkedHashMap<Any, Dialog>()
     private var screen: ScreenRef? = null
     private var screenTarget: Any? = null
     private var linkVersion = 0
@@ -57,6 +57,16 @@ internal class LayoutsTracker(
         if (screenTarget === activity) screenTarget = null
     }
 
+    override val hasStartedActivity: Boolean
+        get() = started.isNotEmpty()
+
+    override fun knownRoots(): List<View> {
+        val roots = ArrayList<View>(dialogs.size + 1)
+        started.lastOrNull()?.window?.peekDecorView()?.let(roots::add)
+        for (dialog in dialogs.values) dialog.window.peekDecorView()?.let(roots::add)
+        return roots
+    }
+
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
     override fun onActivityResumed(activity: Activity) = guarded { tracer?.onActivityShown(activity) }
     override fun onActivityPaused(activity: Activity) = Unit
@@ -71,6 +81,7 @@ internal class LayoutsTracker(
     }
 
     override fun onDialogShown(fragment: Any, activity: Any?, window: Window, name: String) {
+        dialogs.remove(fragment) // Shown again: now the top-most.
         dialogs[fragment] = Dialog(window, name)
         tracer?.onDialogShown(fragment, activity, window)
     }

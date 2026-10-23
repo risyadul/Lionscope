@@ -1,6 +1,13 @@
 import type { ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
 import { vi } from 'vitest';
-import type { ByeReason, SdkHello, SdkLink, SdkLinkHandler } from '../../src/device/sdkLink.ts';
+import { SdkInspectError } from '../../src/device/sdkLink.ts';
+import type {
+  ByeReason,
+  SdkHello,
+  SdkInspection,
+  SdkLink,
+  SdkLinkHandler,
+} from '../../src/device/sdkLink.ts';
 import { ProfilingSession } from '../../src/session/profilingSession.ts';
 import { FakeAdb, FakeDevice } from './fakes.ts';
 
@@ -32,6 +39,13 @@ export class FakeLink implements SdkLink {
   }
   sendConfig(options: SdkOptions): void {
     this.configs.push(options);
+  }
+  /** What inspect() answers; unset, it fails as `unsupported`. */
+  answerInspect: (() => Promise<SdkInspection>) | null = null;
+  inspects = 0;
+  inspect(): Promise<SdkInspection> {
+    this.inspects += 1;
+    return this.answerInspect?.() ?? Promise.reject(new SdkInspectError('unsupported'));
   }
 }
 

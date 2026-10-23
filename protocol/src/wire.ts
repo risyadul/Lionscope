@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -544,6 +544,116 @@ export type ScreenClientMessage =
   | { type: 'keyFrame' };
 
 // ---------------------------------------------------------------------------
+// Layout Inspector (0.5.0): a frozen snapshot of the device's view hierarchy, aligned with a screenshot
+//
+// Source `sdk`: the in-app SDK walks every window of the app (Android 10+), with the XML layout and line each view
+// was inflated from and its owning Fragment / Activity. Source `uiautomator`: the accessibility tree from
+// `uiautomator dump` (apps without the SDK, Compose screens, system UI); no layout source, owner or layout params.
+// ---------------------------------------------------------------------------
+
+export type InspectorSource = 'sdk' | 'uiautomator';
+/** [left, top, right, bottom] in device screen pixels (the current rotation). */
+export type PixelRect = [number, number, number, number];
+
+export const MAX_INSPECTOR_NODES = 5000;
+
+export interface InspectorWindow {
+  /** Index in `InspectorSnapshot.windows`, bottom-most first. */
+  id: number;
+  /** WindowManager.LayoutParams.type (1 = application, 2 = dialog, …), null when unknown. */
+  type: number | null;
+  bounds: PixelRect;
+}
+
+/**
+ * One view (SDK) or accessibility node (uiautomator). Siblings are listed in drawing order: the ViewGroup's custom
+ * drawing order when enabled (getChildDrawingOrder), then stably by Z (elevation + translationZ). A later sibling
+ * draws over an earlier one, so for overlapping nodes the later one in pre-order is on top.
+ */
+export interface InspectorNode {
+  /** Unique within its snapshot (pre-order index). */
+  id: number;
+  /** Parent node id, null for a window's root. */
+  parent: number | null;
+  window: number;
+  /** Fully-qualified class (SDK) or the accessibility class name (uiautomator). */
+  className: string;
+  /** Resource id entry name for the app's own ids (`btn_checkout`), `package:id/name` for others, null if none. */
+  resourceId: string | null;
+  /**
+   * TextView text as set (not caps-transformed), or the accessibility text. Password fields (password input types,
+   * password transformation, password autofill hints) never send their text or content description; text under a
+   * custom transformation is sent as displayed.
+   */
+  text: string | null;
+  contentDescription: string | null;
+  /** Unclipped bounds. */
+  bounds: PixelRect;
+  /** Bounds clipped to its ancestors and the screen; null when nothing of it is on screen. */
+  visibleBounds: PixelRect | null;
+  visibility: 'visible' | 'invisible' | 'gone';
+  alpha: number | null;
+  enabled: boolean | null;
+  clickable: boolean | null;
+  focused: boolean | null;
+  selected: boolean | null;
+  /** Checkable state: true / false when checkable, null otherwise. */
+  checked: boolean | null;
+  /** [left, top, right, bottom] px, SDK only. */
+  padding: PixelRect | null;
+  /** MarginLayoutParams margins [left, top, right, bottom] px, SDK only. */
+  margin: PixelRect | null;
+  /** `match_parent`, `wrap_content` or `<n>px`, SDK only. */
+  layoutWidth: string | null;
+  layoutHeight: string | null;
+  /**
+   * The XML layout this view was inflated from (`fragment_home`) and the line of its tag. `line` is where the start
+   * tag ENDS (its `>`), as recorded by aapt2, not the `<Tag` line. Null for views built in code, ViewStubs, views
+   * inflated off the main thread or before tracking, and for uiautomator nodes.
+   */
+  source: { layout: string; line: number } | null;
+  /** Owning Fragment / Activity (fully-qualified class), SDK only. */
+  fragment: string | null;
+  activity: string | null;
+}
+
+export interface InspectorSnapshot {
+  /** Server-assigned id; screenshot at `/inspector/<id>.png` (same origin, served while the snapshot is kept). */
+  id: string;
+  /** Laptop clock when captured. */
+  ts: number;
+  serial: string;
+  packageName: string | null;
+  source: InspectorSource;
+  /** Top screen name (SDK's view) when captured, null if unknown. */
+  screen: string | null;
+  /** Device screen size and rotation (0, 90, 180, 270) the bounds and the screenshot use. */
+  display: { width: number; height: number; rotation: number };
+  windows: InspectorWindow[];
+  nodes: InspectorNode[];
+  /** More than MAX_INSPECTOR_NODES nodes: the rest were dropped (deepest-first). */
+  truncated: boolean;
+  /** Main-thread time the SDK spent capturing, ms (SDK source only). */
+  captureMs: number | null;
+  /** Why the SDK source was not used, when `source` is `uiautomator` (e.g. `no_sdk`, `compose`, `old_sdk`). */
+  fallbackReason: string | null;
+}
+
+/** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
+export interface InspectorSelection {
+  snapshotId: string;
+  nodeId: number;
+  /** Laptop clock when selected. */
+  ts: number;
+  /**
+   * Who picked it: `user` (a click in a dashboard) or `agent` (select_inspector_node). An agent's own selection only
+   * points at an element: get_inspector_selection then returns its structure (class, id, source, owner, bounds)
+   * but not its text, content description or image, so an agent cannot read the screen without device control.
+   */
+  origin: 'user' | 'agent';
+}
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
@@ -572,6 +682,11 @@ export type ServerMessage =
   | { type: 'strictmode'; sample: StrictModeSample }
   | { type: 'inflate'; sample: InflateSample }
   | { type: 'viewtree'; sample: ViewTreeSample }
+  /** 0.5.0. A new Inspector snapshot (answer to `inspect`, from any client); replaces the previous one. */
+  | { type: 'inspection'; snapshot: InspectorSnapshot }
+  /** 0.5.0. The current Inspector selection changed (null = cleared); sent on connect too. */
+  | { type: 'inspectorSelection'; selection: InspectorSelection | null }
+  /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
 export type ServerMessageType = ServerMessage['type'];
@@ -588,6 +703,8 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'apps',
   'session',
   'snapshot',
+  'inspection',
+  'inspectorSelection',
   'error',
 ]);
 
@@ -614,7 +731,15 @@ export type ClientMessage =
   | { type: 'startSession'; serial: string; packageName: string }
   | { type: 'stopSession' }
   /** Change SDK options for the current session (partial). The server answers with an updated `session`. */
-  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean; inflateTracking?: boolean };
+  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean; inflateTracking?: boolean }
+  /**
+   * 0.5.0. Capture an Inspector snapshot of `serial`'s screen: from the SDK when the session's app on that device is
+   * linked at device protocol ≥ 4 and on top, else from uiautomator. Answered with `inspection` (to every client) or
+   * `error` code `inspect_failed`. At most one capture runs per device; a second request joins it.
+   */
+  | { type: 'inspect'; serial: string }
+  /** 0.5.0. Select a node of the current snapshot (null clears). Answered with `inspectorSelection` to every client. */
+  | { type: 'selectInspectorNode'; snapshotId: string; nodeId: number | null };
 
 /** Max accepted size of a dashboard → server frame, in bytes. */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -635,16 +760,24 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 3;
+export const DEVICE_PROTOCOL_VERSION = 4;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
  * v2 adds SDK → server `stall` and `strictmode`, and server → SDK `config`. Neither side sends a v2 type on a
  * link negotiated at 1.
  * v3 adds SDK → server `inflate` and `viewtree`, and the `config.inflateTracking` field (a v2 SDK ignores it).
+ * v4 adds server → SDK `inspect` and SDK → server `inspectBegin`, `inspectNodes` and `inspectError`.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
+export const DEVICE_PROTOCOL_V4 = 4;
+/** Max serialized bytes of one `inspectNodes` line (well under MAX_DEVICE_LINE_BYTES). */
+export const MAX_INSPECT_CHUNK_BYTES = 32 * 1024;
+/** Max total bytes of one `inspect` answer (all its lines); the SDK sends `inspectError failed` instead of more. */
+export const MAX_INSPECT_ANSWER_BYTES = 8 * 1024 * 1024;
+/** The server gives up on an `inspect` request after this long without the last chunk. */
+export const INSPECT_TIMEOUT_MS = 5000;
 /**
  * Highest `hello.protocolVersion` the server accepts (and negotiates down). It bounds the field to a plausible
  * range: anything above is garbage, not a future SDK.
@@ -748,7 +881,29 @@ export type DeviceMessage =
       maxDepth: number;
       deepestPath: ViewPathNode[];
       topClasses: { className: string; count: number }[];
-    };
+    }
+  /**
+   * v4. Start of the answer to gateway `inspect` with the same `requestId`: the snapshot was taken on the main thread
+   * at `ts`; `nodeCount` nodes follow in `inspectNodes` chunks (seq 0, 1, …; the one with `last: true` ends it).
+   * Node ids are pre-order indexes; windows are bottom-most first.
+   */
+  | {
+      type: 'inspectBegin';
+      requestId: number;
+      ts: number;
+      screen: string | null;
+      display: { width: number; height: number; rotation: number };
+      windows: InspectorWindow[];
+      nodeCount: number;
+      truncated: boolean;
+      captureMs: number;
+      /** True when a window's content is Compose (the server may prefer uiautomator for it). */
+      compose: boolean;
+    }
+  /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
+  | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }
+  /** v4. The snapshot could not be taken (`background`, `no_window`, `disabled`, `failed`). */
+  | { type: 'inspectError'; requestId: number; reason: 'background' | 'no_window' | 'disabled' | 'failed' };
 
 export type DeviceMessageType = DeviceMessage['type'];
 
@@ -762,4 +917,6 @@ export type GatewayMessage =
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
-  | { type: 'config'; stallThresholdMs: number; strictMode: boolean; inflateTracking: boolean };
+  | { type: 'config'; stallThresholdMs: number; strictMode: boolean; inflateTracking: boolean }
+  /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
+  | { type: 'inspect'; requestId: number };

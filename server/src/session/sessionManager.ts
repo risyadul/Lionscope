@@ -39,6 +39,12 @@ export const REMAP_INTERVAL_MS = 10_000;
 const DEVICES_TIMEOUT_MS = 5000;
 const APPS_TIMEOUT_MS = 15_000;
 
+export interface InspectorSessionSource {
+  packageName: string;
+  link: SdkLink | null;
+  screen: string | null;
+}
+
 export const IDLE_SESSION: SessionState = {
   status: 'idle',
   serial: null,
@@ -143,6 +149,16 @@ export class SessionManager implements SdkLinkTarget {
       return { ok: false, reason: 'no_session' };
     }
     return { ok: true, handler: session.attachSdk(hello, link) };
+  }
+
+  /**
+   * What the running session knows of `serial` for an Inspector snapshot: its app, its live SDK link (null while
+   * none is) and the top screen. Null when no session runs on that device.
+   */
+  inspectorSource(serial: string): InspectorSessionSource | null {
+    const session = this.session;
+    if (!session || session.isStopped || session.serial !== serial) return null;
+    return { packageName: session.packageName, link: session.sdkLink, screen: session.topScreen() };
   }
 
   /** Change the SDK options of the running session (announced with a `session` broadcast). false: no session. */

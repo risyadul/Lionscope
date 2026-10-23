@@ -101,3 +101,17 @@ export const StopIcon = () => (
     <rect x="5" y="5" width="4" height="4" rx="0.5" fill="currentColor" stroke="none" />
   </Icon>
 );
+
+/** A dashed frame with a pointer: pick a view on the frozen screen. */
+export const InspectIcon = () => (
+  <Icon>
+    <path d="M2 5V2.5a.5.5 0 0 1 .5-.5H5M9 2h2.5a.5.5 0 0 1 .5.5V5M12 9v2.5a.5.5 0 0 1-.5.5H9M5 12H2.5a.5.5 0 0 1-.5-.5V9" />
+    <path d="M5.5 5.5l5 1.8-2.1.9-.9 2.1z" />
+  </Icon>
+);
+
+export const RefreshIcon = () => (
+  <Icon>
+    <path d="M11.5 7a4.5 4.5 0 1 1-1.4-3.25M11.5 2v2.5H9" />
+  </Icon>
+);

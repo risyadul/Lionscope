@@ -3,6 +3,7 @@ package io.github.risyadul.lionscope
 import android.content.Context
 import android.util.AttributeSet
 import android.view.InflateException
+import android.view.LayoutInflater
 import android.view.View
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -209,6 +210,50 @@ class InflateTracerTest {
             assertNull(AppCompatBridge.invokeCreateView({ throw failure }) { broken = it })
             assertSame(failure, broken)
         }
+    }
+
+    private val inflater = object : LayoutInflater(null as Context?) {
+        override fun cloneInContext(newContext: Context?): LayoutInflater = this
+    }
+
+    /** A factory reproducing framework views through [createView] (no AppCompat in these tests: no delegate). */
+    private fun factory(createView: (Context, String, String?, AttributeSet) -> View?) =
+        TracingFactory(activity, inflater, Any(), tracer, createsFrameworkViews = true, createView = createView)
+
+    @Test
+    fun aFrameworkConstructorFailureSurfacesOnceAsCreateViewThrowsIt() {
+        var constructed = 0
+        val failure = InflateException("Binary XML file line #12: Error inflating class TextView")
+        val factory = factory { _, name, prefix, _ ->
+            if (prefix == "android.widget." && name == "TextView") {
+                constructed++
+                throw failure
+            }
+            throw ClassNotFoundException("$prefix$name")
+        }
+        try {
+            factory.onCreateView(null, "TextView", activity, parser())
+            fail("swallowed: the inflater would construct the view a second time")
+        } catch (e: InflateException) {
+            assertSame(failure, e)
+        }
+        assertEquals(1, constructed)
+    }
+
+    @Test
+    fun aClassFoundUnderNoFrameworkPrefixIsLeftToTheInflater() {
+        val tried = ArrayList<String?>()
+        val factory = factory { _, name, prefix, _ ->
+            tried += prefix
+            throw ClassNotFoundException("$prefix$name")
+        }
+        assertNull(factory.onCreateView(null, "Mystery", activity, parser()))
+        assertEquals(listOf("android.widget.", "android.webkit.", "android.app.", "android.view."), tried)
+        tried.clear()
+        assertNull(factory.onCreateView(null, "com.example.shop.MissingView", activity, parser()))
+        assertEquals(listOf(null), tried)
+        assertNull(factory.onCreateView(null, "ViewStub", activity, parser())) // Always the inflater's.
+        assertEquals(listOf(null), tried)
     }
 
     @Test

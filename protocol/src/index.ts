@@ -12,11 +12,13 @@ import {
   AVD_NAME_PATTERN,
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V3,
+  DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
+  MAX_INSPECTOR_NODES,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
   MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
@@ -35,6 +37,8 @@ import {
   type ClientMessage,
   type DeviceMessage,
   type DeviceMessageType,
+  type InspectorNode,
+  type InspectorWindow,
   type ScreenClientMessage,
 } from './wire.ts';
 
@@ -43,6 +47,13 @@ export * from './wire.ts';
 export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
 export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
+/** Inspector snapshot ids as the server assigns them (`InspectorSnapshot.id`). */
+export const INSPECTOR_SNAPSHOT_ID_PATTERN = /^[0-9a-f]{16}$/;
+const inspectorNodeId = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_INSPECTOR_NODES - 1);
 
 // ---------------------------------------------------------------------------
 // Dashboard → server (validated)
@@ -80,6 +91,14 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
         message.inflateTracking !== undefined,
       'no SDK option given',
     ),
+  z.object({ type: z.literal('inspect'), serial: serialSchema }).strict(),
+  z
+    .object({
+      type: z.literal('selectInspectorNode'),
+      snapshotId: z.string().regex(INSPECTOR_SNAPSHOT_ID_PATTERN, 'invalid snapshot id'),
+      nodeId: inspectorNodeId.nullable(),
+    })
+    .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -307,6 +326,66 @@ const stackFrameSchema = z
   })
   .strip();
 
+/** Bounds of the 0.5.0 Inspector messages (screen pixels, window counts, strings). */
+export const MAX_INSPECTOR_PIXELS = 100_000;
+export const MAX_INSPECTOR_WINDOWS = 32;
+export const MAX_INSPECTOR_DISPLAY_PX = 20_000;
+const MAX_INSPECTOR_TEXT_LENGTH = 500;
+/** `WindowManager.LayoutParams.type` values (application 1-99, sub-windows 1000+, system windows 2000+). */
+const MAX_WINDOW_TYPE = 10_000;
+/** Java's `int` (`XmlPullParser.getLineNumber()`, request ids). */
+const MAX_JAVA_INT = 2_147_483_647;
+const LAYOUT_DIMENSION_PATTERN = /^(match_parent|wrap_content|-?\d{1,6}px)$/;
+
+const pixel = z.number().int().min(-MAX_INSPECTOR_PIXELS).max(MAX_INSPECTOR_PIXELS);
+const pixelRect = z.tuple([pixel, pixel, pixel, pixel]);
+const inspectorText = textOf(MAX_INSPECTOR_TEXT_LENGTH);
+const windowIndex = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_INSPECTOR_WINDOWS - 1);
+const requestId = z.number().int().min(0).max(MAX_JAVA_INT);
+
+const inspectorWindowSchema = z
+  .object({
+    id: windowIndex,
+    type: z.number().int().min(0).max(MAX_WINDOW_TYPE).nullable(),
+    bounds: pixelRect,
+  })
+  .strip() satisfies z.ZodType<InspectorWindow>;
+
+const inspectorNodeSchema = z
+  .object({
+    id: inspectorNodeId,
+    parent: inspectorNodeId.nullable(),
+    window: windowIndex,
+    className: layoutText,
+    resourceId: layoutText.nullable(),
+    text: inspectorText.nullable(),
+    contentDescription: inspectorText.nullable(),
+    bounds: pixelRect,
+    visibleBounds: pixelRect.nullable(),
+    visibility: z.enum(['visible', 'invisible', 'gone']),
+    alpha: z.number().min(0).max(1).nullable(),
+    enabled: z.boolean().nullable(),
+    clickable: z.boolean().nullable(),
+    focused: z.boolean().nullable(),
+    selected: z.boolean().nullable(),
+    checked: z.boolean().nullable(),
+    padding: pixelRect.nullable(),
+    margin: pixelRect.nullable(),
+    layoutWidth: z.string().regex(LAYOUT_DIMENSION_PATTERN, 'invalid layout dimension').nullable(),
+    layoutHeight: z.string().regex(LAYOUT_DIMENSION_PATTERN, 'invalid layout dimension').nullable(),
+    source: z
+      .object({ layout: layoutText, line: z.number().int().min(1).max(MAX_JAVA_INT) })
+      .strip()
+      .nullable(),
+    fragment: layoutText.nullable(),
+    activity: layoutText.nullable(),
+  })
+  .strip() satisfies z.ZodType<InspectorNode>;
+
 export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -396,17 +475,61 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       topClasses: z.array(viewClassCountSchema).max(MAX_VIEW_TREE_CLASSES),
     })
     .strip(),
+  z
+    .object({
+      type: z.literal('inspectBegin'),
+      requestId,
+      ts: epochMs,
+      screen: layoutText.nullable(),
+      display: z
+        .object({
+          width: z.number().int().min(1).max(MAX_INSPECTOR_DISPLAY_PX),
+          height: z.number().int().min(1).max(MAX_INSPECTOR_DISPLAY_PX),
+          rotation: z.literal([0, 90, 180, 270]),
+        })
+        .strip(),
+      windows: z.array(inspectorWindowSchema).max(MAX_INSPECTOR_WINDOWS),
+      nodeCount: z.number().int().min(0).max(MAX_INSPECTOR_NODES),
+      truncated: z.boolean(),
+      captureMs: durationMs,
+      compose: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('inspectNodes'),
+      requestId,
+      seq: z
+        .number()
+        .int()
+        .min(0)
+        .max(MAX_INSPECTOR_NODES - 1),
+      last: z.boolean(),
+      nodes: z.array(inspectorNodeSchema).max(MAX_INSPECTOR_NODES),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('inspectError'),
+      requestId,
+      reason: z.enum(['background', 'no_window', 'disabled', 'failed']),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
- * Diagnostics (v2, v3 `inflate` / `viewtree`): a line of these types that fails validation is dropped by the caller (`invalidDiagnostic`),
- * not fatal to the link like a bad v1 message.
+ * Diagnostics (v2, v3 `inflate` / `viewtree`) and the v4 Inspector answers: a line of these types that fails
+ * validation is dropped by the caller (`invalidDiagnostic`), not fatal to the link like a bad v1 message (an
+ * invalid Inspector answer fails its request instead).
  */
 const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'stall',
   'strictmode',
   'inflate',
   'viewtree',
+  'inspectBegin',
+  'inspectNodes',
+  'inspectError',
 ]);
 
 /**
@@ -422,13 +545,17 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   strictmode: DEVICE_PROTOCOL_V2,
   inflate: DEVICE_PROTOCOL_V3,
   viewtree: DEVICE_PROTOCOL_V3,
+  inspectBegin: DEVICE_PROTOCOL_V4,
+  inspectNodes: DEVICE_PROTOCOL_V4,
+  inspectError: DEVICE_PROTOCOL_V4,
 };
 
 /**
  * Flags of a failed parse; at most one is set:
  * - `unknownType`: a JSON object whose string `type` this build does not know (a newer SDK): skippable.
  * - `unnegotiated`: a known type introduced after the link's negotiated protocol version (`since`): skippable.
- * - `invalidDiagnostic`: a diagnostic (`stall` / `strictmode` / `inflate` / `viewtree`) with invalid fields: skippable.
+ * - `invalidDiagnostic`: a diagnostic (`stall` / `strictmode` / `inflate` / `viewtree`) or an Inspector answer
+ *   (`inspectBegin` / `inspectNodes` / `inspectError`) with invalid fields: skippable.
  * - `unsupportedVersion`: a `hello` whose numeric `protocolVersion` is out of range.
  * Anything else that fails (bad JSON, another known type with invalid fields) is a plain error.
  */

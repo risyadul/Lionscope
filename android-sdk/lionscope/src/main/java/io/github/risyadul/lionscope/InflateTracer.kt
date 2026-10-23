@@ -93,6 +93,9 @@ internal class InflateTracer(
     private val postAtFrontOfQueue: (Runnable) -> Unit,
     private val nanoTime: () -> Long = System::nanoTime,
     private val wallMs: () -> Long = System::currentTimeMillis,
+    /** Layout and line of each view the factory creates, for the Inspector; null records none. */
+    private val origins: ViewOrigins? = null,
+    private val sourceResId: (AttributeSet) -> Int = Resources::getAttributeSetSourceResId,
 ) : InflateHooks {
     /** An Activity between its pre-created and post-created callbacks. */
     private class Scope(val owner: Any, val screen: String)
@@ -146,6 +149,17 @@ internal class InflateTracer(
         if (!isRecording || recorder.isEmpty || !isOwned(fragment, activity)) return
         val decor = window.peekDecorView() ?: return
         recorder.assignRoots(ScreenNames.nameOf(fragment)) { (it as? View)?.rootView === decor }
+    }
+
+    /**
+     * Any view created by [TracingFactory] on the main thread, recording or not: its layout and the parser's line,
+     * which is where the view's start tag ends (also for `<include>` roots and `<merge>` children: each layout has
+     * its own parser).
+     */
+    fun noteOrigin(parser: AttributeSet, view: View) {
+        val origins = origins ?: return
+        val line = (parser as? XmlPullParser)?.lineNumber ?: return
+        origins.record(view, sourceResId(parser), line)
     }
 
     /** One view created by [TracingFactory] on the main thread while recording. */
@@ -285,11 +299,13 @@ internal class InflateTracer(
  * Times view creation on the main thread while recording, creating views exactly as the inflater would without it:
  * AppCompat's delegate first (`AppCompatDelegate.createView`, so widget substitution stays intact), then the
  * Activity (its private factory: `<fragment>`, `FragmentContainerView`, app overrides of `onCreateView`), then the
- * framework, through the public API 29 `createView` with the view's own context. Elsewhere, and when not recording,
- * it only does AppCompat's part and leaves the rest to the inflater. A view AppCompat fails on fails exactly as with
- * AppCompat's own factory (see [AppCompatBridge.invokeCreateView]). Views it cannot create the same way (a `ViewStub`,
- * an inflater it does not know) or whose framework construction fails are left to the inflater, which then
- * reproduces any error.
+ * framework, through the public API 29 `createView` with the view's own context. On the main thread it does so also
+ * when not recording, so every view it creates gets its origin noted for the Inspector ([InflateTracer.noteOrigin]);
+ * elsewhere it only does AppCompat's part and leaves the rest to the inflater. A view AppCompat fails on fails exactly as with
+ * AppCompat's own factory (see [AppCompatBridge.invokeCreateView]); a framework view whose constructor throws fails
+ * as `LayoutInflater.createView` throws it (an InflateException with the cause), never constructed a second time by
+ * the inflater. Views it cannot create the same way (a `ViewStub`, an inflater it does not know, a class not found
+ * under any framework prefix) are left to the inflater.
  */
 @RequiresApi(29)
 internal class TracingFactory(
@@ -297,9 +313,11 @@ internal class TracingFactory(
     private val inflater: LayoutInflater,
     private val delegate: Any,
     private val tracer: InflateTracer,
-) : LayoutInflater.Factory2 {
     /** Only the framework's own inflater class is reproduced view for view. */
-    private val createsFrameworkViews = inflater.javaClass.name == PHONE_LAYOUT_INFLATER
+    private val createsFrameworkViews: Boolean = inflater.javaClass.name == PHONE_LAYOUT_INFLATER,
+    /** `LayoutInflater.createView(Context, String, String, AttributeSet)` (API 29). */
+    private val createView: (Context, String, String?, AttributeSet) -> View? = inflater::createView,
+) : LayoutInflater.Factory2 {
 
     @Volatile
     private var delegateBroken = false
@@ -308,17 +326,26 @@ internal class TracingFactory(
         onCreateView(null, name, context, attrs)
 
     override fun onCreateView(parent: View?, name: String, context: Context, attrs: AttributeSet): View? {
-        if (Looper.myLooper() !== Looper.getMainLooper() || !tracer.isRecording) {
-            return delegateView(parent, name, context, attrs)
+        if (Looper.myLooper() !== Looper.getMainLooper()) return delegateView(parent, name, context, attrs)
+        if (!tracer.isRecording) {
+            val view = createView(parent, name, context, attrs)
+            if (view != null) guarded { tracer.noteOrigin(attrs, view) }
+            return view
         }
         val start = System.nanoTime()
-        val view = delegateView(parent, name, context, attrs)
-            ?: activity.onCreateView(parent, name, context, attrs)
-            ?: frameworkView(name, context, attrs)
+        val view = createView(parent, name, context, attrs)
         val end = System.nanoTime()
-        if (view != null) guarded { tracer.record(attrs, view, parent, context, name, start, end) }
+        if (view != null) {
+            guarded { tracer.record(attrs, view, parent, context, name, start, end) }
+            guarded { tracer.noteOrigin(attrs, view) }
+        }
         return view
     }
+
+    private fun createView(parent: View?, name: String, context: Context, attrs: AttributeSet): View? =
+        delegateView(parent, name, context, attrs)
+            ?: activity.onCreateView(parent, name, context, attrs)
+            ?: frameworkView(name, context, attrs)
 
     private fun delegateView(parent: View?, name: String, context: Context, attrs: AttributeSet): View? {
         if (delegateBroken) return null
@@ -331,12 +358,14 @@ internal class TracingFactory(
 
     private fun frameworkView(name: String, context: Context, attrs: AttributeSet): View? {
         if (!createsFrameworkViews || name == VIEW_STUB || name == FULL_VIEW_STUB) return null
+        // A constructor failure propagates as createView throws it (an InflateException with the cause), as it would
+        // from the inflater: returning null instead would make the inflater construct the view a second time.
         return try {
-            if (name.indexOf('.') != -1) return inflater.createView(context, name, null, attrs)
+            if (name.indexOf('.') != -1) return createView(context, name, null, attrs)
             // PhoneLayoutInflater.onCreateView: these prefixes in turn, then LayoutInflater's `android.view.`.
             for (prefix in FRAMEWORK_PREFIXES) {
                 try {
-                    return inflater.createView(context, name, prefix, attrs)
+                    return createView(context, name, prefix, attrs)
                 } catch (e: ClassNotFoundException) {
                     // Next prefix.
                 }
@@ -344,8 +373,6 @@ internal class TracingFactory(
             null
         } catch (e: ClassNotFoundException) {
             null
-        } catch (e: RuntimeException) {
-            null // e.g. InflateException from the constructor: the inflater tries again and throws it.
         }
     }
 

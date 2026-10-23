@@ -12,6 +12,8 @@ export default defineConfig({
     proxy: {
       // Origin is forwarded unchanged (no changeOrigin): the server allowlists the Vite dev origin.
       [WS_PATH]: { target: `ws://127.0.0.1:${SERVER_PORT}`, ws: true },
+      // Layout Inspector screenshots (0.5.0).
+      '/inspector': { target: `http://127.0.0.1:${SERVER_PORT}` },
     },
   },
   build: {

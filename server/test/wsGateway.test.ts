@@ -2,10 +2,11 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { CONTROL_SERVER_MESSAGE_TYPES } from '@lionscope/protocol';
-import type { CpuSample, Snapshot } from '@lionscope/protocol';
+import type { CpuSample, InspectorSnapshot, Snapshot } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAllowedOrigins, createWsGateway, MAX_CLIENT_BUFFERED_BYTES } from '../src/http/wsGateway.ts';
-import type { GatewayEmulators, GatewayManager, WsGateway } from '../src/http/wsGateway.ts';
+import type { GatewayEmulators, GatewayInspector, GatewayManager, WsGateway } from '../src/http/wsGateway.ts';
+import { PublicError } from '../src/errors.ts';
 import { IDLE_SESSION } from '../src/session/sessionManager.ts';
 import { Client } from './helpers/net.ts';
 
@@ -37,6 +38,13 @@ const emulators: GatewayEmulators = {
   shutdown: async () => undefined,
 };
 
+const inspector: GatewayInspector = {
+  inspect: () => Promise.reject(new PublicError('no device')),
+  select: () => null,
+  current: null,
+  selection: null,
+};
+
 /** Stop reading on the client side so the server's send buffer fills up. */
 function socketOf(client: Client): Socket {
   return (client.ws as unknown as { _socket: Socket })._socket;
@@ -65,6 +73,7 @@ describe('WebSocket gateway back-pressure', () => {
       server,
       manager,
       emulators,
+      inspector,
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -109,6 +118,8 @@ describe('WebSocket gateway back-pressure', () => {
       'emulators',
       'error',
       'hello',
+      'inspection',
+      'inspectorSelection',
       'session',
       'snapshot',
     ]);
@@ -198,6 +209,7 @@ describe('WebSocket gateway refreshDevices', () => {
       server,
       manager: { ...manager, refreshDevices: () => Promise.reject(new Error('adb gone')) },
       emulators: { ...emulators, refresh: () => Promise.reject(new Error('emulator gone')) },
+      inspector,
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -237,6 +249,7 @@ describe('WebSocket gateway shutdownEmulator', () => {
           calls.push([avdName, confirmUnmanaged ?? false]);
         },
       },
+      inspector,
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -258,5 +271,97 @@ describe('WebSocket gateway shutdownEmulator', () => {
       await gateway.close();
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+});
+
+describe('WebSocket gateway Inspector', () => {
+  const snapshot: InspectorSnapshot = {
+    id: '0123456789abcdef',
+    ts: 1,
+    serial: 'emulator-5554',
+    packageName: 'com.example.shop',
+    source: 'uiautomator',
+    screen: null,
+    display: { width: 1080, height: 2424, rotation: 0 },
+    windows: [],
+    nodes: [],
+    truncated: false,
+    captureMs: null,
+    fallbackReason: 'no_sdk',
+  };
+
+  async function withGateway(fake: GatewayInspector, run: (port: number) => Promise<void>): Promise<void> {
+    const server = createServer();
+    let port = 0;
+    const gateway = createWsGateway({
+      server,
+      manager,
+      emulators,
+      inspector: fake,
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    try {
+      await run(port);
+    } finally {
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  it('sends the current snapshot and selection on connect, the selection even when there is none', async () => {
+    const selection = { snapshotId: snapshot.id, nodeId: 0, ts: 2, origin: 'user' as const };
+    await withGateway({ ...inspector, current: snapshot, selection }, async (port) => {
+      const client = await Client.open(port);
+      expect(await client.waitFor('inspectorSelection')).toEqual({ type: 'inspectorSelection', selection });
+      const types = client.messages.map((message) => message.type);
+      expect(types.slice(-2)).toEqual(['inspection', 'inspectorSelection']);
+      client.close();
+    });
+    await withGateway(inspector, async (port) => {
+      const client = await Client.open(port);
+      expect(await client.waitFor('inspectorSelection')).toEqual({
+        type: 'inspectorSelection',
+        selection: null,
+      });
+      expect(client.messages.some((message) => message.type === 'inspection')).toBe(false);
+      client.close();
+    });
+  });
+
+  it('passes inspect and selectInspectorNode on and answers failures with their codes', async () => {
+    const calls: unknown[] = [];
+    const fake: GatewayInspector = {
+      ...inspector,
+      inspect: async (serial) => {
+        calls.push(['inspect', serial]);
+        throw new PublicError('Device emulator-5554 is not connected');
+      },
+      select: (snapshotId, nodeId, origin) => {
+        calls.push(['select', snapshotId, nodeId, origin]);
+        throw new PublicError('That Inspector snapshot is not the current one');
+      },
+    };
+    await withGateway(fake, async (port) => {
+      const client = await Client.open(port);
+      await client.waitFor('inspectorSelection');
+      client.send({ type: 'inspect', serial: 'emulator-5554' });
+      expect(await client.waitFor('error')).toEqual({
+        type: 'error',
+        code: 'inspect_failed',
+        message: 'Device emulator-5554 is not connected',
+      });
+      client.send({ type: 'selectInspectorNode', snapshotId: snapshot.id, nodeId: null });
+      await waitUntil(() => client.messages.filter((message) => message.type === 'error').length === 2);
+      expect(client.messages.at(-1)).toMatchObject({ code: 'selectInspectorNode_failed' });
+      expect(calls).toEqual([
+        ['inspect', 'emulator-5554'],
+        ['select', snapshot.id, null, 'user'],
+      ]);
+      client.close();
+    });
   });
 });

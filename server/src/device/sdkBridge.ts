@@ -103,6 +103,11 @@ export class SdkBridge {
     return this.current;
   }
 
+  /** The verified live link (Inspector snapshots are asked of it), null while there is none. */
+  get liveLink(): SdkLink | null {
+    return this.stopped ? null : (this.active?.link ?? null);
+  }
+
   /**
    * Change the SDK options (partial): announced with the status at once and, when they changed, pushed to the
    * links CONFIG_DEBOUNCE_MS after the last change.

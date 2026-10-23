@@ -122,6 +122,16 @@
   --log-e: #c42f2f;
   --log-f: #a3122b;
 
+  /* Layout Inspector overlay: drawn over a screenshot, so the same in both themes. */
+  --inspect-hover: #3b8bff;
+  --inspect-hover-wash: rgba(59, 139, 255, 0.22);
+  --inspect-select: #ffb020;
+  --inspect-select-wash: rgba(255, 176, 32, 0.2);
+  --inspect-agent: #8b5cf6;
+  --inspect-agent-wash: rgba(139, 92, 246, 0.2);
+  --inspect-padding: rgba(60, 194, 106, 0.42);
+  --inspect-margin: rgba(150, 128, 240, 0.4);
+
   --shadow-pop: 0 1px 0 rgba(17, 20, 24, 0.04), 0 14px 36px -10px rgba(17, 20, 24, 0.22);
 }
 

@@ -10,6 +10,8 @@ import type {
   FrameBreakdownSample,
   FrameSample,
   InflateSample,
+  InspectorSelection,
+  InspectorSnapshot,
   LogEntry,
   MemorySample,
   ScreenSpan,
@@ -87,6 +89,10 @@ export interface DashboardState {
   inflates: InflateSample[];
   /** One view-tree snapshot per screen visit (0.4.0), ascending by `ts`. */
   viewTrees: ViewTreeSample[];
+  /** The latest Layout Inspector snapshot (0.5.0), from any client; null until one is taken. */
+  inspection: InspectorSnapshot | null;
+  /** The element picked in the Inspector (by the user or an AI agent), for `inspection` only. */
+  inspectorSelection: InspectorSelection | null;
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees); the pruning reference.
@@ -151,6 +157,8 @@ export function createInitialState(): DashboardState {
     strictMode: [],
     inflates: [],
     viewTrees: [],
+    inspection: null,
+    inspectorSelection: null,
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -575,6 +583,17 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return applyInflate(state, msg.sample, now);
     case 'viewtree':
       return applyViewTree(state, msg.sample, now);
+    case 'inspection': {
+      // A selection belongs to the snapshot it was made on.
+      const keep = state.inspectorSelection?.snapshotId === msg.snapshot.id;
+      return {
+        ...state,
+        inspection: msg.snapshot,
+        inspectorSelection: keep ? state.inspectorSelection : null,
+      };
+    }
+    case 'inspectorSelection':
+      return { ...state, inspectorSelection: msg.selection };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

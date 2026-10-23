@@ -15,6 +15,7 @@ import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
+import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -93,10 +94,14 @@ export type GatewayManager = Pick<
   | 'setSdkOptions'
 >;
 
+/** What the gateway needs from the Inspector. */
+export type GatewayInspector = Pick<InspectorService, 'inspect' | 'select' | 'current' | 'selection'>;
+
 export interface WsGatewayOptions {
   server: Server;
   manager: GatewayManager;
   emulators: GatewayEmulators;
+  inspector: GatewayInspector;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -107,7 +112,8 @@ export interface WsGatewayOptions {
 }
 
 export interface WsGateway {
-  broadcast(message: ServerMessage): void;
+  /** `payload`, when given, is `message` already serialized (a large Inspector snapshot is serialized once). */
+  broadcast(message: ServerMessage, payload?: string): void;
   close(): Promise<void>;
 }
 
@@ -119,11 +125,13 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   startSession: 'Could not start the profiling session',
   stopSession: 'Could not stop the profiling session',
   setSdkOptions: 'Could not change the SDK options',
+  inspect: 'Could not inspect the screen',
+  selectInspectorNode: 'Could not select the Inspector node',
 };
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
-  const { server, manager, emulators } = options;
+  const { server, manager, emulators, inspector } = options;
   const delegatedPaths = options.delegatedPaths ?? new Set<string>();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIENT_MESSAGE_BYTES });
   const clients = new Map<WebSocket, ClientState>();
@@ -202,6 +210,14 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         }
         return;
       }
+      case 'inspect':
+        // Answered by the `inspection` broadcast (a failure by `inspect_failed` to this client).
+        await inspector.inspect(message.serial);
+        return;
+      case 'selectInspectorNode':
+        // Answered by the `inspectorSelection` broadcast (none when nothing changed).
+        inspector.select(message.snapshotId, message.nodeId, 'user');
+        return;
     }
   };
 
@@ -252,6 +268,9 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     send(ws, { type: 'emulators', emulators: emulators.getEmulators() });
     send(ws, { type: 'session', session: manager.getSessionState() });
     send(ws, { type: 'snapshot', snapshot: manager.getSnapshot() });
+    const inspection = inspector.current;
+    if (inspection) send(ws, { type: 'inspection', snapshot: inspection });
+    send(ws, { type: 'inspectorSelection', selection: inspector.selection });
   });
 
   const pingTimer = setInterval(() => {
@@ -267,8 +286,8 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
   pingTimer.unref();
 
   return {
-    broadcast(message) {
-      const payload = JSON.stringify(message);
+    broadcast(message, serialized) {
+      const payload = serialized ?? JSON.stringify(message);
       // Everything that isn't control traffic is a droppable stream, resynced by a snapshot.
       const live = !CONTROL_SERVER_MESSAGE_TYPES.has(message.type);
       for (const [ws, state] of clients) {

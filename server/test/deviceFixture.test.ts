@@ -3,6 +3,7 @@ import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
 import type { DeviceMessage, ServerMessage } from '@lionscope/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDeviceGateway } from '../src/device/deviceGateway.ts';
+import { SdkInspectError } from '../src/device/sdkLink.ts';
 import { droppedFramesMessage } from '../src/device/sdkBridge.ts';
 import type { DeviceGateway } from '../src/device/deviceGateway.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
@@ -224,9 +225,9 @@ describe('golden device messages through the gateway', () => {
 
   it('on a v3 link: inflations and view trees on the laptop clock, ignored on a v2 link', async () => {
     const { manager, port, ofType } = await startSession();
-    const [inflateLine, labelLine, treeLine] = GOLDEN.slice(-3).map(
-      (line) => JSON.parse(line) as DeviceMessage,
-    );
+    const [inflateLine, labelLine, treeLine] = GOLDEN.filter((line) =>
+      /^\{"type":"(inflate|viewtree)"/.test(line),
+    ).map((line) => JSON.parse(line) as DeviceMessage);
     const v3 = await DeviceClient.open(port);
     v3.send({ ...HELLO, protocolVersion: 3 });
     for (const line of GOLDEN.slice(1)) v3.send(line);
@@ -260,6 +261,40 @@ describe('golden device messages through the gateway', () => {
       inflateTracking: false,
     });
     v3.close();
+  });
+
+  it('on a v4 link: answers an inspect request with the golden snapshot, and an error with its reason', async () => {
+    const { manager, port } = await startSession();
+    const golden = (type: string) => {
+      const line = GOLDEN.find((candidate) => candidate.startsWith(`{"type":"${type}"`));
+      return JSON.parse(line ?? '{}') as Record<string, unknown>;
+    };
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 4 });
+    await client.waitFor((message) => message.type === 'welcome');
+    await waitUntil(() => manager.getSessionState().sdk?.connected === true);
+    const link = manager.inspectorSource('emulator-5554')?.link;
+    expect(link?.protocolVersion).toBe(4);
+    expect(manager.inspectorSource('R58M123ABC')).toBeNull();
+
+    const requests = () =>
+      client.received.flatMap((message) => (message.type === 'inspect' ? [message.requestId] : []));
+    const answer = link?.inspect();
+    await client.waitFor((message) => message.type === 'inspect');
+    const [requestId = -1] = requests();
+    expect(client.rawLines.at(-1)).toBe(`{"type":"inspect","requestId":${requestId}}`);
+    client.send({ ...golden('inspectBegin'), requestId });
+    client.send({ ...golden('inspectNodes'), requestId });
+    const inspection = await answer;
+    expect(inspection?.begin).toEqual({ ...golden('inspectBegin'), requestId });
+    expect(inspection?.nodes).toEqual(golden('inspectNodes').nodes);
+
+    const failing = link?.inspect();
+    await waitUntil(() => requests().length === 2);
+    client.send({ ...golden('inspectError'), requestId: requests()[1] });
+    await expect(failing).rejects.toEqual(new SdkInspectError('background'));
+    expect(manager.getSessionState().sdk?.connected).toBe(true);
+    client.close();
   });
 
   it('ignores the v3 golden lines on a v2 link', async () => {

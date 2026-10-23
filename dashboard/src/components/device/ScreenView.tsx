@@ -14,11 +14,15 @@ import {
   CameraIcon,
   ClipboardIcon,
   HomeIcon,
+  InspectIcon,
   PowerIcon,
   RecentsIcon,
+  RefreshIcon,
   RotateLeftIcon,
   RotateRightIcon,
 } from './icons.tsx';
+import { InspectorOverlay } from '../inspector/InspectorOverlay.tsx';
+import { useInspectorContext } from '../inspector/InspectorContext.tsx';
 import { ClipboardToast } from './ClipboardToast.tsx';
 import { useClipboardShare } from './useClipboardShare.ts';
 import { useScreenInput } from './useScreenInput.ts';
@@ -182,11 +186,18 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
   useEffect(() => {
     streamEvents.current = { onOpen: onSocketOpen, onClipboard: onRemoteClipboard };
   }, [onSocketOpen, onRemoteClipboard]);
+  const inspector = useInspectorContext();
+  const frozen = inspector !== null && inspector.isActive ? inspector.snapshot : null;
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
   const hintId = useId();
 
-  const aspect = info && info.frameHeight > 0 ? info.frameWidth / info.frameHeight : DEFAULT_ASPECT;
+  const streamAspect = info && info.frameHeight > 0 ? info.frameWidth / info.frameHeight : DEFAULT_ASPECT;
+  // The frozen screenshot has its own size and rotation.
+  const aspect =
+    frozen !== null && frozen.display.height > 0
+      ? frozen.display.width / frozen.display.height
+      : streamAspect;
   const glass = fitDeviceGlass(stage.width, stage.height, aspect);
   const orientation = aspect > 1 ? 'landscape' : 'portrait';
   const status = statusText(state, videoError);
@@ -231,6 +242,27 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
           disabled={!isLive}
           onClick={() => send({ type: 'screenshot' })}
         />
+        {inspector !== null && (
+          <>
+            <ToolButton
+              label="Inspect"
+              title="Inspect the layout: freezes the screen so you can pick a view (Esc exits)"
+              icon={<InspectIcon />}
+              disabled={!inspector.canInspect}
+              isPressed={inspector.isActive}
+              className="device-inspect"
+              onClick={inspector.toggle}
+            />
+            {inspector.isActive && (
+              <ToolButton
+                label="Refresh the snapshot"
+                icon={<RefreshIcon />}
+                disabled={inspector.isCapturing || !inspector.canInspect}
+                onClick={inspector.refresh}
+              />
+            )}
+          </>
+        )}
         <Segmented
           className="device-size"
           label="Frame size (short edge, px)"
@@ -255,7 +287,8 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
             <canvas
               ref={canvasRef}
               className="device-canvas"
-              tabIndex={0}
+              tabIndex={frozen !== null || inspector?.isActive ? -1 : 0}
+              inert={inspector?.isActive || undefined}
               role="application"
               aria-roledescription="device screen"
               aria-label={`${label} screen`}
@@ -267,7 +300,31 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
               }}
               onFocus={pushFromDesktop}
             />
-            {status !== null && (
+            {inspector?.isActive && frozen !== null && (
+              <InspectorOverlay controller={inspector} snapshot={frozen} label={label} />
+            )}
+            {inspector?.isActive && frozen === null && (
+              <div
+                className="device-glass-status"
+                data-tone={inspector.failure === null ? 'capturing' : 'failed'}
+                role="status"
+              >
+                {inspector.failure === null ? (
+                  <>
+                    <span className="banner-spinner" aria-hidden="true" />
+                    <span>Capturing the screen…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{inspector.failure}</span>
+                    <button type="button" className="btn device-retry" onClick={inspector.refresh}>
+                      Try again
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {!inspector?.isActive && status !== null && (
               <div className="device-glass-status" data-tone={state.status} role="status">
                 {state.status !== 'failed' && <span className="banner-spinner" aria-hidden="true" />}
                 <span>{status}</span>
@@ -296,8 +353,16 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
         ))}
       </div>
       <p id={hintId} className="device-hint">
-        Click to interact · <kbd>Esc</kbd> = Back · <kbd>Alt</kbd>+drag = pinch
-        {clipboard.isPasteOnly && (
+        {inspector?.isActive ? (
+          <>
+            Frozen · hover to highlight · click to select · <kbd>Esc</kbd> exits
+          </>
+        ) : (
+          <>
+            Click to interact · <kbd>Esc</kbd> = Back · <kbd>Alt</kbd>+drag = pinch
+          </>
+        )}
+        {!inspector?.isActive && clipboard.isPasteOnly && (
           <>
             {' · '}
             Press <kbd>{pasteShortcut()}</kbd> on the screen to send your clipboard

@@ -24,6 +24,8 @@ const SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<ServerMessa
   'strictmode',
   'inflate',
   'viewtree',
+  'inspection',
+  'inspectorSelection',
   'error',
 ]);
 

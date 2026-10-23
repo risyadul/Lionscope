@@ -51,6 +51,7 @@ internal class DeviceLink(
     private val stateChanged = stateLock.newCondition()
     private val welcomeListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
     private val configListeners = CopyOnWriteArrayList<(SdkOptions) -> Unit>()
+    private val inspectListeners = CopyOnWriteArrayList<(Int) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -72,6 +73,12 @@ internal class DeviceLink(
         }
     }
 
+    override fun sendV4(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && speaks(negotiatedVersion, DEVICE_PROTOCOL_V4)) {
+            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V4, encode))
+        }
+    }
+
     /** Records the top screen (re-sent after every reconnect); encoding happens on the link thread. */
     override fun onScreen(ts: Long, screen: ScreenRef?) {
         currentScreen = screen
@@ -89,6 +96,10 @@ internal class DeviceLink(
 
     override fun addConfigListener(listener: (SdkOptions) -> Unit) {
         configListeners.add(listener)
+    }
+
+    override fun addInspectListener(listener: (requestId: Int) -> Unit) {
+        inspectListeners.add(listener)
     }
 
     private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
@@ -212,7 +223,15 @@ internal class DeviceLink(
                     close()
                 }
                 is GatewayMessage.Config -> onConfig(message.options)
+                is GatewayMessage.Inspect -> onInspect(message.requestId)
             }
+        }
+
+        /** Ignored before `welcome`, after close, and on a link negotiated below v4. */
+        @Synchronized
+        private fun onInspect(requestId: Int) {
+            if (!welcomed || closed || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V4)) return
+            dispatch(inspectListeners, requestId)
         }
 
         /** Ignored before `welcome`, after close, and on a link negotiated below v2. */

@@ -1,5 +1,7 @@
 package io.github.risyadul.lionscope
 
+import android.view.ViewGroup
+
 /**
  * Encoders for SDK → server lines (no trailing newline). Field order matches the golden fixtures. They also enforce
  * the server's bounds (see protocol/src/wire.ts): SDK-produced text via [WireText], numbers clamped, at most
@@ -24,6 +26,17 @@ internal object DeviceMessages {
     private const val MAX_INFLATE_MS = 60_000.0
     /** View tree path class / id names: shorter than other v3 text, so 64 nodes stay far below the line limit. */
     private const val MAX_PATH_TEXT_LENGTH = 80
+    /** v4 Inspector text (TextView text, content descriptions); names (classes, ids, layouts) use [MAX_V3_TEXT_LENGTH]. */
+    private const val MAX_INSPECTOR_TEXT_LENGTH = 500
+    private const val MAX_INSPECTOR_PIXELS = 100_000
+    private const val MAX_INSPECTOR_DISPLAY_PX = 20_000
+    private const val MAX_WINDOW_TYPE = 10_000
+    private const val MAX_CAPTURE_MS = 60_000.0
+    /** `<n>px` layout sizes: at most 6 digits on the wire. */
+    private const val MAX_LAYOUT_PX = 999_999
+    private const val MATCH_PARENT = "match_parent"
+    private const val WRAP_CONTENT = "wrap_content"
+    private val LAYOUT_PX = Regex("-?\\d{1,6}px")
 
     fun hello(
         packageName: String,
@@ -214,6 +227,171 @@ internal object DeviceMessages {
         }
         return json.endArray().endObject().toString()
     }
+
+    /**
+     * v4. Start of the answer to `inspect` [requestId]; windows beyond [MAX_INSPECTOR_WINDOWS] are not sent (the
+     * snapshot never has more). [display] sizes are clamped to 1..20 000 px, its rotation to a multiple of 90.
+     */
+    fun inspectBegin(
+        requestId: Int,
+        ts: Long,
+        screen: String?,
+        display: InspectorDisplay,
+        windows: List<InspectorWindow>,
+        nodeCount: Int,
+        truncated: Boolean,
+        captureMs: Double,
+        compose: Boolean,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("inspectBegin")
+            .name("requestId").value(requestId.coerceAtLeast(0))
+            .name("ts").value(ts)
+            .name("screen").value(WireText.clean(screen, MAX_V3_TEXT_LENGTH))
+            .name("display").beginObject()
+            .name("width").value(display.width.coerceIn(1, MAX_INSPECTOR_DISPLAY_PX))
+            .name("height").value(display.height.coerceIn(1, MAX_INSPECTOR_DISPLAY_PX))
+            .name("rotation").value(rotation(display.rotation))
+            .endObject()
+            .name("windows").beginArray()
+        for (window in windows.take(MAX_INSPECTOR_WINDOWS)) {
+            json.beginObject()
+                .name("id").value(window.id)
+                .name("type")
+            val type = window.type?.takeIf { it in 0..MAX_WINDOW_TYPE }
+            if (type == null) json.nullValue() else json.value(type)
+            json.name("bounds")
+            writeRect(json, window.bounds)
+            json.endObject()
+        }
+        return json.endArray()
+            .name("nodeCount").value(nodeCount.coerceIn(0, MAX_INSPECTOR_NODES))
+            .name("truncated").value(truncated)
+            .name("captureMs").value(clampMs(captureMs, MAX_CAPTURE_MS))
+            .name("compose").value(compose)
+            .endObject().toString()
+    }
+
+    /**
+     * v4. The [nodes] of `inspect` [requestId] as `inspectNodes` lines of at most [maxLineBytes] UTF-8 bytes each,
+     * filled node by node (by size, not count); the last one has `last: true`. One node is at most a few KB (text is
+     * capped), so it always fits a chunk; no nodes still give one (empty) last chunk.
+     */
+    fun inspectChunks(requestId: Int, nodes: List<InspectorNode>, maxLineBytes: Int = MAX_INSPECT_CHUNK_BYTES): List<String> {
+        val chunks = ArrayList<List<String>>()
+        var current = ArrayList<String>()
+        var bytes = 0
+        for (node in nodes) {
+            val encoded = inspectNode(node)
+            val size = StackFrames.utf8Length(encoded)
+            if (current.isEmpty()) bytes = envelopeBytes(requestId, chunks.size)
+            val added = size + if (current.isEmpty()) 0 else 1
+            if (current.isNotEmpty() && bytes + added > maxLineBytes) {
+                chunks += current
+                current = ArrayList()
+                bytes = envelopeBytes(requestId, chunks.size) + size
+            } else {
+                bytes += added
+            }
+            current += encoded
+        }
+        chunks += current
+        return chunks.mapIndexed { seq, encoded -> inspectNodes(requestId, seq, seq == chunks.size - 1, encoded) }
+    }
+
+    /** v4. One `inspectNodes` line of already-encoded [nodes] ([inspectNode]). */
+    fun inspectNodes(requestId: Int, seq: Int, last: Boolean, nodes: List<String>): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("inspectNodes")
+            .name("requestId").value(requestId.coerceAtLeast(0))
+            .name("seq").value(seq)
+            .name("last").value(last)
+            .name("nodes").beginArray()
+        for (node in nodes) json.rawValue(node)
+        return json.endArray().endObject().toString()
+    }
+
+    /** v4. One `InspectorNode` object, text cleaned and capped, numbers clamped to the server's bounds. */
+    fun inspectNode(node: InspectorNode): String {
+        val json = JsonWriter().beginObject()
+            .name("id").value(node.id)
+            .name("parent")
+        if (node.parent == null) json.nullValue() else json.value(node.parent)
+        json.name("window").value(node.window)
+            .name("className").value(WireText.required(node.className, MAX_V3_TEXT_LENGTH))
+            .name("resourceId").value(WireText.clean(node.resourceId, MAX_V3_TEXT_LENGTH))
+            .name("text").value(WireText.clean(node.text, MAX_INSPECTOR_TEXT_LENGTH))
+            .name("contentDescription").value(WireText.clean(node.contentDescription, MAX_INSPECTOR_TEXT_LENGTH))
+            .name("bounds")
+        writeRect(json, node.bounds)
+        json.name("visibleBounds")
+        writeRect(json, node.visibleBounds)
+        json.name("visibility").value(node.visibility.wire)
+            .name("alpha").value(if (node.alpha.isNaN()) 0.0 else node.alpha.coerceIn(0.0, 1.0))
+            .name("enabled").value(node.enabled)
+            .name("clickable").value(node.clickable)
+            .name("focused").value(node.focused)
+            .name("selected").value(node.selected)
+            .name("checked")
+        if (node.checked == null) json.nullValue() else json.value(node.checked)
+        json.name("padding")
+        writeRect(json, node.padding)
+        json.name("margin")
+        writeRect(json, node.margin)
+        json.name("layoutWidth").value(layoutSize(node.layoutWidth))
+            .name("layoutHeight").value(layoutSize(node.layoutHeight))
+            .name("source")
+        val layout = node.source?.let { WireText.clean(it.layout, MAX_V3_TEXT_LENGTH) }
+        if (node.source == null || layout == null || node.source.line < 1) {
+            json.nullValue()
+        } else {
+            json.beginObject()
+                .name("layout").value(layout)
+                .name("line").value(node.source.line)
+                .endObject()
+        }
+        return json.name("fragment").value(WireText.clean(node.fragment, MAX_V3_TEXT_LENGTH))
+            .name("activity").value(WireText.clean(node.activity, MAX_V3_TEXT_LENGTH))
+            .endObject().toString()
+    }
+
+    /** v4. */
+    fun inspectError(requestId: Int, reason: InspectError): String = JsonWriter().beginObject()
+        .name("type").value("inspectError")
+        .name("requestId").value(requestId.coerceAtLeast(0))
+        .name("reason").value(reason.wire)
+        .endObject().toString()
+
+    /** A `LayoutParams` width or height as sent: `match_parent`, `wrap_content` or `<n>px` (n clamped to 6 digits). */
+    fun layoutDimension(size: Int): String = when (size) {
+        ViewGroup.LayoutParams.MATCH_PARENT -> MATCH_PARENT
+        ViewGroup.LayoutParams.WRAP_CONTENT -> WRAP_CONTENT
+        else -> "${size.coerceIn(-MAX_LAYOUT_PX, MAX_LAYOUT_PX)}px"
+    }
+
+    /** Anything but a [layoutDimension] is sent as null. */
+    private fun layoutSize(value: String?): String? =
+        value?.takeIf { it == MATCH_PARENT || it == WRAP_CONTENT || LAYOUT_PX.matches(it) }
+
+    /** The size of an `inspectNodes` line without nodes, with `last: false` (longer than `true`). */
+    private fun envelopeBytes(requestId: Int, seq: Int): Int = inspectNodes(requestId, seq, false, emptyList()).length
+
+    private fun rotation(degrees: Int): Int = (((degrees / 90) % 4 + 4) % 4) * 90
+
+    private fun writeRect(json: JsonWriter, rect: PixelRect?) {
+        if (rect == null) {
+            json.nullValue()
+            return
+        }
+        json.beginArray()
+            .value(pixel(rect.left))
+            .value(pixel(rect.top))
+            .value(pixel(rect.right))
+            .value(pixel(rect.bottom))
+            .endArray()
+    }
+
+    private fun pixel(value: Int): Int = value.coerceIn(-MAX_INSPECTOR_PIXELS, MAX_INSPECTOR_PIXELS)
 
     private fun clampMs(value: Double, max: Double): Double = if (value.isNaN()) 0.0 else value.coerceIn(0.0, max)
 

@@ -3,7 +3,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SCREEN_WS_PATH, WS_PATH } from '@lionscope/protocol';
 import type { Adb } from './adb/adb.ts';
+import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
+import { dumpUi } from './agent/uiDump.ts';
 import type { AgentContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway } from './device/deviceGateway.ts';
@@ -14,7 +16,9 @@ import { EmulatorManager } from './emulator/emulatorManager.ts';
 import { createScreenGateway, isEmulatorSerial } from './emulator/screenGateway.ts';
 import { cleanupScrcpyLeftovers } from './scrcpy/scrcpyServer.ts';
 import { errorMessage, log } from './log.ts';
+import { INSPECTOR_PATH_PREFIX, serveInspectorPng } from './http/inspectorFiles.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
+import { InspectorService } from './inspector/inspectorService.ts';
 import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
 import { buildAllowedOrigins, createWsGateway, isAllowedHost } from './http/wsGateway.ts';
 import type { WsGateway } from './http/wsGateway.ts';
@@ -56,6 +60,9 @@ export interface LionscopeServer {
   /** What the agent tools run against (`lionscope mcp` calls them in-process). */
   readonly agent: Omit<AgentContext, 'deviceControl'>;
 }
+
+/** Longest an Inspector snapshot may wait for uiautomator (it retries while the screen is not idle). */
+const INSPECT_UI_DUMP_MS = 20_000;
 
 function sendPlain(res: ServerResponse, status: number, body: string): void {
   res.statusCode = status;
@@ -102,9 +109,22 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     limits: options.deviceLimits,
   });
 
+  const inspector = new InspectorService({
+    sessions: manager,
+    // The agent's dump: it also refreshes what the element tools know of the screen.
+    dumpUi: async (serial) =>
+      (
+        await dumpUi({ ...agent, deviceControl: false }, serial, {
+          deadline: performance.now() + INSPECT_UI_DUMP_MS,
+        })
+      ).tree,
+    screencap: (serial) => screencap({ adb: options.adb }, serial),
+    broadcast: (message, payload) => gateway?.broadcast(message, payload),
+  });
   const agent: Omit<AgentContext, 'deviceControl'> = {
     sessions: manager,
     emulators,
+    inspector,
     adb: options.adb,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
@@ -143,6 +163,13 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       sendPlain(res, 405, 'Method not allowed\n');
       return;
     }
+    if (pathname.startsWith(INSPECTOR_PATH_PREFIX)) {
+      serveInspectorPng(req, res, pathname, {
+        png: (id) => inspector.png(id),
+        allowedOrigins: () => allowedOrigins,
+      });
+      return;
+    }
     if (pathname === WS_PATH || pathname === SCREEN_WS_PATH) {
       sendPlain(res, 426, 'WebSocket upgrade required\n');
       return;
@@ -162,6 +189,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     server,
     manager,
     emulators,
+    inspector,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,

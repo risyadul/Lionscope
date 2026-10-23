@@ -2,16 +2,28 @@ import { createServer } from 'node:net';
 import type { AddressInfo, Socket } from 'node:net';
 import {
   DEVICE_PROTOCOL_V2,
+  DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_VERSION,
+  INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
   parseDeviceMessage,
 } from '@lionscope/protocol';
-import type { GatewayMessage, SdkOptions } from '@lionscope/protocol';
+import type { GatewayMessage, InspectorNode, SdkOptions } from '@lionscope/protocol';
 import { HOST } from '../config.ts';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
-import type { ByeReason, SdkLink, SdkLinkHandler, SdkLinkTarget } from './sdkLink.ts';
+import { MAX_INSPECT_ANSWER_BYTES, SdkInspectError } from './sdkLink.ts';
+import type {
+  ByeReason,
+  SdkInspectBegin,
+  SdkInspection,
+  SdkInspectFailure,
+  SdkInspectMessage,
+  SdkLink,
+  SdkLinkHandler,
+  SdkLinkTarget,
+} from './sdkLink.ts';
 
 export interface DeviceGatewayLimits {
   /** Connections still waiting for their hello; a new one evicts the oldest (it can't lock others out). */
@@ -28,6 +40,14 @@ export interface DeviceGatewayLimits {
   /** Gateway-wide token bucket for hellos: reconnecting must not reset the per-connection limit. */
   hellosPerSecond: number;
   helloBurst: number;
+  /**
+   * An `inspect` request fails when no answer line arrived this long after it was sent or after its previous
+   * line, or when it is not complete `inspectTotalTimeoutMs` after it was sent.
+   */
+  inspectTimeoutMs: number;
+  inspectTotalTimeoutMs: number;
+  /** Bytes of one `inspect` answer at most (MAX_INSPECT_ANSWER_BYTES). */
+  maxInspectAnswerBytes: number;
 }
 
 export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
@@ -39,6 +59,9 @@ export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
   lineBurst: 200,
   hellosPerSecond: 1,
   helloBurst: 5,
+  inspectTimeoutMs: INSPECT_TIMEOUT_MS,
+  inspectTotalTimeoutMs: 15_000,
+  maxInspectAnswerBytes: MAX_INSPECT_ANSWER_BYTES,
 };
 
 /** Browsers can send requests to localhost ports: a request line ends the connection at once. */
@@ -193,7 +216,52 @@ function configMessage(options: SdkOptions): GatewayMessage {
   };
 }
 
-const DIAGNOSTIC_TYPES: ReadonlySet<string> = new Set(['stall', 'strictmode', 'inflate', 'viewtree']);
+const INSPECT_TYPES: ReadonlySet<string> = new Set(['inspectBegin', 'inspectNodes', 'inspectError']);
+/** Dropped (counted) rather than fatal when over the line budget. */
+const SHEDDABLE_TYPES: ReadonlySet<string> = new Set([
+  'stall',
+  'strictmode',
+  'inflate',
+  'viewtree',
+  ...INSPECT_TYPES,
+]);
+
+function isInspectMessage(message: { type: string }): message is SdkInspectMessage {
+  return INSPECT_TYPES.has(message.type);
+}
+
+interface PendingInspect {
+  begin: SdkInspectBegin | null;
+  chunks: Map<number, InspectorNode[]>;
+  /** seq of the chunk marked `last`, once it arrived. */
+  lastSeq: number | null;
+  received: number;
+  /** Bytes of its lines so far. */
+  bytes: number;
+  /** performance.now() by which it must be complete. */
+  deadline: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  resolve: (inspection: SdkInspection) => void;
+  reject: (error: SdkInspectError) => void;
+}
+
+/** The nodes of a complete answer in seq order, or null when they don't form the snapshot `begin` announced. */
+function assembleNodes(pending: PendingInspect, begin: SdkInspectBegin): InspectorNode[] | null {
+  const nodes: InspectorNode[] = [];
+  for (let seq = 0; seq < pending.chunks.size; seq++) {
+    const chunk = pending.chunks.get(seq);
+    if (!chunk) return null;
+    nodes.push(...chunk);
+  }
+  if (nodes.length !== begin.nodeCount) return null;
+  const consistent = nodes.every(
+    (node, index) =>
+      node.id === index &&
+      (node.parent === null || node.parent < index) &&
+      node.window < begin.windows.length,
+  );
+  return consistent ? nodes : null;
+}
 const TYPE_PREFIX = '{"type":"';
 const MAX_PEEKED_TYPE_LENGTH = 16;
 
@@ -220,7 +288,7 @@ interface ConnectionContext {
   ignore: (type: string) => void;
   /** A message of a type the negotiated protocol version lacks (skipped, counted). */
   skipUnnegotiated: (type: string, since: number, negotiated: number) => void;
-  /** A diagnostic (`stall` / `strictmode`) failed validation (dropped, counted; the link stays up). */
+  /** A diagnostic (`stall` / `strictmode`) or Inspector answer failed validation (dropped, counted; the link stays up). */
   dropDiagnostic: (type: string, error: string) => void;
   /** A diagnostic line over the connection's line budget was dropped (counted; the link stays up). */
   shedDiagnostic: (type: string) => void;
@@ -239,16 +307,109 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   /** A `config` asked for before the `welcome` went out. */
   let pendingConfig: GatewayMessage | null = null;
   let closing = false;
+  const inspects = new Map<number, PendingInspect>();
+  let nextRequestId = 1;
+  /**
+   * Inspector answer lines (and bytes) of pending requests that may still bypass the line budget: one line per
+   * request sent (its begin or error) and, once a begin arrived, one per announced node (a chunk holds at least
+   * one); maxInspectAnswerBytes per request. Reset when no request is pending.
+   */
+  let inspectAllowance = 0;
+  let inspectBytesAllowance = 0;
+
+  const settleInspect = (requestId: number): PendingInspect | null => {
+    const pending = inspects.get(requestId);
+    if (!pending) return null;
+    inspects.delete(requestId);
+    clearTimeout(pending.timer);
+    if (inspects.size === 0) {
+      inspectAllowance = 0;
+      inspectBytesAllowance = 0;
+    }
+    return pending;
+  };
+  /** (Re-)arm a request's timer: the next line is due within inspectTimeoutMs, all of them by its deadline. */
+  const armInspectTimer = (requestId: number, pending: PendingInspect): void => {
+    clearTimeout(pending.timer);
+    const left = Math.min(limits.inspectTimeoutMs, pending.deadline - performance.now());
+    pending.timer = setTimeout(() => failInspect(requestId, 'timeout'), Math.max(0, left));
+  };
+  const failInspect = (requestId: number, reason: SdkInspectFailure): void => {
+    settleInspect(requestId)?.reject(new SdkInspectError(reason));
+  };
+  const failAllInspects = (reason: SdkInspectFailure): void => {
+    for (const requestId of [...inspects.keys()]) failInspect(requestId, reason);
+  };
+
+  const inspect = (): Promise<SdkInspection> =>
+    new Promise((resolve, reject) => {
+      if (protocolVersion < DEVICE_PROTOCOL_V4) return reject(new SdkInspectError('unsupported'));
+      if (closing || !handler) return reject(new SdkInspectError('closed'));
+      const requestId = nextRequestId++;
+      const pending: PendingInspect = {
+        begin: null,
+        chunks: new Map(),
+        lastSeq: null,
+        received: 0,
+        bytes: 0,
+        deadline: performance.now() + limits.inspectTotalTimeoutMs,
+        timer: undefined,
+        resolve,
+        reject,
+      };
+      inspects.set(requestId, pending);
+      armInspectTimer(requestId, pending);
+      inspectAllowance += 1;
+      inspectBytesAllowance += limits.maxInspectAnswerBytes;
+      socket.write(gatewayLine({ type: 'inspect', requestId }));
+    });
+
+  /** One Inspector answer line; anything inconsistent fails its request (the link stays up). */
+  const onInspectMessage = (message: SdkInspectMessage, bytes: number): void => {
+    const pending = inspects.get(message.requestId);
+    // An answer after its request timed out (or to none at all) is stale: dropped quietly.
+    if (!pending) return;
+    if (message.type === 'inspectError') return failInspect(message.requestId, message.reason);
+    pending.bytes += bytes;
+    if (pending.bytes > limits.maxInspectAnswerBytes) return failInspect(message.requestId, 'too_large');
+    armInspectTimer(message.requestId, pending);
+    if (message.type === 'inspectBegin') {
+      const windowsInOrder = message.windows.every((window, index) => window.id === index);
+      if (pending.begin || !windowsInOrder) return failInspect(message.requestId, 'invalid');
+      pending.begin = message;
+      inspectAllowance += Math.max(1, message.nodeCount);
+      return;
+    }
+    const { begin } = pending;
+    if (!begin || pending.chunks.has(message.seq)) return failInspect(message.requestId, 'invalid');
+    pending.received += message.nodes.length;
+    const tooMany =
+      pending.received > begin.nodeCount ||
+      (message.nodes.length === 0 && begin.nodeCount > 0) ||
+      pending.chunks.size >= Math.max(1, begin.nodeCount) ||
+      (pending.lastSeq !== null && (message.last || message.seq > pending.lastSeq));
+    if (tooMany) return failInspect(message.requestId, 'invalid');
+    pending.chunks.set(message.seq, message.nodes);
+    if (message.last) pending.lastSeq = message.seq;
+    if (pending.lastSeq === null || pending.chunks.size <= pending.lastSeq) return;
+    // Every chunk 0..lastSeq is in (chunks may arrive out of order).
+    const nodes = assembleNodes(pending, begin);
+    settleInspect(message.requestId);
+    if (nodes) pending.resolve({ begin, nodes });
+    else pending.reject(new SdkInspectError('invalid'));
+  };
 
   const close = (bye?: ByeReason): void => {
     if (closing) return;
     closing = true;
     clearTimeout(helloTimer);
+    failAllInspects('closed');
     endSocket(socket, bye && { type: 'bye', reason: bye });
   };
   const abort = (reason: string): void => {
     warn(reason);
     closing = true;
+    failAllInspects('closed');
     socket.destroy();
   };
   const helloTimer = setTimeout(() => abort('no hello'), limits.helloTimeoutMs);
@@ -277,6 +438,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         if (handler) socket.write(gatewayLine(configMessage(options)));
         else pendingConfig = configMessage(options);
       },
+      inspect,
     };
     const result = target.attachSdk(parsed.value, link);
     if (!result.ok) return close(result.reason);
@@ -288,31 +450,65 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     pendingConfig = null;
   };
 
-  const onLine = (raw: string): void => {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-    if (!bucket.take()) {
-      // Diagnostics are droppable: an over-budget one is counted, not fatal. Anything else closes the link.
-      const type = handler ? peekType(line) : null;
-      if (type === null || !DIAGNOSTIC_TYPES.has(type)) {
-        warn('rate limit');
-        return close('protocol_error');
-      }
-      return shedDiagnostic(type);
+  /**
+   * Over the line budget: a diagnostic is dropped (counted), anything else closes the link. `stale`: an Inspector
+   * answer known to belong to no pending request.
+   */
+  const overBudget = (type: string | null, stale = false): void => {
+    if (type === null || !SHEDDABLE_TYPES.has(type)) {
+      warn('rate limit');
+      return close('protocol_error');
     }
+    // A snapshot missing a line can't be completed.
+    if (INSPECT_TYPES.has(type) && !stale) failAllInspects('invalid');
+    shedDiagnostic(type);
+  };
+
+  const onLine = (raw: string, rawBytes: number): void => {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    const type = handler ? peekType(line) : null;
+    // A snapshot's chunks come in a burst: while a request waits for them, its answer lines don't count against
+    // the line budget, up to the announced node count and MAX_INSPECT_ANSWER_BYTES (they still go through every
+    // other check). Whether a line really is such an answer is only known once parsed.
+    const exempt =
+      type !== null &&
+      INSPECT_TYPES.has(type) &&
+      inspects.size > 0 &&
+      inspectAllowance > 0 &&
+      rawBytes <= inspectBytesAllowance;
+    if (!exempt && !bucket.take()) return overBudget(type);
     if (!handler) return onHello(line);
     const parsed = parseDeviceMessage(line, protocolVersion);
+    if (exempt) {
+      // JSON.parse keeps the last of duplicate keys: the type peeked at must be the type parsed.
+      const parsedType = parsed.ok
+        ? parsed.value.type
+        : (parsed.invalidDiagnostic ?? parsed.unknownType ?? parsed.unnegotiated?.type ?? null);
+      if (parsedType !== type) {
+        warn('inspect answer of another type');
+        return close('protocol_error');
+      }
+      // Only answers to a pending request are exempt; a stale one spends the budget like any line.
+      const requestId = parsed.ok && isInspectMessage(parsed.value) ? parsed.value.requestId : null;
+      if (requestId === null || inspects.has(requestId)) {
+        inspectAllowance -= 1;
+        inspectBytesAllowance -= rawBytes;
+      } else if (!bucket.take()) return overBudget(type, true);
+    }
     if (!parsed.ok && parsed.unknownType !== undefined) return ignore(parsed.unknownType);
     if (!parsed.ok && parsed.unnegotiated) {
       return skipUnnegotiated(parsed.unnegotiated.type, parsed.unnegotiated.since, protocolVersion);
     }
     if (!parsed.ok && parsed.invalidDiagnostic !== undefined) {
       dropDiagnostic(parsed.invalidDiagnostic, parsed.error);
+      if (INSPECT_TYPES.has(parsed.invalidDiagnostic)) return failAllInspects('invalid');
       return handler.onInvalidDiagnostic();
     }
     if (!parsed.ok || parsed.value.type === 'hello') {
       warn('invalid message');
       return close('protocol_error');
     }
+    if (isInspectMessage(parsed.value)) return onInspectMessage(parsed.value, rawBytes);
     handler.onMessage(parsed.value);
   };
 
@@ -328,12 +524,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         partialBytes += piece.length;
         return;
       }
+      const bytes = partialBytes + piece.length;
       const line = Buffer.concat([...partial, piece]).toString('utf8');
       partial = [];
       partialBytes = 0;
       start = newline + 1;
       try {
-        onLine(line);
+        onLine(line, bytes);
       } catch (error) {
         // A bug downstream must not take the server down; the SDK reconnects.
         log.error('Device gateway: failed to handle a line:', errorMessage(error));
@@ -345,6 +542,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   socket.on('close', () => {
     closing = true;
     clearTimeout(helloTimer);
+    failAllInspects('closed');
     const linked = handler;
     handler = null;
     linked?.onClose();

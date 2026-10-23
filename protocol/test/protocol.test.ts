@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V3,
+  DEVICE_PROTOCOL_V4,
   isValidAvdName,
   isValidPackageName,
   isValidProcessName,
@@ -12,6 +13,8 @@ import {
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
+  MAX_INSPECTOR_NODES,
+  MAX_INSPECTOR_WINDOWS,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
   MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
@@ -157,6 +160,37 @@ describe('parseClientMessage', () => {
     const tooBig = `{"type":"stopSession","x":"${'é'.repeat(2100)}"}`;
     expect(tooBig.length).toBeLessThan(MAX_CLIENT_MESSAGE_BYTES);
     expect(parseClientMessage(tooBig)).toEqual({ ok: false, error: 'message too large' });
+  });
+});
+
+describe('Inspector client messages', () => {
+  const snapshotId = '0123456789abcdef';
+
+  it('parses inspect and selectInspectorNode (a node or null)', () => {
+    expect(parseClientMessage('{"type":"inspect","serial":"emulator-5554"}')).toEqual({
+      ok: true,
+      value: { type: 'inspect', serial: 'emulator-5554' },
+    });
+    for (const nodeId of [0, MAX_INSPECTOR_NODES - 1, null]) {
+      const message = { type: 'selectInspectorNode', snapshotId, nodeId };
+      expect(parseClientMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+    }
+  });
+
+  it('rejects bad serials, snapshot ids, node ids and extra fields', () => {
+    for (const message of [
+      { type: 'inspect', serial: 'emulator-5554; reboot' },
+      { type: 'inspect' },
+      { type: 'inspect', serial: 'emulator-5554', all: true },
+      { type: 'selectInspectorNode', snapshotId: '../etc', nodeId: 1 },
+      { type: 'selectInspectorNode', snapshotId: snapshotId.toUpperCase(), nodeId: 1 },
+      { type: 'selectInspectorNode', snapshotId, nodeId: -1 },
+      { type: 'selectInspectorNode', snapshotId, nodeId: MAX_INSPECTOR_NODES },
+      { type: 'selectInspectorNode', snapshotId, nodeId: 1.5 },
+      { type: 'selectInspectorNode', snapshotId },
+    ]) {
+      expect(parseClientMessage(JSON.stringify(message)).ok).toBe(false);
+    }
   });
 });
 
@@ -406,7 +440,19 @@ describe('parseDeviceMessage', () => {
     }
     const types = GOLDEN_LINES.map((line) => (JSON.parse(line) as DeviceMessage).type);
     expect(new Set(types)).toEqual(
-      new Set(['hello', 'screen', 'frames', 'heartbeat', 'stall', 'strictmode', 'inflate', 'viewtree']),
+      new Set([
+        'hello',
+        'screen',
+        'frames',
+        'heartbeat',
+        'stall',
+        'strictmode',
+        'inflate',
+        'viewtree',
+        'inspectBegin',
+        'inspectNodes',
+        'inspectError',
+      ]),
     );
   });
 
@@ -838,6 +884,117 @@ describe('parseDeviceMessage', () => {
       for (const bad of [{ views: -1 }, { viewGroups: 1_000_001 }, { maxDepth: 1.5 }]) {
         expect(error({ ...viewtree, ...bad })).not.toBeNull();
       }
+    });
+  });
+
+  describe('v4 Inspector answers', () => {
+    const golden = (type: string) => {
+      const line = GOLDEN_LINES.find((candidate) => (JSON.parse(candidate) as DeviceMessage).type === type);
+      if (!line) throw new Error(`no golden ${type} line`);
+      return JSON.parse(line) as Record<string, unknown>;
+    };
+    const begin = golden('inspectBegin');
+    const nodes = golden('inspectNodes');
+    const [decor, button] = nodes.nodes as Record<string, unknown>[];
+    const chunk = (node: Record<string, unknown>) => ({ ...nodes, nodes: [node] });
+    const error = (value: object) => errorOf(JSON.stringify(value));
+
+    it('flags them as unnegotiated below v4, without validating them', () => {
+      for (const message of [begin, nodes, { type: 'inspectError' }]) {
+        expect(parseDeviceMessage(JSON.stringify(message), DEVICE_PROTOCOL_V3)).toEqual({
+          ok: false,
+          error: `${String(message.type)} needs protocol version 4`,
+          unnegotiated: { type: message.type, since: DEVICE_PROTOCOL_V4 },
+        });
+      }
+    });
+
+    it('flags invalid ones as skippable', () => {
+      for (const message of [
+        { ...begin, nodeCount: -1 },
+        { type: 'inspectNodes' },
+        { type: 'inspectError' },
+      ]) {
+        expect(parseDeviceMessage(JSON.stringify(message))).toMatchObject({
+          ok: false,
+          invalidDiagnostic: message.type,
+        });
+      }
+    });
+
+    it('strips unknown fields of nodes and windows', () => {
+      const extended = {
+        ...nodes,
+        nodes: [{ ...decor, elevation: 4 }],
+        extra: 1,
+      };
+      expect(parseDeviceMessage(JSON.stringify(extended))).toEqual({
+        ok: true,
+        value: { ...nodes, nodes: [decor] },
+      });
+    });
+
+    it('bounds the begin: display, windows, counts and times', () => {
+      expect(error({ ...begin, nodeCount: MAX_INSPECTOR_NODES })).toBeNull();
+      expect(error({ ...begin, nodeCount: MAX_INSPECTOR_NODES + 1 })).not.toBeNull();
+      const window = { id: 0, type: 2, bounds: [0, 0, 10, 10] };
+      const windows = (count: number) => Array.from({ length: count }, (_, id) => ({ ...window, id }));
+      expect(error({ ...begin, windows: windows(MAX_INSPECTOR_WINDOWS) })).toBeNull();
+      expect(error({ ...begin, windows: windows(MAX_INSPECTOR_WINDOWS + 1) })).not.toBeNull();
+      expect(error({ ...begin, windows: [{ ...window, type: null }] })).toBeNull();
+      for (const bad of [
+        { display: { width: 0, height: 2424, rotation: 0 } },
+        { display: { width: 1080, height: 20_001, rotation: 0 } },
+        { display: { width: 1080, height: 2424, rotation: 45 } },
+        { windows: [{ ...window, bounds: [0, 0, 10] }] },
+        { windows: [{ ...window, bounds: [0, 0, 10, 100_001] }] },
+        { windows: [{ ...window, bounds: [0, 0, 10, 1.5] }] },
+        { windows: [{ ...window, type: -1 }] },
+        { requestId: -1 },
+        { captureMs: -1 },
+        { screen: 's'.repeat(201) },
+        { compose: 'no' },
+      ]) {
+        expect(error({ ...begin, ...bad })).not.toBeNull();
+      }
+    });
+
+    it('bounds the nodes: ids, strings, rects, layout dimensions and the count', () => {
+      expect(error(chunk({ ...button, text: 't'.repeat(500) }))).toBeNull();
+      expect(error(chunk({ ...button, layoutWidth: '-12px', layoutHeight: '480px' }))).toBeNull();
+      expect(error(chunk({ ...button, visibleBounds: null, alpha: 0, checked: true }))).toBeNull();
+      for (const bad of [
+        { text: 't'.repeat(501) },
+        { text: '' },
+        { text: 'two\nlines' },
+        { contentDescription: '\u202eevil' },
+        { className: 'c'.repeat(201) },
+        { resourceId: 'r'.repeat(201) },
+        { id: MAX_INSPECTOR_NODES },
+        { parent: -1 },
+        { window: MAX_INSPECTOR_WINDOWS },
+        { bounds: [0, 0, 10, -100_001] },
+        { padding: [0, 0, 0] },
+        { visibility: 'hidden' },
+        { alpha: 1.5 },
+        { layoutWidth: 'fill_parent' },
+        { layoutHeight: '12dp' },
+        { source: { layout: 'fragment_home', line: 0 } },
+        { source: { layout: '', line: 3 } },
+        { fragment: 'f'.repeat(201) },
+      ]) {
+        expect(error(chunk({ ...button, ...bad }))).not.toBeNull();
+      }
+      const many = Array.from({ length: MAX_INSPECTOR_NODES + 1 }, () => decor);
+      expect(error({ ...nodes, nodes: many })).not.toBeNull();
+      expect(error({ ...nodes, seq: MAX_INSPECTOR_NODES })).not.toBeNull();
+    });
+
+    it('accepts only the listed error reasons', () => {
+      for (const reason of ['background', 'no_window', 'disabled', 'failed']) {
+        expect(error({ type: 'inspectError', requestId: 1, reason })).toBeNull();
+      }
+      expect(error({ type: 'inspectError', requestId: 1, reason: 'busy' })).not.toBeNull();
     });
   });
 

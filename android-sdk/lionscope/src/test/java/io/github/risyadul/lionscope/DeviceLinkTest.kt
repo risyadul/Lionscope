@@ -270,6 +270,49 @@ class DeviceLinkTest {
         assertEquals("{\"type\":\"inflate\"}", DeviceLink.encode(item, negotiatedVersion = 3))
     }
 
+    @Test
+    fun aV4ItemIsEncodedOnlyOnAV4Connection() {
+        val item = DeviceLink.V2Item(16, DEVICE_PROTOCOL_V4) { "{\"type\":\"inspectError\"}" }
+        assertNull(DeviceLink.encode(item, negotiatedVersion = null))
+        assertNull(DeviceLink.encode(item, negotiatedVersion = 3))
+        assertEquals("{\"type\":\"inspectError\"}", DeviceLink.encode(item, negotiatedVersion = 4))
+    }
+
+    @Test(timeout = 20_000)
+    fun inspectRequestsReachListenersOnlyOnAV4Link() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            val requests = CopyOnWriteArrayList<Int>()
+            link.addInspectListener { requests += it }
+            link.start()
+
+            server.accept().use { client ->
+                val input = client.reader()
+                assertEquals(hello, input.readLine())
+                client.reply("{\"type\":\"inspect\",\"requestId\":1}") // Before welcome: ignored.
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":3}")
+                waitFor { link.isWelcomed }
+                client.reply("{\"type\":\"inspect\",\"requestId\":2}") // A v3 link: ignored.
+                link.sendV4(16) { "{\"type\":\"inspectError\"}" } // Dropped.
+                link.send("{\"type\":\"marker\"}")
+                assertEquals("marker", input.readUntil { it["type"] != "heartbeat" }["type"])
+            }
+            waitFor { !link.isConnected }
+
+            server.accept().use { client ->
+                val input = client.reader()
+                assertEquals(hello, input.readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":4}")
+                waitFor { link.isWelcomed }
+                client.reply("{\"type\":\"inspect\",\"requestId\":3}")
+                waitFor { requests.isNotEmpty() }
+                link.sendV4(16) { "{\"type\":\"inspectError\",\"requestId\":3}" }
+                assertEquals(3.0, input.readUntil { it["type"] != "heartbeat" }["requestId"])
+            }
+            assertEquals(listOf(3), requests.toList())
+        }
+    }
+
     @Test(timeout = 20_000)
     fun reconnectsAfterTheServerDisappears() {
         val first = localServer()

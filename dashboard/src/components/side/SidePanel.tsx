@@ -2,12 +2,13 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'screens' | 'stalls' | 'layouts';
+export type SideTab = 'screens' | 'stalls' | 'layouts' | 'inspector';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'screens', label: 'Screens' },
   { id: 'stalls', label: 'Stalls' },
   { id: 'layouts', label: 'Layouts' },
+  { id: 'inspector', label: 'Inspector' },
 ];
 
 type Props = {
@@ -19,9 +20,12 @@ type Props = {
   stallCount: number;
   /** Layouts in the visible window, shown on its tab. */
   layoutCount: number;
+  /** Views in the latest Inspector snapshot, shown on its tab. */
+  inspectorCount: number;
   screens: ReactNode;
   stalls: ReactNode;
   layouts: ReactNode;
+  inspector: ReactNode;
 };
 
 /** The right-hand column: the per-screen table and stalls share it as tabs (both stay mounted). */
@@ -31,12 +35,19 @@ export function SidePanel({
   screenCount,
   stallCount,
   layoutCount,
+  inspectorCount,
   screens,
   stalls,
   layouts,
+  inspector,
 }: Props) {
-  const counts: Record<SideTab, number> = { screens: screenCount, stalls: stallCount, layouts: layoutCount };
-  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts };
+  const counts: Record<SideTab, number> = {
+    screens: screenCount,
+    stalls: stallCount,
+    layouts: layoutCount,
+    inspector: inspectorCount,
+  };
+  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, inspector };
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -54,7 +65,7 @@ export function SidePanel({
   };
 
   return (
-    <aside className="side" aria-label="Screens, stalls and layouts">
+    <aside className="side" aria-label="Screens, stalls, layouts and inspector">
       <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button

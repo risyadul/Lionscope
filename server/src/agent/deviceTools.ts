@@ -71,7 +71,7 @@ export function targetSerial(ctx: AgentContext, serial: string | undefined): str
   return chosen;
 }
 
-function screencap(ctx: AgentContext, serial: string): Promise<Buffer> {
+export function screencap(ctx: Pick<AgentContext, 'adb'>, serial: string): Promise<Buffer> {
   return execBinary(ctx.adb, ['-s', serial, 'exec-out', 'screencap', '-p'], {
     timeoutMs: SCREENCAP_TIMEOUT_MS,
     maxBytes: MAX_SCREENCAP_BYTES,

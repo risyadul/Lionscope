@@ -396,11 +396,14 @@ describe('SDK review round 1', () => {
     const screensTab = screen.getByRole('tab', { name: /Screens/ });
     expect(screensTab.getAttribute('aria-selected')).toBe('true');
     const layoutsTab = screen.getByRole('tab', { name: /Layouts/ });
+    const inspectorTab = screen.getByRole('tab', { name: /Inspector/ });
     fireEvent.keyDown(screensTab, { key: 'End' });
-    expect(layoutsTab.getAttribute('aria-selected')).toBe('true');
-    fireEvent.keyDown(layoutsTab, { key: 'ArrowRight' });
+    expect(inspectorTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(inspectorTab, { key: 'ArrowRight' });
     expect(screensTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(screensTab, { key: 'ArrowLeft' });
+    expect(inspectorTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(inspectorTab, { key: 'ArrowLeft' });
     expect(layoutsTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(layoutsTab, { key: 'ArrowLeft' });
     expect(screen.getByRole('tab', { name: /Stalls/ }).getAttribute('aria-selected')).toBe('true');

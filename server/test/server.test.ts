@@ -162,6 +162,16 @@ describe('Lionscope server', () => {
       }
     });
 
+    it('serves Inspector screenshots under the dashboard Host rules, 404 when there is none', async () => {
+      const path = '/inspector/0123456789abcdef.png';
+      expect((await rawRequest(port, path)).status).toBe(404);
+      expect((await rawRequest(port, path, 'GET', { Host: 'evil.example' })).status).toBe(403);
+      expect((await rawRequest(port, path, 'GET', { Origin: 'http://evil.example' })).status).toBe(403);
+      expect((await rawRequest(port, path, 'POST')).status).toBe(405);
+      // Not the SPA fallback.
+      expect((await rawRequest(port, '/inspector/x')).body).not.toContain('Lionscope');
+    });
+
     it('asks plain HTTP requests to the WebSocket path to upgrade', async () => {
       expect((await rawRequest(port, WS_PATH)).status).toBe(426);
     });

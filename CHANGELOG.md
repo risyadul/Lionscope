@@ -6,6 +6,47 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Layout Inspector in the dashboard. An **Inspect** toggle in the device toolbar freezes the screen to a snapshot
+  with an overlay: hover highlights the view under the pointer with its `Class#id` label, click selects it (the
+  top-most window first, so a dialog is inspectable together with the screen behind it), `Esc` or the toggle
+  returns to the live screen. The snapshot refreshes on its own about 0.7 s after the top screen changes, and on
+  demand, with capturing and error states. Works for emulators and physical devices.
+- **Inspector** side tab: a collapsible, searchable hierarchy with arrow-key navigation that follows the selection
+  and syncs hover with the overlay, and an attributes panel (class, id, text, bounds, visibility, alpha, layout
+  width and height, padding and margin with a box-model figure, flags, the owning Fragment and Activity, and the
+  layout source as `layout.xml:line` with an "end of start tag" note). Badges show whether the tree came from the
+  `SDK` or from `uiautomator` (with the reason), the capture time and the node count. A selection made by an AI
+  agent shows up in the tab and on the screen.
+- Agent tools for the Inspector: `get_inspector_selection` (always on, read-only) returns the element the user
+  selected in the dashboard with all its attributes, its XML layout and line (noted as the end of the start tag),
+  owner, ancestor path, children, the snapshot's device, screen, age and source, and a crop of the screenshot
+  around the element (at most 512 px; none for window roots or elements over half the screen);
+  `select_inspector_node` (always on) highlights a node in the dashboard as the AI's pick, and for such a node
+  `get_inspector_selection` returns its structure only (no text, content description or image);
+  `inspect_screen` (device control) takes a snapshot and lists its visible nodes. The MCP instructions tell agents
+  to call `get_inspector_selection` when the user means "this element". On-screen text, content descriptions,
+  resource ids and crops are marked as app data.
+- Server: Inspector snapshots come from the SDK (device protocol 4) when the session's app on that device is
+  linked and on top, else from `uiautomator dump` (also for Compose screens), with a `screencap` taken at the same
+  moment. The last 5 snapshots (64 MB at most) stay in memory and their screenshots are served at
+  `/inspector/<id>.png` (loopback Host, same origin only, never cached). When the SDK can't answer, the
+  uiautomator dump gets a screenshot of its own. Snapshots over 8 MB fall back to uiautomator (`sdk_too_large`).
+  New dashboard protocol 4 messages `inspect`, `selectInspectorNode`, `inspection` and `inspectorSelection` (with
+  who selected: `user` or `agent`); the selection follows the element into a refreshed snapshot (same class, id
+  and text, or the same class within 24 px) and is cleared otherwise.
+- Device protocol 4: the server sends `inspect` and the SDK answers with `inspectBegin` and `inspectNodes` chunks
+  (at most 32 KB each) or `inspectError`. The server reassembles and checks the chunks (in any order), gives up
+  5 s after the request or its last line (15 s in all), and lets a pending request's own lines past the per-link
+  line budget, up to the announced node count and 8 MB per answer. A malformed or too large answer fails that
+  request only; the link stays up and the snapshot falls back to uiautomator. A line whose type changes between
+  the first key and the parsed message closes the link.
+
+### Fixed
+
+- README: the device-control tools launch apps with `am start -W`, not `monkey`.
+
 ## [0.4.1] - 2026-10-23
 
 ### Added

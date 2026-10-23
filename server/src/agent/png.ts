@@ -167,3 +167,36 @@ export function scalePng(data: Buffer, maxShortEdge: number): { png: Buffer; siz
   if (!image) return { png: data, size };
   return { png: encodeRgb(downscale(image, target), target), size: target };
 }
+
+/**
+ * The part of a PNG inside `rect` ([left, top, right, bottom] in its pixels, clamped to the image) as a new PNG,
+ * scaled down so its long edge is at most `maxLongEdge`; null when the PNG can't be decoded or the rect is empty.
+ */
+export function cropPng(
+  data: Buffer,
+  rect: readonly [number, number, number, number],
+  maxLongEdge: number,
+): { png: Buffer; size: Size } | null {
+  const image = decodePng(data);
+  if (!image) return null;
+  const left = Math.max(0, Math.floor(rect[0]));
+  const top = Math.max(0, Math.floor(rect[1]));
+  const right = Math.min(image.width, Math.ceil(rect[2]));
+  const bottom = Math.min(image.height, Math.ceil(rect[3]));
+  if (right <= left || bottom <= top) return null;
+  const width = right - left;
+  const height = bottom - top;
+  const stride = width * image.channels;
+  const pixels = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const from = ((top + y) * image.width + left) * image.channels;
+    image.pixels.copy(pixels, y * stride, from, from + stride);
+  }
+  const scale = Math.min(1, maxLongEdge / Math.max(width, height));
+  const target = {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+  const cropped: DecodedPng = { width, height, channels: image.channels, pixels };
+  return { png: encodeRgb(downscale(cropped, target), target), size: target };
+}

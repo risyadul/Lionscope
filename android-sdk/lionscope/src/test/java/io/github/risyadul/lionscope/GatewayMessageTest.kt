@@ -49,6 +49,25 @@ class GatewayMessageTest {
     }
 
     @Test
+    fun parsesInspectWithItsRequestId() {
+        val inspect = GatewayMessage.parse("{\"type\":\"inspect\",\"requestId\":7}")
+        assertEquals(7, (inspect as GatewayMessage.Inspect).requestId)
+        assertEquals(0, (GatewayMessage.parse("{\"type\":\"inspect\", \"requestId\" : 0}") as GatewayMessage.Inspect).requestId)
+        assertEquals(
+            Int.MAX_VALUE,
+            (GatewayMessage.parse("{\"type\":\"inspect\",\"requestId\":2147483647}") as GatewayMessage.Inspect).requestId,
+        )
+    }
+
+    @Test
+    fun anInspectWithoutAUsableRequestIdIsDropped() {
+        for (raw in listOf("-1", "1.5", "1e3", "\"7\"", "null", "2147483648", "99999999999")) {
+            assertNull(raw, GatewayMessage.parse("{\"type\":\"inspect\",\"requestId\":$raw}"))
+        }
+        assertNull(GatewayMessage.parse("{\"type\":\"inspect\"}"))
+    }
+
+    @Test
     fun parsesByeWithReason() {
         val bye = GatewayMessage.parse("{ \"type\" : \"bye\", \"reason\": \"package_mismatch\" }")
         assertTrue(bye is GatewayMessage.Bye)

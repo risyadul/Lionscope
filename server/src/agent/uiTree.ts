@@ -16,6 +16,8 @@ export interface UiElement {
   depth: number;
   /** Simple class name (`Button`, `TextView`, `ComposeView`). */
   className: string;
+  /** The class as dumped (`android.widget.Button`). */
+  qualifiedClassName: string;
   package: string;
   /** Null for a password field: its text is never returned. */
   text: string | null;
@@ -78,6 +80,7 @@ function toElement(raw: RawUiNode, index: number, parent: number | null, depth: 
     parent,
     depth,
     className: className.slice(className.lastIndexOf('.') + 1),
+    qualifiedClassName: className,
     package: pkg,
     text: password ? null : nonEmpty(a.text),
     desc: nonEmpty(a['content-desc']),

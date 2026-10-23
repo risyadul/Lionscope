@@ -178,6 +178,16 @@ export class ProfilingSession {
     this.sdk.setOptions(changes);
   }
 
+  /** The live, verified SDK link of this session (null while none is), for Inspector snapshots. */
+  get sdkLink(): SdkLink | null {
+    return this.sdk.liveLink;
+  }
+
+  /** The top screen as the SDK last reported it, null when unknown or in the background. */
+  topScreen(): string | null {
+    return this.store.topScreenAt(this.now());
+  }
+
   /** Hand an SDK connection for this app to the session; it goes live once its PID checks out. */
   attachSdk(hello: SdkHello, link: SdkLink): SdkLinkHandler {
     return this.sdk.attach(hello, link);

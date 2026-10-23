@@ -27,7 +27,12 @@ const HELLO: SdkHello = {
   deviceWallMs: 1,
   refreshRateHz: 60,
 };
-const link: SdkLink = { protocolVersion: 1, close: () => undefined, sendConfig: () => undefined };
+const link: SdkLink = {
+  protocolVersion: 1,
+  close: () => undefined,
+  sendConfig: () => undefined,
+  inspect: () => Promise.reject(new Error('unsupported')),
+};
 
 function setup(
   gatewayPort: (() => number | null) | null = () => GATEWAY_PORT,

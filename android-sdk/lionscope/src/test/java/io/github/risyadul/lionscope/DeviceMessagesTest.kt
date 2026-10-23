@@ -30,7 +30,10 @@ class DeviceMessagesTest {
     fun goldenFixtureCoversEveryMessageType() {
         val types = goldenLines.map { (TestJson.parse(it) as Map<*, *>)["type"] }.toSet()
         assertEquals(
-            setOf("hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree"),
+            setOf(
+                "hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree",
+                "inspectBegin", "inspectNodes", "inspectError",
+            ),
             types,
         )
     }
@@ -59,9 +62,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionThree() {
-        assertEquals(3, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V3, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionFour() {
+        assertEquals(4, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V4, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -321,6 +324,106 @@ class DeviceMessagesTest {
     }
 
     @Test
+    fun goldenInspectorNodesAreChunkedIntoTheGoldenLine() {
+        val golden = goldenLines.single { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
+        val nodes = ((TestJson.parse(golden) as Map<*, *>)["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
+        assertEquals(listOf(golden), DeviceMessages.inspectChunks(7, nodes))
+    }
+
+    /** The server's v4 rules (protocol/src/index.ts): text ≤ 500 / names ≤ 200, pixels ±100 000, line ≥ 1. */
+    private fun assertServerAcceptsNode(node: Map<*, *>) {
+        val badChars = Regex("[\\p{Cc}\\p{Cf}]")
+        fun text(key: String, max: Int, nullable: Boolean = true) {
+            val value = node[key]
+            if (value == null) {
+                assertTrue("$key null in $node", nullable)
+                return
+            }
+            value as String
+            assertTrue("$key: $value", value.isNotEmpty() && value.length <= max && value.trim() == value)
+            assertFalse("$key: $value", badChars.containsMatchIn(value))
+        }
+        fun rect(key: String) {
+            val value = node[key] as List<*>? ?: return
+            assertEquals(4, value.size)
+            value.forEach { assertTrue("$key: $value", (it as Double) == Math.floor(it) && Math.abs(it) <= 100_000) }
+        }
+        text("className", 200, nullable = false)
+        text("resourceId", 200)
+        text("text", 500)
+        text("contentDescription", 500)
+        text("fragment", 200)
+        text("activity", 200)
+        listOf("bounds", "visibleBounds", "padding", "margin").forEach(::rect)
+        assertTrue((node["alpha"] as Double) in 0.0..1.0)
+        for (key in listOf("layoutWidth", "layoutHeight")) {
+            val value = node[key] as String? ?: continue
+            assertTrue(value, Regex("^(match_parent|wrap_content|-?\\d{1,6}px)$").matches(value))
+        }
+        (node["source"] as Map<*, *>?)?.let { source ->
+            assertTrue((source["line"] as Double) >= 1)
+            val layout = source["layout"] as String
+            assertTrue(layout.isNotEmpty() && layout.length <= 200)
+        }
+    }
+
+    @Test
+    fun inspectorNodesAreCleanedCappedAndClamped() {
+        val dirty = InspectorFixtures.plainNode(3, 1).copy(
+            className = "\n",
+            resourceId = "r".repeat(300),
+            text = "Hello\n\tworld \u200E" + "x".repeat(800),
+            contentDescription = "\u0000",
+            bounds = PixelRect(-200_000, 0, 200_000, 50),
+            alpha = 1.7,
+            margin = PixelRect(1, 2, 3, 4),
+            layoutWidth = "12345678px",
+            layoutHeight = "fill",
+            source = ViewSource("fragment_home", 0),
+            fragment = "f".repeat(250),
+        )
+        val node = TestJson.parse(DeviceMessages.inspectNode(dirty)) as Map<*, *>
+        assertServerAcceptsNode(node)
+        assertEquals("?", node["className"])
+        assertEquals(500, (node["text"] as String).length)
+        assertTrue((node["text"] as String).startsWith("Hello world x"))
+        assertEquals(null, node["contentDescription"])
+        assertEquals(listOf(-100_000.0, 0.0, 100_000.0, 50.0), node["bounds"])
+        assertEquals(1.0, node["alpha"])
+        assertEquals(null, node["layoutWidth"])
+        assertEquals(null, node["layoutHeight"])
+        assertEquals(null, node["source"]) // Line 0 is unknown.
+        assertEquals(listOf(1.0, 2.0, 3.0, 4.0), node["margin"])
+        assertEquals(
+            listOf("match_parent", "wrap_content", "12px", "-999999px", "999999px"),
+            listOf(-1, -2, 12, -5_000_000, 5_000_000).map(DeviceMessages::layoutDimension),
+        )
+    }
+
+    @Test
+    fun inspectBeginKeepsTheDisplayAndWindowsWithinTheServerBounds() {
+        val line = DeviceMessages.inspectBegin(
+            requestId = 1,
+            ts = 5,
+            screen = "\u200E",
+            display = InspectorDisplay(0, 40_000, 450),
+            windows = List(40) { InspectorWindow(it, if (it == 0) 99_999 else 2, PixelRect(0, 0, 10, 10)) },
+            nodeCount = 9_000,
+            truncated = true,
+            captureMs = Double.NaN,
+            compose = false,
+        )
+        val begin = TestJson.parse(line) as Map<*, *>
+        assertEquals(null, begin["screen"])
+        assertEquals(mapOf("width" to 1.0, "height" to 20_000.0, "rotation" to 90.0), begin["display"])
+        val windows = (begin["windows"] as List<*>).map { it as Map<*, *> }
+        assertEquals(MAX_INSPECTOR_WINDOWS, windows.size)
+        assertEquals(null, windows.first()["type"])
+        assertEquals(5_000.0, begin["nodeCount"])
+        assertEquals(0.0, begin["captureMs"])
+    }
+
+    @Test
     fun zeroDroppedFramesIsOmitted() {
         val json = TestJson.parse(DeviceMessages.frames("w", 16.667, emptyList(), droppedFrames = 0)) as Map<*, *>
         assertEquals(listOf("type", "window", "intervalMs", "frames"), json.keys.toList())
@@ -390,6 +493,30 @@ class DeviceMessagesTest {
                 val entry = it as Map<*, *>
                 ClassCount(entry.str("className"), entry.num("count").toInt())
             },
+        )
+        "inspectBegin" -> {
+            val display = message["display"] as Map<*, *>
+            DeviceMessages.inspectBegin(
+                requestId = message.num("requestId").toInt(),
+                ts = message.num("ts").toLong(),
+                screen = message["screen"] as String?,
+                display = InspectorDisplay(display.num("width").toInt(), display.num("height").toInt(), display.num("rotation").toInt()),
+                windows = (message["windows"] as List<*>).map { InspectorFixtures.window(it as Map<*, *>) },
+                nodeCount = message.num("nodeCount").toInt(),
+                truncated = message["truncated"] as Boolean,
+                captureMs = message.num("captureMs"),
+                compose = message["compose"] as Boolean,
+            )
+        }
+        "inspectNodes" -> DeviceMessages.inspectNodes(
+            requestId = message.num("requestId").toInt(),
+            seq = message.num("seq").toInt(),
+            last = message["last"] as Boolean,
+            nodes = (message["nodes"] as List<*>).map { DeviceMessages.inspectNode(InspectorFixtures.node(it as Map<*, *>)) },
+        )
+        "inspectError" -> DeviceMessages.inspectError(
+            requestId = message.num("requestId").toInt(),
+            reason = InspectError.values().single { it.wire == message.str("reason") },
         )
         else -> error("Unknown type in golden line: $message")
     }

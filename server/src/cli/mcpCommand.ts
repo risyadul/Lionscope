@@ -28,9 +28,9 @@ Options:
   --port <port>           Dashboard port (LIONSCOPE_PORT, default 8701)
   --device-port <port>    In-app SDK gateway port, when it starts a server (LIONSCOPE_DEVICE_PORT, default 8700)
   --adb <path>            adb binary, when it starts a server (LIONSCOPE_ADB)
-  --allow-device-control  Offer the device tools (get_ui_tree, tap_element, wait_for, scroll_to, screenshot,
-                          tap, swipe, type_text, press_key, launch_app, boot_emulator, shutdown_emulator)
-                          to this client
+  --allow-device-control  Offer the device tools (get_ui_tree, inspect_screen, tap_element, wait_for,
+                          scroll_to, screenshot, tap, swipe, type_text, press_key, launch_app, boot_emulator,
+                          shutdown_emulator) to this client
   -h, --help              Show this help
   -v, --version           Print the version
 `;

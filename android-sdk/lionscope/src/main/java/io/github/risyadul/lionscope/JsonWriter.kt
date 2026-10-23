@@ -54,6 +54,14 @@ internal class JsonWriter {
 
     fun nullValue(): JsonWriter = value(null as String?)
 
+    /** An already-encoded JSON value (e.g. an object built by another writer), written as is. */
+    fun rawValue(json: String): JsonWriter {
+        separate()
+        out.append(json)
+        needsComma = true
+        return this
+    }
+
     override fun toString(): String = out.toString()
 
     private fun open(bracket: Char): JsonWriter {

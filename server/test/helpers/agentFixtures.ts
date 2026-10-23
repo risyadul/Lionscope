@@ -13,7 +13,7 @@ import type {
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
-import type { AgentContext } from '../../src/agent/tool.ts';
+import type { AgentContext, AgentInspector } from '../../src/agent/tool.ts';
 import { emptySnapshot } from '../../src/store/sessionStore.ts';
 import { FakeAdb } from './fakes.ts';
 
@@ -178,7 +178,7 @@ export interface FakeAgent {
 /** A context over a fixed snapshot; the clock stands at `now`. */
 export function fakeAgent(
   snapshot: Partial<Snapshot> = {},
-  options: { session?: SessionState; now?: number; adb?: FakeAdb } = {},
+  options: { session?: SessionState; now?: number; adb?: FakeAdb; inspector?: AgentInspector } = {},
 ): FakeAgent {
   const agent: FakeAgent = {
     adb: options.adb ?? new FakeAdb(() => ''),
@@ -215,6 +215,13 @@ export function fakeAgent(
       refresh: async () => EMULATORS,
       boot: async () => undefined,
       shutdown: async () => undefined,
+    },
+    inspector: options.inspector ?? {
+      inspect: () => Promise.reject(new Error('no Inspector in this test')),
+      select: () => null,
+      current: null,
+      selection: null,
+      png: () => null,
     },
     adb: agent.adb,
     serverVersion: '0.4.1',

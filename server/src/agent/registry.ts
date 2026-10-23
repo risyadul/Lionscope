@@ -11,6 +11,7 @@ import {
   swipeTool,
   tapTool,
 } from './deviceTools.ts';
+import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
 import { logcatTool } from './logTools.ts';
 import { screensTool, summaryTool } from './metricTools.ts';
@@ -30,12 +31,15 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   strictModeTool,
   layoutsTool,
   viewTreeTool,
+  inspectorSelectionTool,
+  selectInspectorNodeTool,
   logcatTool,
   startSessionTool,
   stopSessionTool,
   sdkOptionsTool,
   screenshotTool,
   uiTreeTool,
+  inspectScreenTool,
   tapElementTool,
   waitForTool,
   scrollToTool,

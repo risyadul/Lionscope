@@ -144,6 +144,34 @@ the window's view hierarchy (iteratively, capped at 20,000 views) and reports th
 groups, the depth, the path to the deepest view and the most common view classes. This works on every API level
 the SDK supports, including those below Android 10.
 
+### Layout Inspector: pick a view, see where it came from
+
+Press **Inspect** in the device toolbar (an emulator or a physical device, no profiling session needed). The
+screen freezes to a snapshot and the **Inspector** tab opens next to Layouts. Hover to highlight the view under
+the pointer (its `Class#id` and size appear on the box); click to select it. The selection shows its padding and
+margin on the screen and its attributes in the tab: class, id, text, bounds and size, visibility, alpha, layout
+width and height, padding, margin, flags, the owning Fragment and Activity, and the **XML layout and line** it
+was inflated from (`fragment_cart.xml:33`). The tree beside it collapses, follows the selection, takes the arrow
+keys (↑↓ move, → opens, ← closes) and searches class, id and text; hovering a row lights up the view on the
+screen. `Esc` or the toggle goes back to the live screen. While Inspect is on the snapshot refreshes about 0.7 s
+after the app changes its top screen (never continuously), and the refresh button takes a new one.
+
+- **Where the tree comes from.** With the SDK linked (Lionscope 0.5.0 or later) the SDK walks the app's own views
+  and the badge reads `SDK`. On Android 10 and later that is every window of the app, dialogs included; below
+  Android 10 it is the top Activity and its dialogs, and without layout sources. Otherwise (no SDK in the app, an older SDK,
+  Compose screens, other apps and system UI) the server falls back to `uiautomator dump` and the badge says
+  `uiautomator` with the reason. uiautomator has fewer nodes and no layout source, owner, padding or margin; those
+  fields show a dash. Compose composables are only visible through uiautomator.
+- **The line number is where the start tag ends.** aapt2 records the line of the closing `>`, so a `Button` that
+  spans lines 28 to 33 reports 33. Views built in code, ViewStubs and views inflated off the main thread have no
+  source, and neither do the views of an Activity that was created while inflation tracking was off (or opted out
+  of in the SDK) — turn it on and reopen the screen.
+- **Privacy.** The screenshot and the text on screen stay on your machine, and the snapshot is kept in the
+  server's memory only (the last few). Password fields are never read. An AI agent sees text and a cropped image
+  only for an element _you_ selected (never for a whole window or a large part of the screen); an element the
+  agent selects itself gives it structure only (class, id, layout source, owner, bounds). A view an agent
+  selected is marked **AI** in the dashboard. See "Use with AI agents".
+
 ### Operating the emulator from the dashboard
 
 The device picker lists every AVD, also the ones that are off. **Boot** starts one without a window on the host
@@ -303,11 +331,23 @@ Three ways in, one set of tools:
   command.
 - **Shell**: `npx lionscope query <tool>` prints a tool's JSON result, for agents that can only run commands.
 
-| Tools                      | What they do                                                                                                                                                                                                                                                                                                                                             |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                            |
-| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                     |
-| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator` |
+| Tools                      | What they do                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                        |
+| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                                                                                                 |
+| Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, XML layout and line, owning Fragment and Activity, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                             |
+| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator` |
+
+**"Why is this button misaligned?"** Select the element in the dashboard's Layout Inspector (Inspect, then click
+it) and ask about "this element": the agent calls `get_inspector_selection` and gets what the Inspector tab
+shows (class, id, text, bounds, padding, margins, layout width and height, `view_dashboard_actions.xml` line 15,
+the owning Fragment) plus a cropped screenshot of the element, at most 512 px (none for a window root or an element
+covering more than half of the screen). The line is where the start tag ends, which the tool says too. With
+device control on, `inspect_screen` takes a snapshot itself (with a query to find nodes; it replaces the snapshot
+you see) and `select_inspector_node` points you at the node it means, marked **AI**. For a node the agent selected
+itself, `get_inspector_selection` returns its structure only (class, id, layout source, owner, bounds), never its
+text or an image: an agent without device control can't read the screen that way. Without the SDK in the app the
+snapshot comes from uiautomator, without layout sources or owners.
 
 ### Setup
 
@@ -399,7 +439,7 @@ Device tools are off by default: an agent can read data and start or stop sessio
 Turn them on with `--allow-device-control`, either for one MCP client (`npx -y lionscope mcp
 --allow-device-control`, e.g. `claude mcp add lionscope -- npx -y lionscope mcp --allow-device-control`) or for
 the whole server (`npx lionscope --allow-device-control`, which also enables them on `/mcp`). They run through
-adb (`screencap`, `uiautomator`, `input`, `monkey`) on emulators and physical devices alike, so they can do anything you could
+adb (`screencap`, `uiautomator`, `input`, `am start -W`) on emulators and physical devices alike, so they can do anything you could
 do with the device in your hand: keep them off while a phone with personal data is connected. Emulators this
 server did not boot are shut down only with `confirm: true`.
 
@@ -434,6 +474,7 @@ npx lionscope query stalls --include-stacks
 npx lionscope query logcat --level E --limit 50
 npx lionscope query start-session --serial emulator-5554 --package-name com.example.shop
 npx lionscope query screenshot --allow-device-control --out screen.png
+npx lionscope query inspector-selection --out element.png   # what you selected in the Inspector
 ```
 
 Arguments are `--name value` flags (kebab or camel case) or `--json '{"window":"5m"}'`; short names work
@@ -444,9 +485,14 @@ holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` 
 
 - Everything stays on this machine: the endpoints listen on 127.0.0.1 and refuse requests a web page could make
   (see [Security model](#security-model)).
-- Log lines, tags, screen, layout and class names and stack frames come from the app being profiled. Tool
-  results mark them as untrusted data, and agents should treat them as such: a log line is never an
-  instruction.
+- Log lines, tags, screen, layout and class names and stack frames come from the app being profiled, and so do
+  the view text, content descriptions, resource ids and image crops in Inspector results. Tool results mark them as untrusted data, and agents should treat them
+  as such: a log line or a label is never an instruction.
+- Text on the screen reaches an agent through the Inspector only via `get_inspector_selection` for the one element
+  _you_ selected (with a crop of it, never of a whole window or a large part of the screen) and via
+  `inspect_screen` (device control; no image). An element the agent selects itself (`select_inspector_node`,
+  marked **AI** in the dashboard) gives it structure only: class, id, layout source, owner and bounds. Password
+  fields are never read, and screenshots are never cached by the browser.
 - `--allow-device-control` keeps an AI from operating a device unasked; it is not a security boundary, since
   any local process can already use adb.
 

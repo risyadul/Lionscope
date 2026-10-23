@@ -3,12 +3,14 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 3
+internal const val DEVICE_PROTOCOL_VERSION = 4
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
 /** First version with `inflate` / `viewtree` (SDK → server) and `config.inflateTracking`. */
 internal const val DEVICE_PROTOCOL_V3 = 3
+/** First version with `inspect` (server → SDK) and `inspectBegin` / `inspectNodes` / `inspectError`. */
+internal const val DEVICE_PROTOCOL_V4 = 4
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 internal const val MAX_SDK_FRAMES_PER_BATCH = 256
@@ -18,6 +20,14 @@ internal const val MAX_STACK_FRAMES = 64
 internal const val MAX_VIEW_PATH_NODES = 64
 /** `viewtree.topClasses` lists at most this many classes. */
 internal const val MAX_VIEW_TREE_CLASSES = 10
+/** Max serialized bytes of one `inspectNodes` line. */
+internal const val MAX_INSPECT_CHUNK_BYTES = 32 * 1024
+/** An Inspector snapshot keeps at most this many nodes (the deepest are dropped first). */
+internal const val MAX_INSPECTOR_NODES = 5000
+/** The server fails an answer (`inspectBegin` and its chunks) larger than this (`too_large`). */
+internal const val MAX_INSPECT_ANSWER_BYTES = 8 * 1024 * 1024
+/** The server accepts at most this many windows per snapshot. */
+internal const val MAX_INSPECTOR_WINDOWS = 32
 
 /** Allowed watchdog thresholds; `config` values outside this set snap to the nearest one. */
 internal val STALL_THRESHOLDS_MS = longArrayOf(100, 150, 250, 500, 1000)
@@ -75,3 +85,59 @@ internal data class StackFrame(
 internal data class ViewPathNode(val className: String, val id: String?)
 
 internal data class ClassCount(val className: String, val count: Int)
+
+/** [left, top, right, bottom] in screen pixels (or a padding / margin per side). */
+internal data class PixelRect(val left: Int, val top: Int, val right: Int, val bottom: Int)
+
+internal data class InspectorDisplay(val width: Int, val height: Int, val rotation: Int)
+
+/** [type] is `WindowManager.LayoutParams.type`, null when unknown. */
+internal data class InspectorWindow(val id: Int, val type: Int?, val bounds: PixelRect)
+
+/** The XML layout entry name and the line where the view's start tag ends. */
+internal data class ViewSource(val layout: String, val line: Int)
+
+internal enum class ViewVisibility(val wire: String) {
+    VISIBLE("visible"),
+    INVISIBLE("invisible"),
+    GONE("gone"),
+}
+
+/** One view of an Inspector snapshot; see `InspectorNode` in protocol/src/wire.ts. Text is cleaned when encoded. */
+internal data class InspectorNode(
+    val id: Int,
+    val parent: Int?,
+    val window: Int,
+    val className: String,
+    val resourceId: String?,
+    val text: String?,
+    val contentDescription: String?,
+    val bounds: PixelRect,
+    val visibleBounds: PixelRect?,
+    val visibility: ViewVisibility,
+    val alpha: Double,
+    val enabled: Boolean,
+    val clickable: Boolean,
+    val focused: Boolean,
+    val selected: Boolean,
+    val checked: Boolean?,
+    val padding: PixelRect,
+    val margin: PixelRect?,
+    val layoutWidth: String?,
+    val layoutHeight: String?,
+    val source: ViewSource?,
+    val fragment: String?,
+    val activity: String?,
+)
+
+/**
+ * Why an `inspect` got no snapshot: [BACKGROUND] no Activity of the app is started; [NO_WINDOW] none of its windows is
+ * on screen; [DISABLED] the Inspector could not be set up when the SDK was installed (every request still gets this
+ * answer, so the server falls back to uiautomator at once); [FAILED] the capture (or its encoding) threw.
+ */
+internal enum class InspectError(val wire: String) {
+    BACKGROUND("background"),
+    NO_WINDOW("no_window"),
+    DISABLED("disabled"),
+    FAILED("failed"),
+}
