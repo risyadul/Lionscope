@@ -166,11 +166,13 @@
 }
 
 .device-fps {
-  flex: none;
-  margin-left: auto;
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
   color: var(--ink-muted);
   font-size: var(--text-meta);
   white-space: nowrap;
+  transform: translateY(-50%);
 }
 
 .device-fps[data-live] {
@@ -181,8 +183,9 @@
   color: var(--ink-muted);
 }
 
-/* Narrow column (up to the 346 px it gets at 1440 px, overlay drawers on phones): smaller tools, tighter
-   gaps, and the "fps" unit kept for screen readers only. */
+/* The toolbar is one row of up to 7 tools (power, rotate x2, clipboard, screenshot, inspect, shut down) and the
+   frame-size control: about 356 px at full size. Below that the column (296 px at the narrowest, also in the phone
+   drawer) tightens in two steps; the fps readout lives under the screen, so it never competes for this row. */
 @container device-screen (max-width: 360px) {
   .device-toolbar {
     gap: 2px;
@@ -202,18 +205,9 @@
     min-width: 26px;
     padding: 0 3px;
   }
-
-  .device-fps-unit {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
 }
 
-@container device-screen (max-width: 280px) {
+@container device-screen (max-width: 316px) {
   .device-toolbar .device-tool {
     width: 24px;
   }
@@ -355,10 +349,11 @@
 
 /* Android's three-button bar under the screen. */
 .device-nav {
+  position: relative;
   display: flex;
   flex: none;
   justify-content: center;
-  gap: var(--space-5);
+  gap: var(--space-4);
   padding: 2px 0 0;
 }
 

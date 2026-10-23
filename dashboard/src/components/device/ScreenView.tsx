@@ -17,7 +17,6 @@ import {
   InspectIcon,
   PowerIcon,
   RecentsIcon,
-  RefreshIcon,
   RotateLeftIcon,
   RotateRightIcon,
 } from './icons.tsx';
@@ -253,14 +252,6 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
               className="device-inspect"
               onClick={inspector.toggle}
             />
-            {inspector.isActive && (
-              <ToolButton
-                label="Refresh the snapshot"
-                icon={<RefreshIcon />}
-                disabled={inspector.isCapturing || !inspector.canInspect}
-                onClick={inspector.refresh}
-              />
-            )}
           </>
         )}
         <Segmented
@@ -271,10 +262,6 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
           onChange={setSize}
           ignoreRepeat
         />
-        <span className="device-fps mono" title="Frames per second" data-live={isLive || undefined}>
-          {isLive ? fps : '–'}
-          <span className="device-fps-unit"> fps</span>
-        </span>
         {endTool}
       </div>
 
@@ -342,6 +329,10 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
 
       <InputDeniedBanner label={label} message={inputDenied} onDismiss={dismissInputDenied} />
       <div className="device-nav" role="group" aria-label="Navigation buttons">
+        <span className="device-fps mono" title="Frames per second" data-live={isLive || undefined}>
+          {isLive ? fps : '–'}
+          <span className="device-fps-unit"> fps</span>
+        </span>
         {NAV_BUTTONS.map(({ button, label: name, icon }) => (
           <ToolButton
             key={button}

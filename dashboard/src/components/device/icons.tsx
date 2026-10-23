@@ -109,9 +109,3 @@ export const InspectIcon = () => (
     <path d="M5.5 5.5l5 1.8-2.1.9-.9 2.1z" />
   </Icon>
 );
-
-export const RefreshIcon = () => (
-  <Icon>
-    <path d="M11.5 7a4.5 4.5 0 1 1-1.4-3.25M11.5 2v2.5H9" />
-  </Icon>
-);

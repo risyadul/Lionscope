@@ -159,8 +159,9 @@ after the app changes its top screen (never continuously), and the refresh butto
 - **Where the tree comes from.** With the SDK linked (Lionscope 0.5.0 or later) the SDK walks the app's own views
   and the badge reads `SDK`. On Android 10 and later that is every window of the app, dialogs included; below
   Android 10 it is the top Activity and its dialogs, and without layout sources. Otherwise (no SDK in the app, an older SDK,
-  Compose screens, other apps and system UI) the server falls back to `uiautomator dump` and the badge says
-  `uiautomator` with the reason. uiautomator has fewer nodes and no layout source, owner, padding or margin; those
+  Compose screens, other apps and system UI) the server falls back to the accessibility tree, read by its UI helper
+  (see the agent tools' notes on its side effects) or `uiautomator dump`, and the badge says `uiautomator` with the
+  reason. uiautomator has fewer nodes and no layout source, owner, padding or margin; those
   fields show a dash. Compose composables are only visible through uiautomator.
 - **The line number is where the start tag ends.** aapt2 records the line of the closing `>`, so a `Button` that
   spans lines 28 to 33 reports 33. Views built in code, ViewStubs and views inflated off the main thread have no
@@ -445,7 +446,7 @@ server did not boot are shut down only with `confirm: true`.
 
 Two ways to aim:
 
-- **By element** (precise): `get_ui_tree` reads the screen's accessibility tree (`uiautomator dump`), and
+- **By element** (precise): `get_ui_tree` reads the screen's accessibility tree (see below), and
   `tap_element { text: "Checkout" }`, `wait_for { text: "Order placed" }` and `scroll_to { id: "row_title",
 text: "Row 40" }` find elements by visible text or content description, resource id (`login_button`) or
   description, and tap the exact center of the element. A selector that matches several elements taps nothing
@@ -456,8 +457,13 @@ text: "Row 40" }` find elements by visible text or content description, resource
   `testTagsAsResourceId = true` (otherwise use their text or content description), and WebView, canvas, game
   or video content may be missing from the tree.
 
-`uiautomator dump` takes a second or two and needs the screen to be idle; on a screen that keeps animating it
-fails (after retries) and the error suggests the screenshot route. Coordinates follow the device's current
+The tree comes from Lionscope's UI helper (Android 7.0 and later): a small program the server runs on the device
+over adb that keeps one accessibility (UiAutomation) connection open, reads a screen in a few hundred ms and does
+not wait for animations to stop. While it is connected (until 20 s after the last read) apps see accessibility as
+enabled, which some change their behaviour or performance for, and no other UI automation (Appium, a uiautomator
+test) can connect. When the helper can't be used it falls back to `uiautomator dump`, which takes a second or two
+and needs the screen to be idle; on a screen that keeps animating it fails (after retries) and the error suggests
+the screenshot route. Coordinates follow the device's current
 rotation (from `wm size` and the display rotation, never from a dialog's window): a screenshot taken before the
 screen rotated is refused instead of tapping the wrong spot, so take a new one. `type_text` takes printable
 ASCII and can't type the sequence `%s` (adb's own escape for a space). `launch_app` starts the launcher activity

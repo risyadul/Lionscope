@@ -9,6 +9,7 @@ import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { Size } from '../emulator/screenInput.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
+import type { UiHelpers } from './uiHelper.ts';
 import type { UiTree } from './uiTree.ts';
 
 /**
@@ -78,6 +79,8 @@ export interface AgentContext {
    * get_ui_tree listed, which `tap_element { index }` refers to.
    */
   uiDumps: Map<string, { at: number; tree: UiTree; listing: UiTree | null }>;
+  /** The on-device UI helper, tried before `uiautomator dump`; without it every dump uses uiautomator. */
+  uiHelper?: UiHelpers;
   /** Device tools in flight per device (registry.ts caps them). */
   deviceCalls: Map<string, number>;
   /** Device-control tools are enabled for this call (set per call by the registry). */

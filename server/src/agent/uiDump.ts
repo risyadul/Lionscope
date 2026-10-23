@@ -1,7 +1,8 @@
 /**
- * `uiautomator dump` for the element tools: one dump to a unique file that is always removed, read together
- * with the display size in one shell round trip, retried while the screen is not idle and bounded by the
- * caller's deadline.
+ * The UI dump for the element tools and the Inspector: from the UI helper (uiHelper.ts) when the context has one,
+ * else, or when the helper fails, `uiautomator dump` to a unique file that is always removed. The display size
+ * (and the foreground activity) is read in one shell round trip beside it; attempts are retried while the screen
+ * has no root or is not idle, bounded by the caller's deadline.
  */
 import { randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -13,9 +14,14 @@ import { ToolError } from './tool.ts';
 import type { AgentContext } from './tool.ts';
 import { buildUiTree } from './uiTree.ts';
 import type { UiTree } from './uiTree.ts';
+import { UiHelperError } from './uiHelper.ts';
 import { parseUiXml, UiXmlError } from './uiXml.ts';
 
 const DUMP_TIMEOUT_MS = 20_000;
+/** The helper's share of an attempt (starting it included); uiautomator gets the rest when it fails. */
+const HELPER_DUMP_TIMEOUT_MS = 10_000;
+/** Less time than this left, and a helper that is not running yet is not started (that could fail and back off). */
+const HELPER_START_MIN_MS = 3000;
 /** Less of the deadline left than this, and no dump attempt is started. */
 const MIN_ATTEMPT_MS = 300;
 /** Waits before the 2nd and 3rd attempt: an animating screen often settles within a second. */
@@ -30,6 +36,8 @@ export const UI_DUMP_FAILED =
   'uiautomator could not read the screen (it waits for the UI to be idle, and animations or a secure window prevent that). Try again in a moment, or use screenshot and tap by coordinates.';
 export const UI_DUMP_TIMEOUT =
   'uiautomator did not answer in time. Try again, or use screenshot and tap by coordinates.';
+/** Appended when the UI helper failed before uiautomator did. */
+export const UI_HELPER_FAILED_TOO = 'The Lionscope UI helper could not read the screen either';
 
 const ACTIVITY = /(?:topResumedActivity|mResumedActivity)[=:]\s*ActivityRecord\{\S+ \S+ ([\w.]+)\/([\w.$]+)/;
 
@@ -71,8 +79,21 @@ function removeFile(ctx: AgentContext, serial: string, file: string): void {
   setTimeout(() => void remove(), LATE_CLEANUP_MS).unref();
 }
 
-/** One attempt: the tree, or a status line explaining why there is none (screen not idle, null root). */
-async function attempt(
+function shellError(error: unknown): ToolError {
+  return new ToolError(/timed out/.test(errorMessage(error)) ? UI_DUMP_TIMEOUT : errorMessage(error));
+}
+
+/** `echo <marker>; wm size[; echo <marker>; dumpsys … top activity]`: what a dump is read with. */
+function displayCommand(token: string, withActivity: boolean): { command: string; markers: string[] } {
+  const markers = [`__LS_${token}_WM__`, ...(withActivity ? [`__LS_${token}_TOP__`] : [])];
+  const activity = withActivity
+    ? `; echo ${markers[1]}; dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'`
+    : '';
+  return { command: `echo ${markers[0]}; wm size${activity}`, markers };
+}
+
+/** `uiautomator dump`: the tree, or a status line explaining why there is none (screen not idle, null root). */
+async function uiautomatorAttempt(
   ctx: AgentContext,
   serial: string,
   withActivity: boolean,
@@ -80,25 +101,81 @@ async function attempt(
 ): Promise<Dump | string> {
   const token = randomBytes(6).toString('hex');
   const file = `/data/local/tmp/lionscope-ui-${token}.xml`;
-  const markers = [
-    `__LS_${token}_XML__`,
-    `__LS_${token}_WM__`,
-    ...(withActivity ? [`__LS_${token}_TOP__`] : []),
-  ];
-  const activity = withActivity
-    ? `; echo ${markers[2]}; dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'`
-    : '';
-  const command = `uiautomator dump ${file} 2>&1; echo ${markers[0]}; cat ${file} 2>/dev/null; rm -f ${file}; echo ${markers[1]}; wm size${activity}`;
+  const display = displayCommand(token, withActivity);
+  const markers = [`__LS_${token}_XML__`, ...display.markers];
+  const command = `uiautomator dump ${file} 2>&1; echo ${markers[0]}; cat ${file} 2>/dev/null; rm -f ${file}; ${display.command}`;
   let output: string;
   try {
     output = await adbShell(ctx.adb, serial, command, { timeoutMs });
   } catch (error) {
     // Killed on the timeout: the dump may still land on the device.
     removeFile(ctx, serial, file);
-    throw new ToolError(/timed out/.test(errorMessage(error)) ? UI_DUMP_TIMEOUT : errorMessage(error));
+    throw shellError(error);
   }
   const [status = '', xml = '', wm = '', top = ''] = sections(output, markers);
   if (!xml.includes('<hierarchy')) return status.trim() || 'no UI dump';
+  return readDump(xml, wm, top);
+}
+
+/**
+ * The UI helper's dump, with the display read beside it: the tree, 'null root node', or null when the helper
+ * failed (`failures` says why; uiautomator is tried instead).
+ */
+async function helperAttempt(
+  ctx: AgentContext,
+  serial: string,
+  withActivity: boolean,
+  timeoutMs: number,
+  failures: string[],
+): Promise<Dump | string | null> {
+  const helper = ctx.uiHelper;
+  if (!helper) return null;
+  const unavailable = helper.unavailable(serial);
+  if (unavailable !== null) {
+    failures.push(unavailable);
+    return null;
+  }
+  if (timeoutMs < HELPER_START_MIN_MS && !helper.isRunning(serial)) return null;
+  const token = randomBytes(6).toString('hex');
+  const display = displayCommand(token, withActivity);
+  const shell = adbShell(ctx.adb, serial, display.command, { timeoutMs });
+  // Settled even when the helper fails first and nobody waits for it.
+  shell.catch(() => undefined);
+  let dump;
+  try {
+    dump = await helper.dump(serial, Math.min(HELPER_DUMP_TIMEOUT_MS, timeoutMs));
+  } catch (error) {
+    if (!(error instanceof UiHelperError)) throw error;
+    failures.push(error.message);
+    return null;
+  }
+  if (dump === null) return 'null root node';
+  let output: string;
+  try {
+    output = await shell;
+  } catch (error) {
+    throw shellError(error);
+  }
+  const [, wm = '', top = ''] = sections(output, display.markers);
+  return readDump(dump.xml, wm, top);
+}
+
+/** One attempt: the helper's dump, else uiautomator's, bounded by `deadline`. */
+async function attempt(
+  ctx: AgentContext,
+  serial: string,
+  withActivity: boolean,
+  deadline: number,
+  failures: string[],
+): Promise<Dump | string> {
+  const timeout = () => Math.floor(Math.min(DUMP_TIMEOUT_MS, deadline - performance.now()));
+  const fromHelper = await helperAttempt(ctx, serial, withActivity, timeout(), failures);
+  if (fromHelper !== null) return fromHelper;
+  if (timeout() < MIN_ATTEMPT_MS) throw new ToolError(UI_DUMP_TIMEOUT);
+  return uiautomatorAttempt(ctx, serial, withActivity, timeout());
+}
+
+function readDump(xml: string, wm: string, top: string): Dump | string {
   let hierarchy;
   try {
     hierarchy = parseUiXml(xml.trim());
@@ -136,6 +213,12 @@ export async function dumpUi(
   options: { withActivity?: boolean; deadline?: number } = {},
 ): Promise<Dump> {
   const deadline = options.deadline ?? performance.now() + 60_000;
+  /** Why the helper gave no dump in this call: named when uiautomator fails too. */
+  const failures: string[] = [];
+  const helperNote = () => {
+    const reason = failures.at(-1);
+    return reason === undefined ? '' : ` ${UI_HELPER_FAILED_TOO} (${reason}).`;
+  };
   let lastStatus = '';
   for (let i = 0; i <= DUMP_RETRY_MS.length; i++) {
     if (i > 0) await sleep(DUMP_RETRY_MS[i - 1]);
@@ -144,19 +227,23 @@ export async function dumpUi(
       if (i === 0) throw new ToolError(UI_DUMP_TIMEOUT);
       break;
     }
-    const result = await attempt(
-      ctx,
-      serial,
-      options.withActivity === true,
-      Math.floor(Math.min(DUMP_TIMEOUT_MS, remaining)),
-    );
+    let result;
+    try {
+      result = await attempt(ctx, serial, options.withActivity === true, deadline, failures);
+    } catch (error) {
+      if (error instanceof ToolError && failures.length > 0)
+        throw new ToolError(`${error.message}${helperNote()}`);
+      throw error;
+    }
     if (typeof result !== 'string') {
       remember(ctx, serial, result.tree);
       return result;
     }
     lastStatus = result;
   }
-  throw new ToolError(`${UI_DUMP_FAILED}${lastStatus ? ` (uiautomator: ${lastStatus.slice(0, 200)})` : ''}`);
+  throw new ToolError(
+    `${UI_DUMP_FAILED}${lastStatus ? ` (uiautomator: ${lastStatus.slice(0, 200)})` : ''}${helperNote()}`,
+  );
 }
 
 /** The latest dump if it is under a second old, else a new one. */

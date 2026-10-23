@@ -15,6 +15,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { UI_HELPER_JAR_NAME } from '../../server/src/agent/uiHelperJar.ts';
 import { SCRCPY_VERSION } from '../../server/src/scrcpy/protocol.ts';
 
 const cliDir = fileURLToPath(new URL('..', import.meta.url));
@@ -23,6 +24,8 @@ const dashboardDist = path.join(repoDir, 'dashboard', 'dist');
 const outFile = path.join(cliDir, 'dist', 'lionscope.mjs');
 /** The vendored scrcpy-server and its checksum line, shipped next to the bundle (resolveScrcpyJar). */
 const SCRCPY_JAR = `scrcpy-server-v${SCRCPY_VERSION}`;
+/** Lionscope's own UI helper (android-sdk/ui-helper, Apache-2.0 like the rest), likewise (resolveUiHelperJar). */
+const VENDORED = [SCRCPY_JAR, UI_HELPER_JAR_NAME].flatMap((file) => [file, `${file}.sha256`]);
 const vendorDir = path.join(repoDir, 'server', 'vendor');
 
 // ws loads these optional native addons inside try/catch; left external, the bundle runs without them.
@@ -148,7 +151,7 @@ async function main(): Promise<void> {
   }
   writeFileSync(path.join(cliDir, 'dist', 'THIRD_PARTY_NOTICES.txt'), thirdPartyNotices(bundled.values()));
 
-  for (const file of [SCRCPY_JAR, `${SCRCPY_JAR}.sha256`]) {
+  for (const file of VENDORED) {
     copyFileSync(path.join(vendorDir, file), path.join(cliDir, 'dist', file));
   }
   cpSync(dashboardDist, path.join(cliDir, 'dashboard'), { recursive: true });

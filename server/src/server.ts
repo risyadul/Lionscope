@@ -6,6 +6,7 @@ import type { Adb } from './adb/adb.ts';
 import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
 import { dumpUi } from './agent/uiDump.ts';
+import { UiHelpers } from './agent/uiHelper.ts';
 import type { AgentContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway } from './device/deviceGateway.ts';
@@ -47,6 +48,8 @@ export interface LionscopeServerOptions {
   scrcpyJarPath?: string;
   /** --allow-device-control: the agent endpoints list and run the device-control tools. */
   allowDeviceControl?: boolean;
+  /** The UI helper tried before `uiautomator dump`; defaults to the vendored one. */
+  uiHelperJarPath?: string;
 }
 
 export interface LionscopeServer {
@@ -109,6 +112,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     limits: options.deviceLimits,
   });
 
+  const uiHelper = new UiHelpers({
+    adb: options.adb,
+    ...(options.uiHelperJarPath ? { jarPath: options.uiHelperJarPath } : {}),
+  });
   const inspector = new InspectorService({
     sessions: manager,
     // The agent's dump: it also refreshes what the element tools know of the screen.
@@ -133,6 +140,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     now: Date.now,
     screenshots: new Map(),
     uiDumps: new Map(),
+    uiHelper,
     deviceCalls: new Map(),
   };
   const agentHttp = createAgentHttp({
@@ -258,8 +266,14 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
-      // In parallel: device screens (scrcpy cleanup), the session, and the emulators this server booted.
-      await Promise.all([screenGateway.close(), manager.close(), emulators.close(), agentHttp.close()]);
+      // In parallel: device screens (scrcpy cleanup), UI helpers, the session, and the emulators this server booted.
+      await Promise.all([
+        screenGateway.close(),
+        uiHelper.close(),
+        manager.close(),
+        emulators.close(),
+        agentHttp.close(),
+      ]);
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

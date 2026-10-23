@@ -405,7 +405,7 @@ describe('auto-refresh', () => {
     const { push, inspects } = setup();
     fireEvent.click(inspectButton());
     await push(snapshotMsg());
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the snapshot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(inspects()).toHaveLength(2);
   });
 });
@@ -442,7 +442,7 @@ describe('pending capture', () => {
     const { push } = setup();
     fireEvent.click(inspectButton());
     await push(snapshotMsg());
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the snapshot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await push({ type: 'error', code: 'inspect_failed', message: 'The app is in the background.' });
     const panel = screen.getByRole('tabpanel', { name: /Inspector/ });
     expect(within(panel).getByRole('alert').textContent).toBe('The app is in the background.');
@@ -580,5 +580,21 @@ describe('rendering cost', () => {
     act(() => result.current.hover(3));
     expect(result.current).toBe(first);
     expect(result.current.hoverId.get()).toBe(3);
+  });
+});
+
+describe('device toolbar', () => {
+  it('keeps the fps readout under the screen and the toolbar to the tools, in live and inspect mode', async () => {
+    const { push } = setup();
+    const toolbar = () => document.querySelector<HTMLElement>('.device-toolbar')!;
+    const fps = () => screen.getByTitle('Frames per second');
+    expect(toolbar().contains(fps())).toBe(false);
+    expect(document.querySelector('.device-nav')!.contains(fps())).toBe(true);
+    fireEvent.click(inspectButton());
+    await push(snapshotMsg());
+    expect(toolbar().contains(fps())).toBe(false);
+    expect(within(toolbar()).queryByRole('button', { name: /Refresh/ })).toBeNull();
+    // Power, rotate x2, clipboard, screenshot, inspect, the size control and the emulator's shut down.
+    expect(toolbar().children).toHaveLength(8);
   });
 });

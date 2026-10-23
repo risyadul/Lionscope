@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "lionscope-android"
 
-include(":lionscope", ":lionscope-noop", ":sample")
+include(":lionscope", ":lionscope-noop", ":sample", ":ui-helper")

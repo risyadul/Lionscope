@@ -52,4 +52,14 @@ jobs:
       # ubuntu-latest ships an Android SDK (ANDROID_HOME) with accepted licenses; AGP fetches missing platforms.
       - name: Test SDK, build no-op and sample
         working-directory: android-sdk
-        run: ./gradlew :lionscope:test :lionscope-noop:assemble :sample:assembleDebug --no-daemon
+        run: ./gradlew :lionscope:test :lionscope-noop:assemble :sample:assembleDebug :ui-helper:test --no-daemon
+      # The committed UI helper jar must be what its sources build (same JDK 17 toolchain and build-tools).
+      - name: Rebuild the UI helper and compare it with the vendored jar
+        working-directory: android-sdk
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0" "platforms;android-36" > /dev/null
+          ./gradlew :ui-helper:helperJar --no-daemon
+          expected=$(cut -d' ' -f1 ../server/vendor/lionscope-ui-helper-v1.jar.sha256)
+          actual=$(sha256sum ui-helper/build/helper/lionscope-ui-helper-v1.jar | cut -d' ' -f1)
+          echo "vendored $expected, built $actual"
+          if [ "$expected" != "$actual" ]; then echo "Run ./gradlew :ui-helper:vendor and commit the result"; exit 1; fi
