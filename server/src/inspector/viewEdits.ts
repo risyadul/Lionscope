@@ -80,6 +80,7 @@ const SDK_ERRORS: Readonly<Record<NonNullable<SdkViewEditResult['error']>, ViewE
   limit: 'limit',
   failed: 'failed',
   disabled: 'failed',
+  busy: 'rate_limited',
 };
 
 const LINK_ERRORS: Readonly<Record<SdkEditFailure, ViewEditError>> = {

@@ -206,22 +206,30 @@ internal class ViewEditor<V : Any>(
  * Answers the server's v8 edit requests on the main thread with [editor], or `disabled` without one (the Inspector
  * could not be set up), so the server never waits for an answer. Anything an edit throws is answered `failed`. A
  * request whose connection has ended by the time the main thread gets to it is dropped, applied or not: that server
- * has given up on it, and its request id may mean another request on the next connection. At most [maxQueued] wait
- * for the main thread; more are dropped, so no server can flood it.
+ * has given up on it, and its request id may mean another request on the next connection. No server can flood the
+ * main thread: past a burst of [burst] then [perSecond] a second, or with [maxQueued] already waiting, a request is
+ * answered `busy` right away (with the last count of live edits known).
  */
 internal class ViewEditRequests<V : Any>(
     private val link: LinkPort,
     main: MainScheduler,
     private val editor: ViewEditor<V>?,
     private val maxQueued: Int = MAX_QUEUED,
+    burst: Int = BURST,
+    perSecond: Double = PER_SECOND,
+    nanoTime: () -> Long = System::nanoTime,
 ) {
     private val queued = AtomicInteger()
+    private val bucket = RateBucket(burst, perSecond, nanoTime)
+
+    @Volatile
+    private var lastLiveEdits = 0
 
     init {
         link.addViewEditListener { message ->
             val connection = link.connection
-            if (queued.incrementAndGet() > maxQueued) {
-                queued.decrementAndGet()
+            if (!bucket.take() || !enqueue()) {
+                refuse(message)
             } else {
                 main.post(Runnable {
                     queued.decrementAndGet()
@@ -229,6 +237,24 @@ internal class ViewEditRequests<V : Any>(
                 })
             }
         }
+    }
+
+    /** A place among the [maxQueued] waiting for the main thread, if one is free. */
+    private fun enqueue(): Boolean {
+        if (queued.incrementAndGet() <= maxQueued) return true
+        queued.decrementAndGet()
+        return false
+    }
+
+    /** Link thread: answered without touching any view. */
+    private fun refuse(message: GatewayMessage) {
+        val requestId = when (message) {
+            is GatewayMessage.SetViewProperty -> message.requestId
+            is GatewayMessage.RevertViewProperties -> message.requestId
+            else -> return
+        }
+        val result = EditResult(EditError.BUSY, lastLiveEdits)
+        link.sendV8(RESULT_SIZE_HINT) { DeviceMessages.viewPropertyResult(requestId, result) }
     }
 
     /** Main thread. */
@@ -246,6 +272,7 @@ internal class ViewEditRequests<V : Any>(
             }
             else -> return
         }
+        lastLiveEdits = result.liveEdits
         link.sendV8(RESULT_SIZE_HINT) { DeviceMessages.viewPropertyResult(requestId, result) }
     }
 
@@ -261,7 +288,29 @@ internal class ViewEditRequests<V : Any>(
 
     internal companion object {
         const val RESULT_SIZE_HINT = 96
-        /** A legitimate server sends a few edits a second (it rate-limits them): this only stops a flood. */
-        const val MAX_QUEUED = 16
+        /** A legitimate server sends a few edits a second (it rate-limits them, the same way): this stops a flood. */
+        const val MAX_QUEUED = 8
+        const val BURST = 10
+        const val PER_SECOND = 5.0
+    }
+}
+
+/** A token bucket on a monotonic clock: [burst] at once, then [perSecond]. Thread-safe. */
+internal class RateBucket(private val burst: Int, private val perSecond: Double, private val nanoTime: () -> Long) {
+    private var tokens = burst.toDouble()
+    private var last = nanoTime()
+
+    @Synchronized
+    fun take(): Boolean {
+        val now = nanoTime()
+        tokens = minOf(burst.toDouble(), tokens + (now - last) / NANOS_PER_SECOND * perSecond)
+        last = now
+        if (tokens < 1) return false
+        tokens -= 1
+        return true
+    }
+
+    private companion object {
+        const val NANOS_PER_SECOND = 1_000_000_000.0
     }
 }

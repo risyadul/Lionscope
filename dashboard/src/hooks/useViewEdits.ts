@@ -48,6 +48,8 @@ export interface ViewEdits {
    * outlives snapshots (unlike a field's error) until the next edit or revert.
    */
   notice: string | null;
+  /** Drops the notice (the user inspects again). */
+  clearNotice: () => void;
 }
 
 interface Request {
@@ -322,6 +324,10 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
     setEdits((prev) => ({ ...prev, errors: withError(prev.errors, errorKey(nodeId, name), message) }));
   }, []);
 
+  const clearNotice = useCallback(() => {
+    setEdits((prev) => (prev.notice === null ? prev : { ...prev, notice: null }));
+  }, []);
+
   const dismiss = useCallback((nodeId: number | null, name?: EditName) => {
     setEdits((prev) => ({ ...prev, errors: withError(prev.errors, errorKey(nodeId, name), null) }));
   }, []);
@@ -340,6 +346,16 @@ export function useViewEdits({ state, send, snapshot, index, isEnabled }: Option
       const message = shown.errors.get(errorKey(nodeId, own));
       return message === undefined ? IDLE : { kind: 'error', message };
     };
-    return { canEdit: isEnabled, liveEdits, edit, revert, reject, dismiss, status, notice: shown.notice };
-  }, [shown, isEnabled, liveEdits, edit, revert, reject, dismiss]);
+    return {
+      canEdit: isEnabled,
+      liveEdits,
+      edit,
+      revert,
+      reject,
+      dismiss,
+      status,
+      notice: shown.notice,
+      clearNotice,
+    };
+  }, [shown, isEnabled, liveEdits, edit, revert, reject, dismiss, clearNotice]);
 }

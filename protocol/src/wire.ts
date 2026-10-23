@@ -912,7 +912,8 @@ export type ViewPropertyGroup = keyof typeof VIEW_PROPERTY_GROUPS;
  * padding (px) 0..MAX_EDIT_PADDING_PX and margins (px) ±MAX_EDIT_MARGIN_PX, integers; `layoutWidth` / `layoutHeight`
  * `match_parent`, `wrap_content` or `<n>px` (0..MAX_EDIT_SIZE_PX); `translationX` / `translationY` (px)
  * ±MAX_EDIT_TRANSLATION_PX; `elevation` (px) 0..MAX_EDIT_ELEVATION_PX; colors `#AARRGGBB` (a solid color); `text` at
- * most MAX_EDIT_TEXT_CHARS UTF-16 units, no control characters but line breaks and tabs, no bidi controls; `textSize` (sp)
+ * most MAX_EDIT_TEXT_CHARS UTF-16 units, no control characters but line breaks and tabs, no format characters but
+ * the joiners; `textSize` (sp)
  * MIN_EDIT_TEXT_SIZE_SP..MAX_EDIT_TEXT_SIZE_SP.
  */
 export type ViewPropertyValue = string | number | boolean;
@@ -989,11 +990,12 @@ function isFiniteIn(value: ViewPropertyValue, min: number, max: number): value i
 const HEX_COLOR = /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const LAYOUT_PX = /^(\d{1,5})px$/;
 /**
- * Control characters (C0, DEL, C1) other than tab and line feed, bidi embedding / override / isolate controls (they
- * could make text read differently than it is stored, and edited text flows back into snapshots agents read), and
- * lone surrogates. Joiners (ZWJ, ZWNJ) stay: emoji and many scripts need them.
+ * Control characters (C0, DEL, C1) other than tab and line feed, format characters (Cf: bidi embeddings, overrides and
+ * isolates, zero-width spaces, soft hyphens... they can make text read differently than it is stored, and edited
+ * text flows back into snapshots agents read) other than the joiners ZWNJ and ZWJ (emoji and many scripts need
+ * them), and lone surrogates.
  */
-const BAD_EDIT_TEXT = /[^\P{Cc}\t\n]|[\u202a-\u202e\u2066-\u2069]|\p{Cs}/u;
+const BAD_EDIT_TEXT = /[^\P{Cc}\t\n]|[^\P{Cf}\u200c\u200d]|\p{Cs}/u;
 
 /** `#RRGGBB` / `#AARRGGBB` (any case) as `#AARRGGBB` upper case; null when it is not a hex color. */
 export function normalizeColor(value: string): string | null {
@@ -1491,13 +1493,14 @@ export type DeviceMessage =
    * v8. The answer to `setViewProperty` / `revertViewProperties` with the same `requestId`; `liveEdits` is the
    * number in effect after it. Errors: `stale` (no view with that key in the latest capture, or it is no longer
    * attached), `unsupported` (the property does not apply to that view), `password`, `invalid` (a value out of
-   * bounds), `limit` (MAX_LIVE_EDITS in effect), `failed` (the setter threw), `disabled` (no editor in this SDK).
+   * bounds), `limit` (MAX_LIVE_EDITS in effect), `failed` (the setter threw), `disabled` (no editor in this SDK),
+   * `busy` (a flood of requests: past the SDK's own rate limit or queue, nothing was done).
    */
   | {
       type: 'viewPropertyResult';
       requestId: number;
       ok: boolean;
-      error?: 'stale' | 'unsupported' | 'password' | 'invalid' | 'limit' | 'failed' | 'disabled';
+      error?: 'stale' | 'unsupported' | 'password' | 'invalid' | 'limit' | 'failed' | 'disabled' | 'busy';
       liveEdits: number;
     };
 

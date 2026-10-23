@@ -249,7 +249,8 @@ internal data class ViewState(
 /**
  * Why a live edit was refused: [STALE] no view with that key in the latest capture (or it is no longer attached);
  * [UNSUPPORTED] the property does not apply to the view; [PASSWORD] the text of a password field; [INVALID] a value out
- * of bounds; [LIMIT] [MAX_LIVE_EDITS] are in effect; [FAILED] the setter threw; [DISABLED] no editor in this process.
+ * of bounds; [LIMIT] [MAX_LIVE_EDITS] are in effect; [FAILED] the setter threw; [DISABLED] no editor in this process;
+ * [BUSY] the request came in a flood and was not applied.
  */
 internal enum class EditError(val wire: String) {
     STALE("stale"),
@@ -259,6 +260,9 @@ internal enum class EditError(val wire: String) {
     LIMIT("limit"),
     FAILED("failed"),
     DISABLED("disabled"),
+
+    /** Too many requests at once (more than any server that rate-limits its edits sends): nothing was done. */
+    BUSY("busy"),
 }
 
 /**

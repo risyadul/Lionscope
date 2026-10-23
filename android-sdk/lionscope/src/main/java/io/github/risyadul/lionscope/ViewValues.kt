@@ -22,6 +22,10 @@ internal object ViewValues {
     private const val HEX_RGB = 6
     private const val HEX_ARGB = 8
     private const val OPAQUE = 0xFF000000.toInt()
+    private const val DEL = 0x7F
+    private const val LAST_C1 = 0x9F
+    private const val ZWNJ = 0x200C
+    private const val ZWJ = 0x200D
     private val LAYOUT_PX = Regex("(\\d{1,5})px")
 
     fun parse(property: ViewProperty, raw: Any?): Any? = when (property) {
@@ -56,23 +60,20 @@ internal object ViewValues {
     }
 
     /**
-     * At most [MAX_TEXT_CHARS] UTF-16 units; no control character but tab and line feed (C0, DEL and C1), no bidi
-     * embedding, override or isolate control (U+202A-U+202E, U+2066-U+2069), no lone surrogate.
+     * At most [MAX_TEXT_CHARS] UTF-16 units; no control character but tab and line feed (C0, DEL and C1), no format
+     * character (Cf: bidi controls, zero-width spaces, ...) but the joiners ZWNJ and ZWJ, no lone surrogate.
      */
     fun isEditableText(value: String): Boolean {
         if (value.length > MAX_TEXT_CHARS) return false
         var i = 0
         while (i < value.length) {
             val c = value[i]
-            if ((c < ' ' && c != '\t' && c != '\n') || c in '\u007F'..'\u009F') return false
-            if (c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069') return false
-            if (Character.isHighSurrogate(c)) {
-                if (i + 1 >= value.length || !Character.isLowSurrogate(value[i + 1])) return false
-                i++
-            } else if (Character.isLowSurrogate(c)) {
-                return false
-            }
-            i++
+            if (Character.isHighSurrogate(c) && (i + 1 >= value.length || !Character.isLowSurrogate(value[i + 1]))) return false
+            if (Character.isLowSurrogate(c)) return false
+            val codePoint = value.codePointAt(i)
+            if ((codePoint < ' '.code && c != '\t' && c != '\n') || codePoint in DEL..LAST_C1) return false
+            if (Character.getType(codePoint) == Character.FORMAT.toInt() && codePoint != ZWNJ && codePoint != ZWJ) return false
+            i += Character.charCount(codePoint)
         }
         return true
     }

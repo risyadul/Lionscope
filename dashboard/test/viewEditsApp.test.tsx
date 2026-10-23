@@ -481,6 +481,18 @@ describe('review fixes', () => {
     expect(document.querySelector('.inspect-failure')?.textContent).toBe('Revert some first.');
   });
 
+  it('drops the head notice when the user inspects again', async () => {
+    const { answer, push } = setup();
+    const input = field('elevation');
+    type(input, '9');
+    enter(input);
+    await answer(false, { error: 'no_link', message: 'Link gone.' });
+    expect(document.querySelector('.inspect-failure')?.textContent).toBe('Link gone.');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await push();
+    expect(document.querySelector('.inspect-failure')).toBeNull();
+  });
+
   it('drops the head notice after the snapshot the server takes, and on another device', async () => {
     const { push, answer } = setup();
     const input = field('elevation');

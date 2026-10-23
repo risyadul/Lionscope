@@ -74,14 +74,29 @@ class ViewEditRequestsTest {
     }
 
     @Test
-    fun aFloodWaitsForTheMainThreadOnlyUpToTheCap() {
+    fun aFloodIsAnsweredBusyBeyondTheQueueWithoutWaitingForTheMainThread() {
         ViewEditRequests(link, main, editor, maxQueued = 3)
-        repeat(10) { link.viewEdit(GatewayMessage.RevertViewProperties(it, null, null)) }
+        repeat(6) { link.viewEdit(GatewayMessage.RevertViewProperties(it, null, null)) }
         assertEquals(3, main.pendingCount)
+        assertEquals(List(3) { "busy" }, answers().map { it["error"] })
+        assertEquals(listOf(3.0, 4.0, 5.0), answers().map { it["requestId"] })
         main.runPosted()
-        assertEquals(3, link.v8Lines.size)
+        assertEquals(6, link.v8Lines.size)
         link.viewEdit(GatewayMessage.RevertViewProperties(11, null, null))
         assertEquals(1, main.pendingCount)
+    }
+
+    @Test
+    fun pastItsRateTheSdkAnswersBusyUntilTheBucketRefills() {
+        var nanos = 0L
+        ViewEditRequests(link, main, editor, burst = 2, perSecond = 1.0, nanoTime = { nanos })
+        repeat(3) { link.viewEdit(GatewayMessage.RevertViewProperties(it, null, null)) }
+        main.runPosted()
+        assertEquals(listOf(null, null, "busy"), answers().sortedBy { it["requestId"] as Double }.map { it["error"] })
+        nanos += 1_000_000_000L
+        link.viewEdit(GatewayMessage.RevertViewProperties(9, null, null))
+        main.runPosted()
+        assertEquals(null, answers().last()["error"])
     }
 
     @Test

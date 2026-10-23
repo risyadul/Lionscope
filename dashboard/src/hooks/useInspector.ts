@@ -99,6 +99,7 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
   const isStale = isActive && snapshot !== null && snapshot.id === staleId;
   const isCapturing = pending !== null && pending.serial === serial;
   const edits = useViewEdits({ state, send, snapshot, index, isEnabled: !isStale });
+  const { clearNotice } = edits;
 
   // Answers arrive as store state; settle the request when one does (adjusting state while rendering).
   const [seen, setSeen] = useState({ errorSeq: state.errorSeq, inspectionId });
@@ -148,8 +149,10 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
     }
     lastCapture.current = { serial: target, at: Date.now() };
     setFailure(null);
+    // A notice that the view was gone says "inspect again": this is that.
+    clearNotice();
     setPending({ serial: target, errorSeq, inspectionId: newest });
-  }, [send]);
+  }, [send, clearNotice]);
 
   useEffect(() => {
     if (pending === null) return;
