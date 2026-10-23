@@ -96,7 +96,12 @@ internal class ComposeViewReader : ComposeReading {
         override fun sourceInfo(group: CompositionGroup): String? = group.sourceInfo
         override fun layoutNode(group: CompositionGroup): LayoutInfo? = group.node as? LayoutInfo
         override fun parent(node: LayoutInfo): LayoutInfo? = node.parentInfo
-        override fun isPlaced(node: LayoutInfo): Boolean = node.isPlaced && node.isAttached && node.coordinates.isAttached
+        /** A node mid-transform can report a non-finite position: it counts as not placed rather than failing the read. */
+        override fun isPlaced(node: LayoutInfo): Boolean {
+            if (!node.isPlaced || !node.isAttached || !node.coordinates.isAttached) return false
+            val position = node.coordinates.positionInWindow()
+            return position.x.isFinite() && position.y.isFinite()
+        }
 
         /**
          * navigation-compose's `NavBackStackEntry.LocalOwnersProvider` is not skippable, so its entry is not in the
