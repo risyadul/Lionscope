@@ -8,6 +8,33 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Network inspector (SDK 0.7.0). `Lionscope.okHttpInterceptor()` (in both artifacts; the no-op one passes requests
+  on) records the app's OkHttp requests during a profiling session: method, URL, headers, status, timings (to the
+  response headers and to the end of the body) and, for text types, up to 64 KB of each body (gzip the app asked
+  for itself is unzipped; Brotli and other encodings are flagged). Retrofit and Ktor's OkHttp engine on Android work
+  with one `addInterceptor` line; OkHttp 4.x and 5.x are supported (`compileOnly` in the SDK). The response body is
+  never read by Lionscope (it copies what the app reads), an SDK error never fails or changes the app's call, and
+  outside a session the interceptor is a plain `chain.proceed`. At most 20 requests per second are recorded.
+- Redaction on the device and again on the server: the values of `Authorization`, `Proxy-Authorization`,
+  `Cookie`, `Set-Cookie` and of every header, query parameter and form field whose name looks like a token,
+  secret, API key, auth, session or password. Requests stay in the server's memory only (10 minutes, 5000
+  requests, 32 MB).
+- Dashboard **Network** tab: the request list (filter by text, method and status class; mocked, failed and pending
+  ones marked), a detail pane (overview, headers, bodies with JSON pretty-printing, timing) and a **Network** lane on
+  the timeline (one bar per request, coloured by status; click to open it).
+- Mocks: rules (a method or any, an exact, prefix or `*` glob URL pattern, and a response or a timeout / connection
+  error, with an optional delay up to 30 s) set from the dashboard, or pre-filled with **Mock this response**. They
+  answer matching requests in the app without a network call, belong to the running session, and show as
+  **N mocks active** in the top bar of every view; mocked requests are marked and get one `Lionscope` logcat line.
+- Agent tools: `get_network` and `get_network_request` (read; bodies only with the new `--allow-network-bodies` flag
+  of the server, `lionscope mcp` and `lionscope query`, marked as untrusted data), `set_network_mock` and
+  `clear_network_mocks` (with `--allow-device-control`). `status` reports the network capture and the mocks.
+- The sample app's network demo (More → Open the network demo) and its local API, `android-sdk/sample/sample-api.mjs`.
+- Device protocol v7 (v6 plus the network inspector): SDK → server `httpRequest`, `httpResponse` and `mocksApplied`,
+  server → SDK `mocks` and `mock` (flat lines, golden file `protocol/fixtures/gateway-messages.ndjson`). HTTP lines
+  may be up to 256 KB, server → SDK lines up to 512 KB. Dashboard protocol 6: `http`, `httpExchange` and
+  `networkMocks`; `getHttpExchange`, `setNetworkMock` (up to 1 MB) and `clearNetworkMocks`.
+
 - The Layout Inspector uses the SDK without a profiling session (SDK 0.5.2). While a dashboard shows the Inspector
   for a device, and for 5 minutes after the last Inspect of it (from the dashboard or an agent's `inspect_screen`),
   the server keeps an inspect-only link to the debuggable SDK apps on that device: Inspect gets the SDK tree
