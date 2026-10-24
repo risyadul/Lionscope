@@ -89,11 +89,11 @@ describe('ProfilingSession SDK options', () => {
     session.attachSdk(HELLO_V2, pending); // its PID check takes a second
 
     session.setSdkOptions({ strictMode: true });
-    const strict = { stallThresholdMs: 150, strictMode: true, inflateTracking: true };
+    const strict = { stallThresholdMs: 150, strictMode: true, inflateTracking: true, rxTracking: true };
     expect(session.state.sdk?.options).toEqual(strict);
     expect(ofType('session').at(-1)?.session.sdk?.options).toEqual(strict);
     session.setSdkOptions({ stallThresholdMs: 500, strictMode: undefined });
-    const latest = { stallThresholdMs: 500, strictMode: true, inflateTracking: true };
+    const latest = { stallThresholdMs: 500, strictMode: true, inflateTracking: true, rxTracking: true };
     expect(session.state.sdk?.options).toEqual(latest);
     await vi.advanceTimersByTimeAsync(CONFIG_DEBOUNCE_MS - 1);
     expect(live.link.configs).toEqual([DEFAULT_SDK_OPTIONS]);
@@ -125,6 +125,7 @@ describe('ProfilingSession SDK options', () => {
       stallThresholdMs: 500,
       strictMode: false,
       inflateTracking: true,
+      rxTracking: true,
     });
     expect(ofType('session')).toHaveLength(count);
   });

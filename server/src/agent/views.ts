@@ -7,6 +7,9 @@ import {
   culpritLabel,
   culpritText,
   formatStackLine,
+  frameLocation,
+  originText,
+  type StallOrigin,
 } from '@lionscope/protocol/insights';
 import type { AgentContext } from './tool.ts';
 
@@ -98,6 +101,21 @@ export function stackLines(frames: readonly StackFrame[], maxLines = MAX_STACK_L
   return lines.length <= maxLines
     ? lines
     : [...lines.slice(0, maxLines), `… ${lines.length - maxLines} more`];
+}
+
+/** A stall's origin for an agent: kind, what ran, where it came from, and the facts that apply. */
+export function originView(origin: StallOrigin): Record<string, unknown> {
+  return {
+    kind: origin.kind,
+    label: origin.label,
+    text: originText(origin),
+    ...(origin.frame === null ? {} : { location: frameLocation(origin.frame) }),
+    ...(origin.dispatched === null ? {} : { dispatched: origin.dispatched }),
+    ...(origin.operator === null ? {} : { operator: origin.operator }),
+    ...(origin.consumer === null ? {} : { consumer: origin.consumer }),
+    ...(origin.dispatcher === null ? {} : { dispatcher: origin.dispatcher }),
+    ...(origin.coroutine === null ? {} : { coroutine: origin.coroutine }),
+  };
 }
 
 /** The culprit line: `com.example.Foo.bar (Foo.kt:12)` and its short label `Foo.kt:12`. */

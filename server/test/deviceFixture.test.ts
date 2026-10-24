@@ -22,6 +22,9 @@ const HELLO = JSON.parse(GOLDEN[0] ?? '{}') as Extract<DeviceMessage, { type: 'h
 const isHello = (line: string) => line.startsWith('{"type":"hello"');
 /** The golden lines after the first hello, without the later (v7) hello: one link says hello once. */
 const LINES = GOLDEN.slice(1).filter((line) => !isHello(line));
+/** The 0.9.0 stall lines (origin facts), which only a v9 SDK sends. */
+const V9_STALL = /^\{"type":"stall".*"(outerFrames|rx|coroutine)":/;
+const BELOW_V9 = LINES.filter((line) => !V9_STALL.test(line));
 const V7_NONCE = (JSON.parse(GOLDEN.findLast(isHello) ?? '{}') as { nonce?: string }).nonce ?? '';
 /** The device clock runs 5 s behind the laptop. */
 const OFFSET_MS = 5000;
@@ -219,12 +222,12 @@ describe('golden device messages through the gateway', () => {
   });
   it('on a v2 link: config after the welcome, and stalls / StrictMode violations on the laptop clock', async () => {
     const { manager, port, ofType } = await startSession();
-    const v2Lines = LINES.filter((line) => /"type":"(stall|strictmode)"/.test(line));
+    const v2Lines = BELOW_V9.filter((line) => /"type":"(stall|strictmode)"/.test(line));
     expect(v2Lines).toHaveLength(2);
 
     const client = await DeviceClient.open(port);
     client.send({ ...HELLO, protocolVersion: 2 });
-    for (const line of LINES) client.send(line);
+    for (const line of BELOW_V9) client.send(line);
     await client.waitFor((message) => message.type === 'config');
     expect(client.rawLines.slice(0, 2)).toEqual([
       '{"type":"welcome","protocolVersion":2}',
@@ -291,8 +294,37 @@ describe('golden device messages through the gateway', () => {
       stallThresholdMs: 150,
       strictMode: false,
       inflateTracking: false,
+      rxTracking: true,
     });
     v3.close();
+  });
+
+  it('on a v9 link: stalls keep their origin facts, and config carries rxTracking', async () => {
+    const { manager, port, ofType } = await startSession();
+    const v9Lines = LINES.filter((line) => V9_STALL.test(line));
+    expect(v9Lines).toHaveLength(2);
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 9 });
+    for (const line of v9Lines) client.send(line);
+    await waitUntil(() => ofType('stall').length === 2);
+    expect(client.rawLines.slice(0, 2)).toEqual([
+      '{"type":"welcome","protocolVersion":9,"mode":"session"}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true}',
+    ]);
+    const expected = v9Lines.map((line) => {
+      const { type: _stall, ...stall } = JSON.parse(line) as Extract<DeviceMessage, { type: 'stall' }>;
+      return { ...stall, ts: laptop(stall.ts) };
+    });
+    expect(ofType('stall').map((message) => message.sample)).toEqual(expected);
+    expect(manager.getSnapshot().stalls).toEqual(expected);
+
+    manager.setSdkOptions({ rxTracking: false });
+    await client.waitFor((message) => message.type === 'config' && message.rxTracking === false);
+    expect(client.rawLines.at(-1)).toBe(
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":false}',
+    );
+    expect(manager.getSessionState().sdk?.options?.rxTracking).toBe(false);
+    client.close();
   });
 
   it('on a v4 link: answers an inspect request with the golden snapshot, and an error with its reason', async () => {
