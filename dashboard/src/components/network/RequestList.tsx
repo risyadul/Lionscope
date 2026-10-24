@@ -129,10 +129,12 @@ export function RequestList({ rows, selectedId, onSelect, isFollowing, onFollowC
   const tabStopId =
     selectedIndex >= first && selectedIndex < last ? selectedId : (shown[shown.length - 1]?.id ?? null);
 
+  // Also when the list gets shorter (the detail opens under it): the rows rendered follow the newest, so the
+  // scroll position must too, or the top of the list shows blank space above them.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (list && isFollowing) list.scrollTop = list.scrollHeight;
-  }, [total, isFollowing]);
+  }, [total, isFollowing, height]);
 
   useLayoutEffect(() => {
     const id = focusId.current;
