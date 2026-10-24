@@ -10,6 +10,7 @@ import type {
   GatewayInspectLinks,
   GatewayInspector,
   GatewayManager,
+  GatewayViewEdits,
   WsGateway,
 } from '../src/http/wsGateway.ts';
 import { PublicError } from '../src/errors.ts';
@@ -138,6 +139,7 @@ describe('WebSocket gateway back-pressure', () => {
       'networkMocks',
       'session',
       'snapshot',
+      'viewEdit',
     ]);
     const client = await Client.open(port);
     await client.waitFor('snapshot');
@@ -310,6 +312,7 @@ describe('WebSocket gateway Inspector', () => {
     fake: GatewayInspector,
     run: (port: number) => Promise<void>,
     inspectLinks?: GatewayInspectLinks,
+    viewEdits?: GatewayViewEdits,
   ): Promise<void> {
     const server = createServer();
     let port = 0;
@@ -319,6 +322,7 @@ describe('WebSocket gateway Inspector', () => {
       emulators,
       inspector: fake,
       ...(inspectLinks ? { inspectLinks } : {}),
+      ...(viewEdits ? { viewEdits } : {}),
       serverVersion: '0.0.0',
       bufferWindowMs: 1000,
       allowedOrigins: () => buildAllowedOrigins(port, false),
@@ -416,6 +420,84 @@ describe('WebSocket gateway Inspector', () => {
       },
       inspectLinks,
     );
+  });
+
+  it('answers each edit and revert with viewEdit to the client that asked', async () => {
+    const calls: unknown[] = [];
+    const viewEdits: GatewayViewEdits = {
+      set: async (request) => {
+        calls.push(['set', request]);
+        if (request.property === 'text') throw new Error('boom');
+        return request.property === 'alpha'
+          ? { ok: false, error: 'stale', message: 'Inspect again.', liveEdits: 2 }
+          : { ok: true, liveEdits: 3, next: Promise.resolve(null) };
+      },
+      revert: async (request) => {
+        calls.push(['revert', request]);
+        return { ok: true, liveEdits: 0, next: Promise.resolve(null) };
+      },
+    };
+    await withGateway(
+      inspector,
+      async (port) => {
+        const client = await Client.open(port);
+        const other = await Client.open(port);
+        await client.waitFor('inspectorSelection');
+        const edit = { type: 'setViewProperty', snapshotId: snapshot.id, nodeId: 1 };
+        client.send({ ...edit, requestId: 1, property: 'backgroundColor', value: '#3366cc' });
+        expect(await client.waitFor('viewEdit')).toEqual({
+          type: 'viewEdit',
+          requestId: 1,
+          ok: true,
+          liveEdits: 3,
+        });
+        client.send({ ...edit, requestId: 2, property: 'alpha', value: 0.5 });
+        await waitUntil(() => client.messages.filter((message) => message.type === 'viewEdit').length === 2);
+        expect(client.messages.at(-1)).toEqual({
+          type: 'viewEdit',
+          requestId: 2,
+          ok: false,
+          error: 'stale',
+          message: 'Inspect again.',
+          liveEdits: 2,
+        });
+        client.send({ ...edit, requestId: 3, property: 'text', value: 'Pay' });
+        await waitUntil(() => client.messages.filter((message) => message.type === 'viewEdit').length === 3);
+        expect(client.messages.at(-1)).toMatchObject({ requestId: 3, ok: false, error: 'failed' });
+        client.send({
+          type: 'revertViewProperties',
+          requestId: 4,
+          snapshotId: snapshot.id,
+          nodeId: 1,
+          property: 'padding',
+        });
+        await waitUntil(() => client.messages.filter((message) => message.type === 'viewEdit').length === 4);
+        // An invalid value never reaches the service.
+        client.send({ ...edit, requestId: 5, property: 'alpha', value: 7 });
+        expect(await client.waitFor('error')).toMatchObject({ code: 'bad_request' });
+        expect(calls).toEqual([
+          ['set', { snapshotId: snapshot.id, nodeId: 1, property: 'backgroundColor', value: '#FF3366CC' }],
+          ['set', { snapshotId: snapshot.id, nodeId: 1, property: 'alpha', value: 0.5 }],
+          ['set', { snapshotId: snapshot.id, nodeId: 1, property: 'text', value: 'Pay' }],
+          ['revert', { snapshotId: snapshot.id, nodeId: 1, property: 'padding' }],
+        ]);
+        expect(other.messages.some((message) => message.type === 'viewEdit')).toBe(false);
+        client.close();
+        other.close();
+      },
+      undefined,
+      viewEdits,
+    );
+  });
+
+  it('refuses edits without a view edit service', async () => {
+    await withGateway(inspector, async (port) => {
+      const client = await Client.open(port);
+      await client.waitFor('inspectorSelection');
+      client.send({ type: 'revertViewProperties', requestId: 9, snapshotId: snapshot.id });
+      expect(await client.waitFor('viewEdit')).toMatchObject({ requestId: 9, ok: false, error: 'failed' });
+      client.close();
+    });
   });
 });
 

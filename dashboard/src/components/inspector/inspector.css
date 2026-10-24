@@ -757,3 +757,58 @@
 .inspect-row[aria-selected='true'][data-hover] {
   background: color-mix(in srgb, var(--inspect-select) 28%, transparent);
 }
+
+/* Eyedropper (a color picker waiting for a pixel): the readout follows the pointer, view labels step aside. */
+.inspect-overlay[data-eyedropper] {
+  cursor: cell;
+}
+
+.inspect-overlay[data-eyedropper] .inspect-tag,
+.inspect-overlay[data-eyedropper] .inspect-box[data-kind='hover'] {
+  display: none;
+}
+
+.inspect-loupe {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 3px;
+  border-radius: var(--radius-pill);
+  background: #101317;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 6px 16px -6px rgba(0, 0, 0, 0.6);
+  color: #f2f4f7;
+  font-size: var(--text-meta);
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translate(14px, -50%);
+}
+
+.inspect-loupe[data-end] {
+  transform: translate(calc(-100% - 14px), -50%);
+}
+
+.inspect-loupe-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.inspect-eyedropper-hint {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 3;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.72);
+  color: #f2f4f7;
+  font-size: var(--text-small);
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}

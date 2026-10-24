@@ -24,6 +24,7 @@ import type {
   StallSample,
   StrictModeSample,
   TimelineEvent,
+  ViewEditError,
   ViewTreeSample,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
@@ -65,6 +66,15 @@ export interface ServerError {
   code?: string;
 }
 
+/** The server's answer to this client's `setViewProperty` / `revertViewProperties` (0.8.0). */
+export interface ViewEditAnswer {
+  requestId: number;
+  ok: boolean;
+  error?: ViewEditError;
+  message?: string;
+  liveEdits?: number;
+}
+
 export interface DashboardState {
   connection: ConnectionState;
   server: ServerInfo | null;
@@ -104,6 +114,10 @@ export interface DashboardState {
   networkMocks: NetworkMocksState | null;
   /** The latest refused `setNetworkMock`, for the mock editor (it also shows as `lastError`). */
   mockError: ServerError | null;
+  /** The latest answers to this client's live view edits, oldest first (at most MAX_VIEW_EDIT_ANSWERS). */
+  viewEditAnswers: ViewEditAnswer[];
+  /** Count of `viewEdit` messages: the answers past the one a reader saw last are the newest ones. */
+  viewEditSeq: number;
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
@@ -144,6 +158,8 @@ export const MAX_INFLATES = 5000;
 export const MAX_VIEW_TREES = 500;
 /** Mirrors the server's exchange cap (the oldest go first). */
 export const MAX_HTTP = 5000;
+/** More than the edits one client can have in flight (the socket allows 20 messages a second). */
+export const MAX_VIEW_EDIT_ANSWERS = 64;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -183,6 +199,8 @@ export function createInitialState(): DashboardState {
     httpDetail: null,
     networkMocks: null,
     mockError: null,
+    viewEditAnswers: [],
+    viewEditSeq: 0,
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -672,6 +690,14 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return { ...state, httpDetail: { id: msg.id, exchange: msg.exchange } };
     case 'networkMocks':
       return { ...state, networkMocks: msg.mocks };
+    case 'viewEdit': {
+      const { type: _type, ...answer } = msg;
+      return {
+        ...state,
+        viewEditAnswers: capTail([...state.viewEditAnswers, answer], MAX_VIEW_EDIT_ANSWERS),
+        viewEditSeq: state.viewEditSeq + 1,
+      };
+    }
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

@@ -17,6 +17,7 @@ import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
+import type { ViewEditOutcome, ViewEdits } from '../inspector/viewEdits.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -105,6 +106,9 @@ export type GatewayInspector = Pick<InspectorService, 'inspect' | 'select' | 'cu
 /** What the gateway needs from the inspect-only SDK links. */
 export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
 
+/** What the gateway needs from the live view edits. */
+export type GatewayViewEdits = Pick<ViewEdits, 'set' | 'revert'>;
+
 export interface WsGatewayOptions {
   server: Server;
   manager: GatewayManager;
@@ -112,6 +116,8 @@ export interface WsGatewayOptions {
   inspector: GatewayInspector;
   /** Which device each client's Inspector shows (`inspectorFocus`); omitted = no inspect-only links. */
   inspectLinks?: GatewayInspectLinks;
+  /** Live view edits (`setViewProperty` / `revertViewProperties`); omitted = they are refused. */
+  viewEdits?: GatewayViewEdits;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -141,7 +147,23 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   getHttpExchange: 'Could not read the HTTP exchange',
   setNetworkMock: 'Could not set the mock rule',
   clearNetworkMocks: 'Could not remove the mock rules',
+  setViewProperty: 'Could not edit the view',
+  revertViewProperties: 'Could not revert the edits',
 };
+
+/** The `viewEdit` answer to one client's edit or revert. */
+function viewEditMessage(requestId: number, outcome: ViewEditOutcome): ServerMessage {
+  if (outcome.ok) return { type: 'viewEdit', requestId, ok: true, liveEdits: outcome.liveEdits };
+  const { error, message, liveEdits } = outcome;
+  return {
+    type: 'viewEdit',
+    requestId,
+    ok: false,
+    error,
+    message,
+    ...(liveEdits === undefined ? {} : { liveEdits }),
+  };
+}
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
@@ -190,6 +212,25 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
+
+  /** Every edit gets its `viewEdit` answer, also when it threw (the dashboard waits for it). */
+  const answerEdit = async (
+    ws: WebSocket,
+    requestId: number,
+    edit: (edits: GatewayViewEdits) => Promise<ViewEditOutcome>,
+  ): Promise<void> => {
+    const edits = options.viewEdits;
+    let outcome: ViewEditOutcome;
+    try {
+      outcome = edits
+        ? await edit(edits)
+        : { ok: false, error: 'failed', message: 'This server cannot edit views live.' };
+    } catch (error) {
+      log.warn(`Live view edit failed: ${errorMessage(error)}`);
+      outcome = { ok: false, error: 'failed', message: 'The edit failed on the server.' };
+    }
+    send(ws, viewEditMessage(requestId, outcome));
+  };
 
   const handle = async (ws: WebSocket, message: ClientMessage): Promise<void> => {
     switch (message.type) {
@@ -248,6 +289,17 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         // Answered by the `networkMocks` broadcast; an unknown id (or no session) changes nothing.
         manager.clearNetworkMocks(message.id);
         return;
+      case 'setViewProperty': {
+        const { requestId, snapshotId, nodeId, property, value } = message;
+        // Answered with `viewEdit` to this client; a change is then shown by the `inspection` that follows.
+        await answerEdit(ws, requestId, (edits) => edits.set({ snapshotId, nodeId, property, value }));
+        return;
+      }
+      case 'revertViewProperties': {
+        const { requestId, snapshotId, nodeId, property } = message;
+        await answerEdit(ws, requestId, (edits) => edits.revert({ snapshotId, nodeId, property }));
+        return;
+      }
     }
   };
 

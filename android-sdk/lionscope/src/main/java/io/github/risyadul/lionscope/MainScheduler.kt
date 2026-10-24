@@ -28,9 +28,13 @@ internal interface LinkPort {
 
     /**
      * True while the current connection is a v7 session whose welcome proved the server holds the link key
-     * ([LinkProof]); set before the session listeners hear of the session. Network capture and mocks need it.
+     * ([LinkProof]); set before the session listeners hear of the session. Network capture, mocks and live view edits
+     * need it: anything else on the phone could listen on 8700 while no `adb reverse` maps it.
      */
-    val isNetworkAuthenticated: Boolean
+    val isServerVerified: Boolean
+
+    /** Counts welcomed connections (the current one's number): an answer must go out on its request's connection. */
+    val connection: Int
 
     fun onScreen(ts: Long, screen: ScreenRef?)
 
@@ -53,6 +57,12 @@ internal interface LinkPort {
     fun addInspectListener(listener: (requestId: Int) -> Unit)
 
     /**
+     * Each `setViewProperty` / `revertViewProperties` ([GatewayMessage.SetViewProperty], [GatewayMessage.RevertViewProperties])
+     * on a v8 link; called on a link thread, it must only hand off.
+     */
+    fun addViewEditListener(listener: (GatewayMessage) -> Unit)
+
+    /**
      * Queues a v2 message, encoded later on the link thread by [encode] (null = nothing to send). Dropped unless the
      * current connection negotiated v2, checked again when it is written. [sizeHint] ≈ its encoded length.
      */
@@ -64,13 +74,15 @@ internal interface LinkPort {
     /** [sendV2] for v4 messages: dropped unless the connection negotiated v4. */
     fun sendV4(sizeHint: Int, encode: () -> String?)
 
-    /** [sendV2] for v7 (network) messages: dropped unless the connection [isNetworkAuthenticated]. */
+    /** [sendV2] for v7 (network) messages: dropped unless the connection [isServerVerified]. */
     fun sendV7(sizeHint: Int, encode: () -> String?)
 
     /**
-     * Each v7 `mocks` / `mock` line ([GatewayMessage.Mocks], [GatewayMessage.Mock]) of a network-authenticated link
-     * ([isNetworkAuthenticated]), in order, on the link's reader thread; it must only hand off or do a little
+     * Each v7 `mocks` / `mock` line ([GatewayMessage.Mocks], [GatewayMessage.Mock]) of a server-verified link
+     * ([isServerVerified]), in order, on the link's reader thread; it must only hand off or do a little
      * bookkeeping.
      */
     fun addMocksListener(listener: (GatewayMessage) -> Unit)
+    /** [sendV2] for v8 messages: dropped unless the connection negotiated v8. */
+    fun sendV8(sizeHint: Int, encode: () -> String?)
 }

@@ -22,6 +22,7 @@ import { errorMessage, log } from './log.ts';
 import { INSPECTOR_PATH_PREFIX, serveInspectorPng } from './http/inspectorFiles.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
 import { InspectorService } from './inspector/inspectorService.ts';
+import { ViewEdits } from './inspector/viewEdits.ts';
 import { TokenBucket } from './net/tokenBucket.ts';
 import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts';
 import { buildAllowedOrigins, createWsGateway, isAllowedHost } from './http/wsGateway.ts';
@@ -150,10 +151,12 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       ),
     broadcast: (message, payload) => gateway?.broadcast(message, payload),
   });
+  const viewEdits = new ViewEdits({ inspector });
   const agent: AgentBaseContext = {
     sessions: manager,
     emulators,
     inspector,
+    viewEdits,
     adb: options.adb,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
@@ -222,6 +225,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     emulators,
     inspector,
     inspectLinks,
+    viewEdits,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,
@@ -300,6 +304,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         emulators.close(),
         agentHttp.close(),
       ]);
+      viewEdits.close();
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

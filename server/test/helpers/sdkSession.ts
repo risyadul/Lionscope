@@ -1,12 +1,22 @@
-import type { NetworkMockRule, ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
+import type {
+  NetworkMockRule,
+  ScreenRef,
+  SdkFrame,
+  SdkOptions,
+  ServerMessage,
+  ViewProperty,
+  ViewPropertyGroup,
+  ViewPropertyValue,
+} from '@lionscope/protocol';
 import { vi } from 'vitest';
-import { SdkInspectError } from '../../src/device/sdkLink.ts';
+import { SdkEditError, SdkInspectError } from '../../src/device/sdkLink.ts';
 import type {
   ByeReason,
   SdkHello,
   SdkInspection,
   SdkLink,
   SdkLinkHandler,
+  SdkViewEditResult,
 } from '../../src/device/sdkLink.ts';
 import { ProfilingSession } from '../../src/session/profilingSession.ts';
 import { FakeAdb, FakeDevice } from './fakes.ts';
@@ -30,7 +40,23 @@ export const HELLO: SdkHello = {
   refreshRateHz: 120,
 };
 
+/** What a fake link without edits has of them: a session link below v8, without a proof (edits fail `unsupported`). */
+export const NO_EDITS: Pick<SdkLink, 'mode' | 'proven' | 'setViewProperty' | 'revertViewProperties'> = {
+  mode: 'session',
+  proven: false,
+  setViewProperty: () => Promise.reject(new SdkEditError('unsupported')),
+  revertViewProperties: () => Promise.reject(new SdkEditError('unsupported')),
+};
+
+/** One edit a FakeLink was asked for. */
+export type EditRequest =
+  | { kind: 'set'; viewKey: number; property: ViewProperty; value: ViewPropertyValue }
+  | { kind: 'revert'; viewKey?: number; property?: ViewProperty | ViewPropertyGroup };
+
 export class FakeLink implements SdkLink {
+  mode: SdkLink['mode'] = 'session';
+  /** The welcome carried the link proof (a session link the SDK takes edits from). */
+  proven = true;
   readonly configs: SdkOptions[] = [];
   closedWith: ByeReason | 'none' | null = null;
   constructor(readonly protocolVersion = 1) {}
@@ -51,6 +77,26 @@ export class FakeLink implements SdkLink {
   inspect(): Promise<SdkInspection> {
     this.inspects += 1;
     return this.answerInspect?.() ?? Promise.reject(new SdkInspectError('unsupported'));
+  }
+  /** What the edits answer; unset, they fail as `unsupported`. */
+  answerEdit: ((request: EditRequest) => Promise<SdkViewEditResult>) | null = null;
+  readonly edits: EditRequest[] = [];
+  setViewProperty(
+    viewKey: number,
+    property: ViewProperty,
+    value: ViewPropertyValue,
+  ): Promise<SdkViewEditResult> {
+    return this.edit({ kind: 'set', viewKey, property, value });
+  }
+  revertViewProperties(
+    viewKey?: number,
+    property?: ViewProperty | ViewPropertyGroup,
+  ): Promise<SdkViewEditResult> {
+    return this.edit({ kind: 'revert', viewKey, property });
+  }
+  private edit(request: EditRequest): Promise<SdkViewEditResult> {
+    this.edits.push(request);
+    return this.answerEdit?.(request) ?? Promise.reject(new SdkEditError('unsupported'));
   }
 }
 

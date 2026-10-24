@@ -8,6 +8,7 @@ import type { Adb } from '../adb/adb.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { Size } from '../emulator/screenInput.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
+import type { ViewEdits } from '../inspector/viewEdits.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 import type { UiHelpers } from './uiHelper.ts';
 import type { UiTree } from './uiTree.ts';
@@ -60,6 +61,9 @@ export type AgentEmulators = Pick<EmulatorManager, 'getEmulators' | 'refresh' | 
 /** The dashboard's Layout Inspector: the same snapshots and selection the dashboard shows. */
 export type AgentInspector = Pick<InspectorService, 'inspect' | 'select' | 'current' | 'selection' | 'png'>;
 
+/** Live view edits through the current snapshot's SDK link (the dashboard's own). */
+export type AgentViewEdits = Pick<ViewEdits, 'set' | 'setAll' | 'revert'>;
+
 /** The last screenshot of a device: tap / swipe coordinates are in `shot` pixels, adb input wants `device` ones. */
 export interface ScreenshotSize {
   shot: Size;
@@ -70,6 +74,8 @@ export interface AgentContext {
   sessions: AgentSessions;
   emulators: AgentEmulators;
   inspector: AgentInspector;
+  /** Omitted: the view edit tools say editing is unavailable. */
+  viewEdits?: AgentViewEdits;
   adb: Adb;
   serverVersion: string;
   bufferWindowMs: number;

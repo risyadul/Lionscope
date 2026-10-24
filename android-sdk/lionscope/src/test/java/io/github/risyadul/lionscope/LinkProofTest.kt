@@ -121,7 +121,7 @@ class LinkProofTest {
                 link.send("{\"type\":\"marker\"}")
                 val applied = input.linesUntil("marker").any { it.contains("\"mocksApplied\"") }
                 val active = capture.isActive
-                assertEquals(active, link.isNetworkAuthenticated)
+                assertEquals(active, link.isServerVerified)
                 assertEquals(active, applied)
                 active
             }

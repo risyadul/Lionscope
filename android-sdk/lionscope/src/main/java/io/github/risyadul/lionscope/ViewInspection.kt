@@ -33,6 +33,13 @@ internal fun activityOf(context: Context?): Activity? {
     return null
 }
 
+/** A password field (or a view with a password autofill hint): its text is never read, sent or set. */
+internal fun isPasswordView(view: View): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && InspectorText.hasPasswordHint(view.autofillHints)) return true
+    val textView = view as? TextView ?: return false
+    return InspectorText.shown(textView.transformationMethod, textView.inputType) == InspectorText.Shown.SECRET
+}
+
 /** The windows the SDK tracks itself, for the Inspector below API 29 (main thread). */
 internal interface KnownWindows {
     val hasStartedActivity: Boolean
@@ -93,17 +100,21 @@ internal object WindowRoots {
         (if (sdkInt >= Build.VERSION_CODES.Q) global() else known()).filter(isShown)
 }
 
-/** [InspectorScene] over the app's real windows (Views, and composables when [compose] can read them). */
+/**
+ * [InspectorScene] over the app's real windows (Views, and composables when [compose] can read them). With [editor]
+ * (v8 links) every View node carries its key and editable state, and a capture that worked becomes the one edits name.
+ */
 internal class ViewScene(
     private val known: KnownWindows,
     private val origins: ViewOrigins?,
     private val sdkInt: Int = Build.VERSION.SDK_INT,
     private val compose: () -> ComposeReading? = { ComposeSupport.reading },
+    private val editor: ViewEditor<View>? = null,
 ) : InspectorScene<Any> {
     override val isForeground: Boolean
         get() = known.hasStartedActivity
 
-    override fun prepare(readCompose: Boolean): PreparedScene<Any>? {
+    override fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<Any>? {
         val global = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) globalWindows() else emptyList() }
         val roots = WindowRoots.select(sdkInt, global, known::knownRoots, ::isShownWindow)
         if (roots.isEmpty()) return null
@@ -120,9 +131,19 @@ internal class ViewScene(
                 activity = activity?.javaClass?.name,
             )
         }
-        val views = ViewInspectorAccess(if (sdkInt >= Build.VERSION_CODES.Q) origins else null, fragments)
+        val edits = editor?.takeIf { viewState }
+        val keys = edits?.beginCapture()
+        val views = ViewInspectorAccess(if (sdkInt >= Build.VERSION_CODES.Q) origins else null, fragments, keys)
         val reading = if (readCompose) compose()?.also { it.beginCapture() } else null
-        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading))
+        val captured = if (edits != null && keys != null) {
+            {
+                keys.commit()
+                edits.liveEdits()
+            }
+        } else {
+            null
+        }
+        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading), captured)
     }
 
     @RequiresApi(29)
@@ -312,10 +333,14 @@ internal object DrawingOrder {
     }
 }
 
-/** [InspectorTreeAccess] over real views; resource names and reflective lookups are cached per capture. */
+/**
+ * [InspectorTreeAccess] over real views; resource names and reflective lookups are cached per capture. With [keys]
+ * (a v8 capture) each view read gets its key and editable state.
+ */
 internal class ViewInspectorAccess(
     private val origins: ViewOrigins?,
     private val fragmentRoots: Map<Any, String>,
+    private val keys: ViewEditor<View>.Capture? = null,
 ) : InspectorTreeAccess<View> {
     private val classNames = HashMap<Class<*>, String>()
     private val ids = HashMap<Int, String?>()
@@ -342,7 +367,7 @@ internal class ViewInspectorAccess(
         node.getLocationOnScreen(location)
         val params = node.layoutParams
         val margins = params as? ViewGroup.MarginLayoutParams
-        val secret = isSecret(node)
+        val secret = isPasswordView(node)
         return NodeAttributes(
             className = className(node),
             resourceId = resourceId(node),
@@ -365,13 +390,8 @@ internal class ViewInspectorAccess(
             layoutWidth = params?.let { DeviceMessages.layoutDimension(it.width) },
             layoutHeight = params?.let { DeviceMessages.layoutDimension(it.height) },
             source = source(node),
+            view = keys?.let { AndroidViewEdits.state(node, it.keyOf(node), it.edited(node)) },
         )
-    }
-
-    private fun isSecret(node: View): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && InspectorText.hasPasswordHint(node.autofillHints)) return true
-        val textView = node as? TextView ?: return false
-        return InspectorText.shown(textView.transformationMethod, textView.inputType) == InspectorText.Shown.SECRET
     }
 
     /** Not called for secret views. */

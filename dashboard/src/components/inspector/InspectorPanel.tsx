@@ -1,10 +1,12 @@
 import { memo, useState, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import { fallbackHint, fallbackLabel } from '../../lib/inspector.ts';
+import { EDIT_BLOCKED_HINTS, liveEditsLabel } from '../../lib/viewEdits.ts';
 import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
 import { InspectorTree } from './InspectorTree.tsx';
 import { NodeAttributes } from './NodeAttributes.tsx';
+import { keepFocusNear } from './ViewEditors.tsx';
 import './inspector.css';
 
 function Empty({
@@ -60,6 +62,10 @@ export const InspectorPanel = memo(function InspectorPanel() {
   const selected = selectedId === null ? undefined : index.byId.get(selectedId);
   const reason = fallbackLabel(snapshot.fallbackReason);
   const hint = snapshot.source === 'sdk' ? undefined : fallbackHint(snapshot.fallbackReason);
+  const { edits } = controller;
+  const revertAll = edits.status(null);
+  const failure =
+    controller.failure ?? (revertAll.kind === 'error' ? revertAll.message : null) ?? edits.notice;
   return (
     <div className="inspector" data-stale={controller.isStale || undefined}>
       <div className="inspect-head">
@@ -85,6 +91,35 @@ export const InspectorPanel = memo(function InspectorPanel() {
                 truncated at {formatInteger(MAX_INSPECTOR_NODES)} nodes
               </span>
             ))}
+          {edits.liveEdits > 0 && (
+            <span className="inspect-live">
+              <span
+                className="inspect-badge"
+                data-source="edit"
+                title="Changed from the Inspector. They last until reverted, the app sets the property again or the view is recreated."
+              >
+                {liveEditsLabel(edits.liveEdits)}
+              </span>
+              <button
+                type="button"
+                className="btn inspect-revert-all"
+                disabled={
+                  !edits.canEdit || revertAll.kind === 'applying' || snapshot.editBlocked !== undefined
+                }
+                title={
+                  snapshot.editBlocked === undefined ? undefined : EDIT_BLOCKED_HINTS[snapshot.editBlocked]
+                }
+                aria-busy={revertAll.kind === 'applying' || undefined}
+                onClick={(event) => {
+                  // The count and this button go away once all is reverted: Refresh takes the focus.
+                  keepFocusNear(event, '.inspect-badges', '.inspect-refresh');
+                  edits.revert(null);
+                }}
+              >
+                {revertAll.kind === 'applying' ? 'Reverting…' : 'Revert all'}
+              </button>
+            </span>
+          )}
           <button
             type="button"
             className="btn inspect-refresh"
@@ -95,9 +130,9 @@ export const InspectorPanel = memo(function InspectorPanel() {
           </button>
         </div>
         {hint !== undefined && <p className="inspect-hint">{hint}</p>}
-        {controller.failure !== null && (
+        {failure !== null && (
           <p className="inspect-failure" role="alert">
-            {controller.failure}
+            {failure}
           </p>
         )}
         <input
@@ -125,11 +160,14 @@ export const InspectorPanel = memo(function InspectorPanel() {
             </p>
           ) : (
             <NodeAttributes
+              // Drafts belong to one view: the same view keeps them across snapshots (its key), another drops them.
+              key={selected.view === undefined ? `n${selected.id}` : `v${selected.view.key}`}
               node={selected}
               snapshot={snapshot}
               index={index}
               onSelect={controller.select}
               origin={controller.selectionOrigin}
+              edits={edits}
             />
           )}
         </section>

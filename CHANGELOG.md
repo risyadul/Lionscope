@@ -75,6 +75,28 @@ All notable changes to Lionscope are documented here. The format is based on
 - Sample app: a Compose card inside the XML More screen, and a navigation-compose shop (lazy catalog under an idle
   full-size toast host, a product with an `AndroidView`, a sign-in form with password fields, a dialog
   destination).
+- Live view editing in the Layout Inspector (SDK 0.8.0). The attributes pane of a selected View edits it on the
+  running app: visibility (segmented control), alpha (slider and number), enabled, padding and margins (the
+  box-model figure takes a number per side), layout width and height (`match_parent` / `wrap_content` / px),
+  translation, elevation, background color, and on TextViews text, text size (sp) and text color (hex input with a
+  swatch). Enter commits, Esc cancels; the field shows that the edit is applying and why one failed. The server
+  applies it through the SDK link that captured the snapshot, then takes a new snapshot that keeps the view
+  selected. Edits are temporary: they last until reverted, until the app sets the property itself (a rebound
+  RecyclerView row) or until the view is recreated. Each edited field has a Revert button, and the tab's header shows
+  "N live edits (temporary)" with Revert all. Needs a profiling session (the app takes edits only from a link with
+  the link proof); without one the values show read-only with a hint to press Start. Composables, uiautomator
+  snapshots and older SDKs are read-only (the pane says why; a composable points at its call site), and the text
+  of password fields is never read, shown or set. A background color replaces the view's background (and turns
+  its tint off) until reverted; the revert restores the drawable and its tint, keeping the view's padding.
+- A color picker on the background and text color fields: the swatch opens a saturation/brightness square with hue
+  and alpha sliders, the colors the screen's views already use, the recent ones, and an eyedropper that takes a pixel
+  of the frozen screen (in every browser: it reads the snapshot's screenshot). Like the alpha slider it sends the color
+  it rests on (on release, or 250 ms after the last key), never every step.
+- Agent tools (device control): `set_view_property` (one property, or `padding` / `margin` as one number or four;
+  answers with the element as the next snapshot shows it) and `revert_view_properties` (a property, a node, or every
+  live edit). `get_inspector_selection` lists a node's `editable` properties, the state they need and its live
+  edits; `inspect_screen` marks editable nodes; snapshots report `liveEdits`.
+- Sample app: the Detail screen has a solid-color price tag, a PIN field and a Pay button to try live edits on.
 
 ### Security
 
@@ -95,6 +117,15 @@ All notable changes to Lionscope are documented here. The format is based on
 - Device protocol v6 (v5 plus Compose): Inspector nodes may carry `composable`, `composition` and `destination`,
   and `screen.kind` may be `destination`, on session and inspect-only links alike. An SDK sends none of it to an
   older server (a destination is then a `fragment`), and an older SDK keeps working. The dashboard protocol stays 5.
+- Device protocol v8 (v7 plus live view edits): SDK View nodes carry `view` (a key that names the View object for as
+  long as it lives, and its editable state) and `inspectBegin` carries `liveEdits`; the server sends
+  `setViewProperty` / `revertViewProperties`, answered by `viewPropertyResult`. The SDK applies edits only on a link
+  with the v7 link proof (a profiling session) and answers anything else `unauthenticated`; snapshots say why their
+  views can't be edited (`editBlocked`). Server → SDK lines stay flat JSON with `type` first; their golden lines are
+  in `protocol/fixtures/gateway-messages.ndjson`. Dashboard protocol 7: `setViewProperty`, `revertViewProperties`
+  and their `viewEdit` answer. Nothing changes on a link below v8, byte for byte.
+- The Inspector keeps a selection on the same view by its key when the SDK sends one, so it survives an edit of its
+  text, size or position.
 - A Compose top window now falls back to uiautomator only when the SDK could not read its composition, and says
   why: `compose_disabled` (composed before the SDK started, or opted out: restart the app), `compose_no_source`
   (built without Compose source information), `compose_failed`; `compose` remains for SDKs before 0.6.0.

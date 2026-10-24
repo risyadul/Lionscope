@@ -466,6 +466,7 @@ describe('parseDeviceMessage', () => {
         'httpRequest',
         'httpResponse',
         'mocksApplied',
+        'viewPropertyResult',
       ]),
     );
   });

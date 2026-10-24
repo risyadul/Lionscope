@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 7
+internal const val DEVICE_PROTOCOL_VERSION = 8
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -26,10 +26,16 @@ internal const val DEVICE_PROTOCOL_V7 = 7
 /**
  * v7 link proof (protocol/src/wire.ts, `LINK_KEY_RECEIVER`): the server hands a [LINK_KEY_BYTES] key to
  * [LinkKeyReceiver] over adb, and its welcome carries hex(HMAC-SHA256(key, `<nonce>:<protocolVersion>:<mode>`)) over
- * the hello's [LINK_NONCE_BYTES] nonce. Network capture and mocks need a matching proof; nothing else does.
+ * the hello's [LINK_NONCE_BYTES] nonce. Network capture and mocks, and (v8) live view edits, need a matching proof;
+ * nothing else does.
  */
 internal const val LINK_KEY_BYTES = 32
 internal const val LINK_NONCE_BYTES = 16
+/**
+ * First version with live view edits: `view` on Inspector View nodes, `inspectBegin.liveEdits`, `setViewProperty` /
+ * `revertViewProperties` (server → SDK) and `viewPropertyResult`.
+ */
+internal const val DEVICE_PROTOCOL_V8 = 8
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link; every other line keeps [MAX_DEVICE_LINE_BYTES]. */
@@ -51,6 +57,8 @@ internal const val MAX_INSPECTOR_NODES = 5000
 internal const val MAX_INSPECT_ANSWER_BYTES = 8 * 1024 * 1024
 /** The server accepts at most this many windows per snapshot. */
 internal const val MAX_INSPECTOR_WINDOWS = 32
+/** Live edits (one per view and property) an app process keeps at most; a further one is refused (`limit`). */
+internal const val MAX_LIVE_EDITS = 256
 
 /** Allowed watchdog thresholds; `config` values outside this set snap to the nearest one. */
 internal val STALL_THRESHOLDS_MS = longArrayOf(100, 150, 250, 500, 1000)
@@ -179,7 +187,86 @@ internal data class InspectorNode(
     val composable: ComposableSource? = null,
     val composition: CompositionStatus? = null,
     val destination: String? = null,
+    val view: ViewState? = null,
 )
+
+/** One live-editable View property, as named on the wire (`VIEW_PROPERTIES` in protocol/src/wire.ts, same order). */
+internal enum class ViewProperty(val wire: String) {
+    VISIBILITY("visibility"),
+    ALPHA("alpha"),
+    ENABLED("enabled"),
+    PADDING_LEFT("paddingLeft"),
+    PADDING_TOP("paddingTop"),
+    PADDING_RIGHT("paddingRight"),
+    PADDING_BOTTOM("paddingBottom"),
+    MARGIN_LEFT("marginLeft"),
+    MARGIN_TOP("marginTop"),
+    MARGIN_RIGHT("marginRight"),
+    MARGIN_BOTTOM("marginBottom"),
+    LAYOUT_WIDTH("layoutWidth"),
+    LAYOUT_HEIGHT("layoutHeight"),
+    TRANSLATION_X("translationX"),
+    TRANSLATION_Y("translationY"),
+    ELEVATION("elevation"),
+    BACKGROUND_COLOR("backgroundColor"),
+    TEXT("text"),
+    TEXT_SIZE("textSize"),
+    TEXT_COLOR("textColor"),
+    ;
+
+    companion object {
+        val PADDING = listOf(PADDING_LEFT, PADDING_TOP, PADDING_RIGHT, PADDING_BOTTOM)
+        val MARGIN = listOf(MARGIN_LEFT, MARGIN_TOP, MARGIN_RIGHT, MARGIN_BOTTOM)
+
+        fun of(wire: String): ViewProperty? = values().firstOrNull { it.wire == wire }
+
+        /** A revert's `property`: one property, or the four sides of `padding` / `margin`; null when unknown. */
+        fun group(wire: String): List<ViewProperty>? = when (wire) {
+            "padding" -> PADDING
+            "margin" -> MARGIN
+            else -> of(wire)?.let(::listOf)
+        }
+    }
+}
+
+/**
+ * What editing a View live needs (v8; `ViewState` in protocol/src/wire.ts): its [key], the values the snapshot has no
+ * other field for (px; colors as ARGB ints), and the properties [edited] live and in effect. [textSize] (sp) and
+ * [textColor] are null unless it is a TextView.
+ */
+internal data class ViewState(
+    val key: Int,
+    val translationX: Double,
+    val translationY: Double,
+    val elevation: Double,
+    val backgroundColor: Int?,
+    val textSize: Double?,
+    val textColor: Int?,
+    val password: Boolean,
+    val edited: List<ViewProperty> = emptyList(),
+)
+
+/**
+ * Why a live edit was refused: [STALE] no view with that key in the latest capture (or it is no longer attached);
+ * [UNSUPPORTED] the property does not apply to the view; [PASSWORD] the text of a password field; [INVALID] a value out
+ * of bounds; [LIMIT] [MAX_LIVE_EDITS] are in effect; [FAILED] the setter threw; [DISABLED] no editor in this process;
+ * [BUSY] the request came in a flood and was not applied; [UNAUTHENTICATED] the link is not server-verified.
+ */
+internal enum class EditError(val wire: String) {
+    STALE("stale"),
+    UNSUPPORTED("unsupported"),
+    PASSWORD("password"),
+    INVALID("invalid"),
+    LIMIT("limit"),
+    FAILED("failed"),
+    DISABLED("disabled"),
+
+    /** Too many requests at once (more than any server that rate-limits its edits sends): nothing was done. */
+    BUSY("busy"),
+
+    /** The link has no link proof ([LinkPort.isServerVerified]): whoever listens on 8700 may not be the server. */
+    UNAUTHENTICATED("unauthenticated"),
+}
 
 /**
  * Why an `inspect` got no snapshot: [BACKGROUND] no Activity of the app is started; [NO_WINDOW] none of its windows is

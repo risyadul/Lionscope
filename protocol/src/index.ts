@@ -14,6 +14,7 @@ import {
   DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -38,7 +39,9 @@ import {
   MAX_NETWORK_MOCKS,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
+  MAX_EDIT_TEXT_CHARS,
   MAX_INSPECTOR_NODES,
+  MAX_LIVE_EDITS,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
   MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
@@ -50,10 +53,13 @@ import {
   MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
   MIN_DEVICE_PROTOCOL_VERSION,
+  normalizeViewValue,
   PACKAGE_NAME_PATTERN,
   SCREEN_SIZES,
   SERIAL_PATTERN,
   STALL_THRESHOLDS_MS,
+  VIEW_PROPERTIES,
+  VIEW_PROPERTY_GROUPS,
   type ClientMessage,
   type DeviceMessage,
   type DeviceMessageType,
@@ -63,6 +69,9 @@ import {
   type InspectorWindow,
   type NetworkMockInput,
   type ScreenClientMessage,
+  type ViewProperty,
+  type ViewPropertyValue,
+  type ViewState,
 } from './wire.ts';
 
 export * from './wire.ts';
@@ -77,6 +86,31 @@ const inspectorNodeId = z
   .int()
   .min(0)
   .max(MAX_INSPECTOR_NODES - 1);
+/** Java's `int` (`XmlPullParser.getLineNumber()`, request ids, view keys). */
+const MAX_JAVA_INT = 2_147_483_647;
+const viewPropertySchema = z.enum(VIEW_PROPERTIES);
+const viewPropertyGroupSchema = z.enum(
+  Object.keys(VIEW_PROPERTY_GROUPS) as [
+    keyof typeof VIEW_PROPERTY_GROUPS,
+    ...(keyof typeof VIEW_PROPERTY_GROUPS)[],
+  ],
+);
+const viewPropertyValueSchema = z.union([z.string().max(MAX_EDIT_TEXT_CHARS), z.number(), z.boolean()]);
+const snapshotIdSchema = z.string().regex(INSPECTOR_SNAPSHOT_ID_PATTERN, 'invalid snapshot id');
+const clientRequestId = z.number().int().min(0).max(MAX_JAVA_INT);
+
+/** A valid `value` for `property` (normalizeViewValue), normalized. */
+function viewEdit<T extends { property: ViewProperty; value: ViewPropertyValue }>(
+  message: T,
+  ctx: z.RefinementCtx,
+): T {
+  const value = normalizeViewValue(message.property, message.value);
+  if (value === null) {
+    ctx.addIssue({ code: 'custom', message: `invalid value for ${message.property}` });
+    return z.NEVER;
+  }
+  return { ...message, value };
+}
 
 // ---------------------------------------------------------------------------
 // Network (0.7.0): shared by the dashboard's mock rules, the device gateway and the agent tools
@@ -190,7 +224,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('selectInspectorNode'),
-      snapshotId: z.string().regex(INSPECTOR_SNAPSHOT_ID_PATTERN, 'invalid snapshot id'),
+      snapshotId: snapshotIdSchema,
       nodeId: inspectorNodeId.nullable(),
     })
     .strict(),
@@ -205,6 +239,30 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       id: z.string().regex(MOCK_ID_PATTERN, 'invalid mock id').optional(),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal('setViewProperty'),
+      requestId: clientRequestId,
+      snapshotId: snapshotIdSchema,
+      nodeId: inspectorNodeId,
+      property: viewPropertySchema,
+      value: viewPropertyValueSchema,
+    })
+    .strict()
+    .transform(viewEdit),
+  z
+    .object({
+      type: z.literal('revertViewProperties'),
+      requestId: clientRequestId,
+      snapshotId: snapshotIdSchema,
+      nodeId: inspectorNodeId.optional(),
+      property: z.union([viewPropertySchema, viewPropertyGroupSchema]).optional(),
+    })
+    .strict()
+    .refine(
+      (message) => message.property === undefined || message.nodeId !== undefined,
+      'property needs a nodeId',
+    ),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -448,9 +506,10 @@ export const MAX_INSPECTOR_DISPLAY_PX = 20_000;
 const MAX_INSPECTOR_TEXT_LENGTH = 500;
 /** `WindowManager.LayoutParams.type` values (application 1-99, sub-windows 1000+, system windows 2000+). */
 const MAX_WINDOW_TYPE = 10_000;
-/** Java's `int` (`XmlPullParser.getLineNumber()`, request ids). */
-const MAX_JAVA_INT = 2_147_483_647;
 const LAYOUT_DIMENSION_PATTERN = /^(match_parent|wrap_content|-?\d{1,6}px)$/;
+/** Text sizes as read (sp): far above anything legible, below anything absurd. */
+export const MAX_VIEW_TEXT_SIZE_SP = 10_000;
+const WIRE_COLOR = /^#[0-9A-F]{8}$/;
 
 const pixel = z.number().int().min(-MAX_INSPECTOR_PIXELS).max(MAX_INSPECTOR_PIXELS);
 const pixelRect = z.tuple([pixel, pixel, pixel, pixel]);
@@ -469,6 +528,23 @@ const inspectorWindowSchema = z
     bounds: pixelRect,
   })
   .strip() satisfies z.ZodType<InspectorWindow>;
+
+const viewPixels = z.number().min(-MAX_INSPECTOR_PIXELS).max(MAX_INSPECTOR_PIXELS);
+const wireColor = z.string().regex(WIRE_COLOR, 'invalid color');
+
+const viewStateSchema = z
+  .object({
+    key: z.number().int().min(1).max(MAX_JAVA_INT),
+    translationX: viewPixels,
+    translationY: viewPixels,
+    elevation: viewPixels,
+    backgroundColor: wireColor.nullable(),
+    textSize: z.number().min(0).max(MAX_VIEW_TEXT_SIZE_SP).nullable(),
+    textColor: wireColor.nullable(),
+    password: z.boolean(),
+    edited: z.array(viewPropertySchema).max(VIEW_PROPERTIES.length).optional(),
+  })
+  .strip() satisfies z.ZodType<ViewState>;
 
 const inspectorNodeSchema = z
   .object({
@@ -508,6 +584,7 @@ const inspectorNodeSchema = z
       .optional(),
     composition: z.enum(['read', 'disabled', 'no_source', 'failed']).optional(),
     destination: layoutText.nullable().optional(),
+    view: viewStateSchema.optional(),
   })
   .strip() satisfies z.ZodType<InspectorNode>;
 
@@ -645,6 +722,7 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       truncated: z.boolean(),
       captureMs: durationMs,
       compose: z.boolean(),
+      liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS).optional(),
     })
     .strip(),
   z
@@ -711,6 +789,27 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       count: z.number().int().min(0).max(MAX_NETWORK_MOCKS),
     })
     .strip(),
+  z
+    .object({
+      type: z.literal('viewPropertyResult'),
+      requestId,
+      ok: z.boolean(),
+      error: z
+        .enum([
+          'stale',
+          'unsupported',
+          'password',
+          'invalid',
+          'limit',
+          'failed',
+          'disabled',
+          'busy',
+          'unauthenticated',
+        ])
+        .optional(),
+      liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
@@ -729,6 +828,7 @@ const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'httpRequest',
   'httpResponse',
   'mocksApplied',
+  'viewPropertyResult',
 ]);
 
 /**
@@ -750,6 +850,7 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   httpRequest: DEVICE_PROTOCOL_V7,
   httpResponse: DEVICE_PROTOCOL_V7,
   mocksApplied: DEVICE_PROTOCOL_V7,
+  viewPropertyResult: DEVICE_PROTOCOL_V8,
 };
 
 /**
@@ -773,7 +874,8 @@ export type DeviceParseResult =
     };
 
 const TYPE_PREFIX = '{"type":"';
-const MAX_PEEKED_TYPE_LENGTH = 16;
+/** Longer than any known type (`viewPropertyResult` is 18). */
+const MAX_PEEKED_TYPE_LENGTH = 32;
 
 /** The `type` of an SDK line without parsing it (the SDK writes it first); null when the line does not start so. */
 export function peekLineType(line: string): string | null {

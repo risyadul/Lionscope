@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * whether capture is on, the rate cap, exchange ids, and the active mock rules.
  *
  * Active only while the link is a welcomed profiling session at v7 whose welcome carried a valid link proof
- * ([LinkPort.isNetworkAuthenticated]; [isActive], one volatile read for the interceptor's fast path). Mock rules arrive from the server per session and are cleared whenever the session
+ * ([LinkPort.isServerVerified]; [isActive], one volatile read for the interceptor's fast path). Mock rules arrive from the server per session and are cleared whenever the session
  * starts or ends. Everything here is called from app threads (the interceptor) or the link threads, never blocks
  * and never throws into callers.
  */
@@ -123,7 +123,7 @@ internal class NetworkCapture(
         generation++
         assembler.reset()
         mocks = emptyList()
-        isActive = active && link.isNetworkAuthenticated && DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V7)
+        isActive = active && link.isServerVerified && DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V7)
     }
 
     private fun onMocksMessage(message: GatewayMessage) {

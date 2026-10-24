@@ -3,3 +3,18 @@
 {"type":"mock","rev":3,"index":0,"id":"m2","method":"GET","match":"exact","url":"https://api.example.com/v1/items/42","action":"respond","status":200,"headers":"Content-Type: application/json\nX-Note: \"quoted\" ✓","bodyBase64":"eyJpZCI6NDIsIm5hbWUiOiJNb2NrZWQg4pyTIn0=","delayMs":1500}
 {"type":"mock","rev":3,"index":1,"id":"m1","method":"*","match":"glob","url":"https://*.example.com/v1/*","action":"timeout","status":0,"headers":"","bodyBase64":"","delayMs":0}
 {"type":"mocks","rev":4,"count":0}
+{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true}
+{"type":"bye","reason":"no_session"}
+{"type":"inspect","requestId":10}
+{"type":"setViewProperty","requestId":11,"viewKey":42,"property":"paddingLeft","value":24}
+{"type":"setViewProperty","requestId":12,"viewKey":42,"property":"text","value":"Pay \"now\"\n\\ 🛒 {\"type\":\"bye\",\"requestId\":1}é\t"}
+{"type":"setViewProperty","requestId":13,"viewKey":42,"property":"visibility","value":"gone"}
+{"type":"setViewProperty","requestId":14,"viewKey":42,"property":"enabled","value":false}
+{"type":"setViewProperty","requestId":15,"viewKey":42,"property":"alpha","value":0.35}
+{"type":"setViewProperty","requestId":16,"viewKey":42,"property":"translationY","value":-8.5}
+{"type":"setViewProperty","requestId":17,"viewKey":42,"property":"layoutWidth","value":"wrap_content"}
+{"type":"setViewProperty","requestId":18,"viewKey":42,"property":"backgroundColor","value":"#FF3366CC"}
+{"type":"setViewProperty","requestId":19,"viewKey":42,"property":"textSize","value":18.5}
+{"type":"revertViewProperties","requestId":20,"viewKey":42,"property":"padding"}
+{"type":"revertViewProperties","requestId":21,"viewKey":42}
+{"type":"revertViewProperties","requestId":22}

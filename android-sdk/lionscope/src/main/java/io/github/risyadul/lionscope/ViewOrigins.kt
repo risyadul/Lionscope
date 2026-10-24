@@ -64,6 +64,18 @@ internal class WeakIdentityMap<K : Any, V : Any> {
 
     operator fun get(key: K): V? = entries[Key(key, null)]
 
+    fun remove(key: K): V? {
+        expunge()
+        return entries.remove(Key(key, null))
+    }
+
+    /** The entries whose keys are still alive, in no particular order (a copy). */
+    @Suppress("UNCHECKED_CAST")
+    fun entries(): List<Pair<K, V>> {
+        expunge()
+        return entries.mapNotNull { (key, value) -> (key.get() as K?)?.let { it to value } }
+    }
+
     private fun expunge() {
         while (true) {
             val collected = queue.poll() ?: return

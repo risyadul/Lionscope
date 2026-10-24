@@ -17,6 +17,7 @@ import { InspectorService } from '../src/inspector/inspectorService.ts';
 import { DEVICES, fakeAgent, PKG } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
 import { rgbPng } from './helpers/png.ts';
+import { NO_EDITS } from './helpers/sdkSession.ts';
 
 const RED: [number, number, number] = [220, 30, 30];
 const WHITE: [number, number, number] = [255, 255, 255];
@@ -111,6 +112,7 @@ function inspectorAgent(answer: SdkInspection = INSPECTION) {
     sendConfig: () => undefined,
     sendMocks: () => undefined,
     inspect: async () => answer,
+    ...NO_EDITS,
   };
   let now = Date.UTC(2026, 9, 20, 12, 0, 0);
   const inspector = new InspectorService({

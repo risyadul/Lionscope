@@ -100,19 +100,24 @@ internal object LionscopeRuntime {
             Log.w(LOG_TAG, "Lionscope layouts disabled: $t")
             null
         }
+        // Views are only edited through the keys of an Inspector capture: no Inspector, no editor.
+        val editor = ViewEditor(AndroidViewEdits)
         val inspector = try {
-            layouts?.let { Inspector(deviceLink, main, ViewScene(it, origins), screenName = { screens.currentScreenName }) }
+            layouts?.let {
+                Inspector(deviceLink, main, ViewScene(it, origins, editor = editor), screenName = { screens.currentScreenName })
+            }
         } catch (t: Throwable) {
             if (isFatal(t)) throw t
             Log.w(LOG_TAG, "Lionscope inspector disabled: $t")
             null
         }
-        // Every `inspect` gets an answer, so the server can fall back to uiautomator right away.
+        // Every `inspect` and edit gets an answer, so the server can fall back to uiautomator right away.
         if (inspector == null) {
             deviceLink.addInspectListener { requestId ->
                 deviceLink.sendV4(INSPECT_ERROR_SIZE_HINT) { DeviceMessages.inspectError(requestId, InspectError.DISABLED) }
             }
         }
+        ViewEditRequests(deviceLink, main, editor.takeIf { inspector != null })
         screens = ScreenTracker(
             deviceLink,
             main,

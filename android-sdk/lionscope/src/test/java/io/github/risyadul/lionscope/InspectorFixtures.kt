@@ -33,6 +33,19 @@ internal object InspectorFixtures {
         },
         composition = json["composition"]?.let { wire -> CompositionStatus.values().single { it.wire == wire } },
         destination = json["destination"] as String?,
+        view = (json["view"] as Map<*, *>?)?.let(::viewState),
+    )
+
+    fun viewState(json: Map<*, *>): ViewState = ViewState(
+        key = (json["key"] as Double).toInt(),
+        translationX = json["translationX"] as Double,
+        translationY = json["translationY"] as Double,
+        elevation = json["elevation"] as Double,
+        backgroundColor = (json["backgroundColor"] as String?)?.let { ViewValues.color(it) },
+        textSize = json["textSize"] as Double?,
+        textColor = (json["textColor"] as String?)?.let { ViewValues.color(it) },
+        password = json["password"] as Boolean,
+        edited = (json["edited"] as List<*>?)?.map { wire -> ViewProperty.values().single { it.wire == wire } } ?: emptyList(),
     )
 
     fun window(json: Map<*, *>): InspectorWindow =

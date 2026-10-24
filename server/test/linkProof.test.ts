@@ -12,6 +12,7 @@ import { log } from '../src/log.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
 import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 import { mockInput } from './helpers/networkFixtures.ts';
+import { NO_EDITS } from './helpers/sdkSession.ts';
 
 const PKG = 'com.example.shop';
 const SERIAL = 'emulator-5554';
@@ -48,6 +49,10 @@ class RecordingLink implements SdkLink {
   inspect(): Promise<never> {
     return Promise.reject(new Error('unsupported'));
   }
+  readonly mode = 'session';
+  readonly proven = false;
+  setViewProperty = NO_EDITS.setViewProperty;
+  revertViewProperties = NO_EDITS.revertViewProperties;
 }
 
 afterEach(() => {

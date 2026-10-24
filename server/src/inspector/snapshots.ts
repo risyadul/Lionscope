@@ -3,7 +3,8 @@
  * the SDK answer as a snapshot, and the checks the service makes on both.
  */
 import type { InspectorNode, InspectorSnapshot, InspectorWindow, PixelRect } from '@lionscope/protocol';
-import type { SdkInspection } from '../device/sdkLink.ts';
+import { DEVICE_PROTOCOL_V8 } from '@lionscope/protocol';
+import type { SdkInspection, SdkLink } from '../device/sdkLink.ts';
 import type { UiTree } from '../agent/uiTree.ts';
 import { MAX_INSPECTOR_WINDOWS } from '@lionscope/protocol';
 
@@ -101,7 +102,22 @@ export function uiautomatorSnapshot(
   };
 }
 
-export function sdkSnapshot(inspection: SdkInspection, packageName: string): SnapshotBody {
+/**
+ * Why the views a link captured can't be edited live (InspectorSnapshot.editBlocked): the SDK takes edits only from a
+ * link whose welcome carried the link proof. Undefined below v8 (no edits at all) and on a proven link.
+ */
+export function editBlock(
+  link: Pick<SdkLink, 'protocolVersion' | 'mode' | 'proven'>,
+): SnapshotBody['editBlocked'] {
+  if (link.protocolVersion < DEVICE_PROTOCOL_V8 || link.proven) return undefined;
+  return link.mode === 'inspect' ? 'needs_session' : 'unverified';
+}
+
+export function sdkSnapshot(
+  inspection: SdkInspection,
+  packageName: string,
+  editBlocked?: SnapshotBody['editBlocked'],
+): SnapshotBody {
   const { begin, nodes } = inspection;
   return {
     packageName,
@@ -113,6 +129,8 @@ export function sdkSnapshot(inspection: SdkInspection, packageName: string): Sna
     truncated: begin.truncated,
     captureMs: begin.captureMs,
     fallbackReason: null,
+    ...(begin.liveEdits === undefined ? {} : { liveEdits: begin.liveEdits }),
+    ...(editBlocked === undefined ? {} : { editBlocked }),
   };
 }
 
@@ -159,10 +177,20 @@ export function composeFallback(inspection: SdkInspection): ComposeFallback | nu
 export const CARRY_TOLERANCE_PX = 24;
 
 /**
- * The same element in another snapshot: the only node with its class, resource id and (when it has one) text;
- * else the only node of its class whose edges are each within CARRY_TOLERANCE_PX of its own; else null.
+ * The same element in another snapshot. `sameApp` (both SDK snapshots of one app on one device): the node with its
+ * view key (`view.key`, the same View object, even with new text, size or position). Else, or when no node has the
+ * key: the only node with its class, resource id and (when it has one) text; else the only node of its class whose
+ * edges are each within CARRY_TOLERANCE_PX of its own; else null.
  */
-export function matchingNode(node: InspectorNode, snapshot: InspectorSnapshot): InspectorNode | null {
+export function matchingNode(
+  node: InspectorNode,
+  snapshot: InspectorSnapshot,
+  sameApp = false,
+): InspectorNode | null {
+  const key = sameApp ? node.view?.key : undefined;
+  const byKey =
+    key === undefined ? undefined : snapshot.nodes.find((candidate) => candidate.view?.key === key);
+  if (byKey) return byKey;
   const byIdentity = snapshot.nodes.filter(
     (candidate) =>
       candidate.className === node.className &&
