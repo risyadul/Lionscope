@@ -139,7 +139,8 @@ when `RxJavaPlugins` is locked down, outside a profiling session (an inspect-onl
 app without RxJava 2 (RxJava stays a compile-only dependency of the SDK). Measured on an API 36 emulator: the
 schedule handler costs nothing measurable, the subscribe hooks 1–3 µs per `observeOn` subscription (stack depth
 14–58), against 13–14 µs when the stack is materialised at subscribe time like RxJava's assembly tracking does.
-RxJava 3 is not hooked yet (its stalls still get an origin from the stack).
+RxJava 3 is not hooked yet (its stalls still get an origin from the stack). The SDK's consumer ProGuard rules keep the
+names of the RxJava operators and fields the hooks read, for debug builds that are shrunk.
 
 **StrictMode (opt-in, off by default).** The Stalls tab has a toggle for it (Android 9 / API 28+). When on, the
 SDK extends the app's current main-thread and process StrictMode policies with disk read/write, network, custom
