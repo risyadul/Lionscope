@@ -23,16 +23,45 @@ internal interface RxTracking {
     companion object {
         private const val PLUGINS = "io.reactivex.plugins.RxJavaPlugins"
 
-        /** Null without RxJava 2 in the app. */
+        /** Null without RxJava 2 in the app; the hooks themselves are only created on the first enable. */
         fun createIfPresent(mainThread: Thread): RxTracking? = try {
             Class.forName(PLUGINS, false, RxTracking::class.java.classLoader)
-            RxJava2Hooks(mainThread)
+            LazyRxTracking { RxJava2Hooks(mainThread) }
         } catch (e: ClassNotFoundException) {
             null
         } catch (e: LinkageError) {
             null
         }
     }
+}
+
+/**
+ * Creates the hooks ([create], which loads RxJava's classes) on the first enable, so a process that never has a v9
+ * session loads none of it. A failing [create] leaves RxJava tracking off for the process.
+ */
+internal class LazyRxTracking(private val create: () -> RxTracking) : RxTracking {
+    @Volatile
+    private var hooks: RxTracking? = null
+    private var failed = false
+
+    override fun setEnabled(enabled: Boolean) {
+        val current = hooks ?: if (enabled && !failed) created() else null
+        current?.setEnabled(enabled)
+    }
+
+    private fun created(): RxTracking? = try {
+        create().also { hooks = it }
+    } catch (t: Throwable) {
+        if (isFatal(t)) throw t
+        failed = true
+        null
+    }
+
+    override val currentTask: Any?
+        get() = hooks?.currentTask
+
+    override fun describe(task: Any, frames: (Array<StackTraceElement>) -> List<StackFrame>): RxOrigin? =
+        hooks?.describe(task, frames)
 }
 
 /**

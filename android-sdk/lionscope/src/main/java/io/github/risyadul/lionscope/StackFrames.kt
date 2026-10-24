@@ -8,7 +8,8 @@ package io.github.risyadul.lionscope
  * frames.
  */
 internal object StackFrames {
-    class Mapped(val frames: List<StackFrame>, val truncated: Boolean)
+    /** [consumed]: how many of the stack's elements [frames] stand for (the rest were cut). */
+    class Mapped(val frames: List<StackFrame>, val truncated: Boolean, val consumed: Int = frames.size)
 
     private const val SDK_PACKAGE_PREFIX = "io.github.risyadul.lionscope."
     /** `StackTraceElement.lineNumber` of a native method; other negative values mean unknown. */
@@ -27,14 +28,14 @@ internal object StackFrames {
     fun map(stack: Array<StackTraceElement>, longer: Boolean = false, isInApp: (String) -> Boolean): Mapped {
         val frames = ArrayList<StackFrame>(minOf(stack.size, MAX_STACK_FRAMES))
         var inSdkRun = false
-        for (element in stack) {
+        for ((index, element) in stack.withIndex()) {
             val sdk = isSdkClass(element.className)
             if (sdk && inSdkRun) continue
             inSdkRun = sdk
-            if (frames.size == MAX_STACK_FRAMES) return Mapped(frames, truncated = true)
+            if (frames.size == MAX_STACK_FRAMES) return Mapped(frames, truncated = true, consumed = index)
             frames += if (sdk) SDK_FRAME else frame(element, isInApp)
         }
-        return Mapped(frames, truncated = longer)
+        return Mapped(frames, truncated = longer, consumed = stack.size)
     }
 
     fun isSdkClass(className: String): Boolean =

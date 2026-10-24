@@ -10,7 +10,7 @@ import java.util.IdentityHashMap
  * Turns the v2 features on and off (main thread only). The watchdog runs in a session link at v2 and an
  * activity is started; StrictMode reporting in a session link at v2 and the session's `config` asks for
  * it, deliberately also while the app is in the background with the link up (background violations are just as
- * real). The RxJava hooks ([rx]) run in a session link at v9 whose options keep `rxTracking` on, in the background
+ * real). The RxJava hooks ([rx]) run in a session link at v9 whose `config` keeps `rxTracking` on, in the background
  * too (a chain subscribed there may stall the main thread later). Options fall back to [SdkOptions.DEFAULT] on every
  * link change until the next `config`.
  */
@@ -24,6 +24,8 @@ internal class DiagnosticsController(
     private val started: MutableSet<Activity> = Collections.newSetFromMap(IdentityHashMap())
     private var linkV2 = false
     private var linkV9 = false
+    /** A `config` arrived on this link: the RxJava hooks wait for it (a session may have them off). */
+    private var configured = false
 
     var options = SdkOptions.DEFAULT
         private set
@@ -59,12 +61,14 @@ internal class DiagnosticsController(
     private fun onLinkChanged(version: Int) {
         linkV2 = version >= DEVICE_PROTOCOL_V2
         linkV9 = version >= DEVICE_PROTOCOL_V9
+        configured = false
         options = SdkOptions.DEFAULT
         update()
     }
 
     private fun onConfig(options: SdkOptions) {
-        if (!linkV2) return
+        if (!linkV2 || (configured && options == this.options)) return
+        configured = true
         this.options = options
         update()
     }
@@ -73,7 +77,7 @@ internal class DiagnosticsController(
         watchdog.thresholdMs = options.stallThresholdMs
         if (linkV2 && started.isNotEmpty()) watchdog.start() else watchdog.stop()
         strictMode?.setEnabled(linkV2 && options.strictMode)
-        rx?.setEnabled(linkV9 && options.rxTracking)
+        rx?.setEnabled(linkV9 && configured && options.rxTracking)
     }
 }
 
@@ -87,15 +91,21 @@ internal class DiagnosticsSink(
     private val rx: RxTracking? = null,
     private val topActivityClass: () -> String?,
 ) {
-    /** The v9 origin fields (outer frames, the Rx chain, the coroutine name) only go out on a v9 link. */
+    /**
+     * The v9 origin fields only go out on a v9 link: the outermost [MAX_OUTER_FRAMES] of the elements `frames` left
+     * out (so they join `frames` without a gap unless the stack was longer than both), the Rx chain, the coroutine.
+     */
     fun stall(stall: StallDetector.Stall) {
-        link.sendV2(sizeHint(stall.stack) + sizeHint(stall.outer)) {
+        val outerHint = if (stall.stack.size > MAX_STACK_FRAMES || stall.outer.isNotEmpty()) MAX_OUTER_FRAMES else 0
+        val rxHint = if (stall.rxTask != null) MAX_RX_SITE_FRAMES else 0
+        link.sendV2(sizeHint(stall.stack) + (outerHint + rxHint) * FRAME_SIZE_HINT) {
             val v9 = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V9)
-            val outer = if (v9 && stall.outer.isNotEmpty()) map(stall.outer, longer = false).frames else emptyList()
+            val mapped = map(stall.stack, stall.stackCut)
+            val outer = if (v9) outerFrames(stall, mapped.consumed) else emptyList()
             val task = stall.rxTask
             val rxOrigin = if (v9 && task != null) rx?.describe(task) { map(it, longer = false).frames } else null
             val coroutine = if (v9) CoroutineNames.parse(stall.threadName) else null
-            StackFrames.fitLine(map(stall.stack, stall.stackCut)) { frames, truncated ->
+            StackFrames.fitLine(mapped) { frames, truncated ->
                 DeviceMessages.stall(
                     ts = stall.ts,
                     durationMs = stall.durationMs,
@@ -128,6 +138,12 @@ internal class DiagnosticsSink(
                 )
             }
         }
+    }
+
+    private fun outerFrames(stall: StallDetector.Stall, consumed: Int): List<StackFrame> {
+        val left = stall.stack.copyOfRange(minOf(consumed, stall.stack.size), stall.stack.size) + stall.outer
+        if (left.isEmpty()) return emptyList()
+        return map(left.copyOfRange(maxOf(0, left.size - MAX_OUTER_FRAMES), left.size), longer = false).frames
     }
 
     private fun map(stack: Array<StackTraceElement>, longer: Boolean): StackFrames.Mapped {

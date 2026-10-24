@@ -24,8 +24,10 @@ import org.reactivestreams.Subscriber
  *   (the stack is only turned into frames for a stall), keyed weakly by the operator's downstream observer, at most
  *   [SITES_PER_SECOND] per second.
  * A hook is installed at most once until it is removed again: when the app replaced or wrapped one of ours, ours
- * stays where it is (a pass-through while off) and is never installed a second time, which could make it call itself.
- * Nothing is installed while `RxJavaPlugins` is locked down.
+ * stays where it is (a pass-through while off) and is not installed a second time. Should the app still end up
+ * calling ours from the hook ours calls (it kept ours and wrapped it after we removed it), a per-thread guard makes the
+ * inner call return its input untouched instead of recursing. Nothing is installed while `RxJavaPlugins` is locked
+ * down.
  */
 internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
     @Volatile
@@ -116,9 +118,30 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
 
         fun install(current: H?, set: (H?) -> Unit) {
             if (inChain) return
+            if (current === self) {
+                // The app put ours back itself: calling `current` from ours would loop.
+                inChain = true
+                return
+            }
             previous = current
             set(self)
             inChain = true
+        }
+
+        private val entered = object : ThreadLocal<BooleanArray>() {
+            override fun initialValue() = BooleanArray(1)
+        }
+
+        /** [block], unless this hook is already running on this thread: then [input] as it came. */
+        protected inline fun <T> once(input: T, block: () -> T): T {
+            val flag = entered.get() ?: return block()
+            if (flag[0]) return input
+            flag[0] = true
+            try {
+                return block()
+            } finally {
+                flag[0] = false
+            }
         }
 
         fun uninstall(current: H?, set: (H?) -> Unit) {
@@ -131,9 +154,9 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
     private inner class ScheduleHook : Slot<Function<in Runnable, out Runnable>>(), Function<Runnable, Runnable> {
         override val self: Function<in Runnable, out Runnable> get() = this
 
-        override fun apply(task: Runnable): Runnable {
+        override fun apply(task: Runnable): Runnable = once(task) {
             val scheduled = previous?.apply(task) ?: task
-            return if (enabled) TrackedTask(task, scheduled) else scheduled
+            if (enabled) TrackedTask(task, scheduled) else scheduled
         }
     }
 
@@ -157,10 +180,15 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
 
         override val self: BiFunction<in S, in O, out O> get() = this
 
-        override fun apply(source: S, observer: O): O {
+        override fun apply(source: S, observer: O): O = once(observer) {
             val downstream = previous?.apply(source, observer) ?: observer
-            if (enabled && source.javaClass === observeOn && siteLimit.tryAcquire()) sites.put(downstream, SubscribeSite())
-            return downstream
+            if (enabled && source.javaClass === observeOn) guarded { recordSite(downstream) }
+            downstream
+        }
+
+        /** Our part only: an SDK failure must not fail the app's subscription (the app's own hook may throw). */
+        private fun recordSite(downstream: O) {
+            if (siteLimit.tryAcquire()) sites.put(downstream, SubscribeSite())
         }
     }
 
@@ -175,7 +203,9 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
         RxOrigin(
             task = task.javaClass.name,
             consumer = if (last === task) null else consumerOf(last),
-            subscribedAt = site?.let { frames(siteElements(it.stackTrace)) } ?: emptyList(),
+            // A site without app frames (an observeOn subscribed from a scheduler's thread) says nothing.
+            subscribedAt = site?.let { frames(siteElements(it.stackTrace)) }?.takeIf { s -> s.any { it.inApp } }
+                ?: emptyList(),
         )
     } catch (t: Throwable) {
         if (isFatal(t)) throw t
@@ -189,7 +219,8 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
         const val SINGLE_OBSERVE_ON = INTERNAL + "single.SingleObserveOn"
         const val MAYBE_OBSERVE_ON = INTERNAL + "maybe.MaybeObserveOn"
         const val COMPLETABLE_OBSERVE_ON = INTERNAL + "completable.CompletableObserveOn"
-        const val MAX_SITES = 4096
+        /** Each site holds its VM backtrace (about 1 KB at depth 60): a few MB at most, for long-lived chains. */
+        const val MAX_SITES = 2048
         const val SITES_PER_SECOND = 100
         /** Downstream links followed from a task to its final consumer. */
         const val MAX_HOPS = 32

@@ -190,6 +190,9 @@ class DiagnosticsControllerTest {
         main.runPosted()
         link.welcome(true, DEVICE_PROTOCOL_V9)
         main.runPosted()
+        assertFalse(rx.enabled) // Waits for the session's config.
+        link.config(SdkOptions(150, strictMode = false))
+        main.runPosted()
         assertTrue(rx.enabled) // On by default, in the background too.
 
         link.config(SdkOptions(150, strictMode = false, rxTracking = false))

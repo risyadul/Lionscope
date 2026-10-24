@@ -169,6 +169,89 @@ class RxJava2HooksTest {
 
     @Test
     fun createIfPresentFindsRxJava() {
-        assertTrue(RxTracking.createIfPresent(Thread.currentThread()) is RxJava2Hooks)
+        assertTrue(RxTracking.createIfPresent(Thread.currentThread()) is LazyRxTracking)
+    }
+
+    @Test
+    fun anAppWrapperAroundOurSavedHookDoesNotRecurse() {
+        hooks.setEnabled(true)
+        val saved = RxJavaPlugins.getScheduleHandler()!! // The app keeps a reference to ours...
+        hooks.setEnabled(false) // ...we take ours out (still the installed one)...
+        assertNull(RxJavaPlugins.getScheduleHandler())
+        // ...and the app installs a wrapper that calls the one it kept.
+        var wrapped = 0
+        RxJavaPlugins.setScheduleHandler(Function<Runnable, Runnable> { wrapped++; saved.apply(it) })
+        hooks.setEnabled(true) // Ours now goes in front of that wrapper: ours → wrapper → ours.
+        var seen: Any? = null
+        Observable.just(1).observeOn(immediate).subscribe { seen = hooks.currentTask }
+        assertNotNull(seen)
+        assertEquals(1, wrapped)
+    }
+
+    @Test
+    fun aHookTheAppPutBackItselfIsNotChainedToItself() {
+        hooks.setEnabled(true)
+        val ours = RxJavaPlugins.getScheduleHandler()
+        hooks.setEnabled(false)
+        RxJavaPlugins.setScheduleHandler(ours) // The app restores the reference it kept.
+        hooks.setEnabled(true)
+        assertSame(ours, RxJavaPlugins.getScheduleHandler())
+        var seen: Any? = null
+        Observable.just(1).observeOn(immediate).subscribe { seen = hooks.currentTask }
+        assertNotNull(seen)
+    }
+
+    @Test
+    fun aLockedDownRxJavaGetsNoHooks() {
+        RxJavaPlugins.lockdown()
+        try {
+            hooks.setEnabled(true)
+            assertNull(RxJavaPlugins.getScheduleHandler())
+            var seen: Any? = "unset"
+            Observable.just(1).observeOn(immediate).subscribe { seen = hooks.currentTask }
+            assertNull(seen)
+        } finally {
+            // Package-private, for RxJava's own tests.
+            RxJavaPlugins::class.java.getDeclaredMethod("unlock").apply { isAccessible = true }.invoke(null)
+        }
+    }
+
+    @Test
+    fun aSiteWithoutAppFramesIsDropped() {
+        hooks.setEnabled(true)
+        var origin: RxOrigin? = null
+        val subscribed = java.util.concurrent.CountDownLatch(1)
+        val subject = io.reactivex.subjects.PublishSubject.create<Int>()
+        // observeOn below subscribeOn: it is subscribed on the scheduler's thread, far from the app's subscribe call.
+        subject.observeOn(immediate).doOnSubscribe { subscribed.countDown() }.subscribeOn(Schedulers.single())
+            .subscribe { origin = hooks.describe(hooks.currentTask!!, ::frames) }
+        assertTrue(subscribed.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        subject.onNext(1)
+        assertNotNull(origin)
+        assertEquals(emptyList<StackFrame>(), origin?.subscribedAt)
+    }
+
+    @Test
+    fun createIfPresentCreatesTheHooksOnTheFirstEnableOnly() {
+        var created = 0
+        val lazy = LazyRxTracking { created++; hooks }
+        lazy.setEnabled(false)
+        assertNull(lazy.currentTask)
+        assertEquals(0, created)
+        lazy.setEnabled(true)
+        lazy.setEnabled(false)
+        lazy.setEnabled(true)
+        assertEquals(1, created)
+        assertNotNull(RxJavaPlugins.getScheduleHandler())
+    }
+
+    @Test
+    fun aFailingCreationLeavesTrackingOff() {
+        var tries = 0
+        val lazy = LazyRxTracking { tries++; throw NoSuchMethodError("RxJavaPlugins.getOnMaybeSubscribe") }
+        lazy.setEnabled(true)
+        lazy.setEnabled(true)
+        assertEquals(1, tries)
+        assertNull(lazy.describe(Any()) { emptyList() })
     }
 }
