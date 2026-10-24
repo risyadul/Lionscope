@@ -4,8 +4,11 @@ import {
   compositionNote,
   defaultExpanded,
   fallbackLabel,
+  hitStack,
   hitTest,
   isComposable,
+  isSeeThrough,
+  pickFrom,
   nodeLabel,
   nodeMatches,
   percentBox,
@@ -79,6 +82,78 @@ describe('hitTest', () => {
     const i = buildIndex(clipped);
     expect(hitTest(clipped, i, 100, 100)).toBe(1);
     expect(hitTest(clipped, i, 100, 400)).toBe(0);
+  });
+});
+
+/**
+ * A Compose screen with an idle toast host drawn over everything: AndroidComposeView > [Scaffold > Card > Text,
+ * ToastHost > Box (full size, empty)].
+ */
+function composeOverlay(box: Partial<Parameters<typeof node>[3]> = {}) {
+  const at = { file: 'Home.kt', line: 10 };
+  return inspectorSnapshot({
+    nodes: [
+      node(0, null, [0, 0, 1080, 2400], { className: 'androidx.compose.ui.platform.AndroidComposeView' }),
+      node(1, 0, [0, 0, 1080, 2400], { className: 'Scaffold', composable: at }),
+      node(2, 1, [0, 500, 1080, 900], { className: 'Card', composable: at, clickable: true }),
+      node(3, 2, [100, 600, 500, 700], { className: 'Text', composable: at, text: 'Track' }),
+      node(4, 0, [0, 0, 1080, 2400], { className: 'ToastHost', composable: at }),
+      node(5, 4, [53, 21, 1027, 2340], { className: 'Box', composable: at, ...box }),
+    ],
+    windows: [{ id: 0, type: 1, bounds: [0, 0, 1080, 2400] }],
+  });
+}
+
+describe('picking through stacked views', () => {
+  it('lists every view under the point, one per branch, from the top down', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(hitStack(s, i, 300, 650)).toEqual([5, 3]);
+    expect(hitStack(s, i, 300, 1000)).toEqual([5, 1]);
+    expect(hitStack(s, i, 10, 10)).toEqual([4, 1]);
+  });
+
+  it('looks through an empty full-size composable that shows nothing (an idle toast host)', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(hitTest(s, i, 300, 650)).toBe(3);
+    expect(hitTest(s, i, 800, 800)).toBe(2);
+    expect(isSeeThrough(i, i.byId.get(5)!)).toBe(true);
+  });
+
+  it('keeps a composable that paints, says something or can be clicked', () => {
+    for (const box of [
+      { composable: { file: 'Home.kt', line: 10, draws: true } },
+      { text: 'Saved' },
+      { contentDescription: 'Close' },
+      { resourceId: 'toast' },
+      { clickable: true },
+    ]) {
+      const s = composeOverlay(box);
+      expect(hitTest(s, buildIndex(s), 300, 650)).toBe(5);
+    }
+  });
+
+  it("trusts the SDK's draws flag over the empty-leaf guess", () => {
+    // A container that paints nothing is see-through even with children elsewhere.
+    const s = composeOverlay({ composable: { file: 'Home.kt', line: 10, draws: false } });
+    const i = buildIndex(s);
+    expect(isSeeThrough(i, i.byId.get(4)!)).toBe(false);
+    const host = inspectorSnapshot({
+      ...s,
+      nodes: s.nodes.map((n) =>
+        n.id === 4 ? { ...n, composable: { file: 'Home.kt', line: 9, draws: false } } : n,
+      ),
+    });
+    expect(isSeeThrough(buildIndex(host), buildIndex(host).byId.get(4)!)).toBe(true);
+  });
+
+  it('never treats a View as see-through, and falls back to the top-most when everything is', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(isSeeThrough(i, i.byId.get(0)!)).toBe(false);
+    expect(pickFrom(i, [5])).toBe(5);
+    expect(pickFrom(i, [])).toBeNull();
   });
 });
 

@@ -346,7 +346,7 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       <p id={hintId} className="device-hint">
         {inspector?.isActive ? (
           <>
-            Frozen · hover to highlight · click to select · <kbd>Esc</kbd> exits
+            Frozen · hover to highlight · click to select, again for the view below · <kbd>Esc</kbd> exits
           </>
         ) : (
           <>

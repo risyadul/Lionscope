@@ -195,6 +195,42 @@ describe('overlay', () => {
     expect(document.querySelector('.inspect-box[data-kind="selected"]')).not.toBeNull();
   });
 
+  it('clicking the same spot again steps to the view below, looking through an empty overlay first', async () => {
+    const { push, sent } = setup();
+    fireEvent.click(inspectButton());
+    const at10 = { file: 'Home.kt', line: 10 };
+    await push(
+      snapshotMsg({
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400], { className: 'androidx.compose.ui.platform.AndroidComposeView' }),
+          node(1, 0, [0, 0, 1080, 2400], { className: 'Scaffold', composable: at10 }),
+          node(2, 1, [100, 600, 500, 700], { className: 'Text', composable: at10, text: 'Track' }),
+          node(3, 0, [0, 0, 1080, 2400], { className: 'ToastHost', composable: at10 }),
+          node(4, 3, [53, 21, 1027, 2340], { className: 'Box', composable: at10 }),
+        ],
+        windows: [{ id: 0, type: 1, bounds: [0, 0, 1080, 2400] }],
+      }),
+    );
+    const selected = (nodeId: number) =>
+      push({
+        type: 'inspectorSelection',
+        selection: { snapshotId: 'snap-1', nodeId, ts: 1, origin: 'user' },
+      });
+    // The first click looks through the toast host's empty Box to the text under it.
+    fireEvent.click(overlay(), at(300, 650));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 2 });
+    await selected(2);
+    expect(document.querySelector('.inspect-tag-layer')?.textContent).toBe('2/2');
+    // Again on the same spot: the next one down wraps around to the top-most, the Box itself.
+    fireEvent.click(overlay(), at(302, 652));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 4 });
+    await selected(4);
+    expect(document.querySelector('.inspect-tag-layer')?.textContent).toBe('1/2');
+    // Elsewhere: a fresh pick, not a step.
+    fireEvent.click(overlay(), at(300, 1500));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 1 });
+  });
+
   it('syncs tree hover with the overlay highlight', async () => {
     const { push } = setup();
     fireEvent.click(inspectButton());

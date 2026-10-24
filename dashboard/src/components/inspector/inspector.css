@@ -103,6 +103,15 @@
   font-size: var(--text-overline);
 }
 
+/* "2/3" of the views stacked under the last click: a quiet chip after the size. */
+.inspect-tag-layer {
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  color: #d5d9df;
+  font-size: var(--text-overline);
+}
+
 /* Refreshing: a thin light sweeps the frozen screen while the next snapshot is taken. */
 .inspect-scan {
   position: absolute;

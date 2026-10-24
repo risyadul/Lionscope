@@ -61,46 +61,76 @@ export function hasArea(rect: PixelRect | null): rect is PixelRect {
   return rect !== null && rect[2] > rect[0] && rect[3] > rect[1];
 }
 
-function hitIn(index: InspectorIndex, id: number, x: number, y: number): number | null {
+/** Pushes the deepest picks of one branch under the point, top-most first (pre-order is paint order). */
+function stackIn(index: InspectorIndex, id: number, x: number, y: number, out: number[]): boolean {
   const node = index.byId.get(id);
-  // A fully transparent view (and everything in it) can't be seen, so it can't be picked either.
   if (
     node === undefined ||
     node.visibility !== 'visible' ||
     node.alpha === 0 ||
-    !hasArea(node.visibleBounds)
+    !hasArea(node.visibleBounds) ||
+    !contains(node.visibleBounds, x, y)
   ) {
-    return null;
+    return false;
   }
-  // Visible bounds are clipped to the ancestors, so a miss rules out the whole subtree.
-  if (!contains(node.visibleBounds, x, y)) return null;
   const kids = index.children.get(id) ?? [];
-  // Children arrive in drawing order (the SDK sorts by elevation / Z), so pre-order is the z-order: later
-  // siblings paint over earlier ones and win.
+  let isCovered = false;
   for (let i = kids.length - 1; i >= 0; i--) {
     const kid = kids[i];
-    const hit = kid === undefined ? null : hitIn(index, kid, x, y);
-    if (hit !== null) return hit;
+    if (kid !== undefined && stackIn(index, kid, x, y, out)) isCovered = true;
   }
-  return id;
+  if (!isCovered) out.push(id);
+  return true;
 }
 
-/** The deepest visible node under a device-pixel point; the top-most window that has one wins. */
+/**
+ * Every view under a device-pixel point, one per branch (the deepest one there), from the top-most down: what a
+ * click picks first and what clicking again on the same spot steps through. Top-most window first.
+ */
+export function hitStack(snapshot: InspectorSnapshot, index: InspectorIndex, x: number, y: number): number[] {
+  const stack: number[] = [];
+  for (let w = snapshot.windows.length - 1; w >= 0; w--) {
+    const window = snapshot.windows[w];
+    if (window === undefined) continue;
+    const roots = index.roots.get(window.id) ?? [];
+    for (let r = roots.length - 1; r >= 0; r--) {
+      const root = roots[r];
+      if (root !== undefined) stackIn(index, root, x, y, stack);
+    }
+  }
+  return stack;
+}
+
+/**
+ * A composable that shows nothing of its own where it sits: no text, description, test tag or click, and (per the
+ * SDK) no painting; for SDKs that don't say, an empty one with no children. Full-size overlays like an idle toast or
+ * snackbar host are this: picking on the screen looks through them (they stay in the tree, and clicking again on
+ * the same spot still reaches them).
+ */
+export function isSeeThrough(index: InspectorIndex, node: InspectorNode): boolean {
+  if (node.composable === undefined || node.clickable) return false;
+  if (node.text !== null || node.contentDescription !== null || node.resourceId !== null) return false;
+  if (node.composable.draws !== undefined) return !node.composable.draws;
+  return (index.children.get(node.id)?.length ?? 0) === 0;
+}
+
+/** What a click on the frozen screen picks: the top-most view under the point that isn't see-through. */
+export function pickFrom(index: InspectorIndex, stack: readonly number[]): number | null {
+  for (const id of stack) {
+    const node = index.byId.get(id);
+    if (node !== undefined && !isSeeThrough(index, node)) return id;
+  }
+  return stack[0] ?? null;
+}
+
+/** The view a click picks under a device-pixel point (see `hitStack` and `pickFrom`). */
 export function hitTest(
   snapshot: InspectorSnapshot,
   index: InspectorIndex,
   x: number,
   y: number,
 ): number | null {
-  for (let w = snapshot.windows.length - 1; w >= 0; w--) {
-    const window = snapshot.windows[w];
-    if (window === undefined) continue;
-    for (const root of index.roots.get(window.id) ?? []) {
-      const hit = hitIn(index, root, x, y);
-      if (hit !== null) return hit;
-    }
-  }
-  return null;
+  return pickFrom(index, hitStack(snapshot, index, x, y));
 }
 
 // ---------------------------------------------------------------------------

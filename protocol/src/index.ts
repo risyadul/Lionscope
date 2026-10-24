@@ -385,7 +385,11 @@ const inspectorNodeSchema = z
     fragment: layoutText.nullable(),
     activity: layoutText.nullable(),
     composable: z
-      .object({ file: layoutText.nullable(), line: z.number().int().min(1).max(MAX_JAVA_INT).nullable() })
+      .object({
+        file: layoutText.nullable(),
+        line: z.number().int().min(1).max(MAX_JAVA_INT).nullable(),
+        draws: z.boolean().optional(),
+      })
       .strip()
       .optional(),
     composition: z.enum(['read', 'disabled', 'no_source', 'failed']).optional(),

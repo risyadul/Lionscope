@@ -626,9 +626,12 @@ export interface InspectorNode {
   /**
    * 0.6.0 (SDK, device protocol v6). Set on composables only: the Kotlin file the composable is CALLED from
    * (`HomeScreen.kt`, no path) and the 1-based line of that call, null when the compiler recorded none. A composable
-   * has its name as `className`, no alpha, padding, margin or layout params, and `source` null.
+   * has its name as `className`, no alpha, padding, margin or layout params, and `source` null. `draws` (when the SDK
+   * knows) says whether the composable's own layout node paints anything (a background, border, image, text, a
+   * drawBehind…): a full-size `Box` that draws nothing, like an idle toast or snackbar host, is let through when
+   * picking on the screen.
    */
-  composable?: { file: string | null; line: number | null };
+  composable?: { file: string | null; line: number | null; draws?: boolean };
   /**
    * 0.6.0 (SDK, v6). Set on AndroidComposeView nodes: `read` when its composables follow as its children, else why
    * not (`disabled`: composed before Lionscope enabled Compose inspection, or the app opted out; `no_source`: built

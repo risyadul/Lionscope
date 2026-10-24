@@ -4,10 +4,12 @@ import type { InspectorController } from '../../hooks/useInspector.ts';
 import {
   growRect,
   hasArea,
+  hitStack,
   hitTest,
   isZeroRect,
   nodeLabel,
   percentBox,
+  pickFrom,
   rectSize,
   ringClip,
   shrinkRect,
@@ -16,6 +18,17 @@ import { useHoverId } from './InspectorContext.tsx';
 import './inspector.css';
 
 type Display = InspectorSnapshot['display'];
+
+/** Clicks this close (device px) to the last one are "the same spot": they step to the view below. */
+const SAME_SPOT_PX = 12;
+
+/** The last click on the frozen screen: where, on which snapshot, and every view that was under it. */
+interface LastPick {
+  snapshotId: string;
+  x: number;
+  y: number;
+  stack: readonly number[];
+}
 
 /** The label hugs the box's top-left; near the top it drops inside, near the right edge it aligns right. */
 function labelPlacement(node: InspectorNode, display: Display) {
@@ -79,6 +92,7 @@ export function InspectorOverlay({ controller, snapshot, label }: Props) {
   const { display } = snapshot;
   const ref = useRef<HTMLDivElement>(null);
   const [failedImage, setFailedImage] = useState<string | null>(null);
+  const [lastPick, setLastPick] = useState<LastPick | null>(null);
 
   // Focus lands on the frozen screen, so Esc exits without a click first.
   useEffect(() => {
@@ -87,12 +101,34 @@ export function InspectorOverlay({ controller, snapshot, label }: Props) {
 
   if (index === null) return null;
 
-  const hitAt = (event: MouseEvent<HTMLDivElement>): number | null => {
+  const pointAt = (event: MouseEvent<HTMLDivElement>): { x: number; y: number } | null => {
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
-    const x = ((event.clientX - rect.left) / rect.width) * display.width;
-    const y = ((event.clientY - rect.top) / rect.height) * display.height;
-    return hitTest(snapshot, index, x, y);
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * display.width,
+      y: ((event.clientY - rect.top) / rect.height) * display.height,
+    };
+  };
+
+  const hitAt = (event: MouseEvent<HTMLDivElement>): number | null => {
+    const point = pointAt(event);
+    return point === null ? null : hitTest(snapshot, index, point.x, point.y);
+  };
+
+  // A click picks the top-most view under it that shows something; clicking the same spot again steps down
+  // through the views stacked there (overlays, the cards beneath, their containers), wrapping around.
+  const pickAt = (event: MouseEvent<HTMLDivElement>): number | null => {
+    const point = pointAt(event);
+    if (point === null) return null;
+    const stack = hitStack(snapshot, index, point.x, point.y);
+    const isSameSpot =
+      lastPick !== null &&
+      lastPick.snapshotId === snapshot.id &&
+      Math.abs(lastPick.x - point.x) <= SAME_SPOT_PX &&
+      Math.abs(lastPick.y - point.y) <= SAME_SPOT_PX;
+    const at = isSameSpot && selectedId !== null ? stack.indexOf(selectedId) : -1;
+    setLastPick({ snapshotId: snapshot.id, x: point.x, y: point.y, stack });
+    return at === -1 ? pickFrom(index, stack) : (stack[(at + 1) % stack.length] ?? null);
   };
 
   const hovered = hoverId === null ? undefined : index.byId.get(hoverId);
@@ -100,6 +136,15 @@ export function InspectorOverlay({ controller, snapshot, label }: Props) {
   const labelled = hovered ?? selected;
   const placement = labelled === undefined ? null : labelPlacement(labelled, display);
   const labelRect = labelled === undefined ? null : (labelled.visibleBounds ?? labelled.bounds);
+  // "2/3": the selection's place among the views stacked under the last click, while there is more than one.
+  const layer =
+    labelled !== undefined &&
+    labelled === selected &&
+    lastPick !== null &&
+    lastPick.snapshotId === snapshot.id &&
+    lastPick.stack.length > 1
+      ? lastPick.stack.indexOf(labelled.id)
+      : -1;
 
   return (
     <div
@@ -119,7 +164,7 @@ export function InspectorOverlay({ controller, snapshot, label }: Props) {
       onPointerMove={(event) => controller.hover(isStale ? null : hitAt(event))}
       onPointerLeave={() => controller.hover(null)}
       onClick={(event) => {
-        if (!isStale) controller.select(hitAt(event));
+        if (!isStale) controller.select(pickAt(event));
       }}
     >
       <img
@@ -165,6 +210,11 @@ export function InspectorOverlay({ controller, snapshot, label }: Props) {
           <span className="inspect-tag-size mono">
             {rectSize(labelled.bounds).width} × {rectSize(labelled.bounds).height}
           </span>
+          {layer !== -1 && lastPick !== null && (
+            <span className="inspect-tag-layer mono" title="Click the same spot again for the view below">
+              {layer + 1}/{lastPick.stack.length}
+            </span>
+          )}
         </div>
       )}
       {controller.isCapturing && <div className="inspect-scan" aria-hidden="true" />}
