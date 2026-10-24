@@ -7,6 +7,9 @@
     <string name="toggle_alias">Toggle alias</string>
     <string name="block_main">Block main thread 400 ms</string>
     <string name="read_file">Read file on main thread</string>
+    <string name="rx_stall">RxJava chain: block main 300 ms</string>
+    <string name="coroutine_stall">Coroutine: block main 300 ms</string>
+    <string name="async_done">Done: %1$d</string>
     <string name="read_file_done">Read %1$d bytes on the main thread</string>
     <string name="page_format">Page %1$d of a legacy ViewPager (BEHAVIOR_SET_USER_VISIBLE_HINT). Swipe: no lifecycle event fires, Lionscope re-resolves from frames.</string>
     <string name="home_body">HomeFragment implements ScreenName, so Lionscope reports it as \"home_tab\". The button flips its alias to \"home_tab_alt\" without any lifecycle event.</string>

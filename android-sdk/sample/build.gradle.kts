@@ -68,6 +68,10 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:$navigationCompose")
     // The network demo (NetworkActivity) only: the SDK itself does not bring OkHttp.
     implementation(libs.okhttp)
+    // The Rx and coroutine stall demos (Home) only: the SDK itself brings neither.
+    implementation(libs.rxjava2)
+    implementation(libs.rxandroid2)
+    implementation(libs.coroutines.android)
 
     debugImplementation(project(":lionscope"))
     releaseImplementation(project(":lionscope-noop"))
