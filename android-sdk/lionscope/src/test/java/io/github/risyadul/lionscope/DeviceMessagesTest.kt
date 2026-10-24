@@ -100,6 +100,18 @@ class DeviceMessagesTest {
     }
 
     @Test
+    fun aComposableSaysWhetherItDrawsOnlyWhenKnown() {
+        val box = InspectorFixtures.plainNode(1, 0, className = "Box")
+        fun composable(draws: Boolean?): Any? {
+            val node = box.copy(composable = ComposableSource("ShopApp.kt", 41, draws))
+            return (TestJson.parse(DeviceMessages.inspectNode(node)) as Map<*, *>)["composable"]
+        }
+        assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to false), composable(false))
+        assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to true), composable(true))
+        assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0), composable(null))
+    }
+
+    @Test
     fun nullableStackFieldsAreWrittenAsNull() {
         val line = DeviceMessages.stall(1, 200.0, listOf(StackFrame("a.B", "c", null, null, false)), 1, false, null, false)
         val frame = ((TestJson.parse(line) as Map<*, *>)["frames"] as List<*>).single() as Map<*, *>
@@ -358,7 +370,7 @@ class DeviceMessagesTest {
     @Test
     fun goldenInspectorNodesAreChunkedIntoTheGoldenLine() {
         val goldens = goldenLines.filter { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
-        assertEquals(2, goldens.size) // A v4 (views) and a v6 (Compose) one.
+        assertEquals(3, goldens.size) // A v4 (views) and two v6 (Compose) ones, the second with draws.
         for (golden in goldens) {
             val message = TestJson.parse(golden) as Map<*, *>
             val nodes = (message["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
@@ -394,7 +406,8 @@ class DeviceMessagesTest {
         (node["alpha"] as Double?)?.let { assertTrue(it in 0.0..1.0) }
         text("destination", 200)
         (node["composable"] as Map<*, *>?)?.let { composable ->
-            assertEquals(listOf("file", "line"), composable.keys.toList())
+            assertEquals(listOf("file", "line"), composable.keys.toList().take(2))
+            assertTrue(composable.keys.size == 2 || (composable.keys.size == 3 && composable["draws"] is Boolean))
             (composable["file"] as String?)?.let { assertTrue(it.isNotEmpty() && it.length <= 200) }
             (composable["line"] as Double?)?.let { assertTrue(it >= 1) }
         }

@@ -84,7 +84,7 @@ class SceneTreeAccessTest {
     @Test
     fun aReadCompositionShowsComposablesAndClaimedAndroidViewsUnderThem() {
         val androidView = composable("AndroidView", holder)
-        val button = composable("Button")
+        val button = composable("Button").apply { draws = true }
         val screen = composable("CatalogScreen", button, androidView)
         val semantics = ComposeSemantics("Buy", "Buy now", "buy", true, true, false, false, null, secret = false)
         val reading = FakeReading { ComposeRead(CompositionStatus.READ, listOf(screen), mapOf(button to semantics), setOf(holder), truncated = true) }
@@ -106,7 +106,8 @@ class SceneTreeAccessTest {
         assertTrue(attributes.clickable)
         assertNull(attributes.alpha)
         assertNull(attributes.padding)
-        assertEquals(ComposableSource("Shop.kt", 12), attributes.composable)
+        assertEquals(ComposableSource("Shop.kt", 12, draws = true), attributes.composable)
+        assertEquals(ComposableSource("Shop.kt", 12), access.read(screen).composable) // Unknown: left out.
         assertEquals("catalog", attributes.destination)
         assertEquals("Button", access.className(button))
         assertNull(access.fragmentRootOf(button))

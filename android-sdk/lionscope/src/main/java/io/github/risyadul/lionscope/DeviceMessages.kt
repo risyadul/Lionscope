@@ -367,6 +367,7 @@ internal object DeviceMessages {
                 .name("line")
             val line = source.line?.takeIf { it >= 1 }
             if (line == null) json.nullValue() else json.value(line)
+            source.draws?.let { json.name("draws").value(it) }
             json.endObject()
         }
         node.composition?.let { json.name("composition").value(it.wire) }

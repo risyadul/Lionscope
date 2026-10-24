@@ -62,6 +62,7 @@ dependencies {
     testImplementation(libs.kotlin.stdlib)
     testImplementation(libs.androidx.fragment)
     testImplementation(libs.compose.ui.sdk)
+    testImplementation(libs.compose.foundation.sdk)
 }
 
 afterEvaluate {

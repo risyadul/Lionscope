@@ -34,6 +34,8 @@ androidx-asynclayoutinflater = { module = "androidx.asynclayoutinflater:asynclay
 material = { module = "com.google.android.material:material", version.ref = "material" }
 junit = { module = "junit:junit", version.ref = "junit" }
 compose-ui-sdk = { module = "androidx.compose.ui:ui", version.ref = "composeUiSdk" }
+# SDK tests only: real modifier nodes (background, border, text) for the draws classification.
+compose-foundation-sdk = { module = "androidx.compose.foundation:foundation", version.ref = "composeUiSdk" }
 navigation-runtime-sdk = { module = "androidx.navigation:navigation-runtime", version.ref = "navigationSdk" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }

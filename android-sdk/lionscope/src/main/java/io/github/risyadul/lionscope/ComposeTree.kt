@@ -57,13 +57,16 @@ internal interface SlotTableAccess<G : Any, L : Any> {
  * A composable shown by the Inspector: its [name], call site, [destination] (the navigation route it is drawn for, if
  * any), [layouts] (the layout nodes it emits itself, not through a shown child), [children] (composables in call order,
  * then those of sub-compositions such as lazy list items by position, then any Views added by the caller) and
- * [bounds] (the union of its placed layout nodes and children).
+ * [bounds] (the union of its placed layout nodes and children) and [draws] (whether its layout nodes paint anything,
+ * null when unknown; set by the reader).
  */
 internal class ComposeNode(val name: String, val source: ComposableSource, val destination: String?) {
     val layouts = ArrayList<Any>()
     val children = ArrayList<Any>()
     internal val stitched = ArrayList<ComposeNode>()
     var bounds: PixelRect? = null
+        internal set
+    var draws: Boolean? = null
         internal set
 }
 

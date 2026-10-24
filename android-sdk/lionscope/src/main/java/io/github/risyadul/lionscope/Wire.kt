@@ -107,8 +107,11 @@ internal data class InspectorWindow(val id: Int, val type: Int?, val bounds: Pix
 /** The XML layout entry name and the line where the view's start tag ends. */
 internal data class ViewSource(val layout: String, val line: Int)
 
-/** Where a composable was called: the Kotlin file name and 1-based line, each null when the compiler recorded none. */
-internal data class ComposableSource(val file: String?, val line: Int?)
+/**
+ * Where a composable was called: the Kotlin file name and 1-based line, each null when the compiler recorded none;
+ * [draws]: whether its own layout nodes paint anything (not its children), null when unknown.
+ */
+internal data class ComposableSource(val file: String?, val line: Int?, val draws: Boolean? = null)
 
 /**
  * Whether an AndroidComposeView's composition was read (v6): [READ] its composables are its children; [DISABLED] it

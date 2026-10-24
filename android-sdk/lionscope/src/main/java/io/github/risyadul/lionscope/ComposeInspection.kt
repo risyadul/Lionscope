@@ -32,13 +32,14 @@ internal object ComposeInspectionSwitch {
 /**
  * [ComposeReading] over Compose's tooling API: the compositions Compose records in the view's
  * `inspection_slot_table_set` tag (root and sub-compositions, kept for tools while inspection is enabled), layout
- * nodes through `LayoutInfo`, semantics through the view's unmerged semantics tree, and AndroidView holders through
- * their `getLayoutNode()`. Only public API, except that one reflective call (on failure, AndroidViews stay under
- * AndroidViewsHandler).
+ * nodes through `LayoutInfo`, semantics through the view's unmerged semantics tree, AndroidView holders through
+ * their `getLayoutNode()` and whether a composable paints through its modifier nodes ([ComposeDrawing]). Only public
+ * API, except those reflective reads (on failure, AndroidViews stay under AndroidViewsHandler and `draws` is omitted).
  */
 internal class ComposeViewReader : ComposeReading {
     private var budget = ComposeBudget()
     private var filter = ComposableFilter()
+    private val drawing = ComposeDrawing()
 
     override fun beginCapture() {
         budget = ComposeBudget()
@@ -71,6 +72,7 @@ internal class ComposeViewReader : ComposeReading {
         val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
         forEachNode(tree.roots) { node ->
             semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
+            node.draws = drawing.of(node.layouts)
         }
         val claimed = claimInteropViews(view, tree, semantics)
         return ComposeRead(CompositionStatus.READ, tree.roots, semantics, claimed, tree.truncated)

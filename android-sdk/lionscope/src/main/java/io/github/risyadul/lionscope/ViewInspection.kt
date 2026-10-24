@@ -244,7 +244,7 @@ internal class SceneTreeAccess(
             layoutWidth = null,
             layoutHeight = null,
             source = null,
-            composable = composable.source,
+            composable = composable.source.copy(draws = composable.draws),
             destination = composable.destination,
         )
     }

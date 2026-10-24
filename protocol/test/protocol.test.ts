@@ -1028,8 +1028,15 @@ describe('parseDeviceMessage', () => {
         error(chunk({ ...composable, composable: { file: null, line: null }, destination: null })),
       ).toBeNull();
       expect(error(chunk({ ...decor, composition: 'read' }))).toBeNull();
+      for (const draws of [true, false]) {
+        expect(
+          error(chunk({ ...composable, composable: { file: 'CartScreen.kt', line: 87, draws } })),
+        ).toBeNull();
+      }
       for (const bad of [
         { composable: { file: 'CartScreen.kt', line: 0 } },
+        { composable: { file: 'CartScreen.kt', line: 3, draws: 'no' } },
+        { composable: { file: 'CartScreen.kt', line: 3, draws: null } },
         { composable: { file: '', line: 3 } },
         { composable: { file: 'f'.repeat(201), line: 3 } },
         { composable: { line: 3 } },

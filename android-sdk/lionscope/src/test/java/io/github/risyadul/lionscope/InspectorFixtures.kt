@@ -29,7 +29,7 @@ internal object InspectorFixtures {
         fragment = json["fragment"] as String?,
         activity = json["activity"] as String?,
         composable = (json["composable"] as Map<*, *>?)?.let {
-            ComposableSource(it["file"] as String?, (it["line"] as Double?)?.toInt())
+            ComposableSource(it["file"] as String?, (it["line"] as Double?)?.toInt(), it["draws"] as Boolean?)
         },
         composition = json["composition"]?.let { wire -> CompositionStatus.values().single { it.wire == wire } },
         destination = json["destination"] as String?,
