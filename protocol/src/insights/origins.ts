@@ -63,10 +63,24 @@ export interface StallOrigin {
   coroutine: string | null;
 }
 
-/** Frames a stall's stack is classified on: `frames`, then the outermost ones the SDK kept apart. */
-function stackOf(stall: Pick<StallSample, 'frames' | 'outerFrames'>): readonly StackFrame[] {
+/**
+ * Frames a stall's stack is classified on: `frames`, then the outermost ones the SDK sent apart. Frames may be
+ * missing between the two, so nothing is read as the neighbour of a frame across `boundary` (the first outer one).
+ */
+interface Stack {
+  frames: readonly StackFrame[];
+  boundary: number;
+}
+
+function stackOf(stall: Pick<StallSample, 'frames' | 'outerFrames'>): Stack {
   const outer = stall.outerFrames;
-  return outer === undefined || outer.length === 0 ? stall.frames : [...stall.frames, ...outer];
+  if (outer === undefined || outer.length === 0) return { frames: stall.frames, boundary: Infinity };
+  return { frames: [...stall.frames, ...outer], boundary: stall.frames.length };
+}
+
+/** The frame just inside `i` (towards the innermost), unless it lies across the boundary. */
+function innerOf(stack: Stack, i: number): StackFrame | undefined {
+  return i === stack.boundary ? undefined : stack.frames[i - 1];
 }
 
 function is(frame: StackFrame | undefined, className: string, method?: string): boolean {
@@ -98,16 +112,25 @@ export function runnableLabel(className: string): string {
 }
 
 const RX_TYPE_PREFIX = /^(?:Observable|Flowable|Single|Maybe|Completable|Parallel)(?=[A-Z])/;
+const RX_OPERATORS = /^io\.reactivex\.(?:rxjava3\.)?internal\.operators\./;
+/** An operator name as RxJava spells them (the class name is app-supplied text: nothing else becomes a label). */
+const RX_OPERATOR_NAME = /^[a-z][A-Za-z0-9]{0,40}$/;
 
 /**
- * The operator of an RxJava 2 internal class: `…observable.ObservableObserveOn$ObserveOnObserver` → `observeOn`,
- * `…SingleTimer$TimerDisposable` → `timer`; null for a class outside `io.reactivex.internal.operators`.
+ * The operator of an RxJava 2 or 3 internal class: `…observable.ObservableObserveOn$ObserveOnObserver` → `observeOn`,
+ * `…SingleTimer$TimerDisposable` → `timer`; null for a class outside `io.reactivex[.rxjava3].internal.operators`.
  */
 export function rxOperator(className: string): string | null {
-  if (!className.startsWith('io.reactivex.internal.operators.')) return null;
+  if (!RX_OPERATORS.test(className)) return null;
   const outer = simpleClassName(className).split('$')[0] ?? '';
   const name = outer.replace(RX_TYPE_PREFIX, '');
-  return name === '' ? null : name.charAt(0).toLowerCase() + name.slice(1);
+  const operator = name.charAt(0).toLowerCase() + name.slice(1);
+  return RX_OPERATOR_NAME.test(operator) ? operator : null;
+}
+
+/** RxAndroid's main-thread scheduler (RxJava 2 or 3), whose task wraps the operator's. */
+function isRxScheduler(frame: StackFrame): boolean {
+  return /^io\.reactivex\.(?:rxjava3\.)?android\.schedulers\./.test(frame.className);
 }
 
 interface Dispatch {
@@ -119,20 +142,22 @@ interface Dispatch {
 }
 
 /** The Looper's dispatch: the outermost Handler / input / idle marker. */
-function findDispatch(stack: readonly StackFrame[]): Dispatch | null {
-  for (let i = stack.length - 1; i >= 0; i--) {
-    const frame = stack[i];
-    if (is(frame, 'android.os.Handler', 'handleCallback')) {
-      return { index: i, via: 'callback', target: stack[i - 1] };
-    }
-    if (is(frame, 'android.os.Handler', 'dispatchMessage') && !is(stack[i - 1], 'android.os.Handler')) {
-      return { index: i, via: 'message', target: stack[i - 1] };
+function findDispatch(stack: Stack): Dispatch | null {
+  for (let i = stack.frames.length - 1; i >= 0; i--) {
+    const frame = stack.frames[i];
+    const inner = innerOf(stack, i);
+    if (is(frame, 'android.os.Handler', 'handleCallback'))
+      return { index: i, via: 'callback', target: inner };
+    if (is(frame, 'android.os.Handler', 'dispatchMessage')) {
+      // Across the boundary the frame in between is unknown: a callback or a handleMessage.
+      if (i === stack.boundary) return { index: i, via: 'message', target: undefined };
+      if (!is(inner, 'android.os.Handler')) return { index: i, via: 'message', target: inner };
     }
     if (is(frame, 'android.view.InputEventReceiver', 'dispatchInputEvent')) {
-      return { index: i, via: 'input', target: stack[i - 1] };
+      return { index: i, via: 'input', target: inner };
     }
-    if (is(frame, 'android.os.MessageQueue', 'next') && stack[i - 1]?.method === 'queueIdle') {
-      return { index: i, via: 'idle', target: stack[i - 1] };
+    if (is(frame, 'android.os.MessageQueue', 'next') && inner?.method === 'queueIdle') {
+      return { index: i, via: 'idle', target: inner };
     }
   }
   return null;
@@ -167,9 +192,13 @@ type OriginBase = Pick<StallOrigin, 'kind' | 'label'> &
   Partial<Pick<StallOrigin, 'detail' | 'dispatched' | 'operator' | 'dispatcher'>>;
 
 /** Choreographer frame callbacks, by the callback the frame ran. */
-function frameOrigin(stack: readonly StackFrame[], from: number): OriginBase {
-  const record = outermost(stack, from, (f) => f.className === 'android.view.Choreographer$CallbackRecord');
-  const callback = record < 0 ? undefined : stack[record - 1];
+function frameOrigin(stack: Stack, from: number): OriginBase {
+  const record = outermost(
+    stack.frames,
+    from,
+    (f) => f.className === 'android.view.Choreographer$CallbackRecord',
+  );
+  const callback = record < 0 ? undefined : innerOf(stack, record);
   const name = callback?.className ?? '';
   if (name === 'android.view.ViewRootImpl$TraversalRunnable')
     return { kind: 'frame', label: 'Layout & draw' };
@@ -198,7 +227,7 @@ function coroutineDispatcher(className: string): string | null {
 }
 
 /** A posted Runnable / handled message, refined by what it is. */
-function dispatchOrigin(stack: readonly StackFrame[], dispatch: Dispatch, rxTask: string | null): OriginBase {
+function dispatchOrigin(stack: Stack, dispatch: Dispatch, rxTask: string | null): OriginBase {
   const target = dispatch.target;
   const name = target?.className ?? '';
   if (dispatch.via === 'input') return { kind: 'input', label: 'Input event' };
@@ -207,14 +236,15 @@ function dispatchOrigin(stack: readonly StackFrame[], dispatch: Dispatch, rxTask
   }
   if (dispatch.via === 'message') {
     if (name === 'android.app.ActivityThread$H') return { kind: 'lifecycle', label: 'Activity lifecycle' };
-    if (target === undefined) return { kind: 'handler', label: 'Handler message' };
+    if (target === undefined) return { kind: 'handler', label: 'Handler' };
     return { kind: 'handler', label: 'Handler message', dispatched: name, detail: runnableLabel(name) };
   }
   if (name === 'android.view.Choreographer$FrameDisplayEventReceiver')
     return frameOrigin(stack, dispatch.index);
   const input = INPUT_RUNNABLES[name];
   if (input !== undefined) return { kind: 'input', label: input, dispatched: name };
-  if (rxTask !== null || name.startsWith('io.reactivex.')) return rxFromStack(stack, dispatch.index, rxTask);
+  if (rxTask !== null || name.startsWith('io.reactivex.'))
+    return rxFromStack(stack.frames, dispatch.index, rxTask);
   const dispatcher = coroutineDispatcher(name);
   if (dispatcher !== null) return { kind: 'coroutine', label: dispatcher, dispatcher, dispatched: name };
   if (name === 'androidx.lifecycle.LiveData$1')
@@ -222,7 +252,7 @@ function dispatchOrigin(stack: readonly StackFrame[], dispatch: Dispatch, rxTask
   if (name.startsWith('android.app.LoadedApk$ReceiverDispatcher')) {
     return { kind: 'lifecycle', label: 'Broadcast receiver', dispatched: name };
   }
-  if (target === undefined) return { kind: 'handler', label: 'Handler.post' };
+  if (target === undefined) return { kind: 'handler', label: 'Handler' };
   return { kind: 'handler', label: 'Handler.post', dispatched: name, detail: runnableLabel(name) };
 }
 
@@ -239,9 +269,11 @@ function rxFromStack(stack: readonly StackFrame[], from: number, rxTask: string 
 
 /** Without the Looper frames (a cut stack from an SDK before 0.9.0): what the inner frames still tell. */
 function cutStackOrigin(stack: readonly StackFrame[], rxTask: string | null): OriginBase {
-  if (rxTask !== null || stack.some((f) => f.className.startsWith('io.reactivex.'))) {
-    return rxFromStack(stack, stack.length, rxTask);
-  }
+  // A scheduler's or operator's task, not any Rx frame: `subject.onNext` from a click is the click's work.
+  const isRxTask = (f: StackFrame) =>
+    isRxScheduler(f) ||
+    ((f.method === 'run' || /ObserveOn\$/.test(f.className)) && rxOperator(f.className) !== null);
+  if (rxTask !== null || stack.some(isRxTask)) return rxFromStack(stack, stack.length, rxTask);
   const task = outermost(stack, stack.length, (f) => is(f, 'kotlinx.coroutines.DispatchedTask', 'run'));
   if (task >= 0)
     return { kind: 'coroutine', label: 'Coroutine', dispatched: 'kotlinx.coroutines.DispatchedTask' };
@@ -261,9 +293,10 @@ export function stallOrigin(
   const stack = stackOf(stall);
   const rxTask = stall.rx?.task ?? null;
   const dispatch = findDispatch(stack);
-  const from = dispatch?.index ?? stack.length;
-  const base = dispatch === null ? cutStackOrigin(stack, rxTask) : dispatchOrigin(stack, dispatch, rxTask);
-  const entry = dispatch === null && base.kind === 'unknown' ? null : entryFrame(stack, from);
+  const from = dispatch?.index ?? stack.frames.length;
+  const base =
+    dispatch === null ? cutStackOrigin(stack.frames, rxTask) : dispatchOrigin(stack, dispatch, rxTask);
+  const entry = dispatch === null && base.kind === 'unknown' ? null : entryFrame(stack.frames, from);
   const origin: StallOrigin = {
     kind: base.kind,
     key: '',
@@ -278,26 +311,23 @@ export function stallOrigin(
     dispatcher: base.dispatcher ?? null,
     coroutine: stall.coroutine ?? null,
   };
-  return withWhere(origin, stack, from);
+  return withWhere(origin, stack.frames, from);
 }
 
 /** Fills `detail`, `frame` and `key`: the place this kind of work is best traced back to. */
 function withWhere(origin: StallOrigin, stack: readonly StackFrame[], from: number): StallOrigin {
   switch (origin.kind) {
     case 'rx': {
-      const site = origin.subscribedAt.length > 0 ? culpritFrame(origin.subscribedAt) : null;
-      if (site !== null) {
-        return {
-          ...origin,
-          detail: frameText(site),
-          frame: site,
-          key: `rx|${origin.label}|${frameKey(site)}`,
-        };
-      }
+      // A site is an app line, or nothing (an observeOn subscribed from a scheduler's thread).
+      const culprit = culpritFrame(origin.subscribedAt);
+      const site = culprit?.inApp === true ? culprit : null;
       const consumer = origin.consumer === null ? null : runnableLabel(origin.consumer);
-      const frame = origin.entry;
-      const detail = consumer ?? (frame === null ? null : frameText(frame));
-      return { ...origin, detail, frame, key: `rx|${origin.label}|${origin.consumer ?? frameKey(frame)}` };
+      const frame = site ?? origin.entry;
+      const detail =
+        site !== null ? frameText(site) : (consumer ?? (frame === null ? null : frameText(frame)));
+      // By consumer first: one chain keeps one key whether its site was captured or not (the capture rate).
+      const key = `rx|${origin.label}|${origin.consumer ?? frameKey(site ?? origin.entry)}`;
+      return { ...origin, detail, frame, key };
     }
     case 'coroutine': {
       const continuation = continuationFrame(stack, from);
@@ -335,7 +365,8 @@ function withWhere(origin: StallOrigin, stack: readonly StackFrame[], from: numb
 /** `observeOn · HomeViewModel.load (HomeViewModel.kt:40)`: the origin on one line. */
 export function originText(origin: StallOrigin): string {
   const head = `${ORIGIN_KIND_LABELS[origin.kind]} ${origin.label}`;
-  const name = origin.coroutine === null ? '' : ` "${origin.coroutine}"`;
+  // Quoted as JSON: an app-chosen name can't pose as the rest of the line.
+  const name = origin.coroutine === null ? '' : ` ${JSON.stringify(origin.coroutine)}`;
   return origin.detail === null ? `${head}${name}` : `${head}${name} · ${origin.detail}`;
 }
 

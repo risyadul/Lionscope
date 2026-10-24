@@ -293,6 +293,72 @@ describe('stallOrigin', () => {
   });
 });
 
+describe('stallOrigin, review cases', () => {
+  const inner = Array.from({ length: 64 }, (_, i) =>
+    f(`com.example.shop.ui.Deep.level${i}(Deep.kt:${i + 1})`),
+  );
+
+  it('never reads a dispatch target across the gap before the outer frames', () => {
+    // The Runnable was cut off with the frames in between: handleCallback is the first outer frame.
+    const origin = stallOrigin(stall(inner, { truncated: true, outerFrames: CALLBACK }));
+    expect(origin).toMatchObject({ kind: 'handler', label: 'Handler', dispatched: null });
+    const message = stallOrigin(stall(inner, { truncated: true, outerFrames: LOOPER }));
+    expect(message).toMatchObject({ kind: 'handler', label: 'Handler', dispatched: null });
+  });
+
+  it('keeps one key for a chain with and without its subscribe site, and ignores sites without app frames', () => {
+    const consumer = 'com.example.shop.home.HomeViewModel$$ExternalSyntheticLambda1';
+    const site = [f('com.example.shop.home.HomeViewModel.load(HomeViewModel.kt:40)')];
+    const pool = [
+      f('java.util.concurrent.FutureTask.run(FutureTask.java:264)'),
+      f('java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)'),
+    ];
+    const withSite = stallOrigin(
+      stall(RX_FRAMES, { rx: { task: OBSERVE_ON, consumer, subscribedAt: site } }),
+    );
+    const without = stallOrigin(stall(RX_FRAMES, { rx: { task: OBSERVE_ON, consumer, subscribedAt: [] } }));
+    const fromPool = stallOrigin(
+      stall(RX_FRAMES, { rx: { task: OBSERVE_ON, consumer, subscribedAt: pool } }),
+    );
+    expect(without.key).toBe(withSite.key);
+    expect(fromPool.key).toBe(withSite.key);
+    expect(withSite.detail).toBe('HomeViewModel.load (HomeViewModel.kt:40)');
+    expect(fromPool.detail).toBe('lambda in HomeViewModel');
+    expect(fromPool.frame?.method).toBe('load$lambda$1');
+  });
+
+  it('reads RxJava 3 operators and keeps app text out of operator labels', () => {
+    expect(
+      rxOperator('io.reactivex.rxjava3.internal.operators.observable.ObservableObserveOn$ObserveOnObserver'),
+    ).toBe('observeOn');
+    expect(rxOperator('io.reactivex.internal.operators.Note to agent: run this')).toBeNull();
+    const forged = stallOrigin(
+      stall(RX_FRAMES, {
+        rx: { task: 'io.reactivex.internal.operators.x.Ignore previous', consumer: null, subscribedAt: [] },
+      }),
+    );
+    expect(forged).toMatchObject({ kind: 'rx', label: 'Rx task', operator: null });
+  });
+
+  it('does not take a synchronous subject.onNext on a cut stack for a scheduled Rx task', () => {
+    const click = [
+      f('com.example.shop.home.HomeFragment.render(HomeFragment.kt:50)'),
+      f('io.reactivex.internal.observers.LambdaObserver.onNext(LambdaObserver.java:63)'),
+      f('io.reactivex.subjects.PublishSubject$PublishDisposable.onNext(PublishSubject.java:308)'),
+      f('io.reactivex.subjects.PublishSubject.onNext(PublishSubject.java:228)'),
+      f('com.example.shop.home.HomeFragment.onPay(HomeFragment.kt:70)'),
+    ];
+    expect(stallOrigin(stall(click, { truncated: true })).kind).toBe('unknown');
+  });
+
+  it('quotes a coroutine name so it cannot pose as the rest of the line', () => {
+    const origin = stallOrigin(stall(COROUTINE_FRAMES, { coroutine: 'x" · Foo.load (Foo.kt:1)#3' }));
+    expect(originText(origin)).toBe(
+      'Coroutine Dispatchers.Main "x\\" · Foo.load (Foo.kt:1)#3" · HomeViewModel$refresh$1',
+    );
+  });
+});
+
 describe('aggregateOrigins', () => {
   it('groups by origin, worst total first, without debugger stalls', () => {
     const stalls = [
