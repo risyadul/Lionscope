@@ -4,9 +4,12 @@ Lionscope is a lightweight Android profiler and Layout Inspector in your browser
 too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an app.
 
 - **Profile**: CPU, memory, frame rendering, main-thread stalls, layout inflation and logcat for one app, on a
-  single shared time axis.
+  single shared time axis. With the SDK, each stall names the line that blocked and where its work came from (an
+  RxJava chain and the line that subscribed it, a coroutine, a posted Runnable, a click).
 - **Inspect**: freeze the screen, click a view, and see its attributes; with the SDK, also the XML layout and
-  line it came from and the Fragment that owns it.
+  line it came from and the Fragment that owns it, the composables of Compose screens with the Kotlin line that
+  calls them, and live edits of a View's properties (padding, size, colors with a picker, text…) on the running
+  app.
 - **Network**: with the SDK's OkHttp interceptor, see the app's HTTP requests (headers, bodies, timings) on the same
   time axis, and mock responses or failures from the dashboard.
 - **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
@@ -22,9 +25,10 @@ It works in two modes:
 - **ADB-only** (no app changes): everything is collected through `adb shell` (`/proc`, `dumpsys`, `logcat`).
 - **With the optional SDK** in the app's **debug** build: adds which screen is on top (Activity, Fragment,
   DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
-  stalls with the app code line that caused them (plus opt-in StrictMode violations), layout inflation timing,
-  the Layout Inspector's own view tree with layout sources and owners, and (with one line in your `OkHttpClient`)
-  the app's HTTP traffic and mock responses.
+  stalls with the app code line that caused them and where their work came from (plus opt-in StrictMode
+  violations), layout inflation timing, the Layout Inspector's own view tree with layout sources and owners, the
+  composables of Compose screens, live edits of Views, and (with one line in your `OkHttpClient`) the app's HTTP
+  traffic and mock responses.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
@@ -911,6 +915,9 @@ their stack.
   (the default), and composed after the SDK started. Composables are only those called from your code (and from
   libraries other than androidx Compose, Material and Navigation); a composable that lays nothing out (an effect, a
   `Dialog` call, a provider) has no node of its own, and a `Dialog`'s content appears in the dialog's window.
+- **Live edits are for Views only.** Composables are read-only (their values come from code on every
+  recomposition), and an edit lasts until it is reverted, the app sets the property itself or the view is
+  recreated.
 - **Layout times are a lower bound.** Parser setup is not measured, nested `<include>`s are counted in their
   parent and also on their own, and only inflation on the main thread through the Activity's inflater is seen:
   layouts inflated on a background thread, from an application-context inflater or by Compose are not.
