@@ -37,7 +37,7 @@ It works in two modes:
 
 <sub>The bundled sample app on a headless emulator, operated from the Device column: screen bands across all
 charts, SDK FrameMetrics in the Rendering lane, logcat below the timeline, and the Screens tab ranking the
-janky list first.</sub>
+screens by jank.</sub>
 
 ## What the dashboard shows
 
@@ -93,11 +93,13 @@ they stop. The dashboard shows whether the SDK is connected (and its version), o
 join in when the panel is wider). Names come from the app's own screen alias when it has one (`home_tab`,
 `legacy_page_1`), otherwise from the class.</sub>
 
-<img width="363" alt="Stalls tab: watchdog threshold and StrictMode controls, offenders ranked by culprit line (SlowWork.kt:16), and the stall events" src="docs/images/dashboard-stalls.png">
+<img width="363" alt="Stalls tab: watchdog threshold, StrictMode, inflation and RxJava tracking controls, offenders grouped by origin (an Input click, an RxJava observeOn chain, a coroutine), and the stall events with their lines (SlowWork.kt:16, AsyncWork.kt:42 and :37) and origins" src="docs/images/dashboard-stalls.png">
 
-<sub>The Stalls tab after tapping the sample's "Block main thread" button three times from the Device column: the
-offenders table names the line that blocked the main thread and the screen it happened on, and each stall is
-listed with its duration; with StrictMode on, disk and network violations join the list with their stacks.</sub>
+<sub>The Stalls tab after tapping the sample's Home buttons that block the main thread (directly, from an RxJava
+chain and from a coroutine) from the Device column, with the offenders grouped **By origin**: where the work came
+from, how often and for how long. **By line** ranks the lines that blocked instead. Each stall is listed with its
+duration, its line and its origin; with StrictMode on, disk and network violations join the list with their
+stacks.</sub>
 
 ### Finding the line that blocks the main thread
 
@@ -165,10 +167,10 @@ switch on **Show library layouts**. A layout the SDK cannot name is shown by its
 layout) gets its own row, marked **nested**, because that is its own cost; but its time is already part of the
 layout around it, so the row is not extra time.
 
-<img width="363" alt="Layouts tab: the sample's layouts sorted by total inflation time, fragment_home first, its included dashboard cards marked nested, and item_row inflated 28 times on the list screen" src="docs/images/dashboard-layouts.png">
+<img width="363" alt="Layouts tab: the sample's layouts sorted by total inflation time, fragment_home first, its included dashboard cards marked nested, and item_row inflated 29 times on the list screen" src="docs/images/dashboard-layouts.png">
 
 <sub>The Layouts tab after opening the sample's screens: `fragment_home` is the slowest single inflation, its
-included cards (`view_dashboard_card`, nested) make up most of it, and `item_row` adds up over 28 RecyclerView
+included cards (`view_dashboard_card`, nested) make up most of it, and `item_row` adds up over 29 RecyclerView
 rows.</sub>
 
 The Screens tab gets an **Inflate** column (inflation time on that screen, each inflation counted once and nested
@@ -223,7 +225,7 @@ collapses, follows the selection, takes the arrow keys (↑↓ move, → opens, 
 source file and destination; hovering a row lights up the view on the screen. `Esc` or the toggle goes back to the live screen. While Inspect is on the snapshot refreshes about 0.7 s
 after the app changes its top screen (never continuously), and the refresh button takes a new one.
 
-<img width="710" alt="Layout Inspector on the sample app: the frozen screen with the first card's Share button selected and labelled MaterialButton 231 × 126, and the Inspector tab with the view tree, its ancestor path, source view_dashboard_actions.xml:15 (end of start tag), owner HomeFragment in MainActivity, text, bounds and size" src="docs/images/dashboard-inspector.png">
+<img width="880" alt="The Inspector view on the sample's Detail screen: the frozen screen with the price tag selected and labelled MaterialTextView#price_tag, the view tree, and its attributes: the ancestor path, source activity_detail.xml:28 (end of start tag), owner DetailActivity, bounds and size, and the live editors for its text, visibility, alpha, width and height, translation, elevation, background and text color" src="docs/images/dashboard-inspector.png">
 
 - **Where the tree comes from.** With the SDK in the app (Lionscope 0.5.0 or later) the SDK walks the app's own
   views and the badge reads `SDK`. From SDK 0.9.0 on this needs no profiling session: while a dashboard shows the
@@ -287,6 +289,8 @@ A color field's swatch opens a picker: drag the square and the hue and alpha sli
 screen already uses or a recent one, or press **Pick** and click any pixel of the frozen screen with the mouse (Esc cancels the
 pick). The color is sent when you let go, not on every step.
 
+<img width="483" alt="The background color picker of the sample's price tag: a saturation and brightness square, hue and alpha sliders, the color as #FFFFF3E0, the Pick (eyedropper) button and the colors on this screen" src="docs/images/dashboard-color-picker.png">
+
 Editing needs a **profiling session** (press Start): the app takes edits only from a link whose welcome carried the
 link proof (see [Security model](#security-model)), and an inspect-only link never has one. Without a session the
 Inspector still shows every value, read-only, and says to press Start; a session whose link key could not be handed
@@ -321,6 +325,8 @@ marked; filter by text, method and status class (2xx … 5xx, failed). Select on
 response headers, bodies (JSON pretty-printed) and timing (waiting for the headers, then reading the body). The
 **Network** lane on the timeline shows each request as a bar from start to end, coloured by status; click one to
 open it in the tab.
+
+<img width="363" alt="Network tab: the sample's requests with method, path, host, status and time, a failed one in red, two answered by a mock rule and marked Mocked, and the selected one's overview: URL, status, and the rule that mocked it" src="docs/images/dashboard-network.png">
 
 ```kotlin
 // Retrofit (OkHttp 4.x or 5.x): add it last, after the app's own interceptors
