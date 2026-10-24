@@ -6,6 +6,12 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-25
+
+This release brings together the work planned as 0.5.2, 0.6.0, 0.7.0, 0.8.0 and 0.9.0, which were never published
+separately. Where an entry below names one of those SDK versions, use SDK 0.9.0 (server, npm package and SDK share
+one version). The device protocol versions they name (v5 to v9) are unchanged.
+
 ### Added
 
 - Network inspector (SDK 0.7.0). `Lionscope.okHttpInterceptor()` (in both artifacts; the no-op one passes requests
@@ -460,7 +466,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.5.1...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.9.0...HEAD
+[0.9.0]: https://github.com/risyadul/Lionscope/compare/0.5.1...0.9.0
 [0.5.1]: https://github.com/risyadul/Lionscope/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/risyadul/Lionscope/compare/0.4.1...0.5.0
 [0.4.1]: https://github.com/risyadul/Lionscope/compare/0.4.0...0.4.1

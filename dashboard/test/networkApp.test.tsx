@@ -354,7 +354,7 @@ describe('Network tab: empty states', () => {
     expect(screen.queryByRole('figure', { name: 'Network' })).toBeNull();
     openNetwork();
     expect(within(netPanel()).getByText('Network capture needs the SDK')).toBeTruthy();
-    expect(netPanel().textContent).toContain('It needs Lionscope SDK 0.7.0 (the app runs v0.4.0)');
+    expect(netPanel().textContent).toContain('It needs Lionscope SDK 0.9.0 (the app runs v0.4.0)');
     expect(netPanel().textContent).toContain('Lionscope.okHttpInterceptor()');
   });
 

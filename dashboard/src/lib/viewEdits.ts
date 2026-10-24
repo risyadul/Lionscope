@@ -178,7 +178,7 @@ const EDIT_ERRORS: Record<ViewEditError, string> = {
   not_editable: 'This property cannot be edited on this view.',
   password: 'The text of a password field is never edited.',
   invalid_value: 'The app does not take this value.',
-  old_sdk: 'The app’s Lionscope SDK is older than 0.8.0: update it to edit views live.',
+  old_sdk: 'The app’s Lionscope SDK is older than 0.9.0: update it to edit views live.',
   no_link: 'The app’s SDK is no longer connected: inspect again.',
   rate_limited: 'Too many edits at once: wait a moment and try again.',
   limit: `${MAX_LIVE_EDITS} live edits are in effect: revert some first.`,

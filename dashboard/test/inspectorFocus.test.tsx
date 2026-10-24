@@ -159,7 +159,7 @@ describe('inspectorFocus', () => {
 describe('fallback reasons of 0.5.2', () => {
   it.each([
     ['sdk_linking', 'SDK connecting', 'inspect again'],
-    ['sdk_needs_session', 'SDK needs a session', 'update to 0.5.2, or Start a session'],
+    ['sdk_needs_session', 'SDK needs a session', 'update to 0.9.0, or Start a session'],
     ['sdk_link_busy', 'SDK link busy', 'another Lionscope server holds the SDK link'],
   ])('%s has a label and a hint', (reason, label, hint) => {
     expect(fallbackLabel(reason)).toBe(label);

@@ -79,7 +79,7 @@ function EmptyPanel({ empty }: { empty: NetworkEmpty }) {
         <div className="net-empty">
           <p className="net-empty-title">Network capture needs the SDK</p>
           <p>
-            It needs Lionscope SDK 0.7.0
+            It needs Lionscope SDK 0.9.0
             {empty.sdkVersion ? ` (the app runs v${empty.sdkVersion})` : ''} and{' '}
             <code>Lionscope.okHttpInterceptor()</code> in the app’s OkHttpClient.
           </p>
@@ -108,7 +108,7 @@ function EmptyPanel({ empty }: { empty: NetworkEmpty }) {
       return (
         <div className="net-empty">
           <p className="net-empty-title">This server can’t record requests</p>
-          <p>Update Lionscope to 0.7.0: network capture needs a matching server and SDK.</p>
+          <p>Update Lionscope to 0.9.0: network capture needs a matching server and SDK.</p>
         </div>
       );
     case 'unverified':
@@ -118,7 +118,7 @@ function EmptyPanel({ empty }: { empty: NetworkEmpty }) {
           <p>
             Lionscope couldn’t hand the app its link key over adb, so the SDK doesn’t trust this link and
             keeps capture and mocks off. Restart the session; if it persists, check that the app has SDK
-            0.7.0’s <code>LinkKeyReceiver</code>.
+            0.9.0’s <code>LinkKeyReceiver</code>.
           </p>
         </div>
       );
