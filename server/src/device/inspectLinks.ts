@@ -601,7 +601,7 @@ export class InspectLinks {
     }
     if (this.errors.shouldReport(`old ${key}`)) {
       log.info(
-        `Refused an SDK link from ${packageName} on ${serial} outside a session: its SDK is older than 0.5.2`,
+        `Refused an SDK link from ${packageName} on ${serial} outside a session: its SDK is older than 0.9.0`,
       );
     }
     // An inspect waiting for a link need not wait any longer: this app won't link.

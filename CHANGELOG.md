@@ -6,8 +6,22 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-25
+
+This release brings together the work planned as 0.5.2, 0.6.0, 0.7.0, 0.8.0 and 0.9.0, which were never published
+separately. Where an entry below names one of those SDK versions, use SDK 0.9.0 (server, npm package and SDK share
+one version). The device protocol versions they name (v5 to v9) are unchanged.
+
 ### Added
 
+- An agent skill, `skills/lionscope/SKILL.md` (the Agent Skills format, so Claude Code, Codex, OpenCode, Hermes Agent
+  and other harnesses that read `SKILL.md` can use it). It has playbooks for a janky screen, a blocked main thread,
+  the element picked in the Inspector, the app's requests and mocked error states, and checking a fix, and it works
+  through the MCP tools or `npx lionscope query`. A test checks that every tool, argument and value it names
+  exists and is valid, and that its versions match the release.
+- Claude Code plugins from this repository's marketplace: `lionscope` (the MCP server's read tools and sessions,
+  plus the skill) and `lionscope-device-control` (also the device tools), pinned to the released npm version.
+- MCP Registry metadata: `mcpName` `io.github.risyadul/lionscope` in the npm package and `server.json`.
 - Network inspector (SDK 0.7.0). `Lionscope.okHttpInterceptor()` (in both artifacts; the no-op one passes requests
   on) records the app's OkHttp requests during a profiling session: method, URL, headers, status, timings (to the
   response headers and to the end of the body) and, for text types, up to 64 KB of each body (gzip the app asked
@@ -460,7 +474,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.5.1...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.9.0...HEAD
+[0.9.0]: https://github.com/risyadul/Lionscope/compare/0.5.1...0.9.0
 [0.5.1]: https://github.com/risyadul/Lionscope/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/risyadul/Lionscope/compare/0.4.1...0.5.0
 [0.4.1]: https://github.com/risyadul/Lionscope/compare/0.4.0...0.4.1

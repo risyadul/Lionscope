@@ -219,7 +219,7 @@ const FALLBACK_REASONS: Record<string, string> = {
 /** The longer explanation behind a label, for a tooltip; only reasons that call for an action have one. */
 const FALLBACK_HINTS: Record<string, string> = {
   sdk_linking: 'SDK connecting — inspect again',
-  sdk_needs_session: 'SDK too old for inspecting without a session: update to 0.5.2, or Start a session',
+  sdk_needs_session: 'SDK too old for inspecting without a session: update to 0.9.0, or Start a session',
   sdk_link_busy: 'another Lionscope server holds the SDK link',
 };
 

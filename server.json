@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.risyadul/lionscope",
+  "description": "Android profiler and Layout Inspector: CPU, memory, frames, stalls, layouts, network, logcat",
+  "repository": {
+    "url": "https://github.com/risyadul/Lionscope",
+    "source": "github"
+  },
+  "version": "0.9.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "lionscope",
+      "version": "0.9.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }]
+    }
+  ]
+}
