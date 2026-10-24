@@ -1,7 +1,10 @@
 import { isValidPackageName, isValidSerial } from '@lionscope/protocol';
 import type {
   CpuSample,
+  HttpExchangeDetail,
   MemorySample,
+  NetworkMockRule,
+  NetworkMocksState,
   SdkOptions,
   ServerMessage,
   SessionState,
@@ -15,6 +18,7 @@ import { ShellSession } from '../adb/shellSession.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
 import { SdkBridge } from '../device/sdkBridge.ts';
 import type { SdkHello, SdkLink, SdkLinkHandler } from '../device/sdkLink.ts';
+import { PublicError } from '../errors.ts';
 import { log } from '../log.ts';
 import { computeCpuUsage } from '../metrics/cpu.ts';
 import type { CpuReading } from '../metrics/cpu.ts';
@@ -29,6 +33,8 @@ import { CollectorScheduler } from './collectorScheduler.ts';
 import { DEFAULT_DEVICE_FACTS, probeDevice } from './deviceProbe.ts';
 import { LogBatcher, startLogcatStream } from './logcatStream.ts';
 import type { LogcatStream } from './logcatStream.ts';
+import { MockRules, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
+import type { MockOrigin } from './mockRules.ts';
 
 export interface CollectorIntervals {
   cpuMs: number;
@@ -98,6 +104,7 @@ export class ProfilingSession {
   private readonly errors: CollectorErrorReporter;
   private readonly store: SessionStore;
   private readonly sdk: SdkBridge;
+  private readonly mocks: MockRules;
 
   constructor(options: ProfilingSessionOptions) {
     if (!isValidSerial(options.serial)) throw new Error('invalid adb serial');
@@ -135,6 +142,7 @@ export class ProfilingSession {
       now: this.now,
       flush: (entries) => this.store.append('logs', ...entries),
     });
+    this.mocks = new MockRules({ now: this.now, emit: this.emit });
     this.sdk = new SdkBridge({
       store: this.store,
       now: this.now,
@@ -145,6 +153,10 @@ export class ProfilingSession {
       setGfxinfoPaused: (paused) => this.setCollectorEnabled('frames', !paused),
       onStatusChange: () => this.emit({ type: 'session', session: this.state }),
       notify: (key, message) => this.errors.notify(key, message),
+      // Mocks only reach an app that holds the link key: an unproven SDK keeps them off anyway.
+      onLiveLink: (link, network) =>
+        link && network === 'active' ? this.mocks.linkUp(link) : this.mocks.linkDown(),
+      onMocksApplied: (rev) => this.mocks.applied(rev),
     });
   }
 
@@ -178,9 +190,37 @@ export class ProfilingSession {
     this.sdk.setOptions(changes);
   }
 
+  /** Network messages dropped because their link had no link proof. */
+  get unprovenNetworkMessages(): number {
+    return this.sdk.unprovenNetworkMessages;
+  }
+
   /** The live, verified SDK link of this session (null while none is), for Inspector snapshots. */
   get sdkLink(): SdkLink | null {
     return this.sdk.liveLink;
+  }
+
+  /** Headers and bodies of one HTTP exchange of this session; null when it is not (or no longer) kept. */
+  httpExchange(id: number): HttpExchangeDetail | null {
+    return this.store.http.detail(id);
+  }
+
+  /** The session's mock rules (empty once it stopped). */
+  get networkMocks(): NetworkMocksState {
+    return this.mocks.state;
+  }
+
+  /** Create or replace a mock rule (see MockRules.set); refused once the session stopped. */
+  setNetworkMock(input: unknown, origin: MockOrigin): NetworkMockRule {
+    if (this.stopped) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+    return this.mocks.set(input, origin);
+  }
+
+  /** Remove one rule (`id`) or all of them; false when `id` names no rule. */
+  clearNetworkMocks(id?: string): boolean {
+    if (id !== undefined) return this.mocks.remove(id);
+    this.mocks.clear();
+    return true;
   }
 
   /** The top screen as the SDK last reported it, null when unknown or in the background. */
@@ -190,10 +230,15 @@ export class ProfilingSession {
 
   /**
    * Hand an SDK connection for this app to the session; it goes live once its PID checks out (at once when
-   * `verified`: its PID was already checked on the session device).
+   * `verified`: its PID was already checked on the session device). `proven`: its welcome carries the link proof.
    */
-  attachSdk(hello: SdkHello, link: SdkLink, verified = false): SdkLinkHandler {
-    return this.sdk.attach(hello, link, verified);
+  attachSdk(hello: SdkHello, link: SdkLink, verified = false, proven = false): SdkLinkHandler {
+    return this.sdk.attach(hello, link, verified, proven);
+  }
+
+  /** HTTP exchanges kept (status counts them without building a snapshot). */
+  get httpExchangeCount(): number {
+    return this.store.http.count();
   }
 
   /**
@@ -238,6 +283,7 @@ export class ProfilingSession {
     if (this.stopped) return;
     this.stopped = true;
     this.sdk.stop();
+    this.mocks.end();
     this.scheduler.stop();
     if (this.flushTimer) clearInterval(this.flushTimer);
     this.flushTimer = null;

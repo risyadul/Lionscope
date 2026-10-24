@@ -32,7 +32,7 @@ class DeviceMessagesTest {
         assertEquals(
             setOf(
                 "hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree",
-                "inspectBegin", "inspectNodes", "inspectError",
+                "inspectBegin", "inspectNodes", "inspectError", "httpRequest", "httpResponse", "mocksApplied",
             ),
             types,
         )
@@ -62,9 +62,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionSix() {
-        assertEquals(6, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V6, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionSeven() {
+        assertEquals(7, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V7, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -495,6 +495,7 @@ class DeviceMessagesTest {
             refreshRateHz = message.num("refreshRateHz"),
             protocolVersion = message.num("protocolVersion").toInt(),
             sdkVersion = message.str("sdkVersion"),
+            nonce = message["nonce"] as String?,
         )
         "screen" -> DeviceMessages.screen(message.num("ts").toLong(), (message["screen"] as Map<*, *>?)?.toScreenRef())
         "frames" -> DeviceMessages.frames(
@@ -574,8 +575,47 @@ class DeviceMessagesTest {
             requestId = message.num("requestId").toInt(),
             reason = InspectError.values().single { it.wire == message.str("reason") },
         )
+        "httpRequest" -> checkNotNull(
+            HttpMessages.httpRequest(
+                id = message.num("id").toInt(),
+                ts = message.num("ts").toLong(),
+                method = message.str("method"),
+                url = message.str("url"),
+                headers = message.httpHeaders(),
+                body = (message["body"] as Map<*, *>?)?.toHttpBody(),
+                mockId = message["mockId"] as String?,
+                dropped = message.num("dropped").toInt(),
+            ),
+        )
+        "httpResponse" -> HttpMessages.httpResponse(
+            id = message.num("id").toInt(),
+            ts = message.num("ts").toLong(),
+            status = (message["status"] as Double?)?.toInt(),
+            protocol = message["protocol"] as String?,
+            headers = message.httpHeaders(),
+            body = (message["body"] as Map<*, *>?)?.toHttpBody(),
+            headersMs = message["headersMs"] as Double?,
+            durationMs = message.num("durationMs"),
+            error = (message["error"] as Map<*, *>?)?.let { error ->
+                HttpFailure(HttpFailureKind.values().single { it.wire == error.str("kind") }, error["message"] as String?)
+            },
+        )
+        "mocksApplied" -> HttpMessages.mocksApplied(message.num("rev").toInt(), message.num("count").toInt())
         else -> error("Unknown type in golden line: $message")
     }
+
+    private fun Map<*, *>.httpHeaders() = (this["headers"] as List<*>).map {
+        val pair = it as List<*>
+        pair[0] as String to pair[1] as String
+    }
+
+    private fun Map<*, *>.toHttpBody() = HttpBody(
+        size = (this["size"] as Double?)?.toLong(),
+        contentType = this["contentType"] as String?,
+        text = this["text"] as String?,
+        truncated = this["truncated"] as Boolean,
+        omitted = (this["omitted"] as String?)?.let { omitted -> HttpBodyOmission.values().single { it.wire == omitted } },
+    )
 
     private fun Map<*, *>.stackFrames() = (this["frames"] as List<*>).map {
         val frame = it as Map<*, *>

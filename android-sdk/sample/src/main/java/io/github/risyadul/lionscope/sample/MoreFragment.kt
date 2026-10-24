@@ -15,6 +15,9 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         view.findViewById<View>(R.id.open_detail).setOnClickListener {
             startActivity(Intent(requireContext(), DetailActivity::class.java))
         }
+        view.findViewById<View>(R.id.open_network).setOnClickListener {
+            startActivity(Intent(requireContext(), NetworkActivity::class.java))
+        }
         view.findViewById<View>(R.id.show_dialog).setOnClickListener {
             PromoDialogFragment().show(childFragmentManager, PromoDialogFragment.TAG)
         }

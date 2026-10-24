@@ -2,6 +2,8 @@ package io.github.risyadul.lionscope
 
 import android.content.Context
 import androidx.navigation.NavController
+import okhttp3.Interceptor
+import okhttp3.Response
 
 /**
  * Release stand-in for the Lionscope SDK: same public API, no provider, no permissions, no threads.
@@ -20,4 +22,19 @@ object Lionscope {
     /** Does nothing; exists so navigation tracking compiles against both artifacts. */
     @Suppress("UNUSED_PARAMETER")
     fun trackNavigation(navController: NavController) = Unit
+
+    /**
+     * A pass-through interceptor (`chain.proceed(chain.request())`, one instance per process): no capture, no mocks.
+     * Exists so `addInterceptor(Lionscope.okHttpInterceptor())` compiles against both artifacts.
+     */
+    fun okHttpInterceptor(): Interceptor = PassThroughInterceptor.instance
+}
+
+/** Only loaded when [Lionscope.okHttpInterceptor] is called, so apps without OkHttp never need it. */
+private class PassThroughInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response = chain.proceed(chain.request())
+
+    companion object {
+        val instance = PassThroughInterceptor()
+    }
 }

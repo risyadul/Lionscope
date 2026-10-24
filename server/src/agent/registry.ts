@@ -15,12 +15,18 @@ import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } fr
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
 import { logcatTool } from './logTools.ts';
 import { screensTool, summaryTool } from './metricTools.ts';
+import {
+  clearNetworkMocksTool,
+  networkRequestTool,
+  networkTool,
+  setNetworkMockTool,
+} from './networkTools.ts';
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
 import { scrollToTool, tapElementTool, typeTextTool, uiTreeTool, waitForTool } from './uiTools.ts';
 import { ToolError } from './tool.ts';
-import type { AgentContext, AgentTool } from './tool.ts';
+import type { AgentBaseContext, AgentTool } from './tool.ts';
 
 export const AGENT_TOOLS: readonly AgentTool[] = [
   statusTool,
@@ -34,6 +40,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   inspectorSelectionTool,
   selectInspectorNodeTool,
   logcatTool,
+  networkTool,
+  networkRequestTool,
   startSessionTool,
   stopSessionTool,
   sdkOptionsTool,
@@ -48,6 +56,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   typeTextTool,
   pressKeyTool,
   launchAppTool,
+  setNetworkMockTool,
+  clearNetworkMocksTool,
   bootEmulatorTool,
   shutdownEmulatorTool,
 ];
@@ -59,7 +69,7 @@ export const DEVICE_CONTROL_DISABLED =
 export const MAX_DEVICE_CALLS = 2;
 
 /** The device a device tool will act on, as far as its arguments say (an unnamed device shares one key). */
-function deviceKey(ctx: Omit<AgentContext, 'deviceControl'>, args: Record<string, unknown>): string {
+function deviceKey(ctx: AgentBaseContext, args: Record<string, unknown>): string {
   const named =
     typeof args.serial === 'string' ? args.serial : typeof args.avdName === 'string' ? args.avdName : null;
   return named ?? ctx.sessions.getSessionState().serial ?? 'default';
@@ -94,12 +104,19 @@ function invalidArguments(error: z.ZodError): string {
     .join('; ');
 }
 
+/** Per-call permissions beyond device control. */
+export interface CallOptions {
+  /** --allow-network-bodies: get_network_request returns body texts. */
+  networkBodies?: boolean;
+}
+
 /** Validates and runs one call. Never throws: failures come back as `{ ok: false }` with a message for the caller. */
 export async function callTool(
-  ctx: Omit<AgentContext, 'deviceControl'>,
+  ctx: AgentBaseContext,
   name: string,
   args: unknown,
   deviceControl: boolean,
+  options: CallOptions = {},
 ): Promise<ToolOutcome> {
   const tool = findTool(name);
   if (!tool) return { ok: false, code: 'unknown_tool', error: `No tool named ${name}` };
@@ -127,7 +144,11 @@ export async function callTool(
     ctx.deviceCalls.set(key, running + 1);
   }
   try {
-    const { data, image } = await tool.run(parsed.data, { ...ctx, deviceControl });
+    const { data, image } = await tool.run(parsed.data, {
+      ...ctx,
+      deviceControl,
+      networkBodies: options.networkBodies ?? false,
+    });
     return image
       ? { ok: true, result: data, image: { mimeType: image.mimeType, data: image.data.toString('base64') } }
       : { ok: true, result: data };

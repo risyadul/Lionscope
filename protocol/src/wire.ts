@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -148,7 +148,15 @@ export interface SdkStatus {
   protocolVersion?: number | null;
   /** SDK options for this session (applied to protocol ≥ 2 links); absent on older servers. */
   options?: SdkOptions;
+  /**
+   * 0.7.0. Network capture on the live link: `active` (a v7 session link whose welcome carries the link proof, see
+   * LINK_KEY_RECEIVER), `needs_sdk` (the SDK is older than device protocol v7), `unverified` (the link key could not
+   * be handed to the app, so the SDK keeps capture and mocks off). Null or absent while not connected.
+   */
+  network?: SdkNetworkState | null;
 }
+
+export type SdkNetworkState = 'active' | 'needs_sdk' | 'unverified';
 
 /** Per-session SDK options, set from the dashboard (`setSdkOptions`) and pushed to the SDK as `config`. */
 export interface SdkOptions {
@@ -358,6 +366,8 @@ export interface Snapshot {
   /** 0.4.0 streams, optional like the Phase 2 ones. */
   inflates?: InflateSample[];
   viewTrees?: ViewTreeSample[];
+  /** 0.7.0: the session's HTTP exchanges (summaries, oldest first); details come with `getHttpExchange`. */
+  http?: HttpExchange[];
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +695,170 @@ export interface InspectorSelection {
 }
 
 // ---------------------------------------------------------------------------
+// Network (0.7.0): HTTP exchanges captured by the SDK's OkHttp interceptor, and mock rules
+//
+// Captured only during a profiling session (device protocol v7 session links). Header values, query parameters and
+// form fields with sensitive names are redacted on the device and again by the server (`HTTP_REDACTED`); bodies are
+// captured for text types only, up to MAX_HTTP_BODY_BYTES. Everything stays in the server's memory.
+// ---------------------------------------------------------------------------
+
+/** One header as sent or received, in order: `[name, value]`. Repeated headers are separate entries. */
+export type HttpHeader = [name: string, value: string];
+
+/** What replaces a redacted header value, query parameter value or form field value. */
+export const HTTP_REDACTED = '‹redacted›';
+/** Max UTF-8 bytes of a captured body's text; longer bodies are cut (`HttpBody.truncated`). */
+export const MAX_HTTP_BODY_BYTES = 64 * 1024;
+export const MAX_HTTP_URL_CHARS = 4096;
+/** Summaries (`http`, snapshots) carry at most this much of the URL, so a snapshot of 5000 stays small. */
+export const MAX_HTTP_SUMMARY_URL_CHARS = 1024;
+/** An HTTP method token (`GET`, `PROPFIND`, …). */
+export const MAX_HTTP_METHOD_CHARS = 16;
+/** Headers per request or response side; the SDK keeps the first ones that fit MAX_HTTP_HEADER_BYTES. */
+export const MAX_HTTP_HEADERS = 64;
+export const MAX_HTTP_HEADER_NAME_CHARS = 256;
+export const MAX_HTTP_HEADER_VALUE_CHARS = 4096;
+/** UTF-8 bytes of all header names and values of one side. */
+export const MAX_HTTP_HEADER_BYTES = 16 * 1024;
+export const MAX_HTTP_CONTENT_TYPE_CHARS = 256;
+export const MAX_HTTP_ERROR_CHARS = 256;
+/** Exchanges the SDK records per second at most (a token bucket with HTTP_EXCHANGE_BURST); the rest are counted. */
+export const HTTP_EXCHANGES_PER_SECOND = 20;
+export const HTTP_EXCHANGE_BURST = 50;
+
+/**
+ * Why a body's text was not captured: `type` (not a text type: binary, multipart, unknown), `streaming` (SSE,
+ * WebSocket upgrade, duplex), `encoding` (a Content-Encoding the SDK can't decode, e.g. `br`), `one_shot` (a request
+ * body that can be written only once), `error` (reading it for the capture failed; the app's call was unaffected).
+ */
+export type HttpBodyOmission = 'type' | 'streaming' | 'encoding' | 'one_shot' | 'error';
+
+export interface HttpBody {
+  /** Bytes of the body as the app sent or read it (after OkHttp's own gzip decoding); null when unknown. */
+  size: number | null;
+  /** The Content-Type as sent, null when there is none. */
+  contentType: string | null;
+  /** The captured text (charset-decoded, gunzipped), null when not captured (see `omitted`). */
+  text: string | null;
+  /** `text` holds only the start of the body. */
+  truncated: boolean;
+  omitted: HttpBodyOmission | null;
+}
+
+/**
+ * Why an exchange failed: `timeout`, `connection` (refused, unreachable, DNS), `canceled`, `io` (any other
+ * IOException, or an error thrown by another interceptor); `lost` is set by the server when the SDK link closed
+ * before the response.
+ */
+export interface HttpFailure {
+  kind: 'timeout' | 'connection' | 'canceled' | 'io' | 'lost';
+  /** The exception's class and message (cut to MAX_HTTP_ERROR_CHARS), null when there is none. */
+  message: string | null;
+}
+
+export type HttpExchangeState = 'pending' | 'complete' | 'failed';
+
+/** One request and its response, as the list, the timeline and get_network show it (laptop clock). */
+export interface HttpExchange {
+  /** Server-assigned, increasing, unique for the server's lifetime. */
+  id: number;
+  /** When the call entered the interceptor. */
+  ts: number;
+  /** ts + durationMs once it ended, null while pending. */
+  endTs: number | null;
+  method: string;
+  /** Redacted; cut to MAX_HTTP_SUMMARY_URL_CHARS (ending in `…`) here, whole in HttpExchangeDetail. */
+  url: string;
+  state: HttpExchangeState;
+  /** HTTP status, null while pending or when it failed before a response. */
+  status: number | null;
+  /** Call start → response headers. */
+  headersMs: number | null;
+  /** Call start → end (body read, streaming headers, or failure), null while pending. */
+  durationMs: number | null;
+  requestSize: number | null;
+  responseSize: number | null;
+  /** Response Content-Type. */
+  responseType: string | null;
+  /** The mock rule that answered it (the network was never asked), null for a real exchange. */
+  mockId: string | null;
+  error: HttpFailure | null;
+  /** Top screen when it started (SDK screens), null when unknown. */
+  screen: string | null;
+}
+
+/** An exchange with its headers and bodies (`httpExchange`, get_network_request). */
+export interface HttpExchangeDetail extends HttpExchange {
+  /** The whole (redacted) URL. */
+  url: string;
+  /** `http/1.1`, `h2`, … as OkHttp names it; null for mocks and failures. */
+  protocol: string | null;
+  requestHeaders: HttpHeader[];
+  responseHeaders: HttpHeader[];
+  requestBody: HttpBody | null;
+  responseBody: HttpBody | null;
+}
+
+export type MockMatch = 'exact' | 'prefix' | 'glob';
+/** `respond` answers with the rule's response; the others throw an IOException in the app (no network call). */
+export type MockAction = 'respond' | 'timeout' | 'connection_error';
+
+export const MAX_NETWORK_MOCKS = 32;
+export const MAX_MOCK_URL_CHARS = 2048;
+/** `*` wildcards in a glob pattern at most. */
+export const MAX_MOCK_GLOB_STARS = 8;
+/** UTF-8 bytes of one rule's body, and of all rules' bodies together. */
+export const MAX_MOCK_BODY_BYTES = 256 * 1024;
+export const MAX_MOCK_SET_BODY_BYTES = 2 * 1024 * 1024;
+export const MAX_MOCK_HEADERS = 32;
+/** UTF-8 bytes of one rule's header names and values. */
+export const MAX_MOCK_HEADER_BYTES = 8 * 1024;
+export const MAX_MOCK_DELAY_MS = 30_000;
+
+/** What the dashboard (or set_network_mock) sends to create a rule, or to replace the rule with `id`. */
+export interface NetworkMockInput {
+  /** Replace this rule; absent = a new rule. */
+  id?: string;
+  /** An HTTP method token, or null for any method. */
+  method: string | null;
+  match: MockMatch;
+  /**
+   * `http(s)://host/path…` (glob: `*` may stand anywhere, `*://` too). Compared with the request URL without its
+   * query unless the pattern contains `?`.
+   */
+  url: string;
+  action: MockAction;
+  /** 100..599 (`respond` only; ignored otherwise). */
+  status: number;
+  headers: HttpHeader[];
+  /** UTF-8 text (`respond` only). */
+  body: string;
+  /** Wait this long before answering (or failing), 0..MAX_MOCK_DELAY_MS. */
+  delayMs: number;
+  enabled: boolean;
+}
+
+/** A rule as the server keeps it: normalised (scheme and host lower case, default port dropped). */
+export interface NetworkMockRule extends Omit<NetworkMockInput, 'id'> {
+  /** `m1`, `m2`, … (server-assigned). */
+  id: string;
+  /** Who set it: a dashboard user or an AI agent (set_network_mock). */
+  origin: 'user' | 'agent';
+  /** Laptop clock of its last change (newer wins between otherwise equal rules). */
+  updatedAt: number;
+}
+
+/** The session's mock rules (`networkMocks`); no session = no rules. */
+export interface NetworkMocksState {
+  /** In precedence order: the first enabled rule that matches answers. */
+  rules: NetworkMockRule[];
+  /** Increases with every change. */
+  rev: number;
+  /** The rev the session's SDK confirmed (`mocksApplied`); null while no v7 SDK link is live. */
+  appliedRev: number | null;
+}
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
@@ -717,6 +891,15 @@ export type ServerMessage =
   | { type: 'inspection'; snapshot: InspectorSnapshot }
   /** 0.5.0. The current Inspector selection changed (null = cleared); sent on connect too. */
   | { type: 'inspectorSelection'; selection: InspectorSelection | null }
+  /**
+   * 0.7.0. An HTTP exchange started or changed (a response arrived, it failed): upsert by `exchange.id`. A live
+   * stream; snapshots hold the authoritative list.
+   */
+  | { type: 'http'; exchange: HttpExchange }
+  /** 0.7.0. Answer to `getHttpExchange` (to that client only); `exchange` null when it is no longer kept. */
+  | { type: 'httpExchange'; id: number; exchange: HttpExchangeDetail | null }
+  /** 0.7.0. The session's mock rules; sent on connect and on every change (including the SDK's confirmation). */
+  | { type: 'networkMocks'; mocks: NetworkMocksState }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -736,6 +919,8 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'snapshot',
   'inspection',
   'inspectorSelection',
+  'httpExchange',
+  'networkMocks',
   'error',
 ]);
 
@@ -777,10 +962,22 @@ export type ClientMessage =
    * last `inspect` of it (from any client or agent), the server keeps an inspect-only SDK link to that device, so
    * Inspect gets the SDK tree without a profiling session. Re-sent on reconnect; the latest per client wins.
    */
-  | { type: 'inspectorFocus'; serial: string | null };
+  | { type: 'inspectorFocus'; serial: string | null }
+  /** 0.7.0. Headers and bodies of one exchange; answered with `httpExchange` to this client. */
+  | { type: 'getHttpExchange'; id: number }
+  /**
+   * 0.7.0. Create a mock rule for the running session, or replace the one with `rule.id`. Refused with an `error`
+   * (code `setNetworkMock_failed`) without a session, over MAX_NETWORK_MOCKS or MAX_MOCK_SET_BODY_BYTES, or for an
+   * unknown id; answered with the `networkMocks` broadcast. May be up to MAX_MOCK_CLIENT_MESSAGE_BYTES.
+   */
+  | { type: 'setNetworkMock'; rule: NetworkMockInput }
+  /** 0.7.0. Remove one rule (`id`), or every rule (`id` absent). Answered with `networkMocks`. */
+  | { type: 'clearNetworkMocks'; id?: string };
 
-/** Max accepted size of a dashboard → server frame, in bytes. */
+/** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
+/** `setNetworkMock` frames: a 256 KB body, JSON-escaped, and the rest of the rule. */
+export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // In-app SDK ↔ server (device gateway)
@@ -798,7 +995,7 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 6;
+export const DEVICE_PROTOCOL_VERSION = 7;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -814,11 +1011,37 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * v6 (0.6.0): Inspector nodes may be composables (`composable`, `destination`) under AndroidComposeView nodes
  * (`composition`), and `screen.kind` may be `destination`, in both modes. Both are SDK → server only; an SDK sends
  * none of it on a link negotiated below 6 (a destination is then a `fragment`).
+ * v7 adds the network inspector, on `session` links only: SDK → server `httpRequest`, `httpResponse` and
+ * `mocksApplied`, and server → SDK `mocks` and `mock` (a rule set, see GatewayMessage). `httpRequest` /
+ * `httpResponse` lines may be up to MAX_HTTP_LINE_BYTES.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
 export const DEVICE_PROTOCOL_V4 = 4;
 export const DEVICE_PROTOCOL_V5 = 5;
+export const DEVICE_PROTOCOL_V6 = 6;
+export const DEVICE_PROTOCOL_V7 = 7;
+/** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
+export const MAX_HTTP_LINE_BYTES = 256 * 1024;
+/** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
+export const MAX_GATEWAY_LINE_BYTES = 512 * 1024;
+/**
+ * v7 link proof. Anything on the phone can listen on 127.0.0.1:8700 while no `adb reverse` maps it, and the SDK can't
+ * tell that listener from the server; network capture and mocks therefore need proof that the server is the one
+ * adb trusts. Before welcoming a v7 `session` link whose hello carries a `nonce`, the server makes a fresh random
+ * key (LINK_KEY_BYTES) and hands it to the app over adb: `am broadcast -n <package>/<LINK_KEY_RECEIVER> --es key
+ * <hex> --ei pid <hello.pid>`. The receiver is exported but guarded by `android.permission.DUMP`, which only the
+ * shell and the system hold, so no other app can set the key; it keeps the key only when `pid` is its own process.
+ * Once the broadcast completed, the welcome carries `proof` = hex(HMAC-SHA256(key, `<nonce>:<protocolVersion>:<mode>`)).
+ * The SDK turns capture and mocks on only when the proof matches the key it holds. Frames, screens, stalls, layouts
+ * and Inspector trees don't need the proof (as before 0.7.0).
+ */
+export const LINK_KEY_RECEIVER = 'io.github.risyadul.lionscope.LinkKeyReceiver';
+export const LINK_KEY_BYTES = 32;
+/** `hello.nonce`: 16 random bytes, lower-case hex. */
+export const LINK_NONCE_PATTERN = /^[0-9a-f]{32}$/;
+/** `welcome.proof`: an HMAC-SHA256, lower-case hex. */
+export const LINK_PROOF_PATTERN = /^[0-9a-f]{64}$/;
 /** An inspect-only link stays mapped this long after the last `inspect` of its device (and while a client focuses it). */
 export const INSPECT_LINK_LINGER_MS = 5 * 60_000;
 /**
@@ -826,7 +1049,6 @@ export const INSPECT_LINK_LINGER_MS = 5 * 60_000;
  * covers the SDK's 1 s / 2 s / 5 s reconnect backoff plus its connect timeout.
  */
 export const INSPECT_LINK_WAIT_MS = 6000;
-export const DEVICE_PROTOCOL_V6 = 6;
 /** Max serialized bytes of one `inspectNodes` line (well under MAX_DEVICE_LINE_BYTES). */
 export const MAX_INSPECT_CHUNK_BYTES = 32 * 1024;
 /** Max total bytes of one `inspect` answer (all its lines); the SDK sends `inspectError failed` instead of more. */
@@ -877,6 +1099,8 @@ export type DeviceMessage =
       apiLevel: number;
       deviceWallMs: number;
       refreshRateHz: number;
+      /** v7. A fresh random challenge for the link proof (LINK_NONCE_PATTERN); absent from older SDKs. */
+      nonce?: string;
     }
   /** The top screen changed; `screen: null` when the app went to background. */
   | { type: 'screen'; ts: number; screen: ScreenRef | null }
@@ -961,21 +1185,90 @@ export type DeviceMessage =
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
   | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }
   /** v4. The snapshot could not be taken (`background`, `no_window`, `disabled`, `failed`). */
-  | { type: 'inspectError'; requestId: number; reason: 'background' | 'no_window' | 'disabled' | 'failed' };
+  | { type: 'inspectError'; requestId: number; reason: 'background' | 'no_window' | 'disabled' | 'failed' }
+  /**
+   * v7. A call entered the SDK's OkHttp interceptor (`ts`); its `httpResponse` with the same `id` follows when it
+   * ends. `id` is unique per SDK process. `dropped`: calls not recorded since the previous `httpRequest` (over
+   * HTTP_EXCHANGES_PER_SECOND). `mockId`: the rule that answers it. Redacted on the device.
+   */
+  | {
+      type: 'httpRequest';
+      id: number;
+      ts: number;
+      method: string;
+      url: string;
+      headers: HttpHeader[];
+      body: HttpBody | null;
+      mockId: string | null;
+      dropped: number;
+    }
+  /**
+   * v7. The call ended at `ts`: its response body was read to the end or closed, or (bodiless, streaming) its
+   * headers arrived, or it failed (`error`, `status` null when no response came). Durations are from the call's
+   * start, on a monotonic clock.
+   */
+  | {
+      type: 'httpResponse';
+      id: number;
+      ts: number;
+      status: number | null;
+      protocol: string | null;
+      headers: HttpHeader[];
+      body: HttpBody | null;
+      headersMs: number | null;
+      durationMs: number;
+      error: { kind: 'timeout' | 'connection' | 'canceled' | 'io'; message: string | null } | null;
+    }
+  /** v7. The mock rule set `rev` (with `count` rules) is now the active one. */
+  | { type: 'mocksApplied'; rev: number; count: number };
 
 export type DeviceMessageType = DeviceMessage['type'];
 
 /**
  * Server → SDK. Contract: each line is a flat JSON object serialised with `type` as its FIRST key and with no
  * nested objects that contain `type` or `protocolVersion` keys, because the SDK reads these lines with a
- * dependency-free top-level scan rather than a full JSON parser. New fields must be appended after `type`.
+ * dependency-free top-level scan rather than a full JSON parser. New fields must be appended after `type`. The v7
+ * `mocks` / `mock` lines are flat objects of strings, numbers and booleans only (their strings may hold any text,
+ * JSON-escaped); golden lines: `protocol/fixtures/gateway-messages.ndjson`, reproduced byte for byte by the server.
+ * Lines are at most MAX_GATEWAY_LINE_BYTES.
  */
 export type GatewayMessage =
   /** v5 adds `mode` (sent on v5 links only; absent = `session`). */
-  | { type: 'welcome'; protocolVersion: number; mode?: 'session' | 'inspect' }
+  | {
+      type: 'welcome';
+      protocolVersion: number;
+      mode?: 'session' | 'inspect';
+      /** v7 session links: the link proof over the hello's nonce (LINK_KEY_RECEIVER); absent when no key was handed over. */
+      proof?: string;
+    }
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
   | { type: 'config'; stallThresholdMs: number; strictMode: boolean; inflateTracking: boolean }
   /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
-  | { type: 'inspect'; requestId: number };
+  | { type: 'inspect'; requestId: number }
+  /**
+   * v7 (session links). A complete mock rule set follows: `count` `mock` lines with this `rev` (index 0..count-1,
+   * in precedence order: the first enabled match answers). It replaces the active set once all arrived (count 0:
+   * at once); a newer `mocks` discards a set still arriving. Answered with `mocksApplied`.
+   */
+  | { type: 'mocks'; rev: number; count: number }
+  /**
+   * v7. One rule of set `rev`, flat for the SDK's scan: `method` `*` = any; `action` `respond` uses `status`,
+   * `headers` (`Name: value` lines joined by `\n`) and `bodyBase64` (the UTF-8 body); `timeout` /
+   * `connection_error` send status 0 and empty headers and body. See NetworkMockInput for the matching rules.
+   */
+  | {
+      type: 'mock';
+      rev: number;
+      index: number;
+      id: string;
+      method: string;
+      match: MockMatch;
+      url: string;
+      action: MockAction;
+      status: number;
+      headers: string;
+      bodyBase64: string;
+      delayMs: number;
+    };

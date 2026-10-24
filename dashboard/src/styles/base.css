@@ -132,6 +132,34 @@ kbd {
   flex: none;
 }
 
+/* Select: a native <select> with the panel's chevron (components/ui/Select.tsx); the combobox reuses the chevron. */
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.select-wrap > select {
+  padding-right: 28px;
+  appearance: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.select-wrap > select:disabled {
+  cursor: not-allowed;
+}
+
+.select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--ink-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: transform var(--dur) var(--ease-out);
+}
+
 /* Segmented control (window selector, level filter). */
 .segmented {
   display: inline-flex;

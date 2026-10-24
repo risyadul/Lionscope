@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { DEFAULT_SDK_OPTIONS, PROTOCOL_VERSION, WS_PATH } from '@lionscope/protocol';
+import { DEFAULT_SDK_OPTIONS, MAX_CLIENT_FRAME_BYTES, PROTOCOL_VERSION, WS_PATH } from '@lionscope/protocol';
 import type { SessionState } from '@lionscope/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -340,10 +340,16 @@ describe('Lionscope server', () => {
       client.close();
     });
 
-    it('closes connections that exceed the max payload', async () => {
+    it('closes connections that exceed the max payload; refuses large frames of any type but setNetworkMock', async () => {
       const client = await Client.open(port);
+      await client.waitFor('snapshot');
+      client.send({ type: 'refreshDevices', padding: 'x'.repeat(10_000) });
+      expect(await client.waitFor('error')).toMatchObject({
+        code: 'bad_request',
+        message: 'message too large',
+      });
       const closed = client.closed();
-      client.send('x'.repeat(10_000));
+      client.send('x'.repeat(MAX_CLIENT_FRAME_BYTES + 1));
       expect(await closed).toBe(1009);
     });
 

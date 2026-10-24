@@ -1,6 +1,7 @@
 import { Activity, memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SdkOptions } from '@lionscope/protocol/wire';
 import { DEFAULT_SDK_OPTIONS, isValidSerial, STALL_THRESHOLDS_MS } from '@lionscope/protocol/wire';
+import { exchangesInWindow } from '@lionscope/protocol/insights';
 import { useDashboardState, useServices } from './app/services.ts';
 import { AgentPanel } from './components/device/AgentPanel.tsx';
 import { DeviceColumn, DeviceToggle } from './components/device/DeviceColumn.tsx';
@@ -12,6 +13,8 @@ import { SidePanel, type SideTab } from './components/side/SidePanel.tsx';
 import { InspectorContext } from './components/inspector/InspectorContext.tsx';
 import { InspectorPanel } from './components/inspector/InspectorPanel.tsx';
 import { LayoutsPanel } from './components/layouts/LayoutsPanel.tsx';
+import { MockEditor } from './components/network/MockEditor.tsx';
+import { NetworkPanel, type NetworkView } from './components/network/NetworkPanel.tsx';
 import { StallsPanel } from './components/stalls/StallsPanel.tsx';
 import { StatStrip } from './components/stats/StatStrip.tsx';
 import { WindowControls } from './components/stats/WindowControls.tsx';
@@ -20,6 +23,7 @@ import { INFLATE_UPDATE_HINT } from './components/stalls/StallControls.tsx';
 import { EmptyState } from './components/states/EmptyState.tsx';
 import { Timeline } from './components/timeline/Timeline.tsx';
 import { EmulatorActions } from './components/topbar/EmulatorActions.tsx';
+import { MocksIndicator } from './components/topbar/MocksIndicator.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
 import { ViewSwitch } from './components/topbar/ViewSwitch.tsx';
 import { useAppList } from './hooks/useAppList.ts';
@@ -27,8 +31,10 @@ import { useDeviceColumn } from './hooks/useDeviceColumn.ts';
 import { useDeviceTarget } from './hooks/useDeviceTarget.ts';
 import { useEmulatorActions } from './hooks/useEmulatorActions.ts';
 import { useEscape } from './hooks/useEscape.ts';
+import { useHttpDetail } from './hooks/useHttpDetail.ts';
 import { useInspector } from './hooks/useInspector.ts';
 import { useInspectorFocus } from './hooks/useInspectorFocus.ts';
+import { useMockRules } from './hooks/useMockRules.ts';
 import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { useViewMode } from './hooks/useViewMode.ts';
@@ -36,6 +42,7 @@ import type { ViewMode } from './lib/viewMode.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
 import { inflatesInWindow, inflateByScreen, latestViewTrees } from './lib/layouts.ts';
+import { mocksIndicator } from './lib/network.ts';
 import { aggregateScreens, withLayoutStats, withStallCounts } from './lib/screenStats.ts';
 import { countEventsInWindow, findFeedItem, stallsByScreen } from './lib/stalls.ts';
 import { aggregateFrames, computeStats } from './lib/stats.ts';
@@ -44,9 +51,12 @@ import {
   captureView,
   hasSeries,
   isLayoutCapable,
+  isNetworkCapable,
   isSessionActive,
   isStallCapable,
   layoutsEmptyState,
+  networkEmptyState,
+  networkLinkState,
   screensEmptyState,
   sdkOptionsBlocker,
   stallsEmptyState,
@@ -92,6 +102,8 @@ export function App() {
   const [selectedScreen, setSelectedScreen] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>('screens');
   const [selectedStall, setSelectedStall] = useState<string | null>(null);
+  const [selectedHttp, setSelectedHttp] = useState<number | null>(null);
+  const [networkView, setNetworkView] = useState<NetworkView>('requests');
   // Same request, read synchronously: two clicks in one task both run before React re-renders.
   const inFlight = useRef<PendingRequest | null>(null);
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
@@ -210,6 +222,18 @@ export function App() {
     setSelectedStall(key);
     setSideTab('stalls');
   }, []);
+  // A click on the Network lane opens the call in the Network tab; the top bar's mocks pill opens its rules.
+  const selectHttp = useCallback((id: number) => {
+    setSelectedHttp(id);
+    setNetworkView('requests');
+    setSideTab('network');
+  }, []);
+  const viewNetwork = useCallback(() => setSideTab('network'), []);
+  const openMocks = useCallback(() => {
+    changeView('profile');
+    setSideTab('network');
+    setNetworkView('mocks');
+  }, [changeView]);
 
   const sdk = state.session.sdk;
   // Servers older than 0.4.0 send options without `inflateTracking`: read as on.
@@ -268,12 +292,22 @@ export function App() {
     sideTab === 'stalls' &&
     selectedStall !== null &&
     findFeedItem(series.stalls, series.strictMode, selectedStall) !== null;
-  // One Escape, one thing: an open stall detail closes first; otherwise the screen selection clears.
+  const selectedExchange = useMemo(
+    () => (selectedHttp === null ? null : (series.http.find((e) => e.id === selectedHttp) ?? null)),
+    [series.http, selectedHttp],
+  );
+  const isNetworkDetailOpen =
+    viewMode === 'profile' &&
+    sideTab === 'network' &&
+    networkView === 'requests' &&
+    selectedExchange !== null;
+  // One Escape, one thing: an open stall or request detail closes first; otherwise the screen selection clears.
   const handleEscape = () => {
     if (isStallDetailOpen) setSelectedStall(null);
+    else if (isNetworkDetailOpen) setSelectedHttp(null);
     else setSelectedScreen(null);
   };
-  useEscape(isStallDetailOpen || selectedScreen !== null, handleEscape);
+  useEscape(isStallDetailOpen || isNetworkDetailOpen || selectedScreen !== null, handleEscape);
   const hasInflateData = series.inflates.length > 0;
   const showMainThread = (isActive && isStallCapable(sdk)) || hasStallData || hasInflateData;
   const showLayouts = (isActive && isLayoutCapable(sdk)) || hasInflateData || series.viewTrees.length > 0;
@@ -299,6 +333,27 @@ export function App() {
     sdk,
     sdkLinkError: state.sdkLinkError,
     thresholdMs: sdkOptions.stallThresholdMs,
+  });
+  const httpDetail = useHttpDetail({ send, summary: selectedExchange, answer: state.httpDetail, isOpen });
+  const mockRules = useMockRules({
+    send,
+    mocks: state.networkMocks,
+    mockError: state.mockError,
+    isOpen,
+    isSessionActive: isActive,
+  });
+  const mocksState = mocksIndicator(state.networkMocks, isActive, networkLinkState(sdk));
+  const networkTabCount = useMemo(
+    () => exchangesInWindow(series.http, startTs, endTs, endTs).length,
+    [series.http, startTs, endTs],
+  );
+  const showNetwork = (isActive && isNetworkCapable(sdk)) || series.http.length > 0;
+  const networkEmpty = networkEmptyState({
+    hasItems: networkTabCount > 0,
+    hasAnyData: series.http.length > 0,
+    isSessionActive: isActive,
+    sdk,
+    sdkLinkError: state.sdkLinkError,
   });
   const showScreens = isSdkConnected || series.screens.length > 0;
   const showBreakdown = isSdkConnected || series.breakdown.length > 0;
@@ -348,6 +403,7 @@ export function App() {
             )
           }
           viewSwitch={<ViewSwitch value={viewMode} onChange={changeView} />}
+          mocksIndicator={mocksState && <MocksIndicator indicator={mocksState} onOpen={openMocks} />}
           onRefreshDevices={() => send({ type: 'refreshDevices' })}
           apps={apps}
           packageName={packageName}
@@ -413,6 +469,7 @@ export function App() {
                     stalls={series.stalls}
                     strictMode={series.strictMode}
                     inflates={series.inflates}
+                    http={series.http}
                     showScreens={showScreens}
                     showBreakdown={showBreakdown}
                     showMainThread={showMainThread}
@@ -423,6 +480,10 @@ export function App() {
                     onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
                     onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
                     isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
+                    showNetwork={showNetwork}
+                    selectedHttp={selectedHttp}
+                    onSelectHttp={selectHttp}
+                    onViewNetwork={sideTab === 'network' ? undefined : viewNetwork}
                     isSdkConnected={isSdkConnected}
                     selectedScreen={selectedScreen}
                     onSelectScreen={setSelectedScreen}
@@ -462,6 +523,7 @@ export function App() {
                 screenCount={screenRows.length}
                 stallCount={stallTabCount}
                 layoutCount={layoutTabCount}
+                networkCount={networkTabCount}
                 inspectorCount={inspector.snapshot?.nodes.length ?? 0}
                 screens={
                   <ScreenPanel
@@ -490,6 +552,25 @@ export function App() {
                   />
                 }
                 inspector={<InspectorPanel />}
+                network={
+                  // Off screen (another tab, the Inspector view) it holds its last render: no work per clock tick.
+                  <Frozen isFrozen={viewMode !== 'profile' || sideTab !== 'network'}>
+                    <NetworkPanel
+                      exchanges={series.http}
+                      fromTs={startTs}
+                      toTs={endTs}
+                      openEnd={endTs}
+                      empty={networkEmpty}
+                      view={networkView}
+                      onViewChange={setNetworkView}
+                      selectedId={selectedExchange === null ? null : selectedHttp}
+                      onSelect={setSelectedHttp}
+                      detail={httpDetail}
+                      mocks={state.networkMocks}
+                      mockControl={mockRules}
+                    />
+                  </Frozen>
+                }
                 layouts={
                   <LayoutsPanel
                     inflates={series.inflates}
@@ -508,6 +589,14 @@ export function App() {
             </Frozen>
           </Activity>
         </main>
+        {mockRules.editor && (
+          <MockEditor
+            key={mockRules.editor.openId}
+            editor={mockRules.editor}
+            onSave={mockRules.save}
+            onCancel={mockRules.closeEditor}
+          />
+        )}
       </div>
     </InspectorContext.Provider>
   );

@@ -8,7 +8,7 @@ import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
 import { dumpUi, parseTopPackage, TOP_ACTIVITY_COMMAND } from './agent/uiDump.ts';
 import { UiHelpers } from './agent/uiHelper.ts';
-import type { AgentContext } from './agent/tool.ts';
+import type { AgentBaseContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway, SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
@@ -51,6 +51,8 @@ export interface LionscopeServerOptions {
   scrcpyJarPath?: string;
   /** --allow-device-control: the agent endpoints list and run the device-control tools. */
   allowDeviceControl?: boolean;
+  /** --allow-network-bodies: the agent endpoints return HTTP body texts (get_network_request). */
+  allowNetworkBodies?: boolean;
   /** The UI helper tried before `uiautomator dump`; defaults to the vendored one. */
   uiHelperJarPath?: string;
 }
@@ -64,7 +66,7 @@ export interface LionscopeServer {
   readonly manager: SessionManager;
   readonly emulators: EmulatorManager;
   /** What the agent tools run against (`lionscope mcp` calls them in-process). */
-  readonly agent: Omit<AgentContext, 'deviceControl'>;
+  readonly agent: AgentBaseContext;
 }
 
 /** Longest an Inspector snapshot may wait for uiautomator (it retries while the screen is not idle). */
@@ -137,7 +139,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     // The agent's dump: it also refreshes what the element tools know of the screen.
     dumpUi: async (serial) =>
       (
-        await dumpUi({ ...agent, deviceControl: false }, serial, {
+        await dumpUi({ ...agent, deviceControl: false, networkBodies: false }, serial, {
           deadline: performance.now() + INSPECT_UI_DUMP_MS,
         })
       ).tree,
@@ -148,7 +150,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       ),
     broadcast: (message, payload) => gateway?.broadcast(message, payload),
   });
-  const agent: Omit<AgentContext, 'deviceControl'> = {
+  const agent: AgentBaseContext = {
     sessions: manager,
     emulators,
     inspector,
@@ -166,6 +168,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   const agentHttp = createAgentHttp({
     ctx: agent,
     deviceControl: options.allowDeviceControl ?? false,
+    networkBodies: options.allowNetworkBodies ?? false,
     port: () => address?.port ?? null,
   });
 

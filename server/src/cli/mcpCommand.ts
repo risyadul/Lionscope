@@ -3,8 +3,8 @@
  * tool calls to its JSON tool API) or, when none answers, starts one in this process and runs the tools
  * directly; the dashboard is then served by this process until the MCP client disconnects.
  *
- * `--allow-device-control` enables the device tools for this client only: an autonomy guard for the AI, not a
- * security boundary (local processes are trusted, browsers are not).
+ * `--allow-device-control` enables the device tools for this client only, `--allow-network-bodies` the HTTP body
+ * texts: autonomy guards for the AI, not security boundaries (local processes are trusted, browsers are not).
  */
 import { setTimeout as sleep } from 'node:timers/promises';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
@@ -19,6 +19,7 @@ import { callRemoteTool, probeServer } from './agentClient.ts';
 import { exitOnShutdown, startLionscope } from './serve.ts';
 
 export const MCP_USAGE = `Usage: lionscope mcp [--port <port>] [--device-port <port>] [--adb <path>] [--allow-device-control]
+                     [--allow-network-bodies]
 
 MCP server on stdin/stdout for AI agents (Claude Code, Cursor, VS Code, Codex, Gemini CLI, ...). Uses the
 Lionscope server running on --port, or starts one in this process (dashboard at http://localhost:<port>)
@@ -29,8 +30,10 @@ Options:
   --device-port <port>    In-app SDK gateway port, when it starts a server (LIONSCOPE_DEVICE_PORT, default 8700)
   --adb <path>            adb binary, when it starts a server (LIONSCOPE_ADB)
   --allow-device-control  Offer the device tools (get_ui_tree, inspect_screen, tap_element, wait_for,
-                          scroll_to, screenshot, tap, swipe, type_text, press_key, launch_app, boot_emulator,
-                          shutdown_emulator) to this client
+                          scroll_to, screenshot, tap, swipe, type_text, press_key, launch_app,
+                          set_network_mock, clear_network_mocks, boot_emulator, shutdown_emulator) to this
+                          client
+  --allow-network-bodies  Let this client read captured HTTP body texts (get_network_request)
   -h, --help              Show this help
   -v, --version           Print the version
 `;
@@ -56,6 +59,7 @@ class McpBackend {
   constructor(
     private readonly config: LionscopeConfig,
     private readonly deviceControl: boolean,
+    private readonly networkBodies: boolean,
   ) {}
 
   async connect(): Promise<void> {
@@ -75,8 +79,12 @@ class McpBackend {
         return;
       }
       try {
-        // Device control stays off on this server's HTTP endpoints: the flag is for this client only.
-        const server = await startLionscope({ ...this.config, allowDeviceControl: false });
+        // Device control and bodies stay off on this server's HTTP endpoints: the flags are for this client only.
+        const server = await startLionscope({
+          ...this.config,
+          allowDeviceControl: false,
+          allowNetworkBodies: false,
+        });
         this.server = server;
         this.stop = exitOnShutdown(server);
         return;
@@ -91,8 +99,13 @@ class McpBackend {
 
   readonly invoke: ToolInvoker = async (name, args) => {
     const local = this.server;
-    if (local) return callTool(local.agent, name, args, this.deviceControl);
-    const outcome = await callRemoteTool(this.config.port, name, args, { deviceControl: this.deviceControl });
+    if (local) {
+      return callTool(local.agent, name, args, this.deviceControl, { networkBodies: this.networkBodies });
+    }
+    const outcome = await callRemoteTool(this.config.port, name, args, {
+      deviceControl: this.deviceControl,
+      networkBodies: this.networkBodies,
+    });
     if (outcome.ok || outcome.code !== 'unreachable') return outcome;
     log.info('The Lionscope server this command used went away: reconnecting');
     try {
@@ -121,7 +134,7 @@ export async function runMcpCommand(argv: readonly string[]): Promise<void> {
   }
   const config = loadConfig(process.env, args);
   const deviceControl = config.allowDeviceControl;
-  const backend = new McpBackend(config, deviceControl);
+  const backend = new McpBackend(config, deviceControl, config.allowNetworkBodies);
   await backend.connect();
 
   serveStdio(

@@ -1,4 +1,4 @@
-import type { ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
+import type { NetworkMockRule, ScreenRef, SdkFrame, SdkOptions, ServerMessage } from '@lionscope/protocol';
 import { vi } from 'vitest';
 import { SdkInspectError } from '../../src/device/sdkLink.ts';
 import type {
@@ -39,6 +39,11 @@ export class FakeLink implements SdkLink {
   }
   sendConfig(options: SdkOptions): void {
     this.configs.push(options);
+  }
+  /** Every rule set sent (`sendMocks`), as given. */
+  readonly mockSets: { rev: number; rules: readonly NetworkMockRule[] }[] = [];
+  sendMocks(rev: number, rules: readonly NetworkMockRule[]): void {
+    this.mockSets.push({ rev, rules });
   }
   /** What inspect() answers; unset, it fails as `unsupported`. */
   answerInspect: (() => Promise<SdkInspection>) | null = null;
@@ -89,12 +94,13 @@ export async function setupSdkSession() {
   const ofType = <T extends ServerMessage['type']>(type: T) =>
     messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
   const gfxinfoPolls = () => device.commands.filter((command) => command.includes('gfxinfo')).length;
-  /** Attach a link and let its PID check (a `pidof` on the device) finish. */
+  /** Attach a link and let its PID check (a `pidof` on the device) finish; `proven`: it got the link proof. */
   const connect = async (
     hello: SdkHello = HELLO,
     link = new FakeLink(hello.protocolVersion),
+    proven = false,
   ): Promise<{ link: FakeLink; handler: SdkLinkHandler }> => {
-    const handler = session.attachSdk(hello, link);
+    const handler = session.attachSdk(hello, link, false, proven);
     await vi.advanceTimersByTimeAsync(0);
     return { link, handler };
   };

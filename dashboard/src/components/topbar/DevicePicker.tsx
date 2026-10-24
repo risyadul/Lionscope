@@ -9,6 +9,7 @@ import {
   parseAvdValue,
   standaloneAvds,
 } from '../../lib/emulators.ts';
+import { Select } from '../ui/Select.tsx';
 
 export const DEVICE_PICKER_ID = 'device-picker';
 
@@ -83,48 +84,43 @@ export function DevicePicker({
         Device
       </label>
       <div className="field-row">
-        <div className="select-wrap">
-          <select
-            id={DEVICE_PICKER_ID}
-            className="select"
-            value={selected ?? ''}
-            disabled={isLocked || (list.length === 0 && avds.length === 0)}
-            title={isLocked ? 'Stop the session to change device' : undefined}
-            onChange={(e) => {
-              const avdName = parseAvdValue(e.target.value);
-              if (avdName === null) onChange(e.target.value);
-              else onAvdChange(avdName);
-            }}
-          >
-            {selected === null && (
-              <option value="" disabled>
-                {placeholder}
-              </option>
-            )}
-            {selected !== null && selected === value && !isListed && (
-              <option value={value} disabled>
-                {value} — disconnected
-              </option>
-            )}
-            {avds.length === 0 ? (
-              deviceOptions
-            ) : (
-              <>
-                {list.length > 0 && <optgroup label="Connected">{deviceOptions}</optgroup>}
-                <optgroup label="Emulators">
-                  {avds.map((avd) => (
-                    <option key={avd.avdName} value={avdValue(avd.avdName)}>
-                      {emulatorLabel(avd)} · {emulatorStateNote(avd)}
-                    </option>
-                  ))}
-                </optgroup>
-              </>
-            )}
-          </select>
-          <svg className="select-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path d="m2 3.5 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-        </div>
+        <Select
+          id={DEVICE_PICKER_ID}
+          className="select"
+          value={selected ?? ''}
+          disabled={isLocked || (list.length === 0 && avds.length === 0)}
+          title={isLocked ? 'Stop the session to change device' : undefined}
+          onChange={(e) => {
+            const avdName = parseAvdValue(e.target.value);
+            if (avdName === null) onChange(e.target.value);
+            else onAvdChange(avdName);
+          }}
+        >
+          {selected === null && (
+            <option value="" disabled>
+              {placeholder}
+            </option>
+          )}
+          {selected !== null && selected === value && !isListed && (
+            <option value={value} disabled>
+              {value} — disconnected
+            </option>
+          )}
+          {avds.length === 0 ? (
+            deviceOptions
+          ) : (
+            <>
+              {list.length > 0 && <optgroup label="Connected">{deviceOptions}</optgroup>}
+              <optgroup label="Emulators">
+                {avds.map((avd) => (
+                  <option key={avd.avdName} value={avdValue(avd.avdName)}>
+                    {emulatorLabel(avd)} · {emulatorStateNote(avd)}
+                  </option>
+                ))}
+              </optgroup>
+            </>
+          )}
+        </Select>
         {actions}
         <button
           type="button"

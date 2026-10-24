@@ -23,6 +23,7 @@ Options:
   --json '<object>'       Tool arguments as JSON (flags given next to it win)
   --port <port>           Dashboard port (LIONSCOPE_PORT, default 8701)
   --allow-device-control  Allow a device-control tool for this call
+  --allow-network-bodies  Return HTTP body texts (get_network_request) for this call
   --out <file>            Write a screenshot's PNG to this file instead of printing it as base64
 `;
 
@@ -34,6 +35,7 @@ interface QueryArgs {
   tool: string | null;
   port: number;
   deviceControl: boolean;
+  networkBodies: boolean;
   out: string | null;
   json: string | null;
   /** Tool argument flags as given (name → raw value, or true for a bare flag). */
@@ -77,6 +79,7 @@ function parseQueryArgs(argv: readonly string[], env: NodeJS.ProcessEnv): QueryA
     tool: null,
     port: parsePort(env.LIONSCOPE_PORT),
     deviceControl: false,
+    networkBodies: false,
     out: null,
     json: null,
     flags: new Map(),
@@ -102,6 +105,7 @@ function parseQueryArgs(argv: readonly string[], env: NodeJS.ProcessEnv): QueryA
     if (name === 'list') args.list = true;
     else if (name === 'help' || name === 'h') args.help = true;
     else if (name === 'allow-device-control') args.deviceControl = true;
+    else if (name === 'allow-network-bodies') args.networkBodies = true;
     else if (name === 'port') args.port = parsePort(value(), '--port');
     else if (name === 'out') args.out = value();
     else if (name === 'json') args.json = value();
@@ -203,6 +207,7 @@ export async function runQueryCommand(argv: readonly string[], env = process.env
     if (!tool) throw new QueryError(`No tool named ${args.tool}; \`lionscope query --list\` lists them`);
     const outcome = await callRemoteTool(args.port, tool.name, toolArguments(tool, args), {
       deviceControl: args.deviceControl,
+      networkBodies: args.networkBodies,
     });
     if (!outcome.ok) {
       print({ ok: false, error: outcome.error });

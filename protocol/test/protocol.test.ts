@@ -463,6 +463,9 @@ describe('parseDeviceMessage', () => {
         'inspectBegin',
         'inspectNodes',
         'inspectError',
+        'httpRequest',
+        'httpResponse',
+        'mocksApplied',
       ]),
     );
   });

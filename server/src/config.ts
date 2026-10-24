@@ -29,6 +29,8 @@ export interface LionscopeConfig {
   dev: boolean;
   /** `--allow-device-control`: AI agents may take screenshots, tap, type and boot / shut down emulators. */
   allowDeviceControl: boolean;
+  /** `--allow-network-bodies`: AI agents may read the text of captured HTTP bodies. */
+  allowNetworkBodies: boolean;
 }
 
 const PORT_PATTERN = /^\d{1,5}$/;
@@ -70,7 +72,10 @@ Options:
   --adb <path>          adb binary (LIONSCOPE_ADB; default: $ANDROID_HOME, the usual SDK location, then PATH)
   --allow-device-control
                         Let AI agents operate devices: screenshots, taps, swipes, text, keys, launching
-                        apps, booting and shutting down emulators (off by default)
+                        apps, booting and shutting down emulators, mocking HTTP responses (off by default)
+  --allow-network-bodies
+                        Let AI agents read captured HTTP request and response bodies (off by default;
+                        URLs, headers and timings are always readable)
   -h, --help            Show this help
   -v, --version         Print the version
 `;
@@ -87,6 +92,7 @@ export interface CliArgs {
   devicePort: string | undefined;
   adb: string | undefined;
   allowDeviceControl: boolean;
+  allowNetworkBodies: boolean;
 }
 
 function argsError(detail: string, cause?: unknown): Error {
@@ -112,6 +118,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         'device-port': { type: 'string' },
         adb: { type: 'string' },
         'allow-device-control': { type: 'boolean' },
+        'allow-network-bodies': { type: 'boolean' },
       },
     });
   } catch (error) {
@@ -135,6 +142,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     devicePort: values['device-port'],
     adb: nonEmpty(values.adb?.trim()),
     allowDeviceControl: values['allow-device-control'] === true,
+    allowNetworkBodies: values['allow-network-bodies'] === true,
   };
 }
 
@@ -160,6 +168,7 @@ export function loadConfig(
     adb: args.adb,
     dev: env.LIONSCOPE_DEV === '1' || args.dev,
     allowDeviceControl: args.allowDeviceControl,
+    allowNetworkBodies: args.allowNetworkBodies,
   };
 }
 

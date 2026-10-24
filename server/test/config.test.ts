@@ -13,6 +13,7 @@ describe('config', () => {
       adb: undefined,
       dev: false,
       allowDeviceControl: false,
+      allowNetworkBodies: false,
     });
   });
 
@@ -30,6 +31,7 @@ describe('config', () => {
       adb: undefined,
       dev: false,
       allowDeviceControl: false,
+      allowNetworkBodies: false,
     });
     expect(parsePort(' ')).toBe(8701);
     expect(() => loadConfig({ LIONSCOPE_DEVICE_PORT: '70000' }, NO_ARGS)).toThrow(/LIONSCOPE_DEVICE_PORT/);
@@ -44,6 +46,15 @@ describe('config', () => {
   it('enables device control for AI agents only with --allow-device-control', () => {
     expect(loadConfig({}, parseCliArgs(['--allow-device-control'])).allowDeviceControl).toBe(true);
     expect(USAGE).toContain('--allow-device-control');
+  });
+
+  it('lets AI agents read HTTP bodies only with --allow-network-bodies', () => {
+    expect(loadConfig({}, NO_ARGS).allowNetworkBodies).toBe(false);
+    expect(loadConfig({}, parseCliArgs(['--allow-network-bodies'])).allowNetworkBodies).toBe(true);
+    expect(USAGE).toContain('--allow-network-bodies');
+    expect(() => parseCliArgs(['--allow-network-bodies', '--allow-network-bodies'])).toThrow(
+      /more than once/,
+    );
   });
 
   it.each(['0', '8701', '65535', '00080'])('accepts port %j', (raw) => {
@@ -76,6 +87,7 @@ describe('command-line flags', () => {
       devicePort: undefined,
       adb: undefined,
       allowDeviceControl: false,
+      allowNetworkBodies: false,
     });
     expect(
       parseCliArgs([
@@ -86,6 +98,7 @@ describe('command-line flags', () => {
         '/opt/adb',
         '--dev',
         '--allow-device-control',
+        '--allow-network-bodies',
         '-h',
         '-v',
       ]),
@@ -97,6 +110,7 @@ describe('command-line flags', () => {
       devicePort: '9001',
       adb: '/opt/adb',
       allowDeviceControl: true,
+      allowNetworkBodies: true,
     });
     expect(parseCliArgs(['--help']).help).toBe(true);
     expect(parseCliArgs(['--version']).version).toBe(true);

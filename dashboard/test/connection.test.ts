@@ -98,6 +98,9 @@ describe('parseServerMessage', () => {
       viewtree: true,
       inspection: true,
       inspectorSelection: true,
+      http: true,
+      httpExchange: true,
+      networkMocks: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

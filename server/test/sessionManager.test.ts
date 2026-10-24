@@ -23,6 +23,7 @@ const EMPTY_SNAPSHOT = {
   inflates: [],
   viewTrees: [],
   screens: [],
+  http: [],
 };
 const DEVICES = fixture('adb-devices.txt');
 

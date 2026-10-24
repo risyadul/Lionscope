@@ -1,0 +1,5 @@
+{"type":"welcome","protocolVersion":7,"mode":"session","proof":"f2d88543b6cc93f29e7d04d3c7239f4bbcbd8b40566ba077664e2729f885a0e4"}
+{"type":"mocks","rev":3,"count":2}
+{"type":"mock","rev":3,"index":0,"id":"m2","method":"GET","match":"exact","url":"https://api.example.com/v1/items/42","action":"respond","status":200,"headers":"Content-Type: application/json\nX-Note: \"quoted\" ✓","bodyBase64":"eyJpZCI6NDIsIm5hbWUiOiJNb2NrZWQg4pyTIn0=","delayMs":1500}
+{"type":"mock","rev":3,"index":1,"id":"m1","method":"*","match":"glob","url":"https://*.example.com/v1/*","action":"timeout","status":0,"headers":"","bodyBase64":"","delayMs":0}
+{"type":"mocks","rev":4,"count":0}

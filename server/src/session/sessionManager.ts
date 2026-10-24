@@ -1,7 +1,10 @@
-import { DEVICE_LINK_PORT, isValidPackageName, isValidSerial } from '@lionscope/protocol';
+import { DEVICE_LINK_PORT, DEVICE_PROTOCOL_V7, isValidPackageName, isValidSerial } from '@lionscope/protocol';
 import type {
   AppInfo,
   DeviceInfo,
+  HttpExchangeDetail,
+  NetworkMockRule,
+  NetworkMocksState,
   SdkOptions,
   ServerMessage,
   SessionState,
@@ -11,6 +14,7 @@ import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
+import { deliverLinkKey } from '../device/linkKey.ts';
 import { ReverseTunnel } from '../device/reverseTunnel.ts';
 import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkTarget } from '../device/sdkLink.ts';
 import { ErrorThrottle, PublicError } from '../errors.ts';
@@ -20,6 +24,8 @@ import { buildAppList, parsePackageList } from '../parsers/packages.ts';
 import { parsePs } from '../parsers/ps.ts';
 import { parsePidList } from '../parsers/shellValues.ts';
 import { emptySnapshot } from '../store/sessionStore.ts';
+import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
+import type { MockOrigin } from './mockRules.ts';
 import { ProfilingSession } from './profilingSession.ts';
 import type { CollectorIntervals } from './profilingSession.ts';
 
@@ -159,8 +165,9 @@ export class SessionManager implements SdkLinkTarget {
    * An SDK said hello on a connection from `serial` (null: from no device we mapped, refused). Its PID is checked
    * on that device first, whatever package it claims; then the ready session's own app joins the session, and any
    * other app may get an inspect-only link. Every refusal is `no_session` on the wire and comes after the same
-   * check, so a probe can't learn which package is being profiled; the reason is logged here. `viaSession`: it
-   * arrived through the session gateway.
+   * check, so a probe can't learn which package is being profiled; the reason is logged here. A v7 session link
+   * whose hello has a nonce first gets a link key over adb, and its welcome the proof (deliverLinkKey); inspect-only
+   * links never do. `viaSession`: it arrived through the session gateway.
    */
   async attachSdkOn(
     serial: string | null,
@@ -186,8 +193,18 @@ export class SessionManager implements SdkLinkTarget {
       return NO_SESSION;
     }
     // The session may have started or stopped while checking.
-    const current = this.readySessionOf(serial, packageName);
-    if (current) return { ok: true, mode: 'session', handler: current.attachSdk(hello, link, true) };
+    let current = this.readySessionOf(serial, packageName);
+    let proof: string | null = null;
+    if (current && link.protocolVersion >= DEVICE_PROTOCOL_V7 && hello.nonce !== undefined) {
+      proof = await this.proveLink(serial, { packageName, pid, nonce: hello.nonce }, link.protocolVersion);
+      current = this.closed ? null : this.readySessionOf(serial, packageName);
+    }
+    if (current) {
+      const handler = current.attachSdk(hello, link, true, proof !== null);
+      return proof === null
+        ? { ok: true, mode: 'session', handler }
+        : { ok: true, mode: 'session', handler, proof };
+    }
     const result = (await this.inspectLinks?.attach(serial, hello, link, viaSession)) ?? NO_SESSION;
     if (!result.ok) {
       const profiling =
@@ -213,6 +230,38 @@ export class SessionManager implements SdkLinkTarget {
     if (!session || session.isStopped) return false;
     session.setSdkOptions(changes);
     return true;
+  }
+
+  /** Headers and bodies of one HTTP exchange of the current (or last) session; null when it is not kept. */
+  getHttpExchange(id: number): HttpExchangeDetail | null {
+    return this.session?.httpExchange(id) ?? null;
+  }
+
+  /** HTTP exchanges kept by the current (or last) session. */
+  getHttpExchangeCount(): number {
+    return this.session?.httpExchangeCount ?? 0;
+  }
+
+  /** The session's mock rules; none without a session (they end with it). */
+  getNetworkMocks(): NetworkMocksState {
+    return this.session?.networkMocks ?? EMPTY_MOCKS;
+  }
+
+  /**
+   * Create or replace a mock rule of the running session (announced with a `networkMocks` broadcast). Throws a
+   * PublicError without a session, or for a rule MockRules refuses.
+   */
+  setNetworkMock(input: unknown, origin: MockOrigin): NetworkMockRule {
+    const session = this.session;
+    if (!session || session.isStopped) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+    return session.setNetworkMock(input, origin);
+  }
+
+  /** Remove one rule (`id`) or all; a no-op without a session. false: there was nothing to remove. */
+  clearNetworkMocks(id?: string): boolean {
+    const session = this.session;
+    if (!session || session.isStopped) return false;
+    return session.clearNetworkMocks(id);
   }
 
   /** Poll `adb devices -l` every devicePollMs until close(). */
@@ -274,6 +323,7 @@ export class SessionManager implements SdkLinkTarget {
       this.session = session;
       this.broadcast({ type: 'session', session: session.state });
       this.broadcast({ type: 'snapshot', snapshot: emptySnapshot() });
+      this.broadcast({ type: 'networkMocks', mocks: session.networkMocks });
       log.info(`Profiling ${packageName} on ${serial}`);
       // Not awaited: the first device round-trips must not hold up a following stop/start request.
       session.start().catch((error: unknown) => log.error('session start failed:', errorMessage(error)));
@@ -321,6 +371,25 @@ export class SessionManager implements SdkLinkTarget {
     return session?.isReady && session.serial === serial && session.packageName === packageName
       ? session
       : null;
+  }
+
+  /**
+   * Hand the app a fresh link key over adb and sign the hello's nonce with it (deliverLinkKey); null when it could
+   * not be delivered: the link is welcomed without a proof and its SDK keeps network capture and mocks off.
+   */
+  private async proveLink(
+    serial: string,
+    hello: { packageName: string; pid: number; nonce: string },
+    protocolVersion: number,
+  ): Promise<string | null> {
+    const result = await deliverLinkKey(this.adb, serial, hello, protocolVersion);
+    if (result.ok) return result.proof;
+    if (this.linkErrors.shouldReport(`link-key ${serial}`)) {
+      log.warn(
+        `No link key for ${hello.packageName} on ${serial} (${result.error}): HTTP capture and mocks stay off`,
+      );
+    }
+    return null;
   }
 
   private refuse(serial: string, packageName: string, reason: string): void {

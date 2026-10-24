@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="@string/network_body" />
+
+        <EditText
+            android:id="@+id/base_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/network_base_url"
+            android:importantForAutofill="no"
+            android:inputType="textUri"
+            android:text="http://10.0.2.2:8745" />
+
+        <Button
+            android:id="@+id/run_all"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/network_run_all" />
+
+        <GridLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:columnCount="2">
+
+            <Button
+                android:id="@+id/get_items"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_items" />
+
+            <Button
+                android:id="@+id/get_item"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_item" />
+
+            <Button
+                android:id="@+id/post_cart"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_cart" />
+
+            <Button
+                android:id="@+id/post_login"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_login" />
+
+            <Button
+                android:id="@+id/get_slow"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_slow" />
+
+            <Button
+                android:id="@+id/get_missing"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_not_found" />
+
+            <Button
+                android:id="@+id/get_error"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_server_error" />
+
+            <Button
+                android:id="@+id/get_large"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_large" />
+
+            <Button
+                android:id="@+id/get_gzip"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_gzip" />
+
+            <Button
+                android:id="@+id/get_image"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_image" />
+
+            <Button
+                android:id="@+id/get_events"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_events" />
+
+            <Button
+                android:id="@+id/get_unreachable"
+                style="@style/NetworkDemoButton"
+                android:text="@string/network_unreachable" />
+        </GridLayout>
+
+        <Button
+            android:id="@+id/clear_log"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/network_clear" />
+
+        <TextView
+            android:id="@+id/network_log"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:textSize="12sp" />
+    </LinearLayout>
+</ScrollView>

@@ -15,21 +15,28 @@ internal class GatewayReader(
         thread.start()
     }
 
-    /** Runs until EOF or failure; never throws. Lines longer than [MAX_LINE_BYTES] are skipped. */
+    /**
+     * Runs until EOF or failure; never throws. Lines longer than [MAX_GATEWAY_LINE_BYTES] are skipped. The buffer of a
+     * long line (a `mock` with a large body) is released once it was handled.
+     */
     internal fun readLoop() {
         try {
             lowerThreadPriority()
             val stream = input.buffered()
-            val line = ByteArrayOutputStream(128)
+            var line = ByteArrayOutputStream(INITIAL_LINE_BYTES)
             var oversized = false
             while (true) {
                 val b = stream.read()
                 if (b < 0) break
                 if (b == '\n'.code) {
                     if (!oversized) GatewayMessage.parse(line.toString("UTF-8"))?.let(onMessage)
-                    line.reset()
+                    if (oversized || line.size() > RETAINED_LINE_BYTES) {
+                        line = ByteArrayOutputStream(INITIAL_LINE_BYTES)
+                    } else {
+                        line.reset()
+                    }
                     oversized = false
-                } else if (line.size() < MAX_LINE_BYTES) {
+                } else if (line.size() < MAX_GATEWAY_LINE_BYTES) {
                     line.write(b)
                 } else {
                     oversized = true
@@ -47,6 +54,8 @@ internal class GatewayReader(
     }
 
     internal companion object {
-        const val MAX_LINE_BYTES = 8 * 1024
+        const val INITIAL_LINE_BYTES = 128
+        /** A line buffer that grew past this is dropped after its line instead of being kept for the next one. */
+        const val RETAINED_LINE_BYTES = 16 * 1024
     }
 }

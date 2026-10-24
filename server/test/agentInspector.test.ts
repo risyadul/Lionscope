@@ -109,6 +109,7 @@ function inspectorAgent(answer: SdkInspection = INSPECTION) {
     protocolVersion: answer === INSPECTION ? 4 : 6,
     close: () => undefined,
     sendConfig: () => undefined,
+    sendMocks: () => undefined,
     inspect: async () => answer,
   };
   let now = Date.UTC(2026, 9, 20, 12, 0, 0);

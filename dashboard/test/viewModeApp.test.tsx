@@ -87,7 +87,13 @@ describe('View switch', () => {
     expect(option('Profiler').getAttribute('aria-checked')).toBe('true');
     expect(workspace().dataset.view).toBe('profile');
     expect(isShown('.instrument')).toBe(true);
-    expect(sideTabs().map((tab) => tab.textContent)).toEqual(['Screens', 'Stalls', 'Layouts', 'Inspector']);
+    expect(sideTabs().map((tab) => tab.textContent)).toEqual([
+      'Screens',
+      'Stalls',
+      'Layouts',
+      'Network',
+      'Inspector',
+    ]);
     expect(window.location.search).toBe('');
   });
 

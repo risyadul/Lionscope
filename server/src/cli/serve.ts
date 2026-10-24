@@ -35,6 +35,7 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
     dashboardDir: config.dashboardDir,
     dev: config.dev,
     allowDeviceControl: config.allowDeviceControl,
+    allowNetworkBodies: config.allowNetworkBodies,
   });
   try {
     const address = await server.listen();
@@ -43,6 +44,7 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
     if (config.dev)
       log.info('Dev mode: accepting WebSocket connections from the Vite dev server (port 5173)');
     if (config.allowDeviceControl) log.info('Device control is enabled for AI agents');
+    if (config.allowNetworkBodies) log.info('HTTP bodies are readable by AI agents');
   } catch (error) {
     await server.close().catch(() => undefined);
     throw new Error(`Cannot listen on ${config.host}:${config.port}: ${errorMessage(error)}`, {

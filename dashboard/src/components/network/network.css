@@ -1,0 +1,1084 @@
+/* Network tab: a filter bar over a fixed-row request list (only the rows in view exist), and the selected
+   request's detail under it. The path is the row's headline; status wears its class color (text, ≥ 4.5:1). */
+
+.net {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  container: net / inline-size;
+}
+
+.net-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.net-view > button {
+  height: 24px;
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+}
+
+.net-count {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.net-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Filters --------------------------------------------------------------------
+   One 28 px row: the search takes the room, then method, Mocked and the status classes. A narrow panel moves the
+   status classes to a row of their own (sharing its width), then the search too, so nothing is ever squeezed. */
+
+.net-toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.net-search {
+  position: relative;
+  display: flex;
+  flex: 1 1 150px;
+  align-items: center;
+  min-width: 120px;
+  color: var(--ink-muted);
+}
+
+.net-search svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+}
+
+.net-search input,
+.net-select {
+  height: 28px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  transition:
+    border-color var(--dur-fast) linear,
+    background-color var(--dur-fast) linear;
+}
+
+.net-search input {
+  width: 100%;
+  padding: 0 var(--space-2) 0 30px;
+  font-family: var(--font-mono);
+}
+
+/* The hint reads as a hint (sans); what you type is a URL, a method or a status (mono). */
+.net-search input::placeholder {
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+}
+
+.net-select {
+  padding-block: 0;
+  padding-left: 10px;
+  font-weight: 500;
+}
+
+.net-search input:hover,
+.net-select:hover {
+  border-color: var(--ink-muted);
+}
+
+.net-search input:focus-visible,
+.net-select:focus-visible {
+  border-color: var(--focus);
+  background: var(--surface);
+  outline-offset: 0;
+}
+
+/* Mocked: a filter chip that wears the mock accent (the same as the rows' Mocked badge) when on. */
+.net-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--space-3) 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) linear,
+    border-color var(--dur-fast) linear,
+    color var(--dur-fast) linear;
+}
+
+.net-toggle:hover {
+  border-color: var(--ink-muted);
+  background: var(--hover-wash);
+  color: var(--ink);
+}
+
+.net-toggle-dot {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--mock-accent);
+  border-radius: 50%;
+  transition: background-color var(--dur-fast) linear;
+}
+
+.net-toggle[aria-pressed='true'] {
+  border-color: var(--mock-accent);
+  background: var(--mock-wash);
+  color: var(--ink);
+}
+
+.net-toggle[aria-pressed='true'] .net-toggle-dot {
+  background: var(--mock-accent);
+}
+
+.net-status-filter > button {
+  min-width: 34px;
+  padding: 0 var(--space-2);
+}
+
+/* List ----------------------------------------------------------------------- */
+
+.net-list-host {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 132px;
+}
+
+.net-list {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.net-list:focus-visible {
+  outline-offset: -2px;
+}
+
+.net-list-inner {
+  position: relative;
+}
+
+/* Rows are placed by transform (no layout per row), each exactly ROW_PX tall. */
+.net-row {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: 6.5ch minmax(0, 1fr) 6ch 7.5ch 7ch;
+  align-items: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) linear;
+}
+
+.net-row:hover {
+  background: var(--hover-wash);
+}
+
+.net-row[aria-selected='true'] {
+  background: var(--active-wash);
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+
+.net-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.net-method {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+}
+
+.net-url {
+  display: grid;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.net-path-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.net-path {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-query {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.net-host {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-status,
+.net-time,
+.net-size {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.net-time,
+.net-size {
+  color: var(--ink-2);
+}
+
+.net-status {
+  font-weight: 600;
+}
+
+.net-status[data-class='1xx'],
+.net-status[data-class='3xx'] {
+  color: var(--log-i);
+}
+
+.net-status[data-class='2xx'] {
+  color: var(--good);
+}
+
+.net-status[data-class='4xx'] {
+  color: var(--http-4xx-text);
+}
+
+.net-status[data-class='5xx'],
+.net-status[data-class='failed'] {
+  color: var(--http-5xx-text);
+}
+
+.net-status[data-class='pending'] {
+  color: var(--ink-muted);
+}
+
+/* A failed call reads as one at a glance: its path too. */
+.net-row[data-state='failed'] .net-path {
+  color: var(--http-5xx-text);
+}
+
+.net-row[data-state='pending'] .net-path {
+  color: var(--ink-2);
+}
+
+.net-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  text-transform: uppercase;
+}
+
+.net-badge[data-kind='mock'] {
+  border-color: color-mix(in srgb, var(--mock-accent) 55%, var(--rule-strong));
+  background: var(--mock-wash);
+  color: var(--ink);
+}
+
+.net-badge[data-kind='agent'] {
+  border-color: color-mix(in srgb, var(--event) 55%, var(--rule-strong));
+  background: var(--event-wash);
+  color: var(--ink);
+}
+
+.net-jump {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-inverse);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  transform: translateX(-50%);
+}
+
+.net-jump:hover {
+  background: var(--ink-2);
+}
+
+.net-jump-count {
+  padding-left: 6px;
+  border-left: 1px solid color-mix(in srgb, var(--ink-inverse) 35%, transparent);
+}
+
+/* Detail --------------------------------------------------------------------- */
+
+.net-detail {
+  display: flex;
+  flex: 1.4 1 0;
+  flex-direction: column;
+  min-height: 220px;
+  border-top: 1px solid var(--rule-strong);
+  animation: net-detail-in var(--dur) var(--ease-out) both;
+}
+
+@keyframes net-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.net-detail-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+
+.net-detail-head p {
+  margin: 0;
+}
+
+.net-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.net-detail-title .net-status {
+  font-size: var(--text-small);
+}
+
+.net-detail-path {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-detail-host {
+  grid-row: 2;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-detail-actions {
+  display: flex;
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.net-mock-this,
+.net-detail-close {
+  height: 26px;
+  font-size: var(--text-meta);
+}
+
+.net-detail-close {
+  width: 26px;
+}
+
+.net-detail-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+  scrollbar-width: thin;
+}
+
+.net-detail-tab {
+  position: relative;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color var(--dur-fast) linear;
+}
+
+.net-detail-tab::after {
+  position: absolute;
+  right: var(--space-2);
+  bottom: -1px;
+  left: var(--space-2);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: '';
+  transform: scaleX(0);
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.net-detail-tab:hover,
+.net-detail-tab[aria-selected='true'] {
+  color: var(--ink);
+}
+
+.net-detail-tab[aria-selected='true']::after {
+  transform: scaleX(1);
+}
+
+.net-detail-tab:focus-visible {
+  outline-offset: -2px;
+}
+
+.net-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  overflow: auto;
+}
+
+.net-detail-body:focus-visible {
+  outline-offset: -2px;
+}
+
+.net-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px var(--space-3);
+  margin: 0;
+  font-size: var(--text-small);
+}
+
+.net-facts dt {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.net-facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-2);
+  min-width: 0;
+  margin: 0;
+}
+
+.net-full-url {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.net-error {
+  flex-basis: 100%;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.net-headers {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.net-headers + .net-headers {
+  margin-top: var(--space-4);
+}
+
+.net-headers h4 {
+  margin: 0;
+}
+
+.net-header-list {
+  display: grid;
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  font-size: var(--text-meta);
+}
+
+.net-header {
+  display: grid;
+  grid-template-columns: minmax(8ch, max-content) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 4px var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+.net-header:first-child {
+  border-top: 0;
+}
+
+.net-header dt {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.net-header dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Hidden by Lionscope (sensitive name): a placeholder, never mistaken for the value. */
+.net-header dd[data-redacted] {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.net-body {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.net-body-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.net-body-head .stall-copy {
+  margin-left: auto;
+}
+
+.net-body-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.net-body-text {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.net-note {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.net-note--pad {
+  padding: var(--space-3) var(--space-4);
+}
+
+.net-note--warn {
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--jank);
+  border-radius: var(--radius-s);
+  background: var(--jank-wash);
+  color: var(--ink);
+  font-size: var(--text-meta);
+}
+
+/* Waiting (to headers) then download (to the end), as one bar. */
+.net-timing {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.net-timing-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+}
+
+.net-timing-bar > span {
+  flex-basis: 0;
+  border-radius: 2px;
+}
+
+.net-timing [data-part='waiting'] {
+  background: var(--viz-http-pending);
+}
+
+.net-timing [data-part='download'] {
+  background: var(--viz-http-2xx);
+}
+
+.net-key {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+/* Mocks ---------------------------------------------------------------------- */
+
+.net-mocks {
+  padding: var(--space-3) 0 var(--space-4);
+}
+
+.net-mocks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.net-mocks-head h3 {
+  margin: 0;
+}
+
+.net-mocks-meta {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.net-mocks-buttons {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.net-mock-action {
+  height: 26px;
+  font-size: var(--text-meta);
+}
+
+.net-mock-action.btn--icon {
+  width: 26px;
+}
+
+.net-mocks > .net-note {
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.net-mock-list {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+}
+
+.net-mock {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.net-mock:not([data-enabled]) .net-mock-main {
+  opacity: 0.6;
+}
+
+.net-mock-switch {
+  padding: 0;
+}
+
+.net-mock-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  transition: opacity var(--dur-fast) linear;
+}
+
+.net-mock-main p {
+  margin: 0;
+}
+
+.net-mock-match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.net-mock-id {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: var(--text-overline);
+}
+
+.net-mock-url {
+  font-size: var(--text-meta);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.net-mock-answer {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.net-mock-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.net-mocks-foot {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+/* Empty states --------------------------------------------------------------- */
+
+.net-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  max-width: 560px;
+  padding: var(--space-5) var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.net-empty p {
+  margin: 0;
+}
+
+.net-empty-title {
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.net-empty .net-empty-note {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.net-empty[data-tone='critical'] .net-empty-title {
+  color: var(--log-e);
+}
+
+.net-empty-detail {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--critical);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.net-snippet {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  line-height: 1.55;
+}
+
+/* Mock editor ----------------------------------------------------------------
+   Title and footer stay put; only the fields scroll, so Save is always in view. Every control is 30 px tall. */
+
+.mock-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 2 * var(--space-4));
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--mock-accent);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  animation: confirm-rise var(--dur) var(--ease-out) both;
+}
+
+.mock-head {
+  display: grid;
+  flex: none;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.mock-scroll {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-4);
+  /* A long note and a server error never squeeze the fields out of reach. */
+  min-height: 6rem;
+  padding: var(--space-1) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mock-foot {
+  display: grid;
+  flex: none;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.mock-foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.mock-foot-buttons {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.mock-foot .btn {
+  height: 30px;
+}
+
+.mock-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--jank);
+  border-radius: var(--radius-s);
+  background: var(--jank-wash);
+  font-size: var(--text-small);
+}
+
+.mock-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-4);
+}
+
+.mock-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mock-field--method {
+  width: 132px;
+}
+
+.mock-field--status {
+  width: 112px;
+}
+
+.mock-field--delay {
+  width: 220px;
+  max-width: 100%;
+}
+
+.mock-label,
+.mock-label-row {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: 600;
+}
+
+.mock-label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 22px;
+}
+
+.mock-bytes {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.mock-bytes[data-over] {
+  color: var(--log-e);
+  font-weight: 600;
+}
+
+.mock-format {
+  height: 22px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-overline);
+}
+
+.mock-input {
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: var(--text-small);
+  transition:
+    border-color var(--dur-fast) linear,
+    background-color var(--dur-fast) linear;
+}
+
+/* One line tall exactly (selects and number fields ignore min-height padding differently per engine). */
+input.mock-input,
+select.mock-input {
+  height: 30px;
+  padding-block: 0;
+}
+
+/* Status and delay are typed (↑/↓ still step them): the engines' spinners differ and crowd a short field. */
+.mock-input[type='number'] {
+  appearance: textfield;
+}
+
+.mock-input[type='number']::-webkit-inner-spin-button,
+.mock-input[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.mock-input:hover {
+  border-color: var(--ink-muted);
+}
+
+.mock-input:focus-visible {
+  border-color: var(--focus);
+  background: var(--surface);
+  outline-offset: 0;
+}
+
+.mock-input[aria-invalid='true'] {
+  border-color: var(--critical);
+}
+
+.mock-field--method .select-wrap {
+  width: 100%;
+}
+
+.mock-textarea {
+  resize: vertical;
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+
+.mock-body {
+  min-height: 140px;
+}
+
+.mock-segmented {
+  justify-self: start;
+}
+
+.mock-segmented > button {
+  height: 28px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--text-small);
+}
+
+.mock-help,
+.mock-field-error {
+  margin: 0;
+  font-size: var(--text-meta);
+}
+
+.mock-help {
+  color: var(--ink-muted);
+}
+
+.mock-field-error {
+  color: var(--log-e);
+  font-weight: 500;
+}
+
+.mock-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--critical);
+  border-radius: var(--radius-s);
+  background: var(--critical-wash);
+  color: var(--ink);
+  font-size: var(--text-small);
+}
+
+/* Narrow panel: size goes, the row keeps method, path, status and time. */
+@container net (max-width: 420px) {
+  .net-row {
+    grid-template-columns: 6.5ch minmax(0, 1fr) 6ch 7.5ch;
+  }
+
+  .net-size {
+    display: none;
+  }
+}
+
+/* The status classes take a row of their own and share it evenly. */
+@container net (max-width: 640px) {
+  .net-status-filter {
+    flex-basis: 100%;
+  }
+
+  .net-status-filter > button {
+    flex: 1 0 auto;
+  }
+}
+
+/* Too narrow for search, method and Mocked side by side: the search takes the first row. */
+@container net (max-width: 379px) {
+  .net-search {
+    flex-basis: 100%;
+  }
+}

@@ -2,6 +2,7 @@ import { request } from 'node:http';
 import type { IncomingHttpHeaders } from 'node:http';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MAX_AGENT_BODY_BYTES } from '../src/agent/http.ts';
 import { callRemoteTool, probeServer } from '../src/cli/agentClient.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
@@ -9,7 +10,10 @@ import { noEmulatorHost } from './helpers/emulators.ts';
 import { FakeAdb, fixture } from './helpers/fakes.ts';
 import { freePort } from './helpers/agentProcess.ts';
 
-function startServer(allowDeviceControl: boolean): Promise<{ server: LionscopeServer; port: number }> {
+function startServer(
+  allowDeviceControl: boolean,
+  allowNetworkBodies = false,
+): Promise<{ server: LionscopeServer; port: number }> {
   const adb = new FakeAdb((args) => (args[0] === 'devices' ? fixture('adb-devices.txt') : ''));
   const server = createLionscopeServer({
     port: 0,
@@ -18,6 +22,7 @@ function startServer(allowDeviceControl: boolean): Promise<{ server: LionscopeSe
     emulatorHost: noEmulatorHost(),
     dashboardDir: '/nonexistent/dist',
     allowDeviceControl,
+    allowNetworkBodies,
   });
   return server.listen().then((address) => ({ server, port: address.port }));
 }
@@ -72,7 +77,7 @@ describe('agent HTTP endpoints', () => {
     expect((await post(port, '/api/agent/get_stalls', API, '{"limit":99}')).status).toBe(400);
     expect((await post(port, '/api/agent/no_such_tool', API)).status).toBe(404);
     expect((await post(port, '/api/agent/status', API, '[1]')).status).toBe(400);
-    const huge = JSON.stringify({ padding: 'x'.repeat(70_000) });
+    const huge = JSON.stringify({ padding: 'x'.repeat(MAX_AGENT_BODY_BYTES) });
     expect((await post(port, '/api/agent/status', API, huge)).status).toBe(413);
   });
 
@@ -120,6 +125,21 @@ describe('agent HTTP endpoints', () => {
     await client.close();
   });
 
+  it('keeps network bodies off, except for an explicit JSON API opt-in', async () => {
+    const bodies = async (options: { networkBodies?: boolean }) => {
+      const outcome = await callRemoteTool(port, 'status', {}, options);
+      return outcome.ok
+        ? (outcome.result as { server: { networkBodies: boolean } }).server.networkBodies
+        : null;
+    };
+    expect(await bodies({})).toBe(false);
+    expect(await bodies({ networkBodies: true })).toBe(true);
+    const client = await mcpClient(port);
+    const status = await client.callTool({ name: 'status', arguments: {} });
+    expect(status.structuredContent).toMatchObject({ server: { networkBodies: false } });
+    await client.close();
+  });
+
   it('serves MCP: initialize, tools/list with annotations, a read tool call', async () => {
     const client = await mcpClient(port);
     const { tools } = await client.listTools();
@@ -153,6 +173,26 @@ describe('agent endpoints with --allow-device-control', () => {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       expect(names).toEqual(expect.arrayContaining(['screenshot', 'tap', 'swipe', 'type_text', 'press_key']));
       await client.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('agent endpoints with --allow-network-bodies', () => {
+  it('allows bodies on both endpoints, without device control', async () => {
+    const { server, port } = await startServer(false, true);
+    try {
+      const client = await mcpClient(port);
+      const status = await client.callTool({ name: 'status', arguments: {} });
+      expect(status.structuredContent).toMatchObject({
+        server: { networkBodies: true, deviceControl: false },
+      });
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain('set_network_mock');
+      await client.close();
+      expect(await callRemoteTool(port, 'status', {})).toMatchObject({
+        result: { server: { networkBodies: true } },
+      });
     } finally {
       await server.close();
     }

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { CONTROL_SERVER_MESSAGE_TYPES } from '@lionscope/protocol';
-import type { CpuSample, InspectorSnapshot, Snapshot } from '@lionscope/protocol';
+import type { CpuSample, HttpExchangeDetail, InspectorSnapshot, Snapshot } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAllowedOrigins, createWsGateway, MAX_CLIENT_BUFFERED_BYTES } from '../src/http/wsGateway.ts';
 import type {
@@ -13,8 +13,10 @@ import type {
   WsGateway,
 } from '../src/http/wsGateway.ts';
 import { PublicError } from '../src/errors.ts';
+import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from '../src/session/mockRules.ts';
 import { IDLE_SESSION } from '../src/session/sessionManager.ts';
 import { Client } from './helpers/net.ts';
+import { mockInput } from './helpers/networkFixtures.ts';
 
 const SNAPSHOT: Snapshot = {
   cpu: [{ ts: 1, percent: 1, percentSingleCore: 4, threads: 2 }],
@@ -35,6 +37,12 @@ const manager: GatewayManager = {
   startSession: async () => IDLE_SESSION,
   stopSession: async () => IDLE_SESSION,
   setSdkOptions: () => false,
+  getHttpExchange: () => null,
+  getNetworkMocks: () => EMPTY_MOCKS,
+  setNetworkMock: () => {
+    throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+  },
+  clearNetworkMocks: () => false,
 };
 
 const emulators: GatewayEmulators = {
@@ -124,8 +132,10 @@ describe('WebSocket gateway back-pressure', () => {
       'emulators',
       'error',
       'hello',
+      'httpExchange',
       'inspection',
       'inspectorSelection',
+      'networkMocks',
       'session',
       'snapshot',
     ]);
@@ -406,5 +416,133 @@ describe('WebSocket gateway Inspector', () => {
       },
       inspectLinks,
     );
+  });
+});
+
+describe('WebSocket gateway network', () => {
+  const detail: HttpExchangeDetail = {
+    id: 12,
+    ts: 1,
+    endTs: 2,
+    method: 'GET',
+    url: 'https://api.example.com/v1/items',
+    state: 'complete',
+    status: 200,
+    headersMs: 1,
+    durationMs: 1,
+    requestSize: null,
+    responseSize: 2,
+    responseType: 'application/json',
+    mockId: null,
+    error: null,
+    screen: null,
+    protocol: 'h2',
+    requestHeaders: [],
+    responseHeaders: [],
+    requestBody: null,
+    responseBody: { size: 2, contentType: 'application/json', text: '[]', truncated: false, omitted: null },
+  };
+
+  async function withGateway(fake: GatewayManager, run: (port: number) => Promise<void>): Promise<void> {
+    const server = createServer();
+    let port = 0;
+    const gateway = createWsGateway({
+      server,
+      manager: fake,
+      emulators,
+      inspector,
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    try {
+      await run(port);
+    } finally {
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  it('sends the mock rules on connect, after the snapshot', async () => {
+    const mocks = { rules: [], rev: 4, appliedRev: 4 };
+    await withGateway({ ...manager, getNetworkMocks: () => mocks }, async (port) => {
+      const client = await Client.open(port);
+      expect(await client.waitFor('networkMocks')).toEqual({ type: 'networkMocks', mocks });
+      const types = client.messages.map((message) => message.type);
+      expect(types.indexOf('networkMocks')).toBe(types.indexOf('snapshot') + 1);
+      client.close();
+    });
+  });
+
+  it('answers getHttpExchange to the asking client only, null when unknown', async () => {
+    await withGateway({ ...manager, getHttpExchange: (id) => (id === 12 ? detail : null) }, async (port) => {
+      const asking = await Client.open(port);
+      const other = await Client.open(port);
+      await asking.waitFor('networkMocks');
+      await other.waitFor('networkMocks');
+      asking.send({ type: 'getHttpExchange', id: 12 });
+      expect(await asking.waitFor('httpExchange')).toEqual({
+        type: 'httpExchange',
+        id: 12,
+        exchange: detail,
+      });
+      asking.send({ type: 'getHttpExchange', id: 13 });
+      expect(await asking.waitFor('httpExchange', (message) => message.id === 13)).toEqual({
+        type: 'httpExchange',
+        id: 13,
+        exchange: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(other.messages.some((message) => message.type === 'httpExchange')).toBe(false);
+      asking.close();
+      other.close();
+    });
+  });
+
+  it('passes setNetworkMock and clearNetworkMocks on; without a session setNetworkMock fails', async () => {
+    const calls: unknown[] = [];
+    let running = false;
+    const fake: GatewayManager = {
+      ...manager,
+      setNetworkMock: (input, origin) => {
+        calls.push(['set', input, origin]);
+        if (!running) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+        return { ...mockInput(), id: 'm1', origin, updatedAt: 1 };
+      },
+      clearNetworkMocks: (id) => {
+        calls.push(['clear', id]);
+        return false;
+      },
+    };
+    await withGateway(fake, async (port) => {
+      const client = await Client.open(port);
+      await client.waitFor('networkMocks');
+      client.send({ type: 'setNetworkMock', rule: mockInput() });
+      expect(await client.waitFor('error')).toEqual({
+        type: 'error',
+        code: 'setNetworkMock_failed',
+        message: NO_SESSION_MOCKS_MESSAGE,
+      });
+      running = true;
+      client.send({ type: 'setNetworkMock', rule: mockInput({ body: 'x'.repeat(200_000) }) });
+      client.send({ type: 'clearNetworkMocks', id: 'm1' });
+      client.send({ type: 'clearNetworkMocks' });
+      await waitUntil(() => calls.length === 4);
+      expect(calls.map((call) => (call as unknown[])[0])).toEqual(['set', 'set', 'clear', 'clear']);
+      expect(calls[1]).toEqual(['set', mockInput({ body: 'x'.repeat(200_000) }), 'user']);
+      expect(calls.slice(2)).toEqual([
+        ['clear', 'm1'],
+        ['clear', undefined],
+      ]);
+      // Only setNetworkMock may be larger than 4 KB.
+      client.send({ type: 'getHttpExchange', id: 1, padding: 'x'.repeat(5000) });
+      expect(await client.waitFor('error', (message) => message.code === 'bad_request')).toMatchObject({
+        message: 'message too large',
+      });
+      expect(client.messages.filter((message) => message.type === 'error')).toHaveLength(2);
+      client.close();
+    });
   });
 });

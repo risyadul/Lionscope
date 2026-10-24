@@ -36,9 +36,19 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
 const REVERSE_TIMEOUT_MS = 5000;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 
-/** Typed text can be a password: `input text …` never reaches an error message or a log line. */
+/** An intent's `key` extra: the link key handed to the app (device/linkKey.ts). */
+const KEY_EXTRA = /(--es key )\S+/g;
+
+/**
+ * Typed text can be a password and a link key is a secret: `input text …` and `--es key …` never reach an error
+ * message or a log line.
+ */
 export function describeArgs(args: readonly string[]): string {
-  return args.map((arg) => (/^input text\b/.test(arg) ? 'input text <redacted>' : arg)).join(' ');
+  return args
+    .map((arg) =>
+      /^input text\b/.test(arg) ? 'input text <redacted>' : arg.replace(KEY_EXTRA, '$1<redacted>'),
+    )
+    .join(' ');
 }
 
 /** stderr, else why the process ended; never Node's message, which repeats the whole command line. */

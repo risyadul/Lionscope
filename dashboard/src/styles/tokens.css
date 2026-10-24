@@ -116,6 +116,18 @@
   --viz-inflate: #b88a00;
   --stall-wash: rgba(186, 40, 64, 0.08);
 
+  /* Network (HTTP calls by status class): success green-teal, redirect blue, client-error amber, server error and
+     failure red, pending gray. Hues from the validated palette; the status text in lists carries the class too. */
+  --viz-http-2xx: #1baf7a;
+  --viz-http-3xx: #2a78d6;
+  --viz-http-4xx: #c26a00;
+  --viz-http-5xx: #c42f2f;
+  --viz-http-pending: #8b919c;
+  --http-4xx-text: #9a5200;
+  --http-5xx-text: #c42f2f;
+  --mock-accent: #6250d6;
+  --mock-wash: rgba(98, 80, 214, 0.1);
+
   /* Log levels (text, ≥ 4.5:1) */
   --log-v: #5f6673;
   --log-d: #3f4752;
@@ -205,6 +217,16 @@
     --viz-strictmode: #20a89b;
     --viz-inflate: #d9a824;
     --stall-wash: rgba(214, 78, 87, 0.12);
+
+    --viz-http-2xx: #199e70;
+    --viz-http-3xx: #3987e5;
+    --viz-http-4xx: #f0a420;
+    --viz-http-5xx: #f07070;
+    --viz-http-pending: #6f7682;
+    --http-4xx-text: #f3b23a;
+    --http-5xx-text: #f07070;
+    --mock-accent: #9085e9;
+    --mock-wash: rgba(144, 133, 233, 0.14);
 
     --log-v: #8a919c;
     --log-d: #c9ced6;

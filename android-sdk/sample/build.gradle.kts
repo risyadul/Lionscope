@@ -66,6 +66,8 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
     implementation("androidx.navigation:navigation-compose:$navigationCompose")
+    // The network demo (NetworkActivity) only: the SDK itself does not bring OkHttp.
+    implementation(libs.okhttp)
 
     debugImplementation(project(":lionscope"))
     releaseImplementation(project(":lionscope-noop"))

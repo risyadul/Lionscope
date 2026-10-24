@@ -47,17 +47,22 @@ internal object DeviceMessages {
         refreshRateHz: Double,
         protocolVersion: Int = DEVICE_PROTOCOL_VERSION,
         sdkVersion: String = Lionscope.VERSION,
-    ): String = JsonWriter().beginObject()
-        .name("type").value("hello")
-        .name("protocolVersion").value(protocolVersion)
-        .name("sdkVersion").value(sdkVersion)
-        .name("packageName").value(packageName)
-        .name("processName").value(processName)
-        .name("pid").value(pid)
-        .name("apiLevel").value(apiLevel)
-        .name("deviceWallMs").value(deviceWallMs)
-        .name("refreshRateHz").value(refreshRateHz)
-        .endObject().toString()
+        nonce: String? = null,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("hello")
+            .name("protocolVersion").value(protocolVersion)
+            .name("sdkVersion").value(sdkVersion)
+            .name("packageName").value(packageName)
+            .name("processName").value(processName)
+            .name("pid").value(pid)
+            .name("apiLevel").value(apiLevel)
+            .name("deviceWallMs").value(deviceWallMs)
+            .name("refreshRateHz").value(refreshRateHz)
+        // v7: the link proof's challenge (a fresh one per connection, see LinkProof).
+        if (nonce != null && protocolVersion >= DEVICE_PROTOCOL_V7) json.name("nonce").value(nonce)
+        return json.endObject().toString()
+    }
 
     /** A [ScreenKind.DESTINATION] is sent as `fragment` unless [negotiatedVersion] is v6 or later. */
     fun screen(ts: Long, screen: ScreenRef?, negotiatedVersion: Int? = DEVICE_PROTOCOL_VERSION): String {

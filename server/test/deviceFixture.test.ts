@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
 import type { DeviceMessage, ServerMessage } from '@lionscope/protocol';
@@ -8,6 +9,7 @@ import { droppedFramesMessage } from '../src/device/sdkBridge.ts';
 import type { DeviceGateway } from '../src/device/deviceGateway.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
 import { DeviceClient } from './helpers/deviceClient.ts';
+import { mockInput } from './helpers/networkFixtures.ts';
 import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const GOLDEN = readFileSync(
@@ -17,6 +19,10 @@ const GOLDEN = readFileSync(
   .split('\n')
   .filter((line) => line.trim() !== '');
 const HELLO = JSON.parse(GOLDEN[0] ?? '{}') as Extract<DeviceMessage, { type: 'hello' }>;
+const isHello = (line: string) => line.startsWith('{"type":"hello"');
+/** The golden lines after the first hello, without the later (v7) hello: one link says hello once. */
+const LINES = GOLDEN.slice(1).filter((line) => !isHello(line));
+const V7_NONCE = (JSON.parse(GOLDEN.findLast(isHello) ?? '{}') as { nonce?: string }).nonce ?? '';
 /** The device clock runs 5 s behind the laptop. */
 const OFFSET_MS = 5000;
 /** Device wall clock when the test starts: just after the fixture's last screen change. */
@@ -49,11 +55,17 @@ describe('golden device messages through the gateway', () => {
     const now = () => clock;
     const device = new FakeDevice();
     device.pid = HELLO.pid; // the hello's PID is the app's process on the session device
+    /** The link keys handed to the app (`am broadcast … --es key <hex>`). */
+    const keys: string[] = [];
     const adb = new FakeAdb(
       (args) => {
         if (args[0] === 'devices') return fixture('adb-devices.txt');
         // The gateway checks a hello's PID with `adb shell pidof` before welcoming it.
         const command = execShellCommand(args);
+        if (command?.startsWith('am broadcast ')) {
+          keys.push(/--es key ([0-9a-f]+)/.exec(command)?.[1] ?? '');
+          return 'Broadcasting: Intent { flg=0x400000 cmp=com.example.shop/x (has extras) }\nBroadcast completed: result=0\n';
+        }
         return command?.startsWith('pidof ') ? String(device.handle(command)) : '';
       },
       (command) => {
@@ -79,7 +91,10 @@ describe('golden device messages through the gateway', () => {
     await sessions.startSession('emulator-5554', HELLO.packageName);
     await waitUntil(() => sessions.getSessionState().status === 'running');
     clock = laptop(DEVICE_START_MS);
-    return { adb, device, manager: sessions, port, ofType };
+    const setClock = (ms: number) => {
+      clock = ms;
+    };
+    return { adb, device, manager: sessions, port, ofType, clock: { set: setClock }, keys };
   }
 
   it('produces screen spans, SDK frame samples and a breakdown', async () => {
@@ -87,7 +102,7 @@ describe('golden device messages through the gateway', () => {
     expect(adb.reverseCalls[0]).toEqual(['-s', 'emulator-5554', 'reverse', 'tcp:8700', `tcp:${port}`]);
 
     const client = await DeviceClient.open(port);
-    for (const line of GOLDEN) client.send(line);
+    for (const line of [GOLDEN[0] ?? '', ...LINES]) client.send(line);
     await client.waitFor((message) => message.type === 'welcome');
     await waitUntil(() => ofType('breakdown').length > 0);
     expect(manager.getSessionState().sdk).toEqual({
@@ -98,6 +113,7 @@ describe('golden device messages through the gateway', () => {
       framesActive: true,
       protocolVersion: 1,
       options: DEFAULT_SDK_OPTIONS,
+      network: 'needs_sdk',
     });
     // The hello's PID was checked with pidof right away.
     expect(device.commands.filter((command) => command.startsWith('pidof')).length).toBeGreaterThanOrEqual(2);
@@ -203,12 +219,12 @@ describe('golden device messages through the gateway', () => {
   });
   it('on a v2 link: config after the welcome, and stalls / StrictMode violations on the laptop clock', async () => {
     const { manager, port, ofType } = await startSession();
-    const v2Lines = GOLDEN.slice(1).filter((line) => /"type":"(stall|strictmode)"/.test(line));
+    const v2Lines = LINES.filter((line) => /"type":"(stall|strictmode)"/.test(line));
     expect(v2Lines).toHaveLength(2);
 
     const client = await DeviceClient.open(port);
     client.send({ ...HELLO, protocolVersion: 2 });
-    for (const line of GOLDEN.slice(1)) client.send(line);
+    for (const line of LINES) client.send(line);
     await client.waitFor((message) => message.type === 'config');
     expect(client.rawLines.slice(0, 2)).toEqual([
       '{"type":"welcome","protocolVersion":2}',
@@ -246,7 +262,7 @@ describe('golden device messages through the gateway', () => {
     ).map((line) => JSON.parse(line) as DeviceMessage);
     const v3 = await DeviceClient.open(port);
     v3.send({ ...HELLO, protocolVersion: 3 });
-    for (const line of GOLDEN.slice(1)) v3.send(line);
+    for (const line of LINES) v3.send(line);
     await waitUntil(() => ofType('viewtree').length > 0);
     const { type: _i, ...inflate } = inflateLine as Extract<DeviceMessage, { type: 'inflate' }>;
     const { type: _l, ...label } = labelLine as Extract<DeviceMessage, { type: 'inflate' }>;
@@ -313,11 +329,67 @@ describe('golden device messages through the gateway', () => {
     client.close();
   });
 
+  it('on a v7 link: HTTP exchanges on the laptop clock, and the mock rules sent after the welcome and confirmed', async () => {
+    const { manager, port, ofType, clock, keys } = await startSession();
+    // Rev 3 with two rules, like the golden `mocksApplied`.
+    manager.setNetworkMock(mockInput(), 'user');
+    manager.setNetworkMock(mockInput({ url: 'https://api.example.com/v1/cart', method: 'POST' }), 'user');
+    manager.setNetworkMock({ ...mockInput({ status: 503 }), id: 'm1' }, 'user');
+    const client = await DeviceClient.open(port);
+    client.send({ ...HELLO, protocolVersion: 7, nonce: V7_NONCE });
+    await client.waitFor((message) => message.type === 'mock');
+    await waitUntil(() => manager.getSessionState().sdk?.connected === true);
+    // The link key went to the app before the welcome, which proves the server holds it.
+    expect(keys).toHaveLength(1);
+    const proof = createHmac('sha256', Buffer.from(keys[0] ?? '', 'hex'))
+      .update(`${V7_NONCE}:7:session`)
+      .digest('hex');
+    expect(client.rawLines[0]).toBe(
+      `{"type":"welcome","protocolVersion":7,"mode":"session","proof":"${proof}"}`,
+    );
+    expect(manager.getSessionState().sdk?.network).toBe('active');
+    const sent = client.rawLines.map((line) => JSON.parse(line) as { type: string });
+    expect(sent.map((message) => message.type)).toEqual(['welcome', 'config', 'mocks', 'mock', 'mock']);
+    expect(sent[2]).toEqual({ type: 'mocks', rev: 3, count: 2 });
+
+    clock.set(laptop(1792516396000));
+    for (const line of GOLDEN.filter((candidate) => /"type":"(http|mocks)/.test(candidate)))
+      client.send(line);
+    await waitUntil(() => manager.getNetworkMocks().appliedRev === 3);
+    const http = manager.getSnapshot().http ?? [];
+    // Responses 3 and 4 have no request in the fixture: dropped.
+    expect(http).toHaveLength(2);
+    expect(http[0]).toMatchObject({
+      ts: laptop(1792516381000),
+      endTs: laptop(1792516381000) + 182.7,
+      method: 'GET',
+      url: 'https://api.example.com/v1/items?page=2&token=‹redacted›',
+      state: 'complete',
+      status: 200,
+      headersMs: 120.4,
+      responseSize: 58,
+      responseType: 'application/json; charset=utf-8',
+      mockId: null,
+    });
+    expect(http[1]).toMatchObject({ method: 'POST', status: 503, mockId: 'm1', requestSize: 21 });
+    expect(manager.getHttpExchange(http[0]?.id ?? -1)).toMatchObject({
+      protocol: 'h2',
+      requestHeaders: [
+        ['Accept', 'application/json'],
+        ['Authorization', '‹redacted›'],
+      ],
+      responseBody: { size: 58, text: '{"items":[{"id":42,"name":"Coffee beans"}],"next":"page3"}' },
+    });
+    expect(ofType('http').length).toBeGreaterThanOrEqual(4);
+    expect(ofType('networkMocks').at(-1)?.mocks).toMatchObject({ rev: 3, appliedRev: 3 });
+    client.close();
+  });
+
   it('ignores the v3 golden lines on a v2 link', async () => {
     const { manager, port, ofType } = await startSession();
     const client = await DeviceClient.open(port);
     client.send({ ...HELLO, protocolVersion: 2 });
-    for (const line of GOLDEN.slice(1)) client.send(line);
+    for (const line of LINES) client.send(line);
     const done = { name: 'done', className: 'com.example.shop.ui.DoneActivity', kind: 'activity' } as const;
     client.send({ type: 'screen', ts: DEVICE_START_MS, screen: done });
     await waitUntil(() => ofType('screen').some((message) => message.span.screen?.name === 'done'));
@@ -331,7 +403,7 @@ describe('golden device messages through the gateway', () => {
   it('ignores the v2 and v3 golden lines on a v1 link', async () => {
     const { manager, port, ofType } = await startSession();
     const client = await DeviceClient.open(port);
-    for (const line of GOLDEN) client.send(line);
+    for (const line of [GOLDEN[0] ?? '', ...LINES]) client.send(line);
     // Lines are handled in order: once this one is through, the v2 lines before it were skipped.
     const done = { name: 'done', className: 'com.example.shop.ui.DoneActivity', kind: 'activity' } as const;
     client.send({ type: 'screen', ts: DEVICE_START_MS, screen: done });

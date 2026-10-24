@@ -96,6 +96,7 @@ describe('ProfilingSession SDK link', () => {
       framesActive: false,
       protocolVersion: 1,
       options: DEFAULT_SDK_OPTIONS,
+      network: 'needs_sdk',
     };
     expect(session.state.sdk).toEqual(expected);
     expect(ofType('session').at(-1)?.session.sdk).toEqual(expected);

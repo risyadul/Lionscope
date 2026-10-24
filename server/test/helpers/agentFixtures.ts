@@ -3,6 +3,7 @@ import type {
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
+  HttpExchangeDetail,
   InflateSample,
   LogEntry,
   SessionState,
@@ -13,7 +14,9 @@ import type {
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
-import type { AgentContext, AgentInspector } from '../../src/agent/tool.ts';
+import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
+import { PublicError } from '../../src/errors.ts';
+import { MockRules, NO_SESSION_MOCKS_MESSAGE } from '../../src/session/mockRules.ts';
 import { emptySnapshot } from '../../src/store/sessionStore.ts';
 import { FakeAdb } from './fakes.ts';
 
@@ -168,11 +171,15 @@ export const EMULATORS: EmulatorInfo[] = [
 ];
 
 export interface FakeAgent {
-  ctx: Omit<AgentContext, 'deviceControl'>;
+  ctx: AgentBaseContext;
   adb: FakeAdb;
   snapshot: Required<Snapshot>;
   session: SessionState;
   sdkOptionCalls: unknown[];
+  /** The session's mock rules (a real MockRules; `networkMocks` messages are dropped). */
+  mocks: MockRules;
+  /** What getHttpExchange answers, by id. */
+  httpDetails: Map<number, HttpExchangeDetail>;
 }
 
 /** A context over a fixed snapshot; the clock stands at `now`. */
@@ -185,8 +192,11 @@ export function fakeAgent(
     snapshot: { ...emptySnapshot(), ...snapshot },
     session: options.session ?? RUNNING,
     sdkOptionCalls: [],
+    mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
+    httpDetails: new Map(),
     ctx: undefined as unknown as FakeAgent['ctx'],
   };
+  const running = () => agent.session.status !== 'idle' && agent.session.status !== 'error';
   agent.ctx = {
     sessions: {
       getDevices: () => DEVICES,
@@ -208,6 +218,19 @@ export function fakeAgent(
       setSdkOptions: (changes) => {
         agent.sdkOptionCalls.push(changes);
         return agent.session.status !== 'idle';
+      },
+      getHttpExchange: (id) => agent.httpDetails.get(id) ?? null,
+      getHttpExchangeCount: () => agent.snapshot.http.length,
+      getNetworkMocks: () => agent.mocks.state,
+      setNetworkMock: (input, origin) => {
+        if (!running()) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);
+        return agent.mocks.set(input, origin);
+      },
+      clearNetworkMocks: (id) => {
+        if (!running()) return false;
+        if (id !== undefined) return agent.mocks.remove(id);
+        agent.mocks.clear();
+        return true;
       },
     },
     emulators: {

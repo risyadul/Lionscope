@@ -1,4 +1,10 @@
-import type { DeviceMessage, GatewayMessage, InspectorNode, SdkOptions } from '@lionscope/protocol';
+import type {
+  DeviceMessage,
+  GatewayMessage,
+  InspectorNode,
+  NetworkMockRule,
+  SdkOptions,
+} from '@lionscope/protocol';
 
 export type SdkHello = Extract<DeviceMessage, { type: 'hello' }>;
 /** The answers to a gateway `inspect`: the gateway consumes them itself (SdkLink.inspect). */
@@ -25,6 +31,13 @@ export interface SdkLink {
    * before the `welcome` went out, it is sent right after it.
    */
   sendConfig(options: SdkOptions): void;
+  /**
+   * Send a complete mock rule set (`mocks`, then one `mock` per rule, in the order given: the first match answers).
+   * Only session links at protocol ≥ 7 get it (a no-op otherwise); called before the `welcome` went out, the latest
+   * set is sent right after it. While the socket's buffer is over MAX_PENDING_MOCK_BYTES, only the latest set waits
+   * for it to drain. The SDK answers `mocksApplied`.
+   */
+  sendMocks(rev: number, rules: readonly NetworkMockRule[]): void;
   /**
    * Ask for an Inspector snapshot (links at protocol ≥ 4): resolves with the reassembled answer, rejects with an
    * SdkInspectError.
@@ -74,9 +87,13 @@ export interface SdkLinkHandler {
 /** What a welcomed link is for (`welcome.mode`, sent on v5 links): a profiling session, or inspect-only. */
 export type SdkLinkMode = NonNullable<Extract<GatewayMessage, { type: 'welcome' }>['mode']>;
 
-/** `mode` defaults to `session`; `inspect` is only ever given to links at protocol ≥ 5. */
+/**
+ * `mode` defaults to `session`; `inspect` is only ever given to links at protocol ≥ 5. `proof` (the link proof, see
+ * LINK_KEY_RECEIVER) goes into the welcome of a v7 session link; inspect-only links never get one.
+ */
 export type SdkAttachResult =
-  { ok: true; handler: SdkLinkHandler; mode?: SdkLinkMode } | { ok: false; reason: ByeReason };
+  | { ok: true; handler: SdkLinkHandler; mode?: SdkLinkMode; proof?: string }
+  | { ok: false; reason: ByeReason };
 
 /**
  * Where the gateway hands validated hellos (the session manager). The gateway sends nothing (no `welcome`) until

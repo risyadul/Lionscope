@@ -36,7 +36,7 @@ class GatewayReaderTest {
 
     @Test
     fun skipsOversizedLinesAndKeepsReading() {
-        val huge = "{\"type\":\"welcome\",\"pad\":\"" + "x".repeat(GatewayReader.MAX_LINE_BYTES * 2) + "\"}\n"
+        val huge = "{\"type\":\"welcome\",\"pad\":\"" + "x".repeat(MAX_GATEWAY_LINE_BYTES * 2) + "\"}\n"
         val (messages, closed) = read(ByteArrayInputStream((huge + "{\"type\":\"bye\",\"reason\":\"after\"}\n").toByteArray()))
         assertEquals(1, messages.size)
         assertEquals("after", (messages.single() as GatewayMessage.Bye).reason)

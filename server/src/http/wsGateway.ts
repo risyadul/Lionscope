@@ -4,7 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { RawData } from 'ws';
 import {
   CONTROL_SERVER_MESSAGE_TYPES,
-  MAX_CLIENT_MESSAGE_BYTES,
+  MAX_CLIENT_FRAME_BYTES,
   parseClientMessage,
   PROTOCOL_VERSION,
   WS_PATH,
@@ -93,6 +93,10 @@ export type GatewayManager = Pick<
   | 'startSession'
   | 'stopSession'
   | 'setSdkOptions'
+  | 'getHttpExchange'
+  | 'getNetworkMocks'
+  | 'setNetworkMock'
+  | 'clearNetworkMocks'
 >;
 
 /** What the gateway needs from the Inspector. */
@@ -134,13 +138,17 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   inspect: 'Could not inspect the screen',
   selectInspectorNode: 'Could not select the Inspector node',
   inspectorFocus: 'Could not focus the Inspector',
+  getHttpExchange: 'Could not read the HTTP exchange',
+  setNetworkMock: 'Could not set the mock rule',
+  clearNetworkMocks: 'Could not remove the mock rules',
 };
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
   const { server, manager, emulators, inspector } = options;
   const delegatedPaths = options.delegatedPaths ?? new Set<string>();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIENT_MESSAGE_BYTES });
+  // The larger cap is for `setNetworkMock` only: parseClientMessage holds every other type to 4 KB.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIENT_FRAME_BYTES });
   const clients = new Map<WebSocket, ClientState>();
 
   /** Send unless the client is hopelessly behind, in which case it is disconnected. */
@@ -229,6 +237,17 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         // Not answered: it only keeps (or stops keeping) an inspect-only SDK link to the device.
         options.inspectLinks?.setFocus(ws, message.serial);
         return;
+      case 'getHttpExchange':
+        send(ws, { type: 'httpExchange', id: message.id, exchange: manager.getHttpExchange(message.id) });
+        return;
+      case 'setNetworkMock':
+        // Answered by the `networkMocks` broadcast (a refusal by `setNetworkMock_failed` to this client).
+        manager.setNetworkMock(message.rule, 'user');
+        return;
+      case 'clearNetworkMocks':
+        // Answered by the `networkMocks` broadcast; an unknown id (or no session) changes nothing.
+        manager.clearNetworkMocks(message.id);
+        return;
     }
   };
 
@@ -282,6 +301,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     send(ws, { type: 'emulators', emulators: emulators.getEmulators() });
     send(ws, { type: 'session', session: manager.getSessionState() });
     send(ws, { type: 'snapshot', snapshot: manager.getSnapshot() });
+    send(ws, { type: 'networkMocks', mocks: manager.getNetworkMocks() });
     const inspection = inspector.current;
     if (inspection) send(ws, { type: 'inspection', snapshot: inspection });
     send(ws, { type: 'inspectorSelection', selection: inspector.selection });

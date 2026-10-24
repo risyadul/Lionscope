@@ -19,6 +19,12 @@
         android:text="@string/open_detail" />
 
     <Button
+        android:id="@+id/open_network"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/open_network" />
+
+    <Button
         android:id="@+id/show_dialog"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

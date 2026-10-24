@@ -24,7 +24,7 @@ const MIN_LABEL_PX = 40;
 const MIN_BAND_PX = 3;
 const TOOLTIP_HALF_WIDTH = 130;
 /** Plot-area insets shared with uPlot, so bands line up with every lane's x axis. */
-const TRACK_INSETS = { left: Y_AXIS_WIDTH, right: RIGHT_PAD };
+export const TRACK_INSETS = { left: Y_AXIS_WIDTH, right: RIGHT_PAD };
 
 type Props = {
   spans: readonly ScreenSpan[];
@@ -85,8 +85,8 @@ function ScreenReadout({
   );
 }
 
-/** Synced chart cursor and log-row probe, positioned without re-rendering the bands. */
-function TrackMarkers({
+/** Synced chart cursor and log-row probe, positioned without re-rendering the bands (the Network lane too). */
+export function TrackMarkers({
   cursorX,
   probeTs,
   fromTs,

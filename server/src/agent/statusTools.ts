@@ -50,6 +50,25 @@ function sdkView(session: SessionState) {
     processName: sdk.processName,
     framesActive: sdk.framesActive,
     options: sdk.options ?? null,
+    network: sdk.network ?? null,
+  };
+}
+
+/** HTTP capture (and mocking) runs while the session's SDK link is live at device protocol v7 with a link proof. */
+export function networkCapture(session: SessionState): boolean {
+  return session.sdk?.connected === true && session.sdk.network === 'active';
+}
+
+function networkView(ctx: AgentContext, session: SessionState) {
+  const mocks = ctx.sessions.getNetworkMocks();
+  return {
+    capture: networkCapture(session),
+    exchanges: ctx.sessions.getHttpExchangeCount(),
+    mocks: {
+      total: mocks.rules.length,
+      enabled: mocks.rules.filter((rule) => rule.enabled).length,
+      applied: mocks.appliedRev !== null && mocks.appliedRev === mocks.rev,
+    },
   };
 }
 
@@ -65,6 +84,7 @@ export function statusData(ctx: AgentContext) {
       sdkGatewayPort: ctx.sdkGatewayPort(),
       bufferWindowMinutes: ctx.bufferWindowMs / 60_000,
       deviceControl: ctx.deviceControl,
+      networkBodies: ctx.networkBodies,
     },
     devices: ctx.sessions.getDevices().map((device) => deviceView(device, emulators)),
     emulators: emulators.map((emulator) => ({
@@ -78,6 +98,7 @@ export function statusData(ctx: AgentContext) {
     })),
     session: sessionView(session),
     sdk: sdkView(session),
+    network: networkView(ctx, session),
   };
 }
 
@@ -85,7 +106,7 @@ export const statusTool = defineTool({
   name: 'status',
   title: 'Lionscope status',
   description:
-    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options); and whether device-control tools are enabled. Use the serials it lists for list_apps and start_session. ' +
+    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options, network: active / unverified = the link key could not be handed to the app over adb / needs_sdk = SDK older than 0.7.0); HTTP capture (network: capture on while the SDK link is at protocol 7 and active, exchanges kept, mock rules total/enabled/applied); and whether device-control tools and network bodies are enabled. Use the serials it lists for list_apps and start_session. ' +
     UNTRUSTED_DESCRIPTION,
   access: 'read',
   input: z.object({}),

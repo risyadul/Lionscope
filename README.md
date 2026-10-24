@@ -7,6 +7,8 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   single shared time axis.
 - **Inspect**: freeze the screen, click a view, and see its attributes; with the SDK, also the XML layout and
   line it came from and the Fragment that owns it.
+- **Network**: with the SDK's OkHttp interceptor, see the app's HTTP requests (headers, bodies, timings) on the same
+  time axis, and mock responses or failures from the dashboard.
 - **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
   charts.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
@@ -21,7 +23,8 @@ It works in two modes:
 - **With the optional SDK** in the app's **debug** build: adds which screen is on top (Activity, Fragment,
   DialogFragment), per-frame `FrameMetrics` with a stage-by-stage breakdown, grouped per screen, and main-thread
   stalls with the app code line that caused them (plus opt-in StrictMode violations), layout inflation timing,
-  and the Layout Inspector's own view tree with layout sources and owners.
+  the Layout Inspector's own view tree with layout sources and owners, and (with one line in your `OkHttpClient`)
+  the app's HTTP traffic and mock responses.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
@@ -38,7 +41,7 @@ The dashboard is a single page: a top bar to pick the device and the app and to 
 emulator's screen on the left; stacked timeline charts in the middle that share one time axis (last 1, 5 or 10
 minutes) and can be paused, with the app's logcat in a drawer below them (drag its bar to resize it,
 double-click the bar to maximise it; click, shift-click or Cmd/Ctrl-click lines and press Cmd/Ctrl+C to copy
-them); and, with the SDK, the Screens, Stalls and Layouts tabs on the right. Below 1280 px the screen opens as a
+them); and, with the SDK, the Screens, Stalls, Layouts and Network tabs on the right. Below 1280 px the screen opens as a
 drawer from the top bar (in the Profiler view; the other two keep it on the page).
 
 The switch at the right of the top bar picks what the page is for:
@@ -75,6 +78,7 @@ With the SDK installed in the app's debug build, the dashboard also shows:
 | Stalls tab (offenders, events, stack detail)      | Sampled main-thread stacks; StrictMode violations (opt-in)  |
 | Layouts tab, Inflate column, gold lane markers    | XML layout inflation timing (Android 10+)                   |
 | Views column (count and depth per screen)         | View hierarchy snapshot after a screen's first frame        |
+| Network tab, Network lane, mocks                  | `Lionscope.okHttpInterceptor()` in the app's `OkHttpClient` |
 
 While SDK frames flow, `gfxinfo` polling pauses (no double observation, no `reset` clash); it resumes 3 s after
 they stop. The dashboard shows whether the SDK is connected (and its version), or how to add it.
@@ -232,6 +236,68 @@ android:value="false" />`) cannot be read: the badge says why (restart the app).
   agent selects itself gives it structure only (class, id, layout source, owner, bounds). A view an agent
   selected is marked **AI** in the dashboard. See "Use with AI agents".
 
+### Network: requests and mocks
+
+With SDK 0.7.0 or later and one line in the app's `OkHttpClient`, the **Network** tab lists the app's HTTP requests
+during a profiling session: method, host and path, status, duration and size, with failed, pending and mocked ones
+marked; filter by text, method and status class (2xx … 5xx, failed). Select one for its overview, request and
+response headers, bodies (JSON pretty-printed) and timing (waiting for the headers, then reading the body). The
+**Network** lane on the timeline shows each request as a bar from start to end, coloured by status; click one to
+open it in the tab.
+
+```kotlin
+// Retrofit (OkHttp 4.x or 5.x): add it last, after the app's own interceptors
+val client = OkHttpClient.Builder()
+    .addInterceptor(authInterceptor)
+    .addInterceptor(Lionscope.okHttpInterceptor())
+    .build()
+val retrofit = Retrofit.Builder().baseUrl("https://api.example.com/").client(client).build()
+
+// Ktor on Android (OkHttp engine), in androidMain
+val http = HttpClient(OkHttp) { engine { addInterceptor(Lionscope.okHttpInterceptor()) } }
+```
+
+The release build keeps the same line with `lionscope-noop`, whose interceptor just passes requests on. Lionscope
+does not bring OkHttp; the app's own is used. Added last, the capture sees what the app's interceptors (auth,
+logging) send, and mocked responses go back through them. Added with `addNetworkInterceptor` instead, it records
+but never mocks.
+
+**What it captures.** Only while a profiling session runs (not on the Inspector's session-free link, and not
+without a dashboard: then it is a plain `chain.proceed`), and only on a link the SDK has verified as the real
+server (see [Security model](#security-model); the dashboard says when it couldn't). Bodies of text types (JSON, XML, `text/*`, forms,
+GraphQL), the first 64 KB of each; other bodies (images, multipart, protobuf, downloads) only by size and type.
+Server-sent events and WebSocket upgrades are shown without their stream. A body the app sets
+`Accept-Encoding: gzip` for itself is unzipped for display; Brotli and other encodings are flagged, not decoded.
+The response body is never read by Lionscope: it copies what the app reads, so the app reads it exactly once and the
+request ends (in the list) when the app finishes reading it. An error inside Lionscope never fails or changes the
+app's call. At most 20 requests per second are recorded; the rest are counted.
+
+**Privacy.** Values are replaced with `‹redacted›` on the device, and again by the server: `Authorization`,
+`Proxy-Authorization`, `Cookie` and `Set-Cookie`, and every header, query or fragment parameter, form field, JSON key
+(at any depth) and XML element or attribute whose name contains `token`, `secret`, `api-key` / `api_key` / `apikey`,
+`auth`, `session`, `password` / `passwd`, `credential`, `signature`, `jwt` or `appcheck`, is `key`, `code`, `sig`,
+`pass` or `pwd`, or ends in `-key`, `_key`, `Key` (and the like for `sig`, `pass`, `pwd`). User names and passwords
+in URLs (`user:pass@`) and the query of URLs in `Location`, `Content-Location`, `Referer` and `Link` headers are
+redacted too, and so are URLs and such pairs inside error messages. Redaction goes by name: a secret under an
+innocent name (`"data": "<token>"`) or in a GraphQL query's text is not caught. Requests stay in the server's
+memory only (the last 10 minutes, at most 5000 requests or 32 MB) and are never written to disk. AI agents get the list, headers and timings, but bodies only when you opt in
+with `--allow-network-bodies` (see [Use with AI agents](#use-with-ai-agents)).
+
+**Mocks.** **Mock this response** on a request (or **New mock** in the Mocks list) opens the mock editor: a method
+(or any), a URL pattern (**exact**, **prefix**, or a **glob** where `*` matches anything, `/` included; the query is
+ignored unless the pattern has a `?`), and the answer: a response (status, headers, body up to 256 KB) or a failure
+(**timeout** or **connection error**, which the app sees as an `IOException`), after an optional delay of up to
+30 s. A mocked request never reaches the network. When several rules match, exact wins over prefix over glob, then
+the longer pattern, then a rule for that method over one for any method, then the newest. Rules belong to the
+running session: they are cleared when it stops. While any are on, the top bar says **N mocks active** in every view
+(and whether the app has them yet); each mocked request is marked **Mocked**, and the app's logcat gets one
+`Lionscope` line per mocked request. Up to 32 rules.
+
+In the Inspector and Device views the Network tab is not shown, but requests keep being recorded and the mocks
+indicator stays; click it to go back to the Mocks list. To try it, the sample app's **More → Open the network
+demo** calls a small local API: `node android-sdk/sample/sample-api.mjs`, reached from an emulator at
+`http://10.0.2.2:8745`.
+
 ### Operating the emulator from the dashboard
 
 The device picker lists every AVD, also the ones that are off. **Boot** starts one without a window on the host
@@ -306,7 +372,8 @@ From source instead (the npm package may lag the latest git tag):
 `git clone https://github.com/risyadul/Lionscope.git && cd Lionscope && npm install && npm run lionscope`.
 
 Pick the device, pick the app, press **Start**. Nothing needs to be installed on the device for the ADB-only
-mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`, `--allow-device-control`)
+mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`, `--allow-device-control`,
+`--allow-network-bodies`)
 and the `mcp` and `query` commands for [AI agents](#use-with-ai-agents); the
 [`lionscope`](https://www.npmjs.com/package/lionscope) package is a single bundled file plus the built
 dashboard, with no runtime dependencies.
@@ -372,14 +439,19 @@ dependencies besides `androidx.startup` (`androidx.fragment`, Compose UI, Naviga
 from the host app, and are only used when it has them).
 Demo app: [`android-sdk/sample`](android-sdk/sample).
 
+**Network (optional).** The only SDK feature that needs a code change: add `Lionscope.okHttpInterceptor()` to the
+app's `OkHttpClient` (Retrofit, or Ktor's OkHttp engine) to get the
+[Network tab and mocks](#network-requests-and-mocks). OkHttp 4.x or 5.x comes from the app.
+
 ### Keeping it out of release builds
 
 `debugImplementation` means release builds contain nothing from Lionscope: no classes, no
 `InitializationProvider` entry, no `INTERNET` permission added by the SDK. As a second guard, the SDK does
 nothing unless the app is debuggable (`FLAG_DEBUGGABLE`).
 
-Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`, `Lionscope.trackNavigation()`)
-also need it to compile in release; for them there is a no-op artifact with the same API:
+Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`, `Lionscope.trackNavigation()`,
+`Lionscope.okHttpInterceptor()`) also need it to compile in release; for them there is a no-op artifact with the
+same API (its interceptor only passes requests on):
 
 ```groovy
 releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
@@ -399,6 +471,7 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
 - The main-thread watchdog thread exists only while a dashboard has accepted the app at protocol v2 and an
   activity is started; StrictMode is off until you enable it, and its reporter thread stays idle (no work)
   after the first enable.
+- `Lionscope.okHttpInterceptor()` outside a profiling session is one volatile read and `chain.proceed`.
 - Its threads run at background priority (except the frame-metrics and watchdog threads, which must not be
   starved while the app is busy); a bounded outbound queue drops the oldest messages instead of growing; SDK errors are contained and
   never reach the app's crash handler.
@@ -423,12 +496,13 @@ Three ways in, one set of tools:
   command.
 - **Shell**: `npx lionscope query <tool>` prints a tool's JSON result, for agents that can only run commands.
 
-| Tools                      | What they do                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                        |
-| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                                                                                                 |
-| Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                    |
-| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator` |
+| Tools                      | What they do                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                                                                                                                                            |
+| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                                                                                        |
+| Network (always)           | `get_network` (the app's HTTP requests in the last 1/5/10 min: method, URL, status, timings, sizes, mocked; filter by method, status class, host, text), `get_network_request` (one request's headers and timings; its bodies only with `--allow-network-bodies`)                                                                                                                                                                                                                                                                                        |
+| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator`, `set_network_mock`, `clear_network_mocks` (mock responses or failures, see [Network](#network-requests-and-mocks)) |
 
 **"Why is this button misaligned?"** Select the element in the dashboard's Layout Inspector (Inspect, then click
 it) and ask about "this element": the agent calls `get_inspector_selection` and gets what the Inspector tab
@@ -440,6 +514,15 @@ you see) and `select_inspector_node` points you at the node it means, marked **A
 itself, `get_inspector_selection` returns its structure only (class, id, layout source, owner, bounds), never its
 text or an image: an agent without device control can't read the screen that way. Without the SDK in the app the
 snapshot comes from uiautomator, without layout sources or owners.
+
+**"Why does checkout fail?"** With the interceptor in the app, `get_network` lists the requests around it
+(`status: "5xx"` or `"failed"`) and `get_network_request` gives one request's headers, timing and error. Header
+values that look like credentials are already redacted. Bodies stay out of tool results unless the server or the
+MCP client runs with `--allow-network-bodies` (e.g. `npx -y lionscope mcp --allow-network-bodies`, or
+`lionscope query network-request --id 12 --allow-network-bodies`); with it, they are marked as untrusted data like
+other app strings. With device control on, `set_network_mock` answers a URL with a canned response, an error status
+or a timeout (shown in the dashboard as an **AI** rule), and `clear_network_mocks` removes it: ask the agent to
+clear them when it is done, or stop the session.
 
 ### Setup
 
@@ -572,6 +655,8 @@ npx lionscope query logcat --level E --limit 50
 npx lionscope query start-session --serial emulator-5554 --package-name com.example.shop
 npx lionscope query screenshot --allow-device-control --out screen.png
 npx lionscope query inspector-selection --out element.png   # what you selected in the Inspector
+npx lionscope query network --status 5xx --window 10m
+npx lionscope query network-request --id 12 --allow-network-bodies
 ```
 
 Arguments are `--name value` flags (kebab or camel case) or `--json '{"window":"5m"}'`; short names work
@@ -590,8 +675,12 @@ holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` 
   `inspect_screen` (device control; no image). An element the agent selects itself (`select_inspector_node`,
   marked **AI** in the dashboard) gives it structure only: class, id, layout source, owner and bounds. Password
   fields are never read, and screenshots are never cached by the browser.
+- URLs, headers and bodies of HTTP requests come from the app and its servers and are marked as untrusted data too.
+  Credential-looking values in headers, URLs, forms, JSON and XML are redacted before they leave the device; bodies
+  reach an agent only with `--allow-network-bodies`.
 - `--allow-device-control` keeps an AI from operating a device unasked; it is not a security boundary, since
-  any local process can already use adb.
+  any local process can already use adb. The same goes for `--allow-network-bodies` (any local process can read
+  the dashboard socket); it keeps request and response bodies out of an AI's context unless you want them there.
 
 ## Architecture
 
@@ -630,6 +719,11 @@ an SDK and a server from different releases therefore keep working together: a 0
 protocol 1, and stalls and StrictMode are simply unavailable. The server drops invalid stall or StrictMode
 messages instead of closing the link. A 0.1.0 server only accepts
 protocol version 1 and closes the connection on unknown message types.
+
+The network inspector needs device protocol 7 on both sides (SDK and server 0.7.0 or later): with an older server
+the interceptor stays a pass-through, and an older SDK simply sends no requests. HTTP request and response lines
+may be up to 256 KB (other SDK lines keep the 64 KB cap), and the server's mock rules reach the SDK as flat lines of
+at most 512 KB.
 
 ## Security model
 
@@ -673,6 +767,20 @@ protocol version 1 and closes the connection on unknown message types.
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could act as the server and
   receive that stream, including view trees if it asks for them: don't keep untrusted apps on a device you
   inspect with Lionscope.
+- With `Lionscope.okHttpInterceptor()` in the app, the SDK also sends, during a profiling session only, each HTTP
+  request's method, URL, headers, timings and up to 64 KB of each text body, after redacting credential-looking
+  values (see [Network](#network-requests-and-mocks)). The server checks every field's size and redacts again.
+  Unlike the other SDK data, network capture and mocks need proof that the listener on `127.0.0.1:8700` is the
+  Lionscope server adb trusts: before welcoming the session's link, the server makes a random key for that app
+  process and hands it over with `adb shell am broadcast` to the SDK's `LinkKeyReceiver`, which is guarded by
+  `android.permission.DUMP` (only the shell and the system hold it, so no other app can set the key). The welcome
+  then carries an HMAC-SHA256 of a fresh nonce from the SDK's hello under that key, and the SDK records requests and
+  accepts mock rules only when it checks out. An app listening on that port in place of the server therefore gets
+  no network data and can't inject mocks; it can still receive the screens, frames, stalls and Inspector view trees
+  described above. Requests are kept in memory only (10 minutes, 32 MB) and never written to disk;
+  bodies go to AI agents only with `--allow-network-bodies`. Mock rules are sent to the app only on its session link,
+  are cleared when the session stops, and need `--allow-device-control` when an agent sets them (they change what
+  the app sees).
 
 ## Known limitations
 
@@ -718,15 +826,25 @@ protocol version 1 and closes the connection on unknown message types.
   devices are measured correctly. Some OEM builds (e.g. HyperOS on Xiaomi, Android 15) set vendor flag bits on
   normal frames and swap the `FrameInterval` / `FrameStartTime` header labels; the parser handles both.
 
+- **Network capture needs OkHttp.** Only requests made through an `OkHttpClient` with `Lionscope.okHttpInterceptor()`
+  are seen (Retrofit, Ktor's OkHttp engine, Coil/Glide's OkHttp integrations); `HttpURLConnection`, Ktor's CIO
+  engine, WebView, gRPC's own transports and native code are not. OkHttp 4.x and 5.x are supported (tested with
+  4.12 and 5.4), 3.x is not. A request body is captured only when it can safely be written twice (not one-shot or
+  duplex, with a known length up to 1 MB); a response the app closes before its end is shown as truncated.
+  Bodies are captured up to 64 KB and only for text types; Brotli and zstd bodies are not decoded. A response whose
+  body the app never reads to the end or closes stays pending. Mocks are applied by the interceptor itself, so they
+  answer only requests that go through it, and never when it was added with `addNetworkInterceptor`.
+
 ## Configuration
 
-| Flag                     | Env var                   | Default | Purpose                                                                               |
-| ------------------------ | ------------------------- | ------- | ------------------------------------------------------------------------------------- |
-| `--port <port>`          | `LIONSCOPE_PORT`          | `8701`  | Dashboard HTTP + WebSocket port                                                       |
-| `--device-port <port>`   | `LIONSCOPE_DEVICE_PORT`   | `8700`  | SDK gateway (TCP, NDJSON); reached via `adb reverse`                                  |
-| `--adb <path>`           | `LIONSCOPE_ADB`           | auto    | Path to the `adb` binary                                                              |
-| `--allow-device-control` |                           | off     | AI agents may take screenshots, tap, type, launch apps and boot / shut down emulators |
-|                          | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                                                              |
+| Flag                     | Env var                   | Default | Purpose                                                                                                      |
+| ------------------------ | ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `--port <port>`          | `LIONSCOPE_PORT`          | `8701`  | Dashboard HTTP + WebSocket port                                                                              |
+| `--device-port <port>`   | `LIONSCOPE_DEVICE_PORT`   | `8700`  | SDK gateway (TCP, NDJSON); reached via `adb reverse`                                                         |
+| `--adb <path>`           | `LIONSCOPE_ADB`           | auto    | Path to the `adb` binary                                                                                     |
+| `--allow-device-control` |                           | off     | AI agents may take screenshots, tap, type, launch apps and boot / shut down emulators, and set network mocks |
+| `--allow-network-bodies` |                           | off     | AI agents get HTTP request and response bodies in `get_network_request`                                      |
+|                          | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                                                                                     |
 
 Flags win over environment variables. Without `LIONSCOPE_DASHBOARD_DIR`, the server serves the dashboard that
 ships next to it in the npm package, or `dashboard/dist` in a clone. There is no option to listen on anything

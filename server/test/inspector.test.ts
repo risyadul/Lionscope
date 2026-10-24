@@ -88,6 +88,7 @@ function fakeLink(
     calls: 0,
     close: () => undefined,
     sendConfig: () => undefined,
+    sendMocks: () => undefined,
     inspect: () => {
       link.calls += 1;
       return answer();
