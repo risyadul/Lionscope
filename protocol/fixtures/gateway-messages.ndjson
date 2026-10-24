@@ -18,3 +18,4 @@
 {"type":"revertViewProperties","requestId":20,"viewKey":42,"property":"padding"}
 {"type":"revertViewProperties","requestId":21,"viewKey":42}
 {"type":"revertViewProperties","requestId":22}
+{"type":"config","stallThresholdMs":250,"strictMode":true,"inflateTracking":true,"rxTracking":false}
