@@ -125,4 +125,52 @@ class DiagnosticsSinkTest {
         assertEquals(null, message["message"])
         assertEquals(null, message["screen"])
     }
+
+    private val cutStack = (0 until 100).map { StackTraceElement("com.example.shop.C$it", "m", "C.kt", it + 1) }.toTypedArray()
+    private val outer = arrayOf(
+        StackTraceElement("io.github.risyadul.lionscope.RxJava2Hooks\$TrackedTask", "run", "RxJava2Hooks.kt", 9),
+        StackTraceElement("android.os.Handler", "handleCallback", "Handler.java", 995),
+        StackTraceElement("android.os.Looper", "loop", "Looper.java", 338),
+    )
+
+    private fun originStall() = StallDetector.Stall(
+        1, 300.0, cutStack.copyOf(StackFrames.MAX_SAMPLED_ELEMENTS).requireNoNulls(), stackCut = true, samples = 4,
+        screen = null, debugger = false, outer = outer, rxTask = Any(), threadName = "main @refresh#4",
+    )
+
+    @Test
+    fun aV9LinkGetsTheOuterFramesTheRxChainAndTheCoroutine() {
+        val rx = FakeRxTracking()
+        val sink = DiagnosticsSink(link, AppOwnership("com.example.shop"), rx) { topActivity }
+        link.welcome(true, DEVICE_PROTOCOL_V9)
+        sink.stall(originStall())
+
+        val message = sent()
+        assertEquals(true, message["truncated"])
+        val outerFrames = (message["outerFrames"] as List<*>).map { (it as Map<*, *>)["className"] }
+        // The SDK's own wrapper collapses into its stand-in frame, as in `frames`.
+        assertEquals(listOf("io.github.risyadul.lionscope.Lionscope", "android.os.Handler", "android.os.Looper"), outerFrames)
+        assertEquals("java.lang.Object", (message["rx"] as Map<*, *>)["task"])
+        assertEquals("refresh#4", message["coroutine"])
+        assertTrue(link.v2Lines.single().toByteArray(Charsets.UTF_8).size <= MAX_DEVICE_LINE_BYTES)
+    }
+
+    @Test
+    fun aV8LinkGetsTheStallAsBefore() {
+        val sink = DiagnosticsSink(link, AppOwnership("com.example.shop"), FakeRxTracking()) { topActivity }
+        link.welcome(true, DEVICE_PROTOCOL_V8)
+        sink.stall(originStall())
+        val message = sent()
+        assertTrue(listOf("outerFrames", "rx", "coroutine").none { message.containsKey(it) })
+        assertEquals(true, message["truncated"])
+    }
+
+    @Test
+    fun aThreadNameWithoutACoroutineAndNoRxTaskSendNoOrigin() {
+        val sink = DiagnosticsSink(link, AppOwnership("com.example.shop"), FakeRxTracking()) { topActivity }
+        link.welcome(true, DEVICE_PROTOCOL_V9)
+        val stack = stackOf("app.Work.block", "android.os.Looper.loop")
+        sink.stall(StallDetector.Stall(1, 200.0, stack, false, 3, null, false, threadName = "main"))
+        assertTrue(listOf("outerFrames", "rx", "coroutine").none { sent().containsKey(it) })
+    }
 }

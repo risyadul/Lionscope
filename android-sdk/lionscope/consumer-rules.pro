@@ -16,3 +16,7 @@
 # call it) must still shrink without missing-class errors.
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# RxJava 2 is compileOnly: its hooks (RxJava2Hooks) are loaded only when the app has RxJava 2.
+-dontwarn io.reactivex.**
+-dontwarn org.reactivestreams.**

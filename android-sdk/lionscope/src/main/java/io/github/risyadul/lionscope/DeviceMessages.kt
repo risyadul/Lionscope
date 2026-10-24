@@ -112,17 +112,34 @@ internal object DeviceMessages {
         truncated: Boolean,
         screen: String?,
         debugger: Boolean,
+        outerFrames: List<StackFrame> = emptyList(),
+        rx: RxOrigin? = null,
+        coroutine: String? = null,
     ): String {
         val json = JsonWriter().beginObject()
             .name("type").value("stall")
             .name("ts").value(ts)
             .name("durationMs").value(if (durationMs.isNaN()) 0.0 else durationMs.coerceIn(0.0, MAX_STALL_MS))
         writeStack(json, frames)
-        return json.name("samples").value(samples.coerceIn(1, MAX_SAMPLES))
-            .name("truncated").value(truncated || frames.size > MAX_STACK_FRAMES)
+        json.name("samples").value(samples.coerceIn(1, MAX_SAMPLES))
+            .name("truncated").value(truncated || frames.size > MAX_STACK_FRAMES || outerFrames.isNotEmpty())
             .name("screen").value(WireText.clean(screen, MAX_SCREEN_LENGTH))
             .name("debugger").value(debugger)
-            .endObject().toString()
+        writeOrigin(json, outerFrames, rx, coroutine)
+        return json.endObject().toString()
+    }
+
+    /** v9 stall fields, each only when there is something to say (a v8 line stays as it was). */
+    private fun writeOrigin(json: JsonWriter, outerFrames: List<StackFrame>, rx: RxOrigin?, coroutine: String?) {
+        if (outerFrames.isNotEmpty()) writeFrames(json, "outerFrames", outerFrames, MAX_OUTER_FRAMES)
+        if (rx != null) {
+            json.name("rx").beginObject()
+                .name("task").value(WireText.required(rx.task, MAX_ORIGIN_TEXT_LENGTH))
+                .name("consumer").value(WireText.clean(rx.consumer, MAX_ORIGIN_TEXT_LENGTH))
+            writeFrames(json, "subscribedAt", rx.subscribedAt, MAX_RX_SITE_FRAMES)
+            json.endObject()
+        }
+        WireText.clean(coroutine, MAX_ORIGIN_TEXT_LENGTH)?.let { json.name("coroutine").value(it) }
     }
 
     /** v2. */
@@ -471,9 +488,11 @@ internal object DeviceMessages {
     private fun screenName(screen: ScreenRef): String = WireText.clean(screen.name, MAX_SCREEN_NAME_LENGTH)
         ?: WireText.required(screen.className.substringAfterLast('.'), MAX_SCREEN_NAME_LENGTH)
 
-    private fun writeStack(json: JsonWriter, frames: List<StackFrame>) {
-        json.name("frames").beginArray()
-        for (frame in frames.take(MAX_STACK_FRAMES)) {
+    private fun writeStack(json: JsonWriter, frames: List<StackFrame>) = writeFrames(json, "frames", frames, MAX_STACK_FRAMES)
+
+    private fun writeFrames(json: JsonWriter, name: String, frames: List<StackFrame>, max: Int) {
+        json.name(name).beginArray()
+        for (frame in frames.take(max)) {
             json.beginObject()
                 .name("className").value(WireText.required(frame.className, MAX_NAME_LENGTH))
                 .name("method").value(WireText.required(frame.method, MAX_NAME_LENGTH))

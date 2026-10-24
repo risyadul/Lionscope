@@ -10,24 +10,28 @@ import java.util.IdentityHashMap
  * Turns the v2 features on and off (main thread only). The watchdog runs in a session link at v2 and an
  * activity is started; StrictMode reporting in a session link at v2 and the session's `config` asks for
  * it, deliberately also while the app is in the background with the link up (background violations are just as
- * real). Options fall back to [SdkOptions.DEFAULT] on every link change until the next `config`.
+ * real). The RxJava hooks ([rx]) run in a session link at v9 whose options keep `rxTracking` on, in the background
+ * too (a chain subscribed there may stall the main thread later). Options fall back to [SdkOptions.DEFAULT] on every
+ * link change until the next `config`.
  */
 internal class DiagnosticsController(
     private val link: LinkPort,
     private val main: MainScheduler,
     private val watchdog: Watchdog,
     private val strictMode: StrictModeSwitch?,
+    private val rx: RxTracking? = null,
 ) : Application.ActivityLifecycleCallbacks {
     private val started: MutableSet<Activity> = Collections.newSetFromMap(IdentityHashMap())
     private var linkV2 = false
+    private var linkV9 = false
 
     var options = SdkOptions.DEFAULT
         private set
 
     init {
         link.addSessionListener { welcomed ->
-            val v2 = welcomed && (link.negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V2
-            main.post(Runnable { guarded { onLinkChanged(v2) } })
+            val version = if (welcomed) link.negotiatedVersion ?: 0 else 0
+            main.post(Runnable { guarded { onLinkChanged(version) } })
         }
         link.addConfigListener { options -> main.post(Runnable { guarded { onConfig(options) } }) }
     }
@@ -52,8 +56,9 @@ internal class DiagnosticsController(
     override fun onActivityPaused(activity: Activity) = Unit
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
-    private fun onLinkChanged(v2: Boolean) {
-        linkV2 = v2
+    private fun onLinkChanged(version: Int) {
+        linkV2 = version >= DEVICE_PROTOCOL_V2
+        linkV9 = version >= DEVICE_PROTOCOL_V9
         options = SdkOptions.DEFAULT
         update()
     }
@@ -68,6 +73,7 @@ internal class DiagnosticsController(
         watchdog.thresholdMs = options.stallThresholdMs
         if (linkV2 && started.isNotEmpty()) watchdog.start() else watchdog.stop()
         strictMode?.setEnabled(linkV2 && options.strictMode)
+        rx?.setEnabled(linkV9 && options.rxTracking)
     }
 }
 
@@ -78,10 +84,17 @@ internal class DiagnosticsController(
 internal class DiagnosticsSink(
     private val link: LinkPort,
     private val ownership: AppOwnership,
+    private val rx: RxTracking? = null,
     private val topActivityClass: () -> String?,
 ) {
+    /** The v9 origin fields (outer frames, the Rx chain, the coroutine name) only go out on a v9 link. */
     fun stall(stall: StallDetector.Stall) {
-        link.sendV2(sizeHint(stall.stack)) {
+        link.sendV2(sizeHint(stall.stack) + sizeHint(stall.outer)) {
+            val v9 = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V9)
+            val outer = if (v9 && stall.outer.isNotEmpty()) map(stall.outer, longer = false).frames else emptyList()
+            val task = stall.rxTask
+            val rxOrigin = if (v9 && task != null) rx?.describe(task) { map(it, longer = false).frames } else null
+            val coroutine = if (v9) CoroutineNames.parse(stall.threadName) else null
             StackFrames.fitLine(map(stall.stack, stall.stackCut)) { frames, truncated ->
                 DeviceMessages.stall(
                     ts = stall.ts,
@@ -91,6 +104,9 @@ internal class DiagnosticsSink(
                     truncated = truncated,
                     screen = stall.screen,
                     debugger = stall.debugger,
+                    outerFrames = outer,
+                    rx = rxOrigin,
+                    coroutine = coroutine,
                 )
             }
         }
