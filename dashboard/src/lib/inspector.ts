@@ -146,12 +146,26 @@ const FALLBACK_REASONS: Record<string, string> = {
   sdk_timeout: 'SDK did not answer',
   sdk_failed: 'SDK failed',
   sdk_too_large: 'view tree too large for the SDK',
+  sdk_linking: 'SDK connecting',
+  sdk_needs_session: 'SDK needs a session',
+  sdk_link_busy: 'SDK link busy',
+};
+
+/** The longer explanation behind a label, for a tooltip; only reasons that call for an action have one. */
+const FALLBACK_HINTS: Record<string, string> = {
+  sdk_linking: 'SDK connecting — inspect again',
+  sdk_needs_session: 'SDK too old for inspecting without a session: update to 0.5.2, or Start a session',
+  sdk_link_busy: 'another Lionscope server holds the SDK link',
 };
 
 /** Why the snapshot came from uiautomator, in words. */
 export function fallbackLabel(reason: string | null): string | null {
   if (reason === null || reason === '') return null;
   return FALLBACK_REASONS[reason] ?? reason.replace(/_/g, ' ');
+}
+
+export function fallbackHint(reason: string | null): string | undefined {
+  return reason === null ? undefined : FALLBACK_HINTS[reason];
 }
 
 export function windowTitle(window: InspectorWindow): string {

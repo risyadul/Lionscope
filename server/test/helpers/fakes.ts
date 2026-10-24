@@ -107,6 +107,11 @@ export class FakeShellChild extends FakeChild {
 
 export type ExecHandler = (args: readonly string[]) => string | Promise<string>;
 
+/** The command of an `adb -s <serial> shell <command>` exec, null for any other adb call. */
+export function execShellCommand(args: readonly string[]): string | null {
+  return args[0] === '-s' && args[2] === 'shell' && args.length === 4 ? (args[3] ?? null) : null;
+}
+
 /** Fake Adb: `exec` goes to a handler, `spawn` creates fake shells / logcat children. */
 export class FakeAdb implements Adb {
   readonly path = 'fake-adb';

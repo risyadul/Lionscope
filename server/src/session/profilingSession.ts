@@ -188,9 +188,12 @@ export class ProfilingSession {
     return this.store.topScreenAt(this.now());
   }
 
-  /** Hand an SDK connection for this app to the session; it goes live once its PID checks out. */
-  attachSdk(hello: SdkHello, link: SdkLink): SdkLinkHandler {
-    return this.sdk.attach(hello, link);
+  /**
+   * Hand an SDK connection for this app to the session; it goes live once its PID checks out (at once when
+   * `verified`: its PID was already checked on the session device).
+   */
+  attachSdk(hello: SdkHello, link: SdkLink, verified = false): SdkLinkHandler {
+    return this.sdk.attach(hello, link, verified);
   }
 
   /**

@@ -9,7 +9,7 @@ import {
   SDK_LINK_UNAVAILABLE,
   SessionManager,
 } from '../src/session/sessionManager.ts';
-import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
+import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
 const GATEWAY_PORT = 9123;
@@ -49,6 +49,9 @@ function setup(
         if (devicesError) throw devicesError;
         return devicesOutput;
       }
+      // The PID check of a hello (`adb shell pidof`) asks the fake device.
+      const command = execShellCommand(args);
+      if (command?.startsWith('pidof ')) return String(device.handle(command));
       return args.includes('--list') ? reverseList : '';
     },
     (command) => device.handle(command),
@@ -97,18 +100,17 @@ describe('SessionManager SDK link', () => {
   it('only attaches an SDK of the ready session’s app, answering no_session otherwise', async () => {
     const info = vi.spyOn(log, 'info');
     const { manager, start } = setup();
-    expect(manager.attachSdk(HELLO, link)).toEqual({ ok: false, reason: 'no_session' });
+    expect(await manager.attachSdk(HELLO, link)).toEqual({ ok: false, reason: 'no_session' });
     await start();
     const other = { ...HELLO, packageName: 'com.other.app' };
     // No oracle: a foreign package gets the same answer as "no session"; the reason is only logged.
-    expect(manager.attachSdk(other, link)).toEqual({ ok: false, reason: 'no_session' });
-    expect(manager.attachSdk(other, link)).toEqual({ ok: false, reason: 'no_session' });
+    expect(await manager.attachSdk(other, link)).toEqual({ ok: false, reason: 'no_session' });
+    expect(await manager.attachSdk(other, link)).toEqual({ ok: false, reason: 'no_session' });
     expect(info.mock.calls.filter((call) => String(call[0]).includes('com.other.app'))).toHaveLength(1);
-    expect(manager.attachSdk(HELLO, link).ok).toBe(true);
-    await vi.advanceTimersByTimeAsync(0);
+    expect(await manager.attachSdk(HELLO, link)).toMatchObject({ ok: true, mode: 'session' });
     expect(manager.getSessionState().sdk?.connected).toBe(true);
     await manager.stopSession();
-    expect(manager.attachSdk(HELLO, link)).toEqual({ ok: false, reason: 'no_session' });
+    expect(await manager.attachSdk(HELLO, link)).toEqual({ ok: false, reason: 'no_session' });
     await manager.close();
   });
 
@@ -135,7 +137,10 @@ describe('SessionManager SDK link', () => {
     await manager.startSession('emulator-5554', PKG);
     await vi.advanceTimersByTimeAsync(100);
     // An SDK hello arriving now must not trigger a pidof (and logcat) before the clock offset is known.
-    expect(manager.attachSdk({ ...HELLO, pid: 4321 }, link)).toEqual({ ok: false, reason: 'no_session' });
+    expect(await manager.attachSdk({ ...HELLO, pid: 4321 }, link)).toEqual({
+      ok: false,
+      reason: 'no_session',
+    });
     expect(device.commands.some((command) => command.startsWith('pidof'))).toBe(false);
     expect(adb.reverseCalls).toEqual([]);
 
@@ -237,7 +242,7 @@ describe('SessionManager SDK link', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(reverses()).toBe(2);
 
-    manager.attachSdk(HELLO, link);
+    await manager.attachSdk(HELLO, link);
     await vi.advanceTimersByTimeAsync(REMAP_INTERVAL_MS * 2);
     expect(manager.getSessionState().sdk?.connected).toBe(true);
     await manager.refreshDevices();

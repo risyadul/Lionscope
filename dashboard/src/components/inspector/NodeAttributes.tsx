@@ -3,6 +3,7 @@ import type { InspectorNode, InspectorSnapshot, PixelRect } from '@lionscope/pro
 import { CopyButton } from '../stalls/CopyButton.tsx';
 import {
   ancestorsOf,
+  fallbackHint,
   fallbackLabel,
   idName,
   isZeroRect,
@@ -103,6 +104,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
   const why = isSdk
     ? undefined
     : `Not available from uiautomator${fallbackLabel(snapshot.fallbackReason) ? ` (${fallbackLabel(snapshot.fallbackReason)})` : ''}`;
+  const hint = isSdk ? undefined : fallbackHint(snapshot.fallbackReason);
   const size = rectSize(node.bounds);
   const visible = node.visibleBounds;
   const path = ancestorsOf(index, node.id);
@@ -118,6 +120,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin }: Prop
             </span>
           )}
         </h3>
+        {hint !== undefined && <p className="inspect-hint">{hint}</p>}
         {node.resourceId !== null && (
           <p className="attrs-id mono" title={node.resourceId}>
             #{idName(node.resourceId)}

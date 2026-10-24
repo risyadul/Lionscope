@@ -143,4 +143,21 @@ class DiagnosticsControllerTest {
         assertTrue(watchdog.isRunning)
         assertEquals(250L, watchdog.thresholdMs)
     }
+
+    @Test
+    fun anInspectOnlyLinkLeavesTheWatchdogAndStrictModeOff() {
+        link.welcome(true, DEVICE_PROTOCOL_V5, inspectOnly = true)
+        main.runPosted()
+        controller.onActivityStarted(activity)
+        link.config(SdkOptions(1000, true))
+        main.runPosted()
+        assertFalse(watchdog.isRunning)
+        assertEquals(0, watchdog.starts)
+        assertTrue(strictMode.changes.isEmpty())
+
+        link.welcome(false)
+        main.runPosted()
+        welcome(DEVICE_PROTOCOL_V5) // The same app later joins a session.
+        assertTrue(watchdog.isRunning)
+    }
 }

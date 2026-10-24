@@ -10,6 +10,7 @@ import type {
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
+import type { InspectLinks } from '../device/inspectLinks.ts';
 import { ReverseTunnel } from '../device/reverseTunnel.ts';
 import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkTarget } from '../device/sdkLink.ts';
 import { ErrorThrottle, PublicError } from '../errors.ts';
@@ -17,6 +18,7 @@ import { errorMessage, log } from '../log.ts';
 import { parseDevices } from '../parsers/devices.ts';
 import { buildAppList, parsePackageList } from '../parsers/packages.ts';
 import { parsePs } from '../parsers/ps.ts';
+import { parsePidList } from '../parsers/shellValues.ts';
 import { emptySnapshot } from '../store/sessionStore.ts';
 import { ProfilingSession } from './profilingSession.ts';
 import type { CollectorIntervals } from './profilingSession.ts';
@@ -38,6 +40,8 @@ export const SDK_GATEWAY_DOWN = 'SDK link unavailable (the SDK gateway is not li
 export const REMAP_INTERVAL_MS = 10_000;
 const DEVICES_TIMEOUT_MS = 5000;
 const APPS_TIMEOUT_MS = 15_000;
+const PIDOF_TIMEOUT_MS = 5000;
+const NO_SESSION: SdkAttachResult = { ok: false, reason: 'no_session' };
 
 export interface InspectorSessionSource {
   packageName: string;
@@ -67,9 +71,17 @@ export interface SessionManagerOptions {
   deviceGatewayPort?: () => number | null;
   /** Replaces the TCP probe that tells a live server's `adb reverse` mapping from a stale one (tests). */
   isHostPortLive?: (port: number) => Promise<boolean>;
+  /**
+   * Inspect-only SDK links outside the session: verified hellos of other apps go there, they hear about the
+   * session's mapping and device listings, and take a device's mapping over when its session ends.
+   */
+  inspectLinks?: InspectLinks;
 }
 
-/** Owns the device list, at most one profiling session, and that session's SDK link. */
+/**
+ * Owns the device list, at most one profiling session, and that session's SDK link; routes every SDK hello (to the
+ * session, or to the inspect-only links).
+ */
 export class SessionManager implements SdkLinkTarget {
   private readonly adb: Adb;
   private readonly broadcast: (message: ServerMessage) => void;
@@ -81,6 +93,7 @@ export class SessionManager implements SdkLinkTarget {
   private readonly gatewayPort: (() => number | null) | undefined;
   private readonly linkErrors: ErrorThrottle;
   private readonly refusals: ErrorThrottle;
+  private readonly inspectLinks: InspectLinks | undefined;
   private gatewayDownReported = false;
   private staleChecked = false;
   private lastTunnelAt = 0;
@@ -109,11 +122,13 @@ export class SessionManager implements SdkLinkTarget {
     this.linkErrors = new ErrorThrottle(this.now);
     this.refusals = new ErrorThrottle(this.now);
     this.gatewayPort = options.deviceGatewayPort;
+    this.inspectLinks = options.inspectLinks;
     this.tunnel = new ReverseTunnel({
       adb: this.adb,
       devicePort: DEVICE_LINK_PORT,
       hostPort: options.deviceGatewayPort ?? (() => null),
       ...(options.isHostPortLive ? { isHostPortLive: options.isHostPortLive } : {}),
+      ...(options.inspectLinks ? { devices: options.inspectLinks.queues } : {}),
       onOpenFailed: (error) => {
         log.warn(`adb reverse failed, continuing without the SDK link: ${errorMessage(error)}`);
         if (!this.closed && this.linkErrors.shouldReport('reverse')) {
@@ -135,20 +150,51 @@ export class SessionManager implements SdkLinkTarget {
     return this.session?.snapshot() ?? emptySnapshot();
   }
 
+  /** A hello on the session gateway: only the session's device maps its port there. */
+  attachSdk(hello: SdkHello, link: SdkLink): Promise<SdkAttachResult> {
+    return this.attachSdkOn(this.tunnel.serial, hello, link, true);
+  }
+
   /**
-   * An SDK said hello: only the active, ready session's own app gets a link. Every refusal is `no_session`
-   * on the wire, so a probe can't learn which package is being profiled; the reason is logged here.
+   * An SDK said hello on a connection from `serial` (null: from no device we mapped, refused). Its PID is checked
+   * on that device first, whatever package it claims; then the ready session's own app joins the session, and any
+   * other app may get an inspect-only link. Every refusal is `no_session` on the wire and comes after the same
+   * check, so a probe can't learn which package is being profiled; the reason is logged here. `viaSession`: it
+   * arrived through the session gateway.
    */
-  attachSdk(hello: SdkHello, link: SdkLink): SdkAttachResult {
-    const session = this.session;
-    if (!session?.isReady) return { ok: false, reason: 'no_session' };
-    if (hello.packageName !== session.packageName) {
-      if (this.refusals.shouldReport(hello.packageName)) {
-        log.info(`Refused an SDK link from ${hello.packageName}: profiling ${session.packageName}`);
-      }
-      return { ok: false, reason: 'no_session' };
+  async attachSdkOn(
+    serial: string | null,
+    hello: SdkHello,
+    link: SdkLink,
+    viaSession = false,
+  ): Promise<SdkAttachResult> {
+    if (serial === null || this.closed) return NO_SESSION;
+    const { packageName, pid } = hello;
+    let pids: number[];
+    try {
+      // The same check for every package (not the session's own pidof): its timing must not tell them apart.
+      const output = await adbShell(this.adb, serial, `pidof ${packageName}`, {
+        timeoutMs: PIDOF_TIMEOUT_MS,
+      });
+      pids = parsePidList(output);
+    } catch (error) {
+      this.refuse(serial, packageName, `its pid check failed: ${errorMessage(error)}`);
+      return NO_SESSION;
     }
-    return { ok: true, handler: session.attachSdk(hello, link) };
+    if (!pids.includes(pid)) {
+      this.refuse(serial, packageName, `pid ${pid} is not a process of the app`);
+      return NO_SESSION;
+    }
+    // The session may have started or stopped while checking.
+    const current = this.readySessionOf(serial, packageName);
+    if (current) return { ok: true, mode: 'session', handler: current.attachSdk(hello, link, true) };
+    const result = (await this.inspectLinks?.attach(serial, hello, link, viaSession)) ?? NO_SESSION;
+    if (!result.ok) {
+      const profiling =
+        this.session && !this.session.isStopped ? `profiling ${this.session.packageName}` : null;
+      this.refuse(serial, packageName, profiling ?? 'no session');
+    }
+    return result;
   }
 
   /**
@@ -222,7 +268,7 @@ export class SessionManager implements SdkLinkTarget {
         intervals: this.sessionIntervals,
         // Only once the clock offset is known: SDK data before that would be misplaced in time.
         onReady: () => {
-          if (this.session === session) this.openTunnel(serial);
+          if (this.session === session) this.openTunnel(serial, packageName);
         },
       });
       this.session = session;
@@ -258,14 +304,33 @@ export class SessionManager implements SdkLinkTarget {
     await this.endSession('idle');
   }
 
-  /** Stop the session (if any) and release its `adb reverse` mapping. */
+  /**
+   * Stop the session (if any) and release its `adb reverse` mapping: removed, or, while an Inspector still wants
+   * the device, taken over by its inspect-only link.
+   */
   private endSession(status: 'idle' | 'error', error?: string): Promise<void> {
-    this.session?.stop(status, error);
+    const session = this.session;
+    session?.stop(status, error);
+    if (session && !this.closed && this.inspectLinks?.sessionEnded(session.serial))
+      return this.tunnel.release();
     return this.tunnel.close();
   }
 
+  private readySessionOf(serial: string, packageName: string): ProfilingSession | null {
+    const session = this.session;
+    return session?.isReady && session.serial === serial && session.packageName === packageName
+      ? session
+      : null;
+  }
+
+  private refuse(serial: string, packageName: string, reason: string): void {
+    if (this.refusals.shouldReport(`${serial} ${packageName}`)) {
+      log.info(`Refused an SDK link from ${packageName} on ${serial}: ${reason}`);
+    }
+  }
+
   /** (Re-)map `adb reverse` for the session device; reported once if the SDK gateway isn't listening. */
-  private openTunnel(serial: string): void {
+  private openTunnel(serial: string, packageName: string): void {
     if (!this.gatewayPort) return;
     if (this.gatewayPort() === null) {
       if (this.gatewayDownReported || this.closed) return;
@@ -276,6 +341,7 @@ export class SessionManager implements SdkLinkTarget {
     }
     this.lastTunnelAt = this.now();
     void this.tunnel.open(serial);
+    this.inspectLinks?.sessionMapped(serial, packageName);
   }
 
   private async listDevices(): Promise<DeviceInfo[]> {
@@ -294,6 +360,7 @@ export class SessionManager implements SdkLinkTarget {
     if (!this.staleChecked && this.gatewayPort) {
       // First listing of this run: mappings of the device port on connected devices are leftovers.
       this.staleChecked = true;
+      // (A mapping an inspect-only link makes meanwhile points at a live listener: the sweep leaves it alone.)
       const ready = devices.filter((device) => device.state === 'device').map((device) => device.serial);
       void this.tunnel.clearStale(ready);
     }
@@ -304,6 +371,7 @@ export class SessionManager implements SdkLinkTarget {
       this.devices = devices;
       this.broadcast({ type: 'devices', devices });
     }
+    this.inspectLinks?.onDevices(devices, recovered);
     this.checkSessionDevice(recovered);
     return this.devices;
   }
@@ -355,7 +423,9 @@ export class SessionManager implements SdkLinkTarget {
       const flickered = this.deviceGoneListings > 0;
       this.deviceGoneListings = 0;
       const remapDue = !session.state.sdk?.connected && this.now() - this.lastTunnelAt >= REMAP_INTERVAL_MS;
-      if (session.isReady && (flickered || listingRecovered || remapDue)) this.openTunnel(session.serial);
+      if (session.isReady && (flickered || listingRecovered || remapDue)) {
+        this.openTunnel(session.serial, session.packageName);
+      }
       return;
     }
     this.deviceGoneListings += 1;

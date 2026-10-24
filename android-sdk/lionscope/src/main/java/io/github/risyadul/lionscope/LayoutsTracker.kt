@@ -8,7 +8,7 @@ import android.view.Window
 
 /**
  * The v3 layout features (main thread only): inflation timing through [InflateTracer] (API 29+, null below) and one
- * view tree snapshot per screen visit. It also knows the windows the Inspector walks below API 29 ([KnownWindows]). Snapshots are only taken on a link welcomed at v3. Inflation tracking follows
+ * view tree snapshot per screen visit. It also knows the windows the Inspector walks below API 29 ([KnownWindows]). Snapshots are only taken on a session link at v3 (never an inspect-only one). Inflation tracking follows
  * the last `inflateTracking` a server sent in this process (on until then): it is not reset when the link drops, so
  * Activities created after it was turned off get no factory until a session turns it on again.
  */
@@ -29,7 +29,7 @@ internal class LayoutsTracker(
     private var linkVersion = 0
 
     init {
-        link.addWelcomeListener { welcomed ->
+        link.addSessionListener { welcomed ->
             val version = if (welcomed) link.negotiatedVersion ?: 0 else 0
             main.post(Runnable { guarded { onLinkChanged(version) } })
         }

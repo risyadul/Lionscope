@@ -39,11 +39,31 @@ export const UI_DUMP_TIMEOUT =
 /** Appended when the UI helper failed before uiautomator did. */
 export const UI_HELPER_FAILED_TOO = 'The Lionscope UI helper could not read the screen either';
 
-const ACTIVITY = /(?:topResumedActivity|mResumedActivity)[=:]\s*ActivityRecord\{\S+ \S+ ([\w.]+)\/([\w.$]+)/;
+const resumed = (field: string): RegExp =>
+  new RegExp(`${field}[=:]\\s*ActivityRecord\\{\\S+ \\S+ ([\\w.]+)\\/([\\w.$]+)`);
+/** The focused resumed activity first (several are resumed in split screen), else the older field. */
+const ACTIVITIES = [resumed('topResumedActivity'), resumed('mResumedActivity')];
+
+function resumedActivity(output: string): RegExpExecArray | null {
+  for (const pattern of ACTIVITIES) {
+    const match = pattern.exec(output);
+    if (match) return match;
+  }
+  return null;
+}
+
+/** Prints the resumed (foreground) activity: parseTopActivity / parseTopPackage read it. */
+export const TOP_ACTIVITY_COMMAND =
+  "dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'";
+
+/** The package of the resumed activity, null when there is none (or the output is something else). */
+export function parseTopPackage(output: string): string | null {
+  return resumedActivity(output)?.[1] ?? null;
+}
 
 /** `com.example.shop/.MainActivity` → `com.example.shop.MainActivity`. */
 export function parseTopActivity(output: string): string | null {
-  const match = ACTIVITY.exec(output);
+  const match = resumedActivity(output);
   if (!match?.[1] || !match[2]) return null;
   return match[2].startsWith('.') ? `${match[1]}${match[2]}` : match[2];
 }
@@ -86,9 +106,7 @@ function shellError(error: unknown): ToolError {
 /** `echo <marker>; wm size[; echo <marker>; dumpsys … top activity]`: what a dump is read with. */
 function displayCommand(token: string, withActivity: boolean): { command: string; markers: string[] } {
   const markers = [`__LS_${token}_WM__`, ...(withActivity ? [`__LS_${token}_TOP__`] : [])];
-  const activity = withActivity
-    ? `; echo ${markers[1]}; dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'`
-    : '';
+  const activity = withActivity ? `; echo ${markers[1]}; ${TOP_ACTIVITY_COMMAND}` : '';
   return { command: `echo ${markers[0]}; wm size${activity}`, markers };
 }
 

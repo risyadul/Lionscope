@@ -140,4 +140,14 @@ class GatewayMessageTest {
         assertNull(GatewayMessage.parse("HTTP/1.1 400 Bad Request"))
         assertNull(GatewayMessage.parse(""))
     }
+
+    @Test
+    fun welcomeModeIsInspectOnlyForALiteralInspect() {
+        fun inspectOnly(line: String) = (GatewayMessage.parse(line) as GatewayMessage.Welcome).inspectOnly
+        assertTrue(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"inspect\"}"))
+        assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"session\"}"))
+        assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":4}")) // A v4 server sends none.
+        assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"profile\"}"))
+        assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":null}"))
+    }
 }

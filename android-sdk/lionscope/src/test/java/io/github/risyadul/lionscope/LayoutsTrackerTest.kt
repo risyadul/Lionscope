@@ -98,4 +98,17 @@ class LayoutsTrackerTest {
         assertSame(activity, events[0].second)
         assertEquals(null to null, events[1])
     }
+
+    @Test
+    fun anInspectOnlyLinkTakesNoViewTreeSnapshots() {
+        link.welcome(true, DEVICE_PROTOCOL_V5, inspectOnly = true)
+        main.runPosted()
+        tracker.onScreenChanged(home, Any())
+        assertTrue(snapshots.isEmpty())
+
+        link.welcome(false)
+        main.runPosted()
+        welcome(DEVICE_PROTOCOL_V5) // A later session welcome starts them as before.
+        assertEquals(1, snapshots.size)
+    }
 }

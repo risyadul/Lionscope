@@ -7,8 +7,8 @@ import java.util.Collections
 import java.util.IdentityHashMap
 
 /**
- * Turns the v2 features on and off (main thread only). The watchdog runs while the link is welcomed at v2 and an
- * activity is started; StrictMode reporting while the link is welcomed at v2 and the session's `config` asks for
+ * Turns the v2 features on and off (main thread only). The watchdog runs in a session link at v2 and an
+ * activity is started; StrictMode reporting in a session link at v2 and the session's `config` asks for
  * it, deliberately also while the app is in the background with the link up (background violations are just as
  * real). Options fall back to [SdkOptions.DEFAULT] on every link change until the next `config`.
  */
@@ -25,7 +25,7 @@ internal class DiagnosticsController(
         private set
 
     init {
-        link.addWelcomeListener { welcomed ->
+        link.addSessionListener { welcomed ->
             val v2 = welcomed && (link.negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V2
             main.post(Runnable { guarded { onLinkChanged(v2) } })
         }

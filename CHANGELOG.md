@@ -6,6 +6,32 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- The Layout Inspector uses the SDK without a profiling session (SDK 0.5.2). While a dashboard shows the Inspector
+  for a device, and for 5 minutes after the last Inspect of it (from the dashboard or an agent's `inspect_screen`),
+  the server keeps an inspect-only link to the debuggable SDK apps on that device: Inspect gets the SDK tree
+  (layout sources, owners, padding and margins) without pressing Start. On that link the SDK only reports the top
+  screen and answers Inspect; frames, the watchdog, StrictMode and layout reports start with a session as before.
+  Starting a session moves its app over to the session (it reconnects in about a second) and stopping one moves it
+  back while you still inspect. New fallback reasons, shown under the badge: `sdk_linking` (the first Inspect
+  waited up to 6 s for the app to connect), `sdk_needs_session` (an app with SDK 0.5.0 or 0.5.1, which still links
+  only during a session) and `sdk_link_busy` (another running Lionscope server holds the device's link).
+- Device protocol v5: `welcome.mode` (`session` or `inspect`; servers and SDKs before v5 behave as before), and
+  the dashboard's `inspectorFocus` message (dashboard protocol 5).
+
+### Changed
+
+- Each device with an inspect-only link gets its own SDK gateway listener, so every link is tied to the device it
+  came from; the `adb reverse tcp:8700` mapping for it is made only while someone inspects that device and is
+  never taken from, or removed for, another running Lionscope server.
+
+### Fixed
+
+- The SDK gateway sent `welcome` before checking the app's PID, so a local probe claiming a package could tell
+  whether that package was being profiled. It now answers nothing until the PID is verified on the device the
+  connection came from, and every refusal looks the same.
+
 ## [0.5.1] - 2026-10-24
 
 ### Added

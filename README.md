@@ -182,8 +182,15 @@ after the app changes its top screen (never continuously), and the refresh butto
 
 <img width="710" alt="Layout Inspector on the sample app: the frozen screen with the first card's Share button selected and labelled MaterialButton 231 × 126, and the Inspector tab with the view tree, its ancestor path, source view_dashboard_actions.xml:15 (end of start tag), owner HomeFragment in MainActivity, text, bounds and size" src="docs/images/dashboard-inspector.png">
 
-- **Where the tree comes from.** With the SDK linked (Lionscope 0.5.0 or later) the SDK walks the app's own views
-  and the badge reads `SDK`. On Android 10 and later that is every window of the app, dialogs included; below
+- **Where the tree comes from.** With the SDK in the app (Lionscope 0.5.0 or later) the SDK walks the app's own
+  views and the badge reads `SDK`. From SDK 0.5.2 on this needs no profiling session: while a dashboard shows the
+  Inspector for a device (the Inspector view or tab), and for 5 minutes after the last Inspect of it (yours or an
+  agent's), the server keeps an inspect-only link to the debuggable SDK apps on that device. On that link the SDK
+  only reports which screen is on top and answers Inspect: no frames, watchdog, StrictMode or layout reports until
+  you press Start. The first Inspect after the link appears can wait up to 6 s for the app to connect (the badge
+  then says `SDK connecting` if it didn't). Apps with SDK 0.5.0 or 0.5.1 still link only during a session (badge:
+  `SDK needs a session`), and if another Lionscope server already holds the device's link the badge says
+  `SDK link busy`. On Android 10 and later that is every window of the app, dialogs included; below
   Android 10 it is the top Activity and its dialogs, and without layout sources. Otherwise (no SDK in the app, an older SDK,
   Compose screens, other apps and system UI) the server falls back to the accessibility tree, read by its UI helper
   (see the agent tools' notes on its side effects) or `uiautomator dump`, and the badge says `uiautomator` with the
@@ -581,7 +588,12 @@ protocol version 1 and closes the connection on unknown message types.
   never through a host shell.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
-  connections, and only accepts data after the hello's PID is verified with `pidof` on the session's device.
+  connections, and answers nothing (not even `welcome`) until the hello's PID is verified with `pidof` on the
+  device it came from; every refusal looks the same, so a probe can't learn which app is being profiled. Each
+  device with an inspect-only link (0.5.2) gets its own gateway listener, so a link is always tied to its device;
+  only debuggable apps are linked that way, and an Inspect only asks the app Android reports in the foreground.
+  The `adb reverse tcp:8700` mapping for inspect links exists only while someone inspects that device, and is
+  never taken from (or removed for) another running Lionscope server.
 - The dashboard and screen sockets have no password of their own: any process of any user on the same machine
   that can reach `127.0.0.1` can use them, including operating a mirrored emulator. That is no more access than
   the adb server on `127.0.0.1:5037` already gives local processes; do not run Lionscope on a machine you share
@@ -598,8 +610,11 @@ protocol version 1 and closes the connection on unknown message types.
   connected. If you run the adb server with `adb -a` (listen on all interfaces), that port is reachable from your
   network for that moment, so keep adb on its default loopback binding.
 - The SDK only sends screen class names / aliases, frame timings and, with stalls enabled, stack frames of the
-  main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. Without
-  the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could receive that stream.
+  main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. When you
+  Inspect, it also sends the view tree, including the text on screen (never the text of password fields). Without
+  the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could act as the server and
+  receive that stream, including view trees if it asks for them: don't keep untrusted apps on a device you
+  inspect with Lionscope.
 
 ## Known limitations
 

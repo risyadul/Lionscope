@@ -8,7 +8,7 @@ import { droppedFramesMessage } from '../src/device/sdkBridge.ts';
 import type { DeviceGateway } from '../src/device/deviceGateway.ts';
 import { SessionManager } from '../src/session/sessionManager.ts';
 import { DeviceClient } from './helpers/deviceClient.ts';
-import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
+import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const GOLDEN = readFileSync(
   new URL('../../protocol/fixtures/device-messages.ndjson', import.meta.url),
@@ -50,7 +50,12 @@ describe('golden device messages through the gateway', () => {
     const device = new FakeDevice();
     device.pid = HELLO.pid; // the hello's PID is the app's process on the session device
     const adb = new FakeAdb(
-      (args) => (args[0] === 'devices' ? fixture('adb-devices.txt') : ''),
+      (args) => {
+        if (args[0] === 'devices') return fixture('adb-devices.txt');
+        // The gateway checks a hello's PID with `adb shell pidof` before welcoming it.
+        const command = execShellCommand(args);
+        return command?.startsWith('pidof ') ? String(device.handle(command)) : '';
+      },
       (command) => {
         if (command === 'date +%s%3N') return `${clock - OFFSET_MS}\n`;
         // No gfxinfo frames: only the SDK feeds the frames stream here.

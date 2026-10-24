@@ -71,9 +71,17 @@ export interface SdkLinkHandler {
   onClose(): void;
 }
 
-export type SdkAttachResult = { ok: true; handler: SdkLinkHandler } | { ok: false; reason: ByeReason };
+/** What a welcomed link is for (`welcome.mode`, sent on v5 links): a profiling session, or inspect-only. */
+export type SdkLinkMode = NonNullable<Extract<GatewayMessage, { type: 'welcome' }>['mode']>;
 
-/** Where the gateway hands validated hellos (the session manager). */
+/** `mode` defaults to `session`; `inspect` is only ever given to links at protocol ≥ 5. */
+export type SdkAttachResult =
+  { ok: true; handler: SdkLinkHandler; mode?: SdkLinkMode } | { ok: false; reason: ByeReason };
+
+/**
+ * Where the gateway hands validated hellos (the session manager). The gateway sends nothing (no `welcome`) until
+ * the result is known, so a target may first check the hello's PID on the device.
+ */
 export interface SdkLinkTarget {
-  attachSdk(hello: SdkHello, link: SdkLink): SdkAttachResult;
+  attachSdk(hello: SdkHello, link: SdkLink): SdkAttachResult | Promise<SdkAttachResult>;
 }

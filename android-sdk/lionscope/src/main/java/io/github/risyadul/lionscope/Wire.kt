@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 4
+internal const val DEVICE_PROTOCOL_VERSION = 5
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -11,6 +11,8 @@ internal const val DEVICE_PROTOCOL_V2 = 2
 internal const val DEVICE_PROTOCOL_V3 = 3
 /** First version with `inspect` (server → SDK) and `inspectBegin` / `inspectNodes` / `inspectError`. */
 internal const val DEVICE_PROTOCOL_V4 = 4
+/** First version with `welcome.mode`: `inspect` links run only screens, heartbeat and the Inspector. */
+internal const val DEVICE_PROTOCOL_V5 = 5
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 internal const val MAX_SDK_FRAMES_PER_BATCH = 256

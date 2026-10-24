@@ -33,6 +33,13 @@ internal interface LinkPort {
     /** [listener] is called on a link thread; it must only hand off (e.g. post to the main thread). */
     fun addWelcomeListener(listener: (welcomed: Boolean) -> Unit)
 
+    /**
+     * Like [addWelcomeListener] but only for profiling sessions: true on a welcome whose mode is `session` (or on a
+     * link below v5), false when such a link ends. Never fires for an `inspect`-mode link, which runs screens,
+     * heartbeat and the Inspector only. Same threading rule.
+     */
+    fun addSessionListener(listener: (active: Boolean) -> Unit)
+
     /** v2 options from each `config` on a v2 link; called on a link thread, it must only hand off. */
     fun addConfigListener(listener: (SdkOptions) -> Unit)
 

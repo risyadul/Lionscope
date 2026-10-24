@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -635,7 +635,12 @@ export interface InspectorSnapshot {
   truncated: boolean;
   /** Main-thread time the SDK spent capturing, ms (SDK source only). */
   captureMs: number | null;
-  /** Why the SDK source was not used, when `source` is `uiautomator` (e.g. `no_sdk`, `compose`, `old_sdk`). */
+  /**
+   * Why the SDK source was not used, when `source` is `uiautomator` (e.g. `no_sdk`, `compose`, `old_sdk`). 0.5.2 adds
+   * `sdk_linking` (the inspect-only link was just mapped and no SDK connected in time: inspect again),
+   * `sdk_needs_session` (an SDK older than device protocol v5 is in the app: it links only during a session) and
+   * `sdk_link_busy` (another live Lionscope server holds the device's `adb reverse tcp:8700`).
+   */
   fallbackReason: string | null;
 }
 
@@ -739,7 +744,14 @@ export type ClientMessage =
    */
   | { type: 'inspect'; serial: string }
   /** 0.5.0. Select a node of the current snapshot (null clears). Answered with `inspectorSelection` to every client. */
-  | { type: 'selectInspectorNode'; snapshotId: string; nodeId: number | null };
+  | { type: 'selectInspectorNode'; snapshotId: string; nodeId: number | null }
+  /**
+   * 0.5.2. This dashboard shows the Inspector for `serial` (the Inspector view, or the Inspector tab, while the page is
+   * visible); null = it no longer does. While any client focuses a device, and for INSPECT_LINK_LINGER_MS after the
+   * last `inspect` of it (from any client or agent), the server keeps an inspect-only SDK link to that device, so
+   * Inspect gets the SDK tree without a profiling session. Re-sent on reconnect; the latest per client wins.
+   */
+  | { type: 'inspectorFocus'; serial: string | null };
 
 /** Max accepted size of a dashboard → server frame, in bytes. */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -760,7 +772,7 @@ export const MAX_CLIENT_MESSAGE_BYTES = 4096;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 4;
+export const DEVICE_PROTOCOL_VERSION = 5;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -768,10 +780,23 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * link negotiated at 1.
  * v3 adds SDK → server `inflate` and `viewtree`, and the `config.inflateTracking` field (a v2 SDK ignores it).
  * v4 adds server → SDK `inspect` and SDK → server `inspectBegin`, `inspectNodes` and `inspectError`.
+ * v5 adds `welcome.mode`: `session` (a profiling session: every collector runs, as before) or `inspect` (an
+ * inspect-only link outside a session: the SDK sends only `hello`, `screen` and `heartbeat` and answers `inspect`;
+ * no FrameMetrics, watchdog, StrictMode, inflate or view-tree reports, and the server sends no `config`). A missing
+ * `mode` means `session` (servers before v5 only link during a session). Links below v5 are never welcomed in
+ * `inspect` mode.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
 export const DEVICE_PROTOCOL_V4 = 4;
+export const DEVICE_PROTOCOL_V5 = 5;
+/** An inspect-only link stays mapped this long after the last `inspect` of its device (and while a client focuses it). */
+export const INSPECT_LINK_LINGER_MS = 5 * 60_000;
+/**
+ * A fresh inspect-only mapping gets this long for an SDK to connect before `inspect` falls back (`sdk_linking`): it
+ * covers the SDK's 1 s / 2 s / 5 s reconnect backoff plus its connect timeout.
+ */
+export const INSPECT_LINK_WAIT_MS = 6000;
 /** Max serialized bytes of one `inspectNodes` line (well under MAX_DEVICE_LINE_BYTES). */
 export const MAX_INSPECT_CHUNK_BYTES = 32 * 1024;
 /** Max total bytes of one `inspect` answer (all its lines); the SDK sends `inspectError failed` instead of more. */
@@ -913,7 +938,8 @@ export type DeviceMessageType = DeviceMessage['type'];
  * dependency-free top-level scan rather than a full JSON parser. New fields must be appended after `type`.
  */
 export type GatewayMessage =
-  | { type: 'welcome'; protocolVersion: number }
+  /** v5 adds `mode` (sent on v5 links only; absent = `session`). */
+  | { type: 'welcome'; protocolVersion: number; mode?: 'session' | 'inspect' }
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
