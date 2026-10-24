@@ -225,6 +225,27 @@ class ComposeTreeTest {
     }
 
     @Test
+    fun anEmptyChildDoesNotStretchItsParentToTheCorner() {
+        // A bottom-bar item: its own layout at the bottom right, an icon that is zero-size at the origin.
+        val item = FakeLayout("item", root, PixelRect(805, 2544, 1220, 2664))
+        val icon = FakeLayout("icon", item, PixelRect(0, 0, 0, 0))
+        val tree = build(
+            listOf(
+                function(
+                    "Item", "Home.kt", app, 12,
+                    children = listOf(FakeGroup(layout = item, children = listOf(function("Icon", "Home.kt", app, children = listOf(FakeGroup(layout = icon)))))),
+                ),
+            ),
+        )
+        val node = tree.roots.single()
+        assertEquals(PixelRect(805, 2544, 1220, 2664), node.bounds)
+        // The empty one keeps its own (empty) box; it just doesn't count for the parent.
+        assertEquals(PixelRect(0, 0, 0, 0), (node.children.single() as ComposeNode).bounds)
+        assertEquals(PixelRect(0, 0, 0, 0), ComposeTreeBuilder.union(null, PixelRect(0, 0, 0, 0)))
+        assertEquals(PixelRect(1, 2, 3, 4), ComposeTreeBuilder.union(PixelRect(0, 0, 0, 0), PixelRect(1, 2, 3, 4)))
+    }
+
+    @Test
     fun aCallWhoseParentRecordedNoLocationHasNoLine() {
         val tree = build(listOf(FakeGroup(children = listOf(function("Orphan", "Home.kt", app, children = listOf(FakeGroup(layout = FakeLayout("o", root))))))))
         val orphan = tree.roots.single()

@@ -238,10 +238,19 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
 
         private val BY_POSITION = compareBy<ComposeNode>({ it.bounds?.top }, { it.bounds?.left })
 
+        /**
+         * The box around both. An empty rect never stretches a real one: a zero-size node (an icon not loaded yet, a
+         * spacer, a node laid out at the origin) reports `[0,0,0,0]`, and taking it in would pull its parent's box to
+         * the window's top-left corner, over everything else on the screen.
+         */
         fun union(a: PixelRect?, b: PixelRect?): PixelRect? = when {
             a == null -> b
             b == null -> a
+            isEmpty(b) -> a
+            isEmpty(a) -> b
             else -> PixelRect(minOf(a.left, b.left), minOf(a.top, b.top), maxOf(a.right, b.right), maxOf(a.bottom, b.bottom))
         }
+
+        private fun isEmpty(rect: PixelRect) = rect.right <= rect.left || rect.bottom <= rect.top
     }
 }
