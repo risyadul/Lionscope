@@ -15,6 +15,7 @@ const KIND_LABELS: Record<ScreenKind, string> = {
   activity: 'Activity',
   fragment: 'Fragment',
   dialog: 'Dialog',
+  destination: 'Destination',
 };
 
 export function screenKindLabel(kind: ScreenKind): string {

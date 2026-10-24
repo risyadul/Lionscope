@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildIndex,
+  compositionNote,
   defaultExpanded,
   fallbackLabel,
+  hitStack,
   hitTest,
+  isComposable,
+  isSeeThrough,
+  pickFrom,
   nodeLabel,
+  nodeMatches,
   percentBox,
   ringClip,
   shortClass,
@@ -79,6 +85,78 @@ describe('hitTest', () => {
   });
 });
 
+/**
+ * A Compose screen with an idle toast host drawn over everything: AndroidComposeView > [Scaffold > Card > Text,
+ * ToastHost > Box (full size, empty)].
+ */
+function composeOverlay(box: Partial<Parameters<typeof node>[3]> = {}) {
+  const at = { file: 'Home.kt', line: 10 };
+  return inspectorSnapshot({
+    nodes: [
+      node(0, null, [0, 0, 1080, 2400], { className: 'androidx.compose.ui.platform.AndroidComposeView' }),
+      node(1, 0, [0, 0, 1080, 2400], { className: 'Scaffold', composable: at }),
+      node(2, 1, [0, 500, 1080, 900], { className: 'Card', composable: at, clickable: true }),
+      node(3, 2, [100, 600, 500, 700], { className: 'Text', composable: at, text: 'Track' }),
+      node(4, 0, [0, 0, 1080, 2400], { className: 'ToastHost', composable: at }),
+      node(5, 4, [53, 21, 1027, 2340], { className: 'Box', composable: at, ...box }),
+    ],
+    windows: [{ id: 0, type: 1, bounds: [0, 0, 1080, 2400] }],
+  });
+}
+
+describe('picking through stacked views', () => {
+  it('lists every view under the point, one per branch, from the top down', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(hitStack(s, i, 300, 650)).toEqual([5, 3]);
+    expect(hitStack(s, i, 300, 1000)).toEqual([5, 1]);
+    expect(hitStack(s, i, 10, 10)).toEqual([4, 1]);
+  });
+
+  it('looks through an empty full-size composable that shows nothing (an idle toast host)', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(hitTest(s, i, 300, 650)).toBe(3);
+    expect(hitTest(s, i, 800, 800)).toBe(2);
+    expect(isSeeThrough(i, i.byId.get(5)!)).toBe(true);
+  });
+
+  it('keeps a composable that paints, says something or can be clicked', () => {
+    for (const box of [
+      { composable: { file: 'Home.kt', line: 10, draws: true } },
+      { text: 'Saved' },
+      { contentDescription: 'Close' },
+      { resourceId: 'toast' },
+      { clickable: true },
+    ]) {
+      const s = composeOverlay(box);
+      expect(hitTest(s, buildIndex(s), 300, 650)).toBe(5);
+    }
+  });
+
+  it("trusts the SDK's draws flag over the empty-leaf guess", () => {
+    // A container that paints nothing is see-through even with children elsewhere.
+    const s = composeOverlay({ composable: { file: 'Home.kt', line: 10, draws: false } });
+    const i = buildIndex(s);
+    expect(isSeeThrough(i, i.byId.get(4)!)).toBe(false);
+    const host = inspectorSnapshot({
+      ...s,
+      nodes: s.nodes.map((n) =>
+        n.id === 4 ? { ...n, composable: { file: 'Home.kt', line: 9, draws: false } } : n,
+      ),
+    });
+    expect(isSeeThrough(buildIndex(host), buildIndex(host).byId.get(4)!)).toBe(true);
+  });
+
+  it('never treats a View as see-through, and falls back to the top-most when everything is', () => {
+    const s = composeOverlay();
+    const i = buildIndex(s);
+    expect(isSeeThrough(i, i.byId.get(0)!)).toBe(false);
+    expect(pickFrom(i, [5])).toBe(5);
+    expect(pickFrom(i, [])).toBeNull();
+  });
+});
+
 describe('labels and geometry', () => {
   it('shortens classes and labels with the id entry name', () => {
     expect(shortClass('com.google.android.material.button.MaterialButton')).toBe('MaterialButton');
@@ -91,6 +169,37 @@ describe('labels and geometry', () => {
   it('writes the source as layout.xml:line', () => {
     expect(sourceLabel(snap.nodes[2]!)).toBe('fragment_cart.xml:33');
     expect(sourceLabel(snap.nodes[3]!)).toBeNull();
+  });
+
+  it('labels composables by name and testTag and writes their call site as File.kt:line', () => {
+    const button = node(9, 1, [0, 0, 10, 10], {
+      className: 'Button',
+      resourceId: 'nav/checkout',
+      composable: { file: 'CartScreen.kt', line: 87 },
+      destination: 'cart',
+    });
+    expect(isComposable(button)).toBe(true);
+    expect(isComposable(snap.nodes[2]!)).toBe(false);
+    expect(nodeLabel(button)).toBe('Button#nav/checkout'); // A testTag is kept whole.
+    expect(sourceLabel(button)).toBe('CartScreen.kt:87');
+    expect(sourceLabel({ ...button, composable: { file: 'CartScreen.kt', line: null } })).toBe(
+      'CartScreen.kt',
+    );
+    expect(sourceLabel({ ...button, composable: { file: null, line: null } })).toBeNull();
+    expect(nodeMatches(button, 'cartscreen')).toBe(true);
+    expect(nodeMatches(button, 'CART')).toBe(true);
+    expect(nodeMatches(snap.nodes[2]!, 'cartscreen')).toBe(false);
+  });
+
+  it('says why a composition was not read', () => {
+    const composeView = node(9, 1, [0, 0, 10, 10], {
+      className: 'androidx.compose.ui.platform.AndroidComposeView',
+    });
+    expect(compositionNote(composeView)).toBeNull();
+    expect(compositionNote({ ...composeView, composition: 'read' })).toBeNull();
+    expect(compositionNote({ ...composeView, composition: 'disabled' })).toContain('restart the app');
+    expect(compositionNote({ ...composeView, composition: 'no_source' })).toContain('source information');
+    expect(fallbackLabel('compose_disabled')).toContain('restart the app');
   });
 
   it('explains a fallback', () => {

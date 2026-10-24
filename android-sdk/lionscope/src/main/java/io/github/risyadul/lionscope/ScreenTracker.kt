@@ -24,11 +24,18 @@ internal interface LayoutEvents {
     fun onScreenChanged(screen: ScreenRef?, target: Any?)
 }
 
+/** The current navigation destination shown in an Activity, if any (main thread). */
+internal interface DestinationScreens {
+    fun screenFor(activity: Any): ScreenRef?
+}
+
 /**
  * Feeds Activity (and, when androidx.fragment is present, Fragment) lifecycle events into [ScreenResolver].
  * Resolution is coalesced into one main-thread post, so a whole transition (pause A → resume B → resume B's
  * fragments) yields a single `screen` message. Changes without lifecycle events (legacy ViewPager swipes,
  * hide/show, dynamic aliases) are caught by [requestResolve], driven by frames or, below API 24, by a 1 s tick.
+ * When the top screen is an Activity itself (no app fragment shown) and [destinations] knows a navigation destination
+ * shown in it, that destination is the screen.
  */
 internal class ScreenTracker(
     private val link: LinkPort,
@@ -62,6 +69,9 @@ internal class ScreenTracker(
         }
     }
     private var tickScheduled = false
+
+    /** Set on the main thread once the app tracks a NavController. */
+    var destinations: DestinationScreens? = null
 
     @Volatile
     private var lastScreen: ScreenRef? = null
@@ -142,10 +152,11 @@ internal class ScreenTracker(
         emitPending.set(false)
         topActivityClassName = resolver.topActivity?.javaClass?.name
         var target: Any? = null
-        val screen = resolver.resolve(isShown, describe = { picked, kind ->
+        var screen = resolver.resolve(isShown, describe = { picked, kind ->
             target = picked
             describe(picked, kind)
         })
+        if (screen?.kind == ScreenKind.ACTIVITY) target?.let { destinations?.screenFor(it) }?.let { screen = it }
         if (screen == lastScreen) return
         lastScreen = screen
         link.onScreen(clock(), screen)

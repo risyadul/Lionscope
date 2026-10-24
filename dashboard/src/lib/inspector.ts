@@ -61,46 +61,76 @@ export function hasArea(rect: PixelRect | null): rect is PixelRect {
   return rect !== null && rect[2] > rect[0] && rect[3] > rect[1];
 }
 
-function hitIn(index: InspectorIndex, id: number, x: number, y: number): number | null {
+/** Pushes the deepest picks of one branch under the point, top-most first (pre-order is paint order). */
+function stackIn(index: InspectorIndex, id: number, x: number, y: number, out: number[]): boolean {
   const node = index.byId.get(id);
-  // A fully transparent view (and everything in it) can't be seen, so it can't be picked either.
   if (
     node === undefined ||
     node.visibility !== 'visible' ||
     node.alpha === 0 ||
-    !hasArea(node.visibleBounds)
+    !hasArea(node.visibleBounds) ||
+    !contains(node.visibleBounds, x, y)
   ) {
-    return null;
+    return false;
   }
-  // Visible bounds are clipped to the ancestors, so a miss rules out the whole subtree.
-  if (!contains(node.visibleBounds, x, y)) return null;
   const kids = index.children.get(id) ?? [];
-  // Children arrive in drawing order (the SDK sorts by elevation / Z), so pre-order is the z-order: later
-  // siblings paint over earlier ones and win.
+  let isCovered = false;
   for (let i = kids.length - 1; i >= 0; i--) {
     const kid = kids[i];
-    const hit = kid === undefined ? null : hitIn(index, kid, x, y);
-    if (hit !== null) return hit;
+    if (kid !== undefined && stackIn(index, kid, x, y, out)) isCovered = true;
   }
-  return id;
+  if (!isCovered) out.push(id);
+  return true;
 }
 
-/** The deepest visible node under a device-pixel point; the top-most window that has one wins. */
+/**
+ * Every view under a device-pixel point, one per branch (the deepest one there), from the top-most down: what a
+ * click picks first and what clicking again on the same spot steps through. Top-most window first.
+ */
+export function hitStack(snapshot: InspectorSnapshot, index: InspectorIndex, x: number, y: number): number[] {
+  const stack: number[] = [];
+  for (let w = snapshot.windows.length - 1; w >= 0; w--) {
+    const window = snapshot.windows[w];
+    if (window === undefined) continue;
+    const roots = index.roots.get(window.id) ?? [];
+    for (let r = roots.length - 1; r >= 0; r--) {
+      const root = roots[r];
+      if (root !== undefined) stackIn(index, root, x, y, stack);
+    }
+  }
+  return stack;
+}
+
+/**
+ * A composable that shows nothing of its own where it sits: no text, description, test tag or click, and (per the
+ * SDK) no painting; for SDKs that don't say, an empty one with no children. Full-size overlays like an idle toast or
+ * snackbar host are this: picking on the screen looks through them (they stay in the tree, and clicking again on
+ * the same spot still reaches them).
+ */
+export function isSeeThrough(index: InspectorIndex, node: InspectorNode): boolean {
+  if (node.composable === undefined || node.clickable) return false;
+  if (node.text !== null || node.contentDescription !== null || node.resourceId !== null) return false;
+  if (node.composable.draws !== undefined) return !node.composable.draws;
+  return (index.children.get(node.id)?.length ?? 0) === 0;
+}
+
+/** What a click on the frozen screen picks: the top-most view under the point that isn't see-through. */
+export function pickFrom(index: InspectorIndex, stack: readonly number[]): number | null {
+  for (const id of stack) {
+    const node = index.byId.get(id);
+    if (node !== undefined && !isSeeThrough(index, node)) return id;
+  }
+  return stack[0] ?? null;
+}
+
+/** The view a click picks under a device-pixel point (see `hitStack` and `pickFrom`). */
 export function hitTest(
   snapshot: InspectorSnapshot,
   index: InspectorIndex,
   x: number,
   y: number,
 ): number | null {
-  for (let w = snapshot.windows.length - 1; w >= 0; w--) {
-    const window = snapshot.windows[w];
-    if (window === undefined) continue;
-    for (const root of index.roots.get(window.id) ?? []) {
-      const hit = hitIn(index, root, x, y);
-      if (hit !== null) return hit;
-    }
-  }
-  return null;
+  return pickFrom(index, hitStack(snapshot, index, x, y));
 }
 
 // ---------------------------------------------------------------------------
@@ -120,25 +150,60 @@ export function idName(resourceId: string): string {
   return slash === -1 ? resourceId : resourceId.slice(slash + 1);
 }
 
-/** `MaterialButton#btn_share`, the label of the highlight and the tree row. */
+/** A composable read from the composition (SDK 0.6.0+): its name is its class, its testTag its id. */
+export function isComposable(node: InspectorNode): boolean {
+  return node.composable !== undefined;
+}
+
+/** What follows `#`: a view's id entry name, a composable's whole testTag. */
+export function idLabel(node: InspectorNode): string | null {
+  if (node.resourceId === null) return null;
+  return isComposable(node) ? node.resourceId : idName(node.resourceId);
+}
+
+/** `MaterialButton#btn_share` (or `Button#checkout` for a composable), the label of the highlight and the tree row. */
 export function nodeLabel(node: InspectorNode): string {
-  return node.resourceId === null
-    ? shortClass(node.className)
-    : `${shortClass(node.className)}#${idName(node.resourceId)}`;
+  const id = idLabel(node);
+  return id === null ? shortClass(node.className) : `${shortClass(node.className)}#${id}`;
 }
 
 export function rectSize(rect: PixelRect): { width: number; height: number } {
   return { width: Math.max(0, rect[2] - rect[0]), height: Math.max(0, rect[3] - rect[1]) };
 }
 
-/** `layout.xml:33`: the line is where the start tag ends. */
+/**
+ * `layout.xml:33` for a view (the line is where the start tag ends); `HomeScreen.kt:42` for a composable (the line it
+ * is called on), just the file when no line was recorded.
+ */
 export function sourceLabel(node: InspectorNode): string | null {
+  if (node.composable) {
+    const { file, line } = node.composable;
+    if (file === null) return null;
+    return line === null ? file : `${file}:${line}`;
+  }
   return node.source === null ? null : `${node.source.layout}.xml:${node.source.line}`;
+}
+
+const COMPOSITION_NOTES: Readonly<Record<string, string>> = {
+  disabled:
+    'Composed before Lionscope turned Compose inspection on, or the app opted out: restart the app to read it',
+  no_source: 'Built without Compose source information: composables cannot be named',
+  failed: 'Lionscope could not read this composition',
+};
+
+/** Why an AndroidComposeView's composables are missing, null when they were read (or the SDK predates 0.6.0). */
+export function compositionNote(node: InspectorNode): string | null {
+  const status = node.composition;
+  if (status === undefined || status === 'read') return null;
+  return COMPOSITION_NOTES[status] ?? status.replace(/_/g, ' ');
 }
 
 const FALLBACK_REASONS: Record<string, string> = {
   no_sdk: 'no SDK',
   compose: 'Compose screen',
+  compose_disabled: 'Compose inspection off (restart the app)',
+  compose_no_source: 'Compose without source information',
+  compose_failed: 'Compose could not be read',
   old_sdk: 'SDK too old',
   background: 'app in the background',
   no_window: 'no app window',
@@ -251,13 +316,18 @@ export type TreeRow =
       isMatch: boolean;
     };
 
-/** What a search query looks at: class, resource id, text and content description. */
+/** What a search query looks at: class, resource id, text, content description, a composable's file and destination. */
 export function nodeMatches(node: InspectorNode, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (q === '') return false;
-  return [node.className, node.resourceId, node.text, node.contentDescription].some(
-    (field) => field !== null && field.toLowerCase().includes(q),
-  );
+  return [
+    node.className,
+    node.resourceId,
+    node.text,
+    node.contentDescription,
+    node.composable?.file ?? null,
+    node.destination ?? null,
+  ].some((field) => field !== null && field.toLowerCase().includes(q));
 }
 
 /** Roots and one level below: what a fresh snapshot shows before anything is opened. */

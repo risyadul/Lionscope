@@ -175,9 +175,10 @@ screen freezes to a snapshot and the **Inspector** tab opens next to Layouts. Ho
 the pointer (its `Class#id` and size appear on the box); click to select it. The selection shows its padding and
 margin on the screen and its attributes in the tab: class, id, text, bounds and size, visibility, alpha, layout
 width and height, padding, margin, flags, the owning Fragment and Activity, and the **XML layout and line** it
-was inflated from (`fragment_cart.xml:33`). The tree beside it collapses, follows the selection, takes the arrow
-keys (↑↓ move, → opens, ← closes) and searches class, id and text; hovering a row lights up the view on the
-screen. `Esc` or the toggle goes back to the live screen. While Inspect is on the snapshot refreshes about 0.7 s
+was inflated from (`fragment_cart.xml:33`). On Compose screens the nodes are **composables** (`Button`,
+`ProductCard`) with the **Kotlin file and line they are called from** (`CartScreen.kt:87`). The tree beside it
+collapses, follows the selection, takes the arrow keys (↑↓ move, → opens, ← closes) and searches class, id, text,
+source file and destination; hovering a row lights up the view on the screen. `Esc` or the toggle goes back to the live screen. While Inspect is on the snapshot refreshes about 0.7 s
 after the app changes its top screen (never continuously), and the refresh button takes a new one.
 
 <img width="710" alt="Layout Inspector on the sample app: the frozen screen with the first card's Share button selected and labelled MaterialButton 231 × 126, and the Inspector tab with the view tree, its ancestor path, source view_dashboard_actions.xml:15 (end of start tag), owner HomeFragment in MainActivity, text, bounds and size" src="docs/images/dashboard-inspector.png">
@@ -191,17 +192,42 @@ after the app changes its top screen (never continuously), and the refresh butto
   then says `SDK connecting` if it didn't). Apps with SDK 0.5.0 or 0.5.1 still link only during a session (badge:
   `SDK needs a session`), and if another Lionscope server already holds the device's link the badge says
   `SDK link busy`. On Android 10 and later that is every window of the app, dialogs included; below
-  Android 10 it is the top Activity and its dialogs, and without layout sources. Otherwise (no SDK in the app, an older SDK,
-  Compose screens, other apps and system UI) the server falls back to the accessibility tree, read by its UI helper
-  (see the agent tools' notes on its side effects) or `uiautomator dump`, and the badge says `uiautomator` with the
-  reason. uiautomator has fewer nodes and no layout source, owner, padding or margin; those
-  fields show a dash. Compose composables are only visible through uiautomator.
+  Android 10 it is the top Activity and its dialogs, and without layout sources. From 0.6.0 the SDK also reads
+  Compose (below). Otherwise (no SDK in the app, an older SDK, Compose it cannot read, other apps and system UI) the
+  server falls back to the accessibility tree, read by its UI helper (see the agent tools' notes on its side
+  effects) or `uiautomator dump`, and the badge says `uiautomator` with the reason. uiautomator has fewer nodes and
+  no source, owner, padding or margin; those fields show a dash.
+- **Compose.** The SDK (0.6.0 or later, with or without a session) reads the composition of every `ComposeView` (a
+  `setContent {}` Activity, a ComposeView in an XML layout, a Compose dialog or popup window), the way Android Studio's Layout Inspector does: it turns
+  Compose's tooling data on when it starts, before anything is composed. A node is a composable **called from your
+  code**, so `Button` is one but the `Surface`, `Row` and `Layout` inside it are not (calls whose call site is in
+  androidx Compose, Material or Navigation are folded into the nearest composable you called; a third-party
+  library's internals do show). Its source is the **call site**: the file and line of the call, not where the
+  function is defined. Its id is its `testTag`; text, content description and flags come from its semantics;
+  lazy list items sit under their list, an `AndroidView`'s View under its composable, a `ComposeView` under the
+  XML views around it. Bounds are the content box of what it lays out (inside its padding modifiers); composables
+  have no alpha, padding, margin or layout params. With `Lionscope.trackNavigation` (below) the owner shows the
+  navigation destination a composable is drawn for. Picking on the screen looks through composables that draw
+  nothing themselves (no background, border, image or text: an idle toast or snackbar host spread over the whole
+  screen) and have no text, content description, test tag or click; they stay in the tree. Clicking again on the
+  same spot steps to the view below. Works with Jetpack Compose 1.6 and later and Compose Multiplatform 1.8+ on
+  Android, compiled with source information (the default for debug builds).
+- **When Compose falls back.** A Compose screen that was composed before the SDK started (Lionscope installed by
+  hand late, or the app opted out with `<meta-data android:name="io.github.risyadul.lionscope.composeInspection"
+android:value="false" />`) cannot be read: the badge says why (restart the app). So does a build without
+  Compose source information. The tooling data makes composition a little slower and keeps a little more in
+  memory (as under Android Studio's inspector), so debug frame timings of Compose screens lean slightly
+  pessimistic. A capture runs on the main thread: about 10 ms for a 30-item lazy list on an emulator, several
+  times that on a slow phone; reading compositions stops after 200 ms (the snapshot is then marked truncated).
 - **The line number is where the start tag ends.** aapt2 records the line of the closing `>`, so a `Button` that
   spans lines 28 to 33 reports 33. Views built in code, ViewStubs and views inflated off the main thread have no
   source, and neither do the views of an Activity that was created while inflation tracking was off (or opted out
   of in the SDK) — turn it on and reopen the screen.
 - **Privacy.** The screenshot and the text on screen stay on your machine, and the snapshot is kept in the
-  server's memory only (the last few). Password fields are never read. An AI agent sees text and a cropped image
+  server's memory only (the last few). Password fields are never read: for Compose, text fields with password
+  semantics (`PasswordVisualTransformation`, secure text fields) or a password content type, and a field once
+  seen as one stays redacted when "show password" turns that off. A Compose field that only ever sets
+  `KeyboardType.Password` shows its text on screen and is read like any other. An AI agent sees text and a cropped image
   only for an element _you_ selected (never for a whole window or a large part of the screen); an element the
   agent selects itself gives it structure only (class, id, layout source, owner, bounds). A view an agent
   selected is marked **AI** in the dashboard. See "Use with AI agents".
@@ -313,8 +339,37 @@ Activity or Fragment has a public zero-arg `getScreen()` that returns an object 
 The sample app's `ScreenName.kt` is an example of this convention; the SDK reads it through reflection, so no
 shared interface is required.
 
+**Navigation Compose.** A single-Activity Compose app is one Activity to the SDK. Tell it about your
+`NavController` and every destination becomes a screen (the Screens lane, per-screen jank, stalls, the Inspector's
+screen and owner):
+
+```kotlin
+val navController = rememberNavController()
+Lionscope.trackNavigation(navController) // once per controller; repeated calls are free
+NavHost(navController, startDestination = "catalog") { /* ... */ }
+```
+
+The screen is the destination's **route pattern**, never its arguments: `product/{id}` (query placeholders are
+dropped from the name), or for a type-safe route its class name (`ProductDetail`); a `dialog()` destination is a
+dialog. It applies while no Fragment of your app is on top, and with nested NavHosts the innermost shown one wins
+(track each). `lionscope-noop` has the same call, so it compiles in release builds. In Kotlin Multiplatform
+(Compose Multiplatform with `org.jetbrains.androidx.navigation:navigation-compose`), the SDK is an Android
+dependency, so call it from `androidMain`, e.g. through an `expect`/`actual` function:
+
+```kotlin
+// commonMain
+@Composable expect fun TrackNavigation(navController: NavHostController)
+// androidMain
+@Composable actual fun TrackNavigation(navController: NavHostController) = Lionscope.trackNavigation(navController)
+// iosMain (and other targets)
+@Composable actual fun TrackNavigation(navController: NavHostController) = Unit
+```
+
+Voyager and Navigation 3 are not tracked yet.
+
 SDK details: minSdk 23 (frame metrics need API 24), Java 8 bytecode, Kotlin metadata 2.0, no runtime
-dependencies besides `androidx.startup` (`androidx.fragment` and the Kotlin stdlib come from the host app).
+dependencies besides `androidx.startup` (`androidx.fragment`, Compose UI, Navigation and the Kotlin stdlib come
+from the host app, and are only used when it has them).
 Demo app: [`android-sdk/sample`](android-sdk/sample).
 
 ### Keeping it out of release builds
@@ -323,8 +378,8 @@ Demo app: [`android-sdk/sample`](android-sdk/sample).
 `InitializationProvider` entry, no `INTERNET` permission added by the SDK. As a second guard, the SDK does
 nothing unless the app is debuggable (`FLAG_DEBUGGABLE`).
 
-Apps that call the API explicitly (`Lionscope.install()` / `Lionscope.isActive()`) also need it to compile in
-release; for them there is a no-op artifact with the same API:
+Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`, `Lionscope.trackNavigation()`)
+also need it to compile in release; for them there is a no-op artifact with the same API:
 
 ```groovy
 releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
@@ -333,6 +388,9 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
 ### Cost when no dashboard is connected
 
 - Lifecycle callbacks only record the current top screen; nothing is sent while there is no connection.
+- In an app with Compose UI, Compose's tooling data is on from the start (so that the Inspector can read it later):
+  composition is a little slower and keeps a little more in memory, as under Android Studio's inspector. Opt out
+  with the `io.github.risyadul.lionscope.composeInspection` meta-data (the Inspector then uses uiautomator there).
 - `FrameMetrics` listeners are registered only while the dashboard has accepted the app (an active session for
   that package), so there is no per-frame work otherwise.
 - The SDK tries to reach `127.0.0.1:8700` every 1 → 2 → 5 s while the app is in the foreground (a refused
@@ -369,7 +427,7 @@ Three ways in, one set of tools:
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                        |
 | Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                                                                                                 |
-| Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, XML layout and line, owning Fragment and Activity, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                             |
+| Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                    |
 | Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator` |
 
 **"Why is this button misaligned?"** Select the element in the dashboard's Layout Inspector (Inspect, then click
@@ -640,6 +698,10 @@ protocol version 1 and closes the connection on unknown message types.
   policy, so they can add lines to logcat (e.g. `penaltyLog`). Apps with their own `penaltyListener` are detected
   by a heuristic that cannot see every listener. Network violations are reported only when the app's policy
   permits network on the main thread.
+- **Compose in the Inspector** needs a debug build that is not minified, compiled with Compose source information
+  (the default), and composed after the SDK started. Composables are only those called from your code (and from
+  libraries other than androidx Compose, Material and Navigation); a composable that lays nothing out (an effect, a
+  `Dialog` call, a provider) has no node of its own, and a `Dialog`'s content appears in the dialog's window.
 - **Layout times are a lower bound.** Parser setup is not measured, nested `<include>`s are counted in their
   parent and also on their own, and only inflation on the main thread through the Activity's inflater is seen:
   layouts inflated on a background thread, from an application-context inflater or by Compose are not.

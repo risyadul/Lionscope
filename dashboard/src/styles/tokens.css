@@ -64,6 +64,8 @@
   --jank-text: #9a5200;
   --jank-wash: rgba(194, 106, 0, 0.1);
   --good: #0b7d32;
+  /* Composables in the Layout Inspector (text, ≥ 4.5:1). */
+  --compose: #0f7a6c;
   --good-wash: rgba(11, 125, 50, 0.1);
   --critical: #c42f2f;
   --critical-wash: rgba(196, 47, 47, 0.08);
@@ -163,6 +165,7 @@
     --jank-text: #f3b23a;
     --jank-wash: rgba(240, 164, 32, 0.12);
     --good: #3cc26a;
+    --compose: #3cc2ae;
     --good-wash: rgba(60, 194, 106, 0.12);
     --critical: #f07070;
     --critical-wash: rgba(240, 112, 112, 0.1);

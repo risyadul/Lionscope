@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.asynclayoutinflater.view.AsyncLayoutInflater
+import androidx.compose.ui.platform.ComposeView
 import androidx.fragment.app.Fragment
 
 class MoreFragment : Fragment(R.layout.fragment_more) {
@@ -16,6 +17,9 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         }
         view.findViewById<View>(R.id.show_dialog).setOnClickListener {
             PromoDialogFragment().show(childFragmentManager, PromoDialogFragment.TAG)
+        }
+        view.findViewById<ComposeView>(R.id.compose_card).setContent {
+            ComposeNoteCard(onOpenShop = { startActivity(Intent(requireContext(), ComposeShopActivity::class.java)) })
         }
         val results = view.findViewById<ViewGroup>(R.id.off_main_results)
         view.findViewById<View>(R.id.inflate_off_main).setOnClickListener { inflateOffMain(results) }

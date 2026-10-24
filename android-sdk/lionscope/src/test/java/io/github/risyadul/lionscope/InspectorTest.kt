@@ -23,10 +23,12 @@ class InspectorTest {
 
     private class Scene(var root: FakeView?, var foreground: Boolean = true) : InspectorScene<FakeView> {
         var failure: RuntimeException? = null
+        val readCompose = ArrayList<Boolean>()
         override val isForeground: Boolean
             get() = foreground
 
-        override fun prepare(): PreparedScene<FakeView>? {
+        override fun prepare(readCompose: Boolean): PreparedScene<FakeView>? {
+            this.readCompose += readCompose
             failure?.let { throw it }
             val root = root ?: return null
             return PreparedScene(listOf(fakeWindow(root)), InspectorDisplay(1080, 2424, 0), FakeTreeAccess())
@@ -116,6 +118,15 @@ class InspectorTest {
         scene.failure = null
         request(4)
         assertEquals(1, background.size) // A failed capture leaves nothing busy.
+    }
+
+    @Test
+    fun compositionsAreOnlyReadOnAV6Link() {
+        request(1)
+        link.welcome(false)
+        link.welcome(true, 6)
+        request(2)
+        assertEquals(listOf(false, true), scene.readCompose)
     }
 
     @Test

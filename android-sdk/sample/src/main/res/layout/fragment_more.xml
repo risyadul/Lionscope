@@ -30,6 +30,11 @@
         android:layout_height="wrap_content"
         android:text="@string/inflate_off_main" />
 
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/compose_card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
     <LinearLayout
         android:id="@+id/off_main_results"
         android:layout_width="wrap_content"

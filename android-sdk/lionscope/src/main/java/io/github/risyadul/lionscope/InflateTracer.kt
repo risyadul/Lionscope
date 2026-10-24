@@ -47,20 +47,19 @@ internal object InflateOptOut {
     }
 
     /** Reads the application's meta-data; an unreadable manifest allows tracking (the default). */
-    @Suppress("DEPRECATION") // getApplicationInfo(String, int) and Bundle.get: the typed variants need API 33.
-    fun allows(context: Context): Boolean {
-        val value = try {
-            context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
-                .metaData?.get(META_DATA)
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
-        } catch (e: RuntimeException) {
-            null
-        }
-        return allowsValue(value).also { allowed ->
-            if (!allowed) Log.i(LOG_TAG, "Lionscope inflation tracking off for this app ($META_DATA = false)")
-        }
+    fun allows(context: Context): Boolean = allowsValue(applicationMetaData(context, META_DATA)).also { allowed ->
+        if (!allowed) Log.i(LOG_TAG, "Lionscope inflation tracking off for this app ($META_DATA = false)")
     }
+}
+
+/** The application's meta-data value for [key]; null when absent or the manifest cannot be read. */
+@Suppress("DEPRECATION") // getApplicationInfo(String, int) and Bundle.get: the typed variants need API 33.
+internal fun applicationMetaData(context: Context, key: String): Any? = try {
+    context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData?.get(key)
+} catch (e: PackageManager.NameNotFoundException) {
+    null
+} catch (e: RuntimeException) {
+    null
 }
 
 /** Where a layout came from, resolved to a [LayoutName] once its message has ended. */

@@ -19,12 +19,49 @@ All notable changes to Lionscope are documented here. The format is based on
   only during a session) and `sdk_link_busy` (another running Lionscope server holds the device's link).
 - Device protocol v5: `welcome.mode` (`session` or `inspect`; servers and SDKs before v5 behave as before), and
   the dashboard's `inspectorFocus` message (dashboard protocol 5).
+- Jetpack Compose in the Layout Inspector. On a Compose screen the SDK now sends the composables themselves instead
+  of one opaque `AndroidComposeView`: the composables called from your code (`ProductCard`, `Button`, `Text`; the
+  androidx Compose, Material and Navigation internals they call are folded in), each with the **Kotlin file and
+  line it is called from** (`CartScreen.kt:87`), its `testTag` as id, text, content description and flags from its
+  semantics, and bounds. Lazy list items hang under their list, an `AndroidView`'s View under its composable, and a
+  `ComposeView` inside an XML layout under its views; Compose dialogs and popups are their own windows. The SDK
+  turns Compose's tooling data on when it starts (before anything is composed), as Android Studio's Layout
+  Inspector does; an app can opt out with the `io.github.risyadul.lionscope.composeInspection` meta-data. Password
+  fields (password semantics or a password content type) never send their text. Compose UI stays a compile-only
+  dependency: apps without Compose are untouched. Works with Jetpack Compose 1.6+ and Compose Multiplatform 1.8+ on
+  Android.
+- Picking on the Inspector's screen looks through composables that draw nothing and have no text, content
+  description, test tag or click (an idle toast or snackbar host over the whole screen); they stay in the tree, and
+  clicking again on the same spot steps to the view below. The SDK says whether a composable's own layout nodes
+  paint anything (`composable.draws`: a background, border, image, text or draw modifier; omitted when it cannot
+  tell); without it the dashboard looks through such composables only when they have no children.
+- `Lionscope.trackNavigation(navController)` (also in `lionscope-noop`): navigation-compose destinations become
+  screens, named by their route pattern (`product/{id}`, never argument values; a type-safe route by its class),
+  with `dialog()` destinations as dialogs. The Screens lane, per-screen jank, stalls and the Inspector's screen
+  follow them, and a composable's owner shows the destination it is drawn for. The README shows how to call it
+  from a Kotlin Multiplatform `androidMain`.
+- Dashboard: composables are tinted in the Inspector tree; their attributes show the call site ("call site"
+  instead of the XML "end of start tag" note), the testTag, the destination as owner, and leave out alpha, layout
+  params and the box model. Search also matches source files and destinations. Destination is a screen kind in
+  the Screens lane.
+- Agent tools: `inspect_screen` and `get_inspector_selection` label composables by name and testTag, give their
+  Kotlin call site (`kind: compose`) instead of an XML layout, their destination, and `query` matches source files
+  and destinations.
+- Sample app: a Compose card inside the XML More screen, and a navigation-compose shop (lazy catalog under an idle
+  full-size toast host, a product with an `AndroidView`, a sign-in form with password fields, a dialog
+  destination).
 
 ### Changed
 
 - Each device with an inspect-only link gets its own SDK gateway listener, so every link is tied to the device it
   came from; the `adb reverse tcp:8700` mapping for it is made only while someone inspects that device and is
   never taken from, or removed for, another running Lionscope server.
+- Device protocol v6 (v5 plus Compose): Inspector nodes may carry `composable`, `composition` and `destination`,
+  and `screen.kind` may be `destination`, on session and inspect-only links alike. An SDK sends none of it to an
+  older server (a destination is then a `fragment`), and an older SDK keeps working. The dashboard protocol stays 5.
+- A Compose top window now falls back to uiautomator only when the SDK could not read its composition, and says
+  why: `compose_disabled` (composed before the SDK started, or opted out: restart the app), `compose_no_source`
+  (built without Compose source information), `compose_failed`; `compose` remains for SDKs before 0.6.0.
 
 ### Fixed
 

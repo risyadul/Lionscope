@@ -3,25 +3,31 @@ package io.github.risyadul.lionscope
 /** One window to walk: its root, `WindowManager.LayoutParams.type`, screen bounds and owning Activity's class. */
 internal class WindowRoot<T : Any>(val root: T, val type: Int?, val bounds: PixelRect, val activity: String?)
 
-/** What [InspectorWalker] reads of one node: everything but its place in the tree, owners and visible bounds. */
-internal class NodeAttributes(
+/**
+ * What [InspectorWalker] reads of one node: everything but its place in the tree, owners and visible bounds. A
+ * composable has no alpha, padding or layout params; [destination] is inherited by the node's subtree.
+ */
+internal data class NodeAttributes(
     val className: String,
     val resourceId: String?,
     val text: String?,
     val contentDescription: String?,
     val bounds: PixelRect,
     val visibility: ViewVisibility,
-    val alpha: Double,
+    val alpha: Double?,
     val enabled: Boolean,
     val clickable: Boolean,
     val focused: Boolean,
     val selected: Boolean,
     val checked: Boolean?,
-    val padding: PixelRect,
+    val padding: PixelRect?,
     val margin: PixelRect?,
     val layoutWidth: String?,
     val layoutHeight: String?,
     val source: ViewSource?,
+    val composable: ComposableSource? = null,
+    val composition: CompositionStatus? = null,
+    val destination: String? = null,
 )
 
 /** A view hierarchy as [InspectorWalker] sees it, so the capture can be tested on a fake tree. */
@@ -35,6 +41,10 @@ internal interface InspectorTreeAccess<T : Any> {
 
     /** The Fragment whose view (or dialog window) [node] is the root of, else null: its subtree inherits it. */
     fun fragmentRootOf(node: T): String?
+
+    /** True once some node's children were cut short (a Compose read over its budget); asked after the walk. */
+    val truncated: Boolean
+        get() = false
 }
 
 internal class InspectorCapture(
@@ -52,7 +62,8 @@ internal class InspectorCapture(
  * deepest nodes first (at the cut depth, the last ones in pre-order), so every kept node keeps its parent. Only the
  * top-most [MAX_INSPECTOR_WINDOWS] windows are walked. Any of these cuts marks the capture truncated. Visible bounds
  * are the bounds clipped to the parent's visible bounds (the window's and the screen's for a root), null for a view
- * that is not visible or has nothing on screen. Iterative: no recursion on deep trees.
+ * that is not visible or has nothing on screen. A node's navigation destination, like its owner, is inherited by its
+ * subtree. Iterative: no recursion on deep trees.
  */
 internal object InspectorWalker {
     const val MAX_WALK = 50_000
@@ -96,7 +107,8 @@ internal object InspectorWalker {
         return InspectorCapture(
             windows = shown.mapIndexed { id, root -> InspectorWindow(id, root.type, root.bounds) },
             nodes = nodes(entries, keptArray, shown, screen, access),
-            truncated = shown.size < windows.size || walked.any { !it!!.complete } || keptArray.any { !it },
+            truncated = shown.size < windows.size || walked.any { !it!!.complete } || keptArray.any { !it } ||
+                access.truncated,
             compose = walked.any { it!!.compose },
         )
     }
@@ -148,6 +160,7 @@ internal object InspectorWalker {
     ): List<InspectorNode> {
         val ids = IntArray(entries.size) { -1 }
         val owners = arrayOfNulls<String>(entries.size)
+        val destinations = arrayOfNulls<String>(entries.size)
         val visible = arrayOfNulls<PixelRect>(entries.size)
         val windowClips = windows.map { intersect(it.bounds, screen) }
         val nodes = ArrayList<InspectorNode>(kept.count { it })
@@ -157,6 +170,7 @@ internal object InspectorWalker {
             val parent = entry.parent
             val clip = if (parent < 0) windowClips[entry.window] else visible[parent]
             owners[index] = access.fragmentRootOf(entry.node) ?: if (parent < 0) null else owners[parent]
+            destinations[index] = attributes.destination ?: if (parent < 0) null else destinations[parent]
             visible[index] = if (attributes.visibility != ViewVisibility.VISIBLE || clip == null) {
                 null
             } else {
@@ -187,6 +201,9 @@ internal object InspectorWalker {
                 source = attributes.source,
                 fragment = owners[index],
                 activity = windows[entry.window].activity,
+                composable = attributes.composable,
+                composition = attributes.composition,
+                destination = destinations[index],
             )
         }
         return nodes
@@ -208,8 +225,11 @@ internal interface InspectorScene<T : Any> {
     /** False while no Activity of the app is started (the app is in the background). */
     val isForeground: Boolean
 
-    /** The visible windows, bottom-most first, and how to read them; null when there is none. */
-    fun prepare(): PreparedScene<T>?
+    /**
+     * The visible windows, bottom-most first, and how to read them; null when there is none. [readCompose]: read the
+     * compositions of AndroidComposeViews (a v6 link), else they stay leaves as before.
+     */
+    fun prepare(readCompose: Boolean): PreparedScene<T>?
 }
 
 internal class PreparedScene<T : Any>(
@@ -257,7 +277,9 @@ internal class Inspector<T : Any>(
         val prepared: PreparedScene<T>
         val capture: InspectorCapture
         try {
-            prepared = scene.prepare()?.takeIf { it.windows.isNotEmpty() } ?: return reply(requestId, InspectError.NO_WINDOW)
+            val readCompose = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V6)
+            prepared = scene.prepare(readCompose)?.takeIf { it.windows.isNotEmpty() }
+                ?: return reply(requestId, InspectError.NO_WINDOW)
             val display = prepared.display
             capture = InspectorWalker.capture(prepared.windows, PixelRect(0, 0, display.width, display.height), prepared.access)
         } catch (t: Throwable) {

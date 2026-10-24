@@ -38,6 +38,8 @@ kotlin {
 }
 
 dependencies {
+    // Lionscope.trackNavigation's parameter type; the app brings Navigation itself.
+    compileOnly(libs.navigation.runtime.sdk)
     compileOnly(libs.kotlin.stdlib)
 }
 

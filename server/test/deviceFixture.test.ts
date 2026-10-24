@@ -169,15 +169,25 @@ describe('golden device messages through the gateway', () => {
       className: 'com.example.shop.ui.promo.PromoBottomSheet',
       kind: 'dialog',
     };
+    const product = {
+      name: 'product/{id}',
+      className: 'product/{id}?tab={tab}',
+      kind: 'destination',
+    };
     const spans = ofType('screen').map((message) => message.span);
-    expect(spans.slice(0, 4)).toEqual([
+    expect(spans.slice(0, 5)).toEqual([
       { start: laptop(1792516375100), end: null, screen: main },
       { start: laptop(1792516375250), end: null, screen: home },
       { start: laptop(1792516376000), end: null, screen: promo },
       { start: laptop(1792516377000), end: null, screen: null },
+      { start: laptop(1792516377500), end: null, screen: product },
     ]);
-    // Link closed: the open (background) span is re-sent closed.
-    expect(spans[4]).toEqual({ start: laptop(1792516377000), end: laptop(DEVICE_START_MS), screen: null });
+    // Link closed: the open (navigation destination) span is re-sent closed.
+    expect(spans[5]).toEqual({
+      start: laptop(1792516377500),
+      end: laptop(DEVICE_START_MS),
+      screen: product,
+    });
     expect(manager.getSessionState().sdk?.framesActive).toBe(false);
 
     const snapshot = manager.getSnapshot();
@@ -185,6 +195,7 @@ describe('golden device messages through the gateway', () => {
       laptop(1792516375250),
       laptop(1792516376000),
       laptop(1792516377000),
+      laptop(1792516377500),
       laptop(DEVICE_START_MS),
     ]);
     expect(snapshot.breakdown?.length).toBeGreaterThanOrEqual(1);

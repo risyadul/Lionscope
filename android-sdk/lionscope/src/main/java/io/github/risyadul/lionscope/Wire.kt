@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 5
+internal const val DEVICE_PROTOCOL_VERSION = 6
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -13,6 +13,11 @@ internal const val DEVICE_PROTOCOL_V3 = 3
 internal const val DEVICE_PROTOCOL_V4 = 4
 /** First version with `welcome.mode`: `inspect` links run only screens, heartbeat and the Inspector. */
 internal const val DEVICE_PROTOCOL_V5 = 5
+/**
+ * First version with Compose in Inspector snapshots (composables under AndroidComposeView, `composable`,
+ * `composition`, `destination`) and `screen.kind` `destination`, on session and inspect links alike.
+ */
+internal const val DEVICE_PROTOCOL_V6 = 6
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 internal const val MAX_SDK_FRAMES_PER_BATCH = 256
@@ -38,6 +43,9 @@ internal enum class ScreenKind(val wire: String) {
     ACTIVITY("activity"),
     FRAGMENT("fragment"),
     DIALOG("dialog"),
+
+    /** A navigation-compose destination (v6; sent as `fragment` to older servers). */
+    DESTINATION("destination"),
 }
 
 internal data class ScreenRef(val name: String, val className: String, val kind: ScreenKind)
@@ -99,13 +107,35 @@ internal data class InspectorWindow(val id: Int, val type: Int?, val bounds: Pix
 /** The XML layout entry name and the line where the view's start tag ends. */
 internal data class ViewSource(val layout: String, val line: Int)
 
+/**
+ * Where a composable was called: the Kotlin file name and 1-based line, each null when the compiler recorded none;
+ * [draws]: whether its own layout nodes paint anything (not its children), null when unknown.
+ */
+internal data class ComposableSource(val file: String?, val line: Int?, val draws: Boolean? = null)
+
+/**
+ * Whether an AndroidComposeView's composition was read (v6): [READ] its composables are its children; [DISABLED] it
+ * was composed before Lionscope enabled Compose inspection (installed late, or the app opted out); [NO_SOURCE] it
+ * has no source information (compiled without it); [FAILED] reading it threw.
+ */
+internal enum class CompositionStatus(val wire: String) {
+    READ("read"),
+    DISABLED("disabled"),
+    NO_SOURCE("no_source"),
+    FAILED("failed"),
+}
+
 internal enum class ViewVisibility(val wire: String) {
     VISIBLE("visible"),
     INVISIBLE("invisible"),
     GONE("gone"),
 }
 
-/** One view of an Inspector snapshot; see `InspectorNode` in protocol/src/wire.ts. Text is cleaned when encoded. */
+/**
+ * One view or composable of an Inspector snapshot; see `InspectorNode` in protocol/src/wire.ts. Text is cleaned when
+ * encoded. A composable has [composable] set, its name as [className], its testTag as [resourceId] and no alpha,
+ * padding or layout params; [composition] is only set on AndroidComposeView nodes, [destination] only on composables.
+ */
 internal data class InspectorNode(
     val id: Int,
     val parent: Int?,
@@ -117,19 +147,22 @@ internal data class InspectorNode(
     val bounds: PixelRect,
     val visibleBounds: PixelRect?,
     val visibility: ViewVisibility,
-    val alpha: Double,
+    val alpha: Double?,
     val enabled: Boolean,
     val clickable: Boolean,
     val focused: Boolean,
     val selected: Boolean,
     val checked: Boolean?,
-    val padding: PixelRect,
+    val padding: PixelRect?,
     val margin: PixelRect?,
     val layoutWidth: String?,
     val layoutHeight: String?,
     val source: ViewSource?,
     val fragment: String?,
     val activity: String?,
+    val composable: ComposableSource? = null,
+    val composition: CompositionStatus? = null,
+    val destination: String? = null,
 )
 
 /**

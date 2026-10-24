@@ -1,9 +1,10 @@
 /**
  * The Layout Inspector: snapshots of a device screen's view hierarchy with a screenshot taken at the same moment.
  * From the in-app SDK when the app on top of that device is linked at device protocol ≥ 4 (layout source, owners,
- * layout params): the session's link, or outside a session an inspect-only link (SDK 0.5.2+); else, and for
- * Compose screens, from `uiautomator dump`. The last few snapshots and their PNGs are kept in memory; the newest is
- * the current one, and the selection always refers to it.
+ * layout params; at ≥ 6 also composables with their call sites): the session's link, or outside a session an
+ * inspect-only link (SDK 0.5.2+); else, and for Compose screens the SDK could not read, from `uiautomator dump`.
+ * The last few snapshots and their PNGs are kept in memory; the newest is the current one, and the selection
+ * always refers to it.
  */
 import { randomBytes } from 'node:crypto';
 import { DEVICE_PROTOCOL_V4 } from '@lionscope/protocol';
@@ -16,8 +17,8 @@ import { errorMessage, log } from '../log.ts';
 import type { InspectorSessionSource } from '../session/sessionManager.ts';
 import type { UiTree } from '../agent/uiTree.ts';
 import { isPng } from '../agent/png.ts';
-import { matchingNode, sdkSnapshot, topWindowIsCompose, uiautomatorSnapshot } from './snapshots.ts';
-import type { SnapshotBody } from './snapshots.ts';
+import { composeFallback, matchingNode, sdkSnapshot, uiautomatorSnapshot } from './snapshots.ts';
+import type { ComposeFallback, SnapshotBody } from './snapshots.ts';
 
 /** Snapshots (with their PNGs) kept for `/inspector/<id>.png`; the oldest go first. */
 export const MAX_KEPT_SNAPSHOTS = 5;
@@ -41,7 +42,7 @@ interface Built {
 export type FallbackReason =
   | 'no_sdk'
   | 'old_sdk'
-  | 'compose'
+  | ComposeFallback
   | 'background'
   | 'no_window'
   | 'sdk_disabled'
@@ -262,8 +263,8 @@ export class InspectorService {
   }
 
   /**
-   * The SDK's snapshot when it can give one (top window not Compose, not too large), else why not. The capture
-   * time is the screenshot's, taken at the same moment.
+   * The SDK's snapshot when it can give one (top window not Compose it could not read, not too large), else why
+   * not. The capture time is the screenshot's, taken at the same moment.
    */
   private async fromSdk(
     serial: string,
@@ -279,7 +280,8 @@ export class InspectorService {
       if (!(error instanceof SdkInspectError)) throw error;
       return SDK_FALLBACKS[error.reason];
     }
-    if (topWindowIsCompose(inspection)) return 'compose';
+    const compose = composeFallback(inspection);
+    if (compose) return compose;
     const built = this.build(serial, ts, sdkSnapshot(inspection, source.packageName));
     return built.bytes > MAX_SNAPSHOT_BYTES ? 'sdk_too_large' : built;
   }

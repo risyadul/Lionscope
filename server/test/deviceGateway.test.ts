@@ -746,8 +746,8 @@ describe('device gateway: checking a hello before the welcome', () => {
       config,
       config,
     ]);
-    expect(await welcome(DEVICE_PROTOCOL_V5 + 1, 'inspect')).toEqual([
-      '{"type":"welcome","protocolVersion":5,"mode":"inspect"}',
+    expect(await welcome(DEVICE_PROTOCOL_VERSION + 1, 'inspect')).toEqual([
+      `{"type":"welcome","protocolVersion":${DEVICE_PROTOCOL_VERSION},"mode":"inspect"}`,
     ]);
     expect(await welcome(DEVICE_PROTOCOL_V4, 'session')).toEqual([
       '{"type":"welcome","protocolVersion":4}',

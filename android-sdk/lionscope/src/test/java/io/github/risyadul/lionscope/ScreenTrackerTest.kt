@@ -69,6 +69,27 @@ class ScreenTrackerTest {
     }
 
     @Test
+    fun aShownDestinationIsTheScreenOfItsActivity() {
+        val tracker = tracker()
+        val activity = PlainTestActivity()
+        val destinations = object : DestinationScreens {
+            var current: ScreenRef? = null
+            override fun screenFor(activity: Any): ScreenRef? = current
+        }
+        tracker.destinations = destinations
+        tracker.launch(activity)
+        main.runPosted()
+        assertEquals(activityRef(activity, "PlainTestActivity"), link.screens.last()) // No destination yet.
+
+        val product = ScreenRef("product/{id}", "product/{id}", ScreenKind.DESTINATION)
+        destinations.current = product
+        tracker.requestResolve()
+        main.runPosted()
+        assertEquals(product, link.screens.last())
+        assertEquals("product/{id}", tracker.currentScreenName)
+    }
+
+    @Test
     fun backgroundEmitsNullAndReportsForegroundChanges() {
         val tracker = tracker()
         val activity = PlainTestActivity()

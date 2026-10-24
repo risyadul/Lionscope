@@ -19,5 +19,9 @@
             android:name=".DetailActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity" />
+        <activity
+            android:name=".ComposeShopActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LionscopeSample.Compose" />
     </application>
 </manifest>

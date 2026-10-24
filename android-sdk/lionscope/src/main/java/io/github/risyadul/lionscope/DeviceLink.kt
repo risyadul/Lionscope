@@ -167,7 +167,10 @@ internal class DeviceLink(
 
     private fun pump(session: Session, out: BufferedWriter) {
         out.writeLine(helloLine())
-        currentScreen?.let { out.writeLine(DeviceMessages.screen(clock(), it)) }
+        // Before `welcome` no version is agreed: a destination waits for it, so a v6 server gets its real kind.
+        currentScreen?.takeIf { it.kind != ScreenKind.DESTINATION }?.let {
+            out.writeLine(DeviceMessages.screen(clock(), it, negotiatedVersion = null))
+        }
         out.flush()
         val batch = ArrayList<Any>(DRAIN_BATCH)
         var nextHeartbeat = clock() + heartbeatIntervalMs
@@ -266,6 +269,7 @@ internal class DeviceLink(
             // (unsupported server) instead of being clamped up.
             negotiatedVersion = protocolVersion.coerceIn(MIN_DEVICE_PROTOCOL_VERSION, DEVICE_PROTOCOL_VERSION)
             stateLock.withLock { policy.onWelcome(clock()) }
+            currentScreen?.takeIf { it.kind == ScreenKind.DESTINATION }?.let { queue.offer(ScreenEvent(clock(), it)) }
             logState(LinkState.CONNECTED)
             setWelcomed(true)
             // `mode` exists from v5 on; below it every welcome is a session.
@@ -317,7 +321,12 @@ internal class DeviceLink(
          * dropped here. A failing v2 encoder drops that one message, never the connection.
          */
         fun encode(item: Any, negotiatedVersion: Int?): String? = when (item) {
-            is ScreenEvent -> DeviceMessages.screen(item.ts, item.screen)
+            // A destination queued before `welcome` is offered again once the version is agreed (see onWelcome).
+            is ScreenEvent -> if (item.screen?.kind == ScreenKind.DESTINATION && negotiatedVersion == null) {
+                null
+            } else {
+                DeviceMessages.screen(item.ts, item.screen, negotiatedVersion)
+            }
             is V2Item -> if (speaks(negotiatedVersion, item.minVersion)) encodeContained(item) else null
             else -> item.toString()
         }

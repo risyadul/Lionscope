@@ -59,7 +59,8 @@ internal object DeviceMessages {
         .name("refreshRateHz").value(refreshRateHz)
         .endObject().toString()
 
-    fun screen(ts: Long, screen: ScreenRef?): String {
+    /** A [ScreenKind.DESTINATION] is sent as `fragment` unless [negotiatedVersion] is v6 or later. */
+    fun screen(ts: Long, screen: ScreenRef?, negotiatedVersion: Int? = DEVICE_PROTOCOL_VERSION): String {
         val json = JsonWriter().beginObject()
             .name("type").value("screen")
             .name("ts").value(ts)
@@ -70,7 +71,7 @@ internal object DeviceMessages {
             json.beginObject()
                 .name("name").value(screenName(screen))
                 .name("className").value(WireText.required(screen.className, MAX_NAME_LENGTH))
-                .name("kind").value(screen.kind.wire)
+                .name("kind").value(screenKind(screen.kind, negotiatedVersion))
                 .endObject()
         }
         return json.endObject().toString()
@@ -327,7 +328,9 @@ internal object DeviceMessages {
         json.name("visibleBounds")
         writeRect(json, node.visibleBounds)
         json.name("visibility").value(node.visibility.wire)
-            .name("alpha").value(if (node.alpha.isNaN()) 0.0 else node.alpha.coerceIn(0.0, 1.0))
+            .name("alpha")
+        if (node.alpha == null) json.nullValue() else json.value(if (node.alpha.isNaN()) 0.0 else node.alpha.coerceIn(0.0, 1.0))
+        json
             .name("enabled").value(node.enabled)
             .name("clickable").value(node.clickable)
             .name("focused").value(node.focused)
@@ -350,10 +353,33 @@ internal object DeviceMessages {
                 .name("line").value(node.source.line)
                 .endObject()
         }
-        return json.name("fragment").value(WireText.clean(node.fragment, MAX_V3_TEXT_LENGTH))
+        json.name("fragment").value(WireText.clean(node.fragment, MAX_V3_TEXT_LENGTH))
             .name("activity").value(WireText.clean(node.activity, MAX_V3_TEXT_LENGTH))
-            .endObject().toString()
+        writeCompose(json, node)
+        return json.endObject().toString()
     }
+
+    /** v6 fields, only written when set (a v4 snapshot has none, byte for byte as before). */
+    private fun writeCompose(json: JsonWriter, node: InspectorNode) {
+        node.composable?.let { source ->
+            json.name("composable").beginObject()
+                .name("file").value(WireText.clean(source.file, MAX_V3_TEXT_LENGTH))
+                .name("line")
+            val line = source.line?.takeIf { it >= 1 }
+            if (line == null) json.nullValue() else json.value(line)
+            source.draws?.let { json.name("draws").value(it) }
+            json.endObject()
+        }
+        node.composition?.let { json.name("composition").value(it.wire) }
+        WireText.clean(node.destination, MAX_V3_TEXT_LENGTH)?.let { json.name("destination").value(it) }
+    }
+
+    private fun screenKind(kind: ScreenKind, negotiatedVersion: Int?): String =
+        if (kind == ScreenKind.DESTINATION && !DeviceLink.speaks(negotiatedVersion, DEVICE_PROTOCOL_V6)) {
+            ScreenKind.FRAGMENT.wire
+        } else {
+            kind.wire
+        }
 
     /** v4. */
     fun inspectError(requestId: Int, reason: InspectError): String = JsonWriter().beginObject()

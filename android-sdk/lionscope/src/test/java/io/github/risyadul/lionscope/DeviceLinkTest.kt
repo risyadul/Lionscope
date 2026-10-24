@@ -314,6 +314,39 @@ class DeviceLinkTest {
     }
 
     @Test(timeout = 20_000)
+    fun aDestinationScreenWaitsForWelcomeAndIsAFragmentBelowV6() {
+        localServer().use { server ->
+            val link = link(server.localPort)
+            link.onScreen(1, ScreenRef("product/{id}", "product/{id}", ScreenKind.DESTINATION))
+            link.start()
+            for ((version, kind) in listOf(4 to "fragment", 6 to "destination")) {
+                server.accept().use { client ->
+                    val input = client.reader()
+                    assertEquals(hello, input.readLine())
+                    link.send("{\"type\":\"marker\"}")
+                    assertEquals("marker", input.readUntil { it["type"] != "heartbeat" }["type"]) // No screen before welcome.
+                    client.reply("{\"type\":\"welcome\",\"protocolVersion\":$version}")
+                    val screen = input.readUntil { it["type"] == "screen" }["screen"] as Map<*, *>
+                    assertEquals(kind, screen["kind"])
+                    assertEquals("product/{id}", screen["name"])
+                }
+                waitFor { !link.isConnected }
+            }
+        }
+    }
+
+    @Test
+    fun aDestinationQueuedBeforeWelcomeIsNotWrittenUntilTheVersionIsKnown() {
+        val destination = ScreenRef("product/{id}", "product/{id}", ScreenKind.DESTINATION)
+        val method = DeviceLink::class.java.declaredClasses.single { it.simpleName == "ScreenEvent" }
+            .getDeclaredConstructor(Long::class.javaPrimitiveType, ScreenRef::class.java).apply { isAccessible = true }
+        val event = method.newInstance(1L, destination)
+        assertEquals(null, DeviceLink.encode(event, null))
+        assertTrue(DeviceLink.encode(event, 6)!!.contains("\"kind\":\"destination\""))
+        assertTrue(DeviceLink.encode(method.newInstance(1L, null), null)!!.contains("\"screen\":null"))
+    }
+
+    @Test(timeout = 20_000)
     fun reconnectsAfterTheServerDisappears() {
         val first = localServer()
         val port = first.localPort

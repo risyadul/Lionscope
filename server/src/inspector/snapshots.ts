@@ -118,19 +118,41 @@ export function sdkSnapshot(inspection: SdkInspection, packageName: string): Sna
 
 const COMPOSE_VIEW = 'AndroidComposeView';
 
-/** The top window is Compose: an AndroidComposeView covers at least half of it (the SDK sees no composables). */
-export function topWindowIsCompose(inspection: SdkInspection): boolean {
+/** Why an SDK snapshot cannot stand for its Compose top window; the suffix is the SDK's `composition` status. */
+export type ComposeFallback = 'compose' | 'compose_disabled' | 'compose_no_source' | 'compose_failed';
+
+const COMPOSE_FALLBACKS: Readonly<
+  Record<Exclude<InspectorNode['composition'] & string, 'read'>, ComposeFallback>
+> = {
+  disabled: 'compose_disabled',
+  no_source: 'compose_no_source',
+  failed: 'compose_failed',
+};
+
+/**
+ * The top window is Compose the SDK did not read: an AndroidComposeView covers at least half of it and its
+ * composition was not read (`composition` other than `read`; absent from an SDK below 0.6.0, which never reads
+ * one), or was read without finding a composable in it. Null when the snapshot shows the top window as it is.
+ */
+export function composeFallback(inspection: SdkInspection): ComposeFallback | null {
   const { begin, nodes } = inspection;
   const top = begin.windows.at(-1);
-  if (!begin.compose || !top) return false;
+  if (!begin.compose || !top) return null;
   const half = rectArea(top.bounds) / 2;
-  return nodes.some(
+  // Read but without a single composable (nothing app-made found in it): uiautomator shows more.
+  const hasComposables = (view: InspectorNode) =>
+    nodes.some((node) => node.parent === view.id && node.composable !== undefined);
+  const unread = nodes.find(
     (node) =>
       node.window === top.id &&
       node.className.endsWith(COMPOSE_VIEW) &&
       node.visibility === 'visible' &&
-      rectArea(node.visibleBounds) >= half,
+      rectArea(node.visibleBounds) >= half &&
+      (node.composition !== 'read' || !hasComposables(node)),
   );
+  if (!unread) return null;
+  const status = unread.composition;
+  return status === undefined || status === 'read' ? 'compose' : COMPOSE_FALLBACKS[status];
 }
 
 /** How far each edge of an element may move between snapshots and still be the same one (by position). */

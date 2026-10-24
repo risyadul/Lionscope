@@ -1,6 +1,7 @@
 package io.github.risyadul.lionscope
 
 import android.content.Context
+import androidx.navigation.NavController
 
 /**
  * Lionscope in-app SDK (debug artifact).
@@ -30,5 +31,16 @@ object Lionscope {
      */
     fun install(context: Context) {
         LionscopeRuntime.installIfEligible(context)
+    }
+
+    /**
+     * Reports [navController]'s destinations as screens: the route pattern (`product/{id}`, never argument values;
+     * a type-safe route by its class name) becomes the screen name while that destination is shown in its Activity
+     * and no app Fragment is on top. Safe to call from composition on every recomposition (idempotent per
+     * controller) and from any thread; does nothing in release builds (`lionscope-noop`) or before the SDK is
+     * installed. Nested NavHosts: track each; the innermost shown destination wins.
+     */
+    fun trackNavigation(navController: NavController) {
+        LionscopeRuntime.trackNavigation(navController)
     }
 }

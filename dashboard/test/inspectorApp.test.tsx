@@ -195,6 +195,42 @@ describe('overlay', () => {
     expect(document.querySelector('.inspect-box[data-kind="selected"]')).not.toBeNull();
   });
 
+  it('clicking the same spot again steps to the view below, looking through an empty overlay first', async () => {
+    const { push, sent } = setup();
+    fireEvent.click(inspectButton());
+    const at10 = { file: 'Home.kt', line: 10 };
+    await push(
+      snapshotMsg({
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400], { className: 'androidx.compose.ui.platform.AndroidComposeView' }),
+          node(1, 0, [0, 0, 1080, 2400], { className: 'Scaffold', composable: at10 }),
+          node(2, 1, [100, 600, 500, 700], { className: 'Text', composable: at10, text: 'Track' }),
+          node(3, 0, [0, 0, 1080, 2400], { className: 'ToastHost', composable: at10 }),
+          node(4, 3, [53, 21, 1027, 2340], { className: 'Box', composable: at10 }),
+        ],
+        windows: [{ id: 0, type: 1, bounds: [0, 0, 1080, 2400] }],
+      }),
+    );
+    const selected = (nodeId: number) =>
+      push({
+        type: 'inspectorSelection',
+        selection: { snapshotId: 'snap-1', nodeId, ts: 1, origin: 'user' },
+      });
+    // The first click looks through the toast host's empty Box to the text under it.
+    fireEvent.click(overlay(), at(300, 650));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 2 });
+    await selected(2);
+    expect(document.querySelector('.inspect-tag-layer')?.textContent).toBe('2/2');
+    // Again on the same spot: the next one down wraps around to the top-most, the Box itself.
+    fireEvent.click(overlay(), at(302, 652));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 4 });
+    await selected(4);
+    expect(document.querySelector('.inspect-tag-layer')?.textContent).toBe('1/2');
+    // Elsewhere: a fresh pick, not a step.
+    fireEvent.click(overlay(), at(300, 1500));
+    expect(sent.at(-1)).toEqual({ type: 'selectInspectorNode', snapshotId: 'snap-1', nodeId: 1 });
+  });
+
   it('syncs tree hover with the overlay highlight', async () => {
     const { push } = setup();
     fireEvent.click(inspectButton());
@@ -273,6 +309,65 @@ describe('Inspector tab', () => {
     expect(within(attrs).getByText('[100, 200][500, 300]')).toBeTruthy();
     expect(within(attrs).getByText('match_parent × wrap_content')).toBeTruthy();
     expect(within(attrs).getByText('clickable').getAttribute('data-on')).toBe('true');
+  });
+
+  it('shows a composable with its call site, destination and no view-only fields', async () => {
+    const compose = inspectorSnapshot({
+      nodes: [
+        node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+        node(1, 0, [0, 0, 1080, 2400], {
+          className: 'androidx.compose.ui.platform.AndroidComposeView',
+          composition: 'read',
+        }),
+        node(2, 1, [100, 200, 500, 300], {
+          className: 'Button',
+          resourceId: 'checkout',
+          clickable: true,
+          alpha: null,
+          padding: null,
+          margin: null,
+          layoutWidth: null,
+          layoutHeight: null,
+          composable: { file: 'CartScreen.kt', line: 87 },
+          destination: 'cart',
+          activity: 'com.example.shop.MainActivity',
+        }),
+      ],
+    });
+    const { push } = setup();
+    await push({ type: 'inspection', snapshot: compose });
+    openTab();
+    await push(selectedOn(2));
+    const row = document.querySelector('[data-node="2"]')!;
+    expect(row.getAttribute('data-compose')).toBe('true');
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText('CartScreen.kt:87')).toBeTruthy();
+    expect(within(attrs).getByText('call site')).toBeTruthy();
+    expect(within(attrs).queryByText('end of start tag')).toBeNull();
+    expect(within(attrs).getByText('Compose')).toBeTruthy();
+    expect(within(attrs).getByText('#checkout')).toBeTruthy();
+    expect(within(attrs).getByText('cart')).toBeTruthy();
+    expect(within(attrs).queryByText('Alpha')).toBeNull();
+    expect(within(attrs).queryByText('Layout')).toBeNull();
+    expect(within(attrs).queryByText('No padding or margin.')).toBeNull();
+  });
+
+  it('says why an AndroidComposeView shows no composables', async () => {
+    const unread = inspectorSnapshot({
+      nodes: [
+        node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+        node(1, 0, [0, 0, 1080, 600], {
+          className: 'androidx.compose.ui.platform.AndroidComposeView',
+          composition: 'disabled',
+        }),
+      ],
+    });
+    const { push } = setup();
+    await push({ type: 'inspection', snapshot: unread });
+    openTab();
+    await push(selectedOn(1));
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText(/restart the app/)).toBeTruthy();
   });
 
   it('opens the path to a selection that was already there when the tree mounts (a reloaded page)', async () => {
