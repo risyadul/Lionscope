@@ -207,8 +207,11 @@ after the app changes its top screen (never continuously), and the refresh butto
   lazy list items sit under their list, an `AndroidView`'s View under its composable, a `ComposeView` under the
   XML views around it. Bounds are the content box of what it lays out (inside its padding modifiers); composables
   have no alpha, padding, margin or layout params. With `Lionscope.trackNavigation` (below) the owner shows the
-  navigation destination a composable is drawn for. Works with Jetpack Compose 1.6 and later and Compose
-  Multiplatform 1.8+ on Android, compiled with source information (the default for debug builds).
+  navigation destination a composable is drawn for. Picking on the screen looks through composables that draw
+  nothing themselves (no background, border, image or text: an idle toast or snackbar host spread over the whole
+  screen) and have no text, content description, test tag or click; they stay in the tree. Clicking again on the
+  same spot steps to the view below. Works with Jetpack Compose 1.6 and later and Compose Multiplatform 1.8+ on
+  Android, compiled with source information (the default for debug builds).
 - **When Compose falls back.** A Compose screen that was composed before the SDK started (Lionscope installed by
   hand late, or the app opted out with `<meta-data android:name="io.github.risyadul.lionscope.composeInspection"
 android:value="false" />`) cannot be read: the badge says why (restart the app). So does a build without

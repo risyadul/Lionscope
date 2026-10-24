@@ -30,6 +30,11 @@ All notable changes to Lionscope are documented here. The format is based on
   fields (password semantics or a password content type) never send their text. Compose UI stays a compile-only
   dependency: apps without Compose are untouched. Works with Jetpack Compose 1.6+ and Compose Multiplatform 1.8+ on
   Android.
+- Picking on the Inspector's screen looks through composables that draw nothing and have no text, content
+  description, test tag or click (an idle toast or snackbar host over the whole screen); they stay in the tree, and
+  clicking again on the same spot steps to the view below. The SDK says whether a composable's own layout nodes
+  paint anything (`composable.draws`: a background, border, image, text or draw modifier; omitted when it cannot
+  tell); without it the dashboard looks through such composables only when they have no children.
 - `Lionscope.trackNavigation(navController)` (also in `lionscope-noop`): navigation-compose destinations become
   screens, named by their route pattern (`product/{id}`, never argument values; a type-safe route by its class),
   with `dialog()` destinations as dialogs. The Screens lane, per-screen jank, stalls and the Inspector's screen
@@ -42,8 +47,9 @@ All notable changes to Lionscope are documented here. The format is based on
 - Agent tools: `inspect_screen` and `get_inspector_selection` label composables by name and testTag, give their
   Kotlin call site (`kind: compose`) instead of an XML layout, their destination, and `query` matches source files
   and destinations.
-- Sample app: a Compose card inside the XML More screen, and a navigation-compose shop (lazy catalog, a product
-  with an `AndroidView`, a sign-in form with password fields, a dialog destination).
+- Sample app: a Compose card inside the XML More screen, and a navigation-compose shop (lazy catalog under an idle
+  full-size toast host, a product with an `AndroidView`, a sign-in form with password fields, a dialog
+  destination).
 
 ### Changed
 
