@@ -20,9 +20,11 @@
 # RxJava 2 is compileOnly: its hooks (RxJava2Hooks) are loaded only when the app has RxJava 2.
 -dontwarn io.reactivex.**
 -dontwarn org.reactivestreams.**
-# The hooks find observeOn operators by class name and walk a chain through these fields: a shrunk debug build keeps
-# their names (nothing else of RxJava).
--keepnames class io.reactivex.internal.operators.**.*ObserveOn
+# The hooks find observeOn operators by class name, name operators by their classes and walk a chain through these
+# fields: a shrunk debug build keeps those names (it still removes what is unused).
+-keepnames class io.reactivex.internal.operators.**
+-keepnames class io.reactivex.internal.observers.**
+-keepnames class io.reactivex.internal.subscribers.**
 -keepclassmembernames class io.reactivex.internal.** {
     *** downstream;
     *** actual;

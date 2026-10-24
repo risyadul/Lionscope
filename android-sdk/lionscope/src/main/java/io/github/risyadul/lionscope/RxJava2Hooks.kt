@@ -132,7 +132,11 @@ internal class RxJava2Hooks(private val mainThread: Thread) : RxTracking {
             override fun initialValue() = BooleanArray(1)
         }
 
-        /** [block], unless this hook is already running on this thread: then [input] as it came. */
+        /**
+         * [block], unless this hook is already running on this thread: then [input] as it came. A nested call from
+         * the app's own hook (it schedules or subscribes inline) then skips the app's hook for the inner call too: rare,
+         * and the price of never recursing.
+         */
         protected inline fun <T> once(input: T, block: () -> T): T {
             val flag = entered.get() ?: return block()
             if (flag[0]) return input
