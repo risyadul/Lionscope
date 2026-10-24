@@ -11,7 +11,12 @@ import {
   type OptionsSync,
 } from '../src/lib/sdkOptionsSync.ts';
 
-const SERVER: SdkOptions = { stallThresholdMs: 150, strictMode: false, inflateTracking: true };
+const SERVER: SdkOptions = {
+  stallThresholdMs: 150,
+  strictMode: false,
+  inflateTracking: true,
+  rxTracking: true,
+};
 const at = (sessionSeq: number, errorSeq = 0, now = 1000) => ({ sessionSeq, errorSeq, now });
 
 describe('changedFields', () => {
@@ -21,6 +26,21 @@ describe('changedFields', () => {
       stallThresholdMs: 500,
     });
     expect(changedFields({}, SERVER)).toBeNull();
+  });
+
+  it('reads rxTracking missing from an older server as on', () => {
+    expect(changedFields({ rxTracking: false }, SERVER)).toEqual({ rxTracking: false });
+    expect(changedFields({ rxTracking: true }, SERVER)).toBeNull();
+    const legacy = { stallThresholdMs: 150, strictMode: false, inflateTracking: true } as SdkOptions;
+    expect(changedFields({ rxTracking: true }, legacy)).toBeNull();
+    expect(changedFields({ rxTracking: false }, legacy)).toEqual({ rxTracking: false });
+  });
+
+  it('settles an rxTracking change once the server reports it', () => {
+    const sent = requestOptions(IDLE_SYNC, { rxTracking: false }, SERVER, at(1));
+    expect(sent.send).toEqual({ rxTracking: false });
+    expect(shownOptions(sent.sync, SERVER).rxTracking).toBe(false);
+    expect(settleOptions(sent.sync, { ...SERVER, rxTracking: false }, at(2)).sync).toBe(IDLE_SYNC);
   });
 });
 

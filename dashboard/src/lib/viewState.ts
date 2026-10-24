@@ -20,6 +20,7 @@ import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V9,
   isValidPackageName,
 } from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
@@ -180,6 +181,11 @@ export function stallsEmptyState(input: StallsEmptyInput): StallsEmpty | null {
 /** The live SDK link speaks protocol v3 (inflation timing, view trees, the inflateTracking option). */
 export function isLayoutCapable(sdk: SdkStatus | undefined): boolean {
   return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V3;
+}
+
+/** The live SDK link speaks protocol v9 (stall origins: the Rx and coroutine facts, the rxTracking option). */
+export function isRxCapable(sdk: SdkStatus | undefined): boolean {
+  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V9;
 }
 
 /** XML layout inflation is measured through a LayoutInflater API that exists from Android 10. */

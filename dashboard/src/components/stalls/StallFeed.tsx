@@ -4,9 +4,13 @@ import {
   frameLocation,
   frameMethod,
   NO_STACK_LABEL,
+  ORIGIN_KIND_LABELS,
+  originText,
   stallColor,
+  stallOrigin,
   type FeedFilter,
   type FeedItem,
+  type StallOrigin,
 } from '../../lib/stalls.ts';
 import { Segmented, type SegmentedOption } from '../ui/Segmented.tsx';
 
@@ -26,11 +30,17 @@ type Props = {
   /** Label of the culprit line the list is narrowed to. */
   culprit: string | null;
   onClearCulprit: () => void;
+  /** Origin the list is narrowed to (stalls only). */
+  origin: StallOrigin | null;
+  onClearOrigin: () => void;
   onSelect: (key: string) => void;
 };
 
 function FeedRow({ item, onSelect }: { item: FeedItem; onSelect: (key: string) => void }) {
   const culprit = item.culprit;
+  // Only stalls have an origin; an unknown one (no stack, cut stack) gets no tag.
+  const origin = item.kind === 'stall' ? stallOrigin(item.sample) : null;
+  const kind = origin === null || origin.kind === 'unknown' ? null : origin.kind;
   const what =
     item.kind === 'stall'
       ? formatBlockMs(item.sample.durationMs)
@@ -40,6 +50,7 @@ function FeedRow({ item, onSelect }: { item: FeedItem; onSelect: (key: string) =
     item.kind === 'stall' ? `blocked ${what}` : `StrictMode ${item.sample.violation}`,
     item.sample.screen ?? 'no screen',
     culprit ? `${frameMethod(culprit)} ${frameLocation(culprit)}` : NO_STACK_LABEL,
+    ...(kind === null ? [] : [`${ORIGIN_KIND_LABELS[kind]} origin`]),
   ].join(', ');
   return (
     <li>
@@ -69,7 +80,16 @@ function FeedRow({ item, onSelect }: { item: FeedItem; onSelect: (key: string) =
           <span className="feed-line mono" data-none={culprit === null || undefined}>
             {culpritLabel(culprit)}
           </span>
-          {culprit && <span className="feed-method mono">{frameMethod(culprit)}</span>}
+          {(culprit || kind) && (
+            <span className="feed-method mono">
+              {kind && (
+                <span className="origin-tag" data-kind={kind} aria-hidden="true">
+                  {ORIGIN_KIND_LABELS[kind]}
+                </span>
+              )}
+              {culprit && frameMethod(culprit)}
+            </span>
+          )}
         </span>
         <span className="feed-screen">{item.sample.screen ?? '—'}</span>
       </button>
@@ -78,7 +98,16 @@ function FeedRow({ item, onSelect }: { item: FeedItem; onSelect: (key: string) =
 }
 
 /** Stalls and StrictMode violations interleaved, newest first. */
-export function StallFeed({ items, filter, onFilterChange, culprit, onClearCulprit, onSelect }: Props) {
+export function StallFeed({
+  items,
+  filter,
+  onFilterChange,
+  culprit,
+  onClearCulprit,
+  origin,
+  onClearOrigin,
+  onSelect,
+}: Props) {
   const rows = items.slice(0, MAX_FEED_ROWS);
   return (
     <section className="feed" aria-labelledby="feed-title">
@@ -110,8 +139,27 @@ export function StallFeed({ items, filter, onFilterChange, culprit, onClearCulpr
           <span className="feed-culprit-filter-hint">Clear</span>
         </button>
       )}
+      {origin && (
+        <button
+          type="button"
+          className="btn feed-culprit-filter"
+          onClick={onClearOrigin}
+          aria-label={`Clear origin filter: ${originText(origin)}`}
+        >
+          <span className="origin-tag" data-kind={origin.kind}>
+            {ORIGIN_KIND_LABELS[origin.kind]}
+          </span>
+          <span className="feed-culprit-filter-name">
+            {origin.label}
+            {origin.detail && <span className="mono"> · {origin.detail}</span>}
+          </span>
+          <span className="feed-culprit-filter-hint">Clear</span>
+        </button>
+      )}
       {rows.length === 0 ? (
-        <p className="stalls-note">Nothing matches — pick All or clear the line filter.</p>
+        <p className="stalls-note">
+          Nothing matches — pick All or clear the {origin ? 'origin' : 'line'} filter.
+        </p>
       ) : (
         <ol className="feed-list" aria-label="Events, newest first" tabIndex={-1}>
           {rows.map((item) => (

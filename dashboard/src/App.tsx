@@ -19,7 +19,7 @@ import { StallsPanel } from './components/stalls/StallsPanel.tsx';
 import { StatStrip } from './components/stats/StatStrip.tsx';
 import { WindowControls } from './components/stats/WindowControls.tsx';
 import { ConnectionBanner, ErrorBanner, SoftwareRendererBanner } from './components/states/Banners.tsx';
-import { INFLATE_UPDATE_HINT } from './components/stalls/StallControls.tsx';
+import { INFLATE_UPDATE_HINT, RX_UPDATE_HINT } from './components/stalls/StallControls.tsx';
 import { EmptyState } from './components/states/EmptyState.tsx';
 import { Timeline } from './components/timeline/Timeline.tsx';
 import { EmulatorActions } from './components/topbar/EmulatorActions.tsx';
@@ -52,6 +52,7 @@ import {
   hasSeries,
   isLayoutCapable,
   isNetworkCapable,
+  isRxCapable,
   isSessionActive,
   isStallCapable,
   layoutsEmptyState,
@@ -236,7 +237,8 @@ export function App() {
   }, [changeView]);
 
   const sdk = state.session.sdk;
-  // Servers older than 0.4.0 send options without `inflateTracking`: read as on.
+  // Servers older than 0.4.0 send options without `inflateTracking`, older than 0.9.0 without `rxTracking`:
+  // the defaults read both as on.
   const serverOptions = sdk?.options;
   const sdkOptions = useMemo<SdkOptions>(
     () => (serverOptions === undefined ? DEFAULT_SDK_OPTIONS : { ...DEFAULT_SDK_OPTIONS, ...serverOptions }),
@@ -325,6 +327,7 @@ export function App() {
     isTrackingOn: sdkOptions.inflateTracking,
   });
   const inflateBlocker = optionsBlocker === null && !isLayoutCapable(sdk) ? INFLATE_UPDATE_HINT : null;
+  const rxBlocker = optionsBlocker === null && !isRxCapable(sdk) ? RX_UPDATE_HINT : null;
   const stallTabCount = countEventsInWindow(series.stalls, series.strictMode, startTs, endTs);
   const stallsEmpty = stallsEmptyState({
     hasItems: stallTabCount > 0,
@@ -547,6 +550,7 @@ export function App() {
                     isOptionsPending={optionsControl.isPending}
                     onOptionsChange={changeOptions}
                     inflateBlocker={inflateBlocker}
+                    rxBlocker={rxBlocker}
                     selectedKey={selectedStall}
                     onSelect={setSelectedStall}
                   />

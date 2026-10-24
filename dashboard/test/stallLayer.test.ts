@@ -58,7 +58,7 @@ function recordingContext() {
 
 describe('createStallLayer', () => {
   const theme = readChartTheme(() => '');
-  const window = { fromTs: T0, toTs: T0 + 10_000, filter: 'all' as const, culprit: null };
+  const window = { fromTs: T0, toTs: T0 + 10_000, filter: 'all' as const, culprit: null, origin: null };
   const feed = buildFeed(
     [
       stall(T0 + 1000, 300),

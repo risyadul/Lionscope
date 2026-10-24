@@ -146,6 +146,15 @@
   font-size: var(--text-overline);
 }
 
+.offenders-mode {
+  margin-left: auto;
+}
+
+.offenders-mode > button {
+  height: 22px;
+  font-size: var(--text-overline);
+}
+
 .stalls-note {
   margin: 0;
   padding: var(--space-1) var(--space-4) var(--space-2);
@@ -294,6 +303,30 @@
   gap: 5px;
 }
 
+/* Origins: a neutral kind tag (RxJava, Coroutine, Handler…) before the label; text carries the meaning. */
+.origin-tag {
+  display: inline-block;
+  flex: none;
+  margin-right: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 14px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.origin-label[data-none] {
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
 /* Event list -------------------------------------------------------------------- */
 
 .feed-culprit-filter {
@@ -313,6 +346,14 @@
 
 .feed-culprit-filter-hint {
   color: var(--ink-muted);
+}
+
+.feed-culprit-filter .origin-tag {
+  margin-right: 0;
+}
+
+.feed-culprit-filter-name .mono {
+  font-weight: 500;
 }
 
 .feed-list {
@@ -381,6 +422,16 @@
 .feed-method {
   color: var(--ink-muted);
   font-size: var(--text-overline);
+}
+
+/* On a row the tag stays quiet: no fill, muted text. */
+.feed-method .origin-tag {
+  margin-right: 5px;
+  border-color: var(--rule);
+  background: transparent;
+  color: var(--ink-muted);
+  font-weight: 500;
+  line-height: 12px;
 }
 
 .feed-screen {
@@ -530,6 +581,86 @@
 .culprit-pkg {
   color: var(--ink-muted);
   font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+/* The origin card: what the Looper ran, under the culprit; quieter than it (no stall-colored edge). */
+.origin {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+}
+
+.origin p {
+  margin: 0;
+}
+
+.origin .culprit-head {
+  margin-bottom: -2px;
+}
+
+.origin-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.origin-title .origin-label {
+  font-size: var(--text-body);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.origin-detail {
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.origin-location {
+  margin-top: -6px;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.origin-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px var(--space-3);
+  margin: 0;
+  font-size: var(--text-meta);
+}
+
+.origin-facts > div {
+  display: contents;
+}
+
+.origin-facts dt {
+  color: var(--ink-muted);
+}
+
+.origin-facts dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.origin-quiet {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.origin-facts dd.origin-quiet {
+  color: var(--ink-muted);
+}
+
+.origin-quiet code {
+  color: var(--ink-2);
   overflow-wrap: anywhere;
 }
 

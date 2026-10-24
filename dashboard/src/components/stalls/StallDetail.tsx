@@ -1,15 +1,21 @@
-import { useEffect, useRef } from 'react';
-import type { StackFrame } from '@lionscope/protocol/wire';
+import { useEffect, useMemo, useRef } from 'react';
+import type { StackFrame, StallSample } from '@lionscope/protocol/wire';
+import { MAX_STACK_FRAMES } from '@lionscope/protocol/wire';
 import { formatBlockMs, formatClock, formatInteger } from '../../lib/format.ts';
 import {
   culpritText,
   frameLocation,
   frameMethod,
+  ORIGIN_KIND_LABELS,
+  originText,
   packageName,
+  runnableLabel,
   SEVERITY_LABELS,
   stallColor,
+  stallOrigin,
   stallSeverity,
   type FeedItem,
+  type StallOrigin,
 } from '../../lib/stalls.ts';
 import { CopyButton } from './CopyButton.tsx';
 import { StackTrace } from './StackTrace.tsx';
@@ -36,6 +42,122 @@ function Culprit({ frame, isFallback }: { frame: StackFrame; isFallback: boolean
       <p className="culprit-method mono">{frameMethod(frame)}</p>
       {pkg && <p className="culprit-pkg mono">{pkg}</p>}
     </section>
+  );
+}
+
+export const RX_SITE_MISSING =
+  'Subscribe site not captured: the chain was subscribed before the session, or RxJava tracking is off';
+
+const COROUTINE_DEBUG_PROPERTY = 'System.setProperty("kotlinx.coroutines.debug", "on")';
+
+/** `HomeViewModel.load (HomeViewModel.kt:40)`. */
+function frameText(frame: StackFrame): string {
+  return `${frameMethod(frame)} (${frameLocation(frame)})`;
+}
+
+/** The facts that apply to this kind of origin, as label / value pairs. */
+function originFacts(origin: StallOrigin): [string, string][] {
+  const facts: [string, string | null][] = [];
+  switch (origin.kind) {
+    case 'rx':
+      facts.push(['Operator', origin.operator]);
+      facts.push(['Consumer', origin.consumer === null ? null : runnableLabel(origin.consumer)]);
+      break;
+    case 'coroutine':
+      facts.push(['Dispatcher', origin.dispatcher]);
+      facts.push(['Continuation', origin.frame === null ? null : frameText(origin.frame)]);
+      break;
+    default:
+      facts.push(['Dispatched', origin.dispatched === null ? null : runnableLabel(origin.dispatched)]);
+      facts.push(['Entry', origin.entry === null ? null : frameText(origin.entry)]);
+  }
+  return facts.filter((fact): fact is [string, string] => fact[1] !== null);
+}
+
+/** What the Looper was running: the Rx chain, the coroutine, the posted Runnable, and where it came from. */
+function Origin({ origin, stallKey }: { origin: StallOrigin; stallKey: string }) {
+  const facts = originFacts(origin);
+  const location = origin.frame === null ? null : frameLocation(origin.frame);
+  // The Rx subscribe site's detail already names its line.
+  const showLocation = location !== null && !(origin.detail ?? '').includes(location);
+  return (
+    <section className="origin" aria-label="Origin">
+      <div className="culprit-head">
+        <span className="overline">Origin · what the main thread was running</span>
+        {origin.frame && <CopyButton text={() => originText(origin)} label="Copy origin" />}
+      </div>
+      <p className="origin-title">
+        <span className="origin-tag" data-kind={origin.kind}>
+          {ORIGIN_KIND_LABELS[origin.kind]}
+        </span>
+        <span className="origin-label">{origin.label}</span>
+      </p>
+      {origin.detail && <p className="origin-detail mono">{origin.detail}</p>}
+      {showLocation && <p className="origin-location mono">{location}</p>}
+      {(facts.length > 0 || origin.kind === 'coroutine') && (
+        <dl className="origin-facts">
+          {origin.kind === 'coroutine' && (
+            <div>
+              <dt>Coroutine</dt>
+              {origin.coroutine !== null ? (
+                <dd className="mono">{origin.coroutine}</dd>
+              ) : (
+                <dd className="origin-quiet">
+                  Names need kotlinx.coroutines debug mode: add{' '}
+                  <code className="mono">{COROUTINE_DEBUG_PROPERTY}</code> in the debug app.
+                </dd>
+              )}
+            </div>
+          )}
+          {facts.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd className="mono">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {origin.kind === 'rx' &&
+        (origin.subscribedAt.length > 0 ? (
+          <StackTrace
+            key={`${stallKey}:subscribe`}
+            frames={origin.subscribedAt}
+            truncated={false}
+            title="Subscribed at"
+            copyName="Copy subscribe stack"
+          />
+        ) : (
+          <p className="origin-quiet">{RX_SITE_MISSING}</p>
+        ))}
+    </section>
+  );
+}
+
+function StallStacks({ stall, stallKey }: { stall: StallSample; stallKey: string }) {
+  const outer = stall.outerFrames ?? [];
+  return (
+    <>
+      <StackTrace
+        key={stallKey}
+        frames={stall.frames}
+        truncated={stall.truncated}
+        title="Main thread stack"
+        note={
+          outer.length > 0
+            ? `Cut at ${MAX_STACK_FRAMES} frames on the device — the frames between it and the outermost frames below were not captured.`
+            : undefined
+        }
+      />
+      {outer.length > 0 && (
+        <StackTrace
+          key={`${stallKey}:outer`}
+          frames={outer}
+          truncated={false}
+          title="Outermost frames · the Looper dispatch"
+          copyName="Copy outermost frames"
+        />
+      )}
+    </>
   );
 }
 
@@ -88,7 +210,15 @@ function Header({ item }: { item: FeedItem }) {
 /** One stall or violation: what blocked, where, and the stack with app frames up front. */
 export function StallDetail({ item, position, onBack, onStep }: Props) {
   const culprit = item.culprit;
-  const truncated = item.kind === 'stall' && item.sample.truncated;
+  const stall = item.kind === 'stall' ? item.sample : null;
+  // Without any stack there is nothing to classify: the stack section already says so.
+  const origin = useMemo(
+    () =>
+      stall === null || (stall.frames.length === 0 && (stall.outerFrames ?? []).length === 0)
+        ? null
+        : stallOrigin(stall),
+    [stall],
+  );
   const articleRef = useRef<HTMLElement>(null);
 
   // Opening the detail (from the list or a lane click) moves focus into it; stepping keeps focus put.
@@ -137,12 +267,12 @@ export function StallDetail({ item, position, onBack, onStep }: Props) {
       </nav>
       <Header item={item} />
       {culprit && <Culprit frame={culprit} isFallback={!culprit.inApp} />}
-      <StackTrace
-        key={item.key}
-        frames={item.sample.frames}
-        truncated={truncated}
-        title={item.kind === 'stall' ? 'Main thread stack' : 'Stack'}
-      />
+      {origin && <Origin origin={origin} stallKey={item.key} />}
+      {stall !== null ? (
+        <StallStacks stall={stall} stallKey={item.key} />
+      ) : (
+        <StackTrace key={item.key} frames={item.sample.frames} truncated={false} title="Stack" />
+      )}
     </article>
   );
 }

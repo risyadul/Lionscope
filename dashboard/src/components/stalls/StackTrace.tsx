@@ -16,6 +16,10 @@ type Props = {
   frames: readonly StackFrame[];
   truncated: boolean;
   title: string;
+  /** Replaces the truncation note (e.g. when the outermost frames follow in their own list). */
+  note?: string;
+  /** Accessible name of the copy button when the detail shows more than one stack. */
+  copyName?: string;
 };
 
 function FrameRow({ frame, index }: { frame: StackFrame; index: number }) {
@@ -34,7 +38,7 @@ function FrameRow({ frame, index }: { frame: StackFrame; index: number }) {
  * A captured stack, innermost first. App frames read in ink with a marker; runs of framework and
  * library frames fold into one "+N framework frames" toggle each.
  */
-export function StackTrace({ frames, truncated, title }: Props) {
+export function StackTrace({ frames, truncated, title, note, copyName }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
   const items = collapseStack(frames);
   const appFrames = frames.filter((frame) => frame.inApp).length;
@@ -66,7 +70,7 @@ export function StackTrace({ frames, truncated, title }: Props) {
         <span className="stack-count mono">
           {formatInteger(frames.length)} frames · {formatInteger(appFrames)} app · innermost first
         </span>
-        <CopyButton text={() => stackText(frames)} label="Copy stack" />
+        <CopyButton text={() => stackText(frames)} label="Copy stack" ariaLabel={copyName} />
       </div>
       <ol className="stack-list">
         {items.map((item) => {
@@ -98,10 +102,14 @@ export function StackTrace({ frames, truncated, title }: Props) {
           );
         })}
       </ol>
-      {truncated && (
-        <p className="stack-note">
-          Cut at {MAX_STACK_FRAMES} frames on the device — the outermost frames are missing.
-        </p>
+      {note !== undefined ? (
+        <p className="stack-note">{note}</p>
+      ) : (
+        truncated && (
+          <p className="stack-note">
+            Cut at {MAX_STACK_FRAMES} frames on the device — the outermost frames are missing.
+          </p>
+        )
       )}
     </section>
   );

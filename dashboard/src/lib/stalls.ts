@@ -1,15 +1,16 @@
 /**
  * Stalls and StrictMode in the dashboard: severity colors, the interleaved feed and the lane's scale / hit
- * testing. Culprit frames, stack collapsing and the offenders ranking live in @lionscope/protocol/insights
- * (shared with the agent tools) and are re-exported here.
+ * testing. Culprit frames, stack collapsing, stall origins and the offenders / origins rankings live in
+ * @lionscope/protocol/insights (shared with the agent tools) and are re-exported here.
  */
 import type { StackFrame, StallSample, StrictModeSample } from '@lionscope/protocol/wire';
-import { culpritFrame, culpritKey, stallInWindow } from '@lionscope/protocol/insights';
+import { culpritFrame, culpritKey, stallInWindow, stallOrigin } from '@lionscope/protocol/insights';
 import { niceCeil, type Aligned } from './series.ts';
 import type { ChartColor } from './theme.ts';
 
 export {
   aggregateOffenders,
+  aggregateOrigins,
   collapseStack,
   countDebuggerStalls,
   countEventsInWindow,
@@ -26,14 +27,27 @@ export {
   NATIVE_LINE,
   NO_STACK_KEY,
   NO_STACK_LABEL,
+  ORIGIN_KIND_LABELS,
+  originText,
   packageName,
+  runnableLabel,
+  rxOperator,
   simpleClassName,
   stackText,
   stallInWindow,
+  stallOrigin,
   stallsByScreen,
   summarizeWindow,
 } from '@lionscope/protocol/insights';
-export type { Offender, ScreenStalls, StackItem, WindowSummary } from '@lionscope/protocol/insights';
+export type {
+  Offender,
+  OriginGroup,
+  ScreenStalls,
+  StackItem,
+  StallOrigin,
+  StallOriginKind,
+  WindowSummary,
+} from '@lionscope/protocol/insights';
 
 // ---------------------------------------------------------------------------
 // Severity
@@ -99,6 +113,8 @@ export interface FeedQuery {
   filter: FeedFilter;
   /** Only items whose culprit has this `culpritKey`. */
   culprit: string | null;
+  /** Only stalls whose origin has this key (StrictMode items have no origin, so they never match). */
+  origin: string | null;
 }
 
 export function buildFeed(
@@ -106,20 +122,21 @@ export function buildFeed(
   strictMode: readonly StrictModeSample[],
   query: FeedQuery,
 ): FeedItem[] {
-  const { fromTs, toTs, filter, culprit } = query;
+  const { fromTs, toTs, filter, culprit, origin } = query;
   const matches = (frame: StackFrame | null) => culprit === null || culpritKey(frame) === culprit;
   const items: FeedItem[] = [];
   if (filter !== 'strictmode') {
     for (const sample of stalls) {
       if (!stallInWindow(sample, fromTs, toTs)) continue;
-      // Offender rows leave debugger stalls out; a line filter must list what its row counts.
-      if (culprit !== null && sample.debugger) continue;
+      // Offender and origin rows leave debugger stalls out; their filter must list what the row counts.
+      if ((culprit !== null || origin !== null) && sample.debugger) continue;
+      if (origin !== null && stallOrigin(sample).key !== origin) continue;
       const frame = culpritFrame(sample.frames);
       if (matches(frame))
         items.push({ kind: 'stall', key: stallKey(sample), ts: sample.ts, sample, culprit: frame });
     }
   }
-  if (filter !== 'stalls') {
+  if (filter !== 'stalls' && origin === null) {
     const keys = strictModeKeys(strictMode);
     strictMode.forEach((sample, i) => {
       if (!inWindow(sample.ts, fromTs, toTs)) return;
