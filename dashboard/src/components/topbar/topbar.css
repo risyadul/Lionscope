@@ -88,13 +88,12 @@
   gap: var(--space-1);
 }
 
-.select-wrap,
 .combo {
   position: relative;
   min-width: 0;
 }
 
-.select-wrap {
+.field-row > .select-wrap {
   flex: 1 1 auto;
 }
 
@@ -139,16 +138,6 @@
 .combo[data-open] .combo-input {
   border-color: var(--focus);
   outline: none;
-}
-
-.select-chevron {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  color: var(--ink-muted);
-  pointer-events: none;
-  transform: translateY(-50%);
-  transition: transform var(--dur) var(--ease-out);
 }
 
 .combo[data-open] .select-chevron {

@@ -13,6 +13,7 @@ import {
 } from '../../lib/network.ts';
 import type { NetworkEmpty } from '../../lib/viewState.ts';
 import { Segmented, type SegmentedOption } from '../ui/Segmented.tsx';
+import { Select } from '../ui/Select.tsx';
 import { ExchangeDetail } from './ExchangeDetail.tsx';
 import { MocksList } from './MocksList.tsx';
 import { RequestList } from './RequestList.tsx';
@@ -242,7 +243,7 @@ export function NetworkPanel({
               <input
                 type="search"
                 value={filter.query}
-                placeholder="URL, method or status"
+                placeholder="URL or status"
                 spellCheck={false}
                 autoComplete="off"
                 onChange={(e) => changeFilter({ query: e.target.value })}
@@ -256,8 +257,8 @@ export function NetworkPanel({
             </label>
             <label className="net-method-filter">
               <span className="sr-only">Method</span>
-              <select
-                className="net-select mono"
+              <Select
+                className="net-select"
                 value={filter.method ?? ANY_METHOD}
                 onChange={(e) =>
                   changeFilter({ method: e.target.value === ANY_METHOD ? null : e.target.value })
@@ -269,15 +270,16 @@ export function NetworkPanel({
                     {method}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <button
               type="button"
-              className="lane-toggle net-mocked-filter"
+              className="net-toggle"
               aria-pressed={filter.mockedOnly}
               title="Only requests answered by a mock rule"
               onClick={() => changeFilter({ mockedOnly: !filter.mockedOnly })}
             >
+              <span className="net-toggle-dot" aria-hidden="true" />
               Mocked
             </button>
             <Segmented
