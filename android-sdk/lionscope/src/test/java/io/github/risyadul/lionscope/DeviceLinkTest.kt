@@ -405,7 +405,8 @@ class DeviceLinkTest {
                 link.sendV4(16) { "{\"type\":\"inspectError\",\"requestId\":7}" }
                 assertEquals(7.0, input.readUntil { it["type"] != "heartbeat" }["requestId"])
             }
-            waitFor { !link.isConnected }
+            // isConnected drops before the welcome listeners hear the link ended.
+            waitFor { !link.isConnected && welcomeEvents.size == 2 }
             assertEquals(listOf(true, false), welcomeEvents.toList())
             assertTrue(sessionEvents.isEmpty())
 

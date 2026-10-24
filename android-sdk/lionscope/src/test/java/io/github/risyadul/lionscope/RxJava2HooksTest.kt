@@ -226,6 +226,9 @@ class RxJava2HooksTest {
         subject.observeOn(immediate).doOnSubscribe { subscribed.countDown() }.subscribeOn(Schedulers.single())
             .subscribe { origin = hooks.describe(hooks.currentTask!!, ::frames) }
         assertTrue(subscribed.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        // A subject adds its observer just after onSubscribe.
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!subject.hasObservers() && System.nanoTime() < deadline) Thread.yield()
         subject.onNext(1)
         assertNotNull(origin)
         assertEquals(emptyList<StackFrame>(), origin?.subscribedAt)
