@@ -35,7 +35,7 @@ Options:
 AI agents: `npx -y lionscope mcp` is an MCP server on stdio (it uses the running Lionscope server, or starts
 one), the running server also serves MCP at `http://localhost:8701/mcp`, and `npx lionscope query <tool>`
 prints a tool's JSON result for shell-only agents (`npx lionscope query --list`). For example, in Claude Code:
-`claude mcp add lionscope -- npx -y lionscope mcp`. Setup for other editors and agents is in the main README.
+`claude mcp add lionscope -- npx -y lionscope mcp`. Setup for other editors and agents is in the main README, with the Lionscope agent skill: `npx skills add risyadul/Lionscope`, or in Claude Code the plugin (`/plugin marketplace add risyadul/Lionscope`, then `/plugin install lionscope@lionscope`).
 
 Nothing needs to be installed on the device. For screen names, per-frame `FrameMetrics`, stall lines and origins,
 the Inspector's layout sources and Compose tree, live view edits and the network inspector, add the optional

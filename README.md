@@ -619,7 +619,8 @@ Each harness starts `npx -y lionscope mcp` itself; add `--allow-device-control` 
 [operate the device](#letting-an-agent-operate-the-device). The HTTP variants talk to a server you started
 with `npx lionscope`. Formats as documented by each tool in October 2026.
 
-**Claude Code** ([docs](https://code.claude.com/docs/en/mcp)):
+**Claude Code** ([docs](https://code.claude.com/docs/en/mcp)), or install the [plugin](#agent-skill), which adds
+the server and the skill together:
 
 ```bash
 claude mcp add lionscope -- npx -y lionscope mcp
@@ -696,6 +697,46 @@ reach `localhost`.
 
 **Any other MCP client**: run `npx -y lionscope mcp` as a stdio server, or connect to
 `http://localhost:8701/mcp` (Streamable HTTP, no authentication, loopback only).
+
+### Agent skill
+
+The MCP tools say what each call does; the **Lionscope skill** (`skills/lionscope/SKILL.md`) tells an agent how to
+use them for a task: where to start, the playbooks for a janky screen, a blocked main thread (by line and by
+origin), the element the user picked in the Inspector (and trying a fix with a live edit), the app's requests and
+mocked error states, and checking a fix before and after. It works with or without the MCP server: without one, it
+uses `npx lionscope query` from the shell. It is one [Agent Skills](https://agentskills.io) folder, so every
+harness that reads `SKILL.md` can use it; only where it goes differs.
+
+**Claude Code: the plugin** (the MCP server and the skill in one install). Pick one of the two plugins:
+
+```text
+/plugin marketplace add risyadul/Lionscope
+/plugin install lionscope@lionscope                   # read tools and sessions
+/plugin install lionscope-device-control@lionscope    # also the device tools (taps, edits, mocks, emulators)
+```
+
+From a terminal, `claude plugin install lionscope --marketplace risyadul/Lionscope` does both steps at once. The
+plugin runs `npx -y lionscope@<version> mcp` itself: remove a `lionscope` MCP server you added by hand, or the
+agent sees every tool twice. New releases arrive with `/plugin marketplace update lionscope` (or with the
+marketplace's auto-update turned on in `/plugin`).
+
+**Any harness, with the skills CLI** ([vercel-labs/skills](https://github.com/vercel-labs/skills), which knows
+where each agent keeps its skills): `npx skills add risyadul/Lionscope` (add `-a codex`, `-a opencode`, … to pick
+the agents, `-g` for your user rather than the project).
+
+**By hand**: copy the `skills/lionscope` folder (or download its `SKILL.md` into a folder named `lionscope`) to:
+
+| Harness                               | Project                                                                            | Your user                                                                                                                                     |
+| :------------------------------------ | :--------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code                           | `.claude/skills/lionscope/`                                                        | `~/.claude/skills/lionscope/`                                                                                                                 |
+| Codex                                 | `.agents/skills/lionscope/`                                                        | `~/.agents/skills/lionscope/`                                                                                                                 |
+| OpenCode                              | `.opencode/skills/lionscope/` (also reads `.agents/skills/` and `.claude/skills/`) | `~/.config/opencode/skills/lionscope/`                                                                                                        |
+| Hermes Agent                          |                                                                                    | `~/.hermes/skills/lionscope/`, or `hermes skills install https://raw.githubusercontent.com/risyadul/Lionscope/main/skills/lionscope/SKILL.md` |
+| Cursor, Gemini CLI, GitHub Copilot, … | their skills folder (see their docs)                                               |                                                                                                                                               |
+
+A copied skill stays at the version you copied: copy it again after updating Lionscope. Installs from the skills
+CLI update with `npx skills update`. The skill pins the npm version it was written for (`npx -y lionscope@<version>
+query`), so its shell commands match the tools it describes.
 
 ### Letting an agent operate the device
 
