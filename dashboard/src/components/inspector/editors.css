@@ -115,7 +115,11 @@ textarea.attr-input {
   flex: none;
   width: 18px;
   height: 18px;
+  padding: 0;
   overflow: hidden;
+  border: 0;
+  cursor: pointer;
+  transition: box-shadow var(--dur-fast) linear;
   border-radius: var(--radius-s);
   background: repeating-conic-gradient(var(--rule-strong) 0% 25%, var(--surface-raised) 0% 50%) 0 0 / 8px 8px;
   box-shadow: inset 0 0 0 1px var(--rule-strong);
@@ -125,6 +129,26 @@ textarea.attr-input {
   position: absolute;
   inset: 0;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+/* The swatch opens the picker: a ring says it is open, hovering says it can. */
+.attr-swatch:hover:not(:disabled) {
+  box-shadow:
+    inset 0 0 0 1px var(--rule-strong),
+    0 0 0 2px var(--surface),
+    0 0 0 3px var(--ink-muted);
+}
+
+.attr-swatch[aria-expanded='true'] {
+  box-shadow:
+    inset 0 0 0 1px var(--rule-strong),
+    0 0 0 2px var(--surface),
+    0 0 0 3px var(--ink);
+}
+
+.attr-swatch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* No single color: a struck-through square. */

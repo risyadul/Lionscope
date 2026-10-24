@@ -88,6 +88,10 @@ All notable changes to Lionscope are documented here. The format is based on
   snapshots and older SDKs are read-only (the pane says why; a composable points at its call site), and the text
   of password fields is never read, shown or set. A background color replaces the view's background (and turns
   its tint off) until reverted; the revert restores the drawable and its tint, keeping the view's padding.
+- A color picker on the background and text color fields: the swatch opens a saturation/brightness square with hue
+  and alpha sliders, the colors the screen's views already use, the recent ones, and an eyedropper that takes a pixel
+  of the frozen screen (in every browser: it reads the snapshot's screenshot). Like the alpha slider it sends the color
+  it rests on (on release, or 250 ms after the last key), never every step.
 - Agent tools (device control): `set_view_property` (one property, or `padding` / `margin` as one number or four;
   answers with the element as the next snapshot shows it) and `revert_view_properties` (a property, a node, or every
   live edit). `get_inspector_selection` lists a node's `editable` properties, the state they need and its live

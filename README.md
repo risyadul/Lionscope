@@ -245,6 +245,10 @@ the background color, and on a TextView its text, text size (sp) and text color 
 field and press Enter or leave it (Esc puts it back); the server applies it through the SDK and takes a new snapshot
 right after, keeping the view selected.
 
+A color field's swatch opens a picker: drag the square and the hue and alpha sliders, click one of the colors the
+screen already uses or a recent one, or press **Pick** and click any pixel of the frozen screen with the mouse (Esc cancels the
+pick). The color is sent when you let go, not on every step.
+
 Editing needs a **profiling session** (press Start): the app takes edits only from a link whose welcome carried the
 link proof (see [Security model](#security-model)), and an inspect-only link never has one. Without a session the
 Inspector still shows every value, read-only, and says to press Start; a session whose link key could not be handed

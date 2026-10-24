@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, useMemo, type ReactNode } from 'react';
 import {
   editableProperties,
   type InspectorNode,
@@ -8,6 +8,7 @@ import {
 } from '@lionscope/protocol/wire';
 import type { ViewEdits } from '../../hooks/useViewEdits.ts';
 import { CopyButton } from '../stalls/CopyButton.tsx';
+import { screenColors } from '../../lib/colorPicker.ts';
 import { EDIT_BLOCKED_HINTS } from '../../lib/viewEdits.ts';
 import {
   AlphaRow,
@@ -187,6 +188,7 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
   const editable = new Set(snapshot.editBlocked === undefined ? editableProperties(node) : []);
   const can = (property: ViewProperty) => editable.has(property);
   const editor: EditorProps = { edits, node, resetKey: snapshot.id };
+  const colors = useMemo(() => screenColors(snapshot.nodes), [snapshot]);
   const readOnly = readOnlyReason(node, snapshot, editable.size > 0);
   const isEdited = (node.view?.edited?.length ?? 0) > 0;
   const viewStatus = edits.status(node.id);
@@ -354,9 +356,11 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
           <TypedRow {...editor} property="translationY" name="Translation Y" unit="px" />
         )}
         {can('elevation') && <TypedRow {...editor} property="elevation" name="Elevation" unit="px" />}
-        {can('backgroundColor') && <ColorRow {...editor} property="backgroundColor" name="Background" />}
+        {can('backgroundColor') && (
+          <ColorRow {...editor} property="backgroundColor" name="Background" screen={colors} />
+        )}
         {can('textSize') && <TypedRow {...editor} property="textSize" name="Text size" unit="sp" />}
-        {can('textColor') && <ColorRow {...editor} property="textColor" name="Text color" />}
+        {can('textColor') && <ColorRow {...editor} property="textColor" name="Text color" screen={colors} />}
         <Row name="Flags">
           <span className="attr-flags">
             {can('enabled') && (

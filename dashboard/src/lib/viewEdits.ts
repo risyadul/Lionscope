@@ -23,6 +23,9 @@ import {
   type ViewPropertyValue,
 } from '@lionscope/protocol/wire';
 
+/** A slider (and the color picker) sends what it rests on after this long without moving (and on release), never every step. */
+export const SLIDER_IDLE_MS = 250;
+
 const SIDES = { Left: 0, Top: 1, Right: 2, Bottom: 3 } as const;
 
 /** The value `node` has for `property` in its snapshot, as the wire carries it; null when unknown. */

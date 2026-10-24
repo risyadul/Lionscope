@@ -12,12 +12,19 @@ import {
 import type { InspectorNode, ViewProperty, ViewPropertyGroup } from '@lionscope/protocol/wire';
 import type { EditName, EditStatus, ViewEdits } from '../../hooks/useViewEdits.ts';
 import { rectSize } from '../../lib/inspector.ts';
-import { cssColor, currentValue, formatNumber, parseDraft, propertyWords } from '../../lib/viewEdits.ts';
+import {
+  cssColor,
+  currentValue,
+  formatNumber,
+  parseDraft,
+  propertyWords,
+  SLIDER_IDLE_MS,
+} from '../../lib/viewEdits.ts';
 import { Segmented, type SegmentedOption } from '../ui/Segmented.tsx';
+import { ColorPicker } from './ColorPicker.tsx';
 import './editors.css';
 
-/** The slider sends what it rests on after this long without moving (and on release), never every step. */
-export const SLIDER_IDLE_MS = 250;
+export { SLIDER_IDLE_MS } from '../../lib/viewEdits.ts';
 
 /** What every editor of one view gets: the controller, the node and the snapshot its drafts belong to. */
 export interface EditorProps {
@@ -211,6 +218,7 @@ export function EditRow({
   status,
   edited,
   children,
+  below,
 }: {
   name: string;
   htmlFor?: string;
@@ -218,6 +226,8 @@ export function EditRow({
   /** The mark and Revert, when the property is edited. */
   edited: ReactNode;
   children: (describedBy: string | undefined) => ReactNode;
+  /** Under the field and its error (the color picker). */
+  below?: ReactNode;
 }) {
   const errorId = useId();
   const error = errorOf(status);
@@ -240,6 +250,7 @@ export function EditRow({
             {error}
           </p>
         )}
+        {below}
       </dd>
     </div>
   );
@@ -297,40 +308,93 @@ export function TypedRow({
   );
 }
 
-/** A hex field and a swatch (checkered behind, so alpha shows); null background = not a single color. */
+/**
+ * A hex field, and a swatch (checkered behind, so alpha shows) that opens the color picker under it; null = not a
+ * single color.
+ */
 export function ColorRow({
   edits,
   node,
   resetKey,
   property,
   name,
-}: EditorProps & { property: 'backgroundColor' | 'textColor'; name: string }) {
+  screen = [],
+}: EditorProps & {
+  property: 'backgroundColor' | 'textColor';
+  name: string;
+  /** The snapshot's colors, offered as swatches by the picker. */
+  screen?: readonly string[];
+}) {
   const id = useId();
+  const pickerId = useId();
+  const [isOpen, setIsOpen] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const swatchRef = useRef<HTMLButtonElement>(null);
   const status = edits.status(node.id, property);
+  // The picker's color until it is applied or given up (the picker clears it then).
   const value = currentValue(node, property);
   const color = typeof value === 'string' ? value : null;
+  const words = propertyWords(property);
   const swatch = (shown: string) => {
-    // The typed color once it is one, else the app's.
-    const css = cssColor(shown) ?? (color === null ? null : cssColor(color));
+    // The color being picked, else the typed one once it is one, else the app's.
+    const css =
+      (preview === null ? null : cssColor(preview)) ??
+      cssColor(shown) ??
+      (color === null ? null : cssColor(color));
     return (
-      <span
+      <button
+        ref={swatchRef}
+        type="button"
         className="attr-swatch"
         data-none={css === null || undefined}
-        title={color === null ? 'Not a single color (none, an image or a shape)' : color}
-        aria-hidden="true"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? pickerId : undefined}
+        aria-label={`${isOpen ? 'Close' : 'Open'} the ${words} picker`}
+        title={
+          color === null
+            ? 'Not a single color (none, an image or a shape): pick one'
+            : `${color}: pick a color`
+        }
+        // An open picker can always be closed, also while the screen is out of date.
+        disabled={!edits.canEdit && !isOpen}
+        onClick={() => setIsOpen(!isOpen)}
       >
         {css !== null && <span style={{ backgroundColor: css }} />}
-      </span>
+      </button>
     );
   };
   return (
-    <EditRow name={name} htmlFor={id} status={status} edited={editedMark(edits, node, property)}>
+    <EditRow
+      name={name}
+      htmlFor={id}
+      status={status}
+      edited={editedMark(edits, node, property)}
+      below={
+        isOpen && (
+          <ColorPicker
+            id={pickerId}
+            value={color}
+            status={status.kind}
+            notice={edits.notice}
+            label={words}
+            screen={screen}
+            disabled={!edits.canEdit}
+            onPreview={setPreview}
+            onCommit={(argb) => edits.edit(node.id, property, argb)}
+            onClose={() => {
+              swatchRef.current?.focus();
+              setIsOpen(false);
+            }}
+          />
+        )
+      }
+    >
       {(describedBy) => (
         <DraftInput
           id={id}
           value={color ?? ''}
           resetKey={resetKey}
-          label={propertyWords(property)}
+          label={words}
           onCommit={(draft) => commitTyped(edits, node, property, draft)}
           onCancel={() => edits.dismiss(node.id, property)}
           before={swatch}
