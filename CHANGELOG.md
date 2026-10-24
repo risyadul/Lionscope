@@ -97,6 +97,23 @@ All notable changes to Lionscope are documented here. The format is based on
   live edit). `get_inspector_selection` lists a node's `editable` properties, the state they need and its live
   edits; `inspect_screen` marks editable nodes; snapshots report `liveEdits`.
 - Sample app: the Detail screen has a solid-color price tag, a PIN field and a Pay button to try live edits on.
+- Stall origins (SDK 0.9.0): every main-thread stall says where its work came from: an RxJava task (the operator,
+  the chain's consumer and **the line that subscribed the chain**), a coroutine (dispatcher, resumed continuation
+  and, in kotlinx.coroutines debug mode, its name), a posted Runnable or Handler message (`LiveData.postValue`,
+  `lambda in HomeFragment`), an input event or click, a Choreographer frame (layout and draw, animators, Compose),
+  an ActivityThread callback or an idle handler. The Stalls tab has a **By line / By origin** switch over its
+  ranking (a row filters the events), the stall detail an Origin section (with the subscribe stack and, for a cut
+  stack, the outermost frames), and the Main thread lane's tooltip the origin. Stalls from older SDKs get an origin
+  from their stack when it reaches the Looper.
+- RxJava tracking (on by default; a switch in the Stalls tab, `set_sdk_options { rxTracking }`): during a session
+  the SDK chains an `RxJavaPlugins` schedule handler and subscribe hooks after the app's own, keeps the stack of
+  each `observeOn` subscription unmaterialised (at most 100 per second) and reads the chain only for a stall.
+  About 1-3 µs per `observeOn` subscription, nothing measurable per scheduled task. RxJava 2 stays compile-only;
+  apps without it, inspect-only links and processes without a session are untouched.
+- Agent tools: `get_stalls` adds `origins` (stalls grouped by origin, the subscribe stack with `includeStacks`) and
+  each recent stall's `origin`.
+- Sample app: Home has an RxJava chain and a coroutine (`refresh-cart`) that block the main thread for 300 ms; the
+  sample turns kotlinx.coroutines debug mode on.
 
 ### Security
 
@@ -124,6 +141,10 @@ All notable changes to Lionscope are documented here. The format is based on
   views can't be edited (`editBlocked`). Server → SDK lines stay flat JSON with `type` first; their golden lines are
   in `protocol/fixtures/gateway-messages.ndjson`. Dashboard protocol 7: `setViewProperty`, `revertViewProperties`
   and their `viewEdit` answer. Nothing changes on a link below v8, byte for byte.
+- Device protocol v9 (v8 plus stall origins): `stall` may carry `outerFrames` (the outermost 16 frames of a stack
+  cut at 64), `rx` (`task`, `consumer`, `subscribedAt`) and `coroutine`; `config` carries `rxTracking`, appended
+  last, on v9 links only. Nothing changes on a link below v9, byte for byte. Dashboard protocol 8:
+  `SdkOptions.rxTracking`, `setSdkOptions.rxTracking` and the new optional `StallSample` fields.
 - The Inspector keeps a selection on the same view by its key when the SDK sends one, so it survives an edit of its
   text, size or position.
 - A Compose top window now falls back to uiautomator only when the SDK could not read its composition, and says

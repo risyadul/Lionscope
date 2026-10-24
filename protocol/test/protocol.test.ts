@@ -116,6 +116,10 @@ describe('parseClientMessage', () => {
       ok: true,
       value: { type: 'setSdkOptions', inflateTracking: false },
     });
+    expect(parse({ rxTracking: false })).toEqual({
+      ok: true,
+      value: { type: 'setSdkOptions', rxTracking: false },
+    });
     expect(parse({ stallThresholdMs: 500, strictMode: false, inflateTracking: true }).ok).toBe(true);
   });
 
@@ -128,6 +132,7 @@ describe('parseClientMessage', () => {
     expect(parse({ strictMode: 'yes' }).ok).toBe(false);
     expect(parse({ inflateTracking: 'no' }).ok).toBe(false);
     expect(parse({ inflateTracking: 1 }).ok).toBe(false);
+    expect(parse({ rxTracking: 'off' }).ok).toBe(false);
     expect(parse({ strictMode: true, extra: 1 }).ok).toBe(false);
   });
 
@@ -708,6 +713,30 @@ describe('parseDeviceMessage', () => {
         error: 'unknown message type',
         unknownType: 'memory',
       });
+    });
+
+    it('accepts the v9 origin fields and drops a stall whose origin is out of bounds', () => {
+      const frame = stall.frames[0];
+      const rx = {
+        task: 'io.reactivex.internal.operators.single.SingleObserveOn$ObserveOnSingleObserver',
+        consumer: null,
+        subscribedAt: [frame],
+      };
+      const v9 = { ...stall, truncated: true, outerFrames: [frame], rx, coroutine: 'refresh#4' };
+      expect(parseDeviceMessage(JSON.stringify(v9))).toEqual({ ok: true, value: v9 });
+      for (const bad of [
+        { ...v9, outerFrames: Array.from({ length: 17 }, () => frame) },
+        { ...v9, rx: { ...rx, subscribedAt: Array.from({ length: 9 }, () => frame) } },
+        { ...v9, rx: { ...rx, task: '' } },
+        { ...v9, rx: { task: rx.task } },
+        { ...v9, coroutine: 'x'.repeat(201) },
+        { ...v9, coroutine: 'refresh\u202e#4' },
+      ]) {
+        expect(parseDeviceMessage(JSON.stringify(bad))).toMatchObject({
+          ok: false,
+          invalidDiagnostic: 'stall',
+        });
+      }
     });
 
     it('flags an invalid diagnostic (skippable) apart from an invalid v1 message (fatal)', () => {

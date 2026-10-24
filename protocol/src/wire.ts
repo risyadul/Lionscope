@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -170,6 +170,12 @@ export interface SdkOptions {
    * Absent on older servers / SDK links below device protocol 3 (read as true).
    */
   inflateTracking: boolean;
+  /**
+   * 0.9.0. RxJava 2 hooks (on by default; device protocol 9): a chained `RxJavaPlugins` schedule handler and
+   * subscribe hooks name the Rx chain and the line that subscribed it for each stall (StallRx). Absent on older
+   * servers (read as true); the SDK runs them only on a v9 session link with RxJava 2 in the app.
+   */
+  rxTracking: boolean;
 }
 
 export const STALL_THRESHOLDS_MS = [100, 150, 250, 500, 1000] as const;
@@ -177,6 +183,7 @@ export const DEFAULT_SDK_OPTIONS: SdkOptions = {
   stallThresholdMs: 150,
   strictMode: false,
   inflateTracking: true,
+  rxTracking: true,
 };
 
 export interface SessionState {
@@ -255,6 +262,29 @@ export interface StackFrame {
 /** Max frames per captured stack (innermost first); longer stacks are cut and flagged `truncated`. */
 export const MAX_STACK_FRAMES = 64;
 
+/** `stall.outerFrames` keeps at most this many of the stack's outermost frames (device protocol 9). */
+export const MAX_OUTER_FRAMES = 16;
+/** `StallRx.subscribedAt` keeps at most this many frames of the subscribe call's stack. */
+export const MAX_RX_SITE_FRAMES = 8;
+/** Longest `StallRx.task` / `consumer` class name and `stall.coroutine` text. */
+export const MAX_ORIGIN_TEXT_LENGTH = 200;
+
+/**
+ * What the SDK's RxJava 2 hooks (SdkOptions.rxTracking) saw on the main thread during a stall (device protocol 9):
+ * the Rx task the main-thread scheduler was running, the chain's final consumer and where the chain was subscribed.
+ */
+export interface StallRx {
+  /** Class of the scheduled task, e.g. `io.reactivex.internal.operators.observable.ObservableObserveOn$ObserveOnObserver`. */
+  task: string;
+  /** Class of the chain's final consumer (the `subscribe` lambda, or the app's own Observer); null when not found. */
+  consumer: string | null;
+  /**
+   * The stack of the `subscribe` call of the chain's `observeOn` (Rx and SDK frames dropped, innermost first, at most
+   * MAX_RX_SITE_FRAMES); empty when it was not captured (subscribed before the session, or over the capture rate).
+   */
+  subscribedAt: StackFrame[];
+}
+
 /** A main-thread block detected by the SDK watchdog (laptop clock). */
 export interface StallSample {
   /** Start of the block (when the watchdog's tick was posted). */
@@ -269,6 +299,15 @@ export interface StallSample {
   screen: string | null;
   /** A debugger was attached (blocks are likely breakpoints, not app work). */
   debugger: boolean;
+  /**
+   * 0.9.0. The outermost frames of the sampled stack (innermost first, at most MAX_OUTER_FRAMES), when `frames` was cut
+   * before them: they hold the Looper dispatch the work came from. Absent otherwise and from older SDKs.
+   */
+  outerFrames?: StackFrame[];
+  /** 0.9.0. What the SDK's RxJava hooks saw (absent without RxJava, with `rxTracking` off, or outside Rx work). */
+  rx?: StallRx;
+  /** 0.9.0. The coroutine on the main thread (`name#id`), when the app runs kotlinx.coroutines debug mode. */
+  coroutine?: string;
 }
 
 export type StrictModePolicy = 'thread' | 'vm';
@@ -1195,7 +1234,14 @@ export type ClientMessage =
   | { type: 'startSession'; serial: string; packageName: string }
   | { type: 'stopSession' }
   /** Change SDK options for the current session (partial). The server answers with an updated `session`. */
-  | { type: 'setSdkOptions'; stallThresholdMs?: number; strictMode?: boolean; inflateTracking?: boolean }
+  | {
+      type: 'setSdkOptions';
+      stallThresholdMs?: number;
+      strictMode?: boolean;
+      inflateTracking?: boolean;
+      /** 0.9.0 (dashboard protocol 8). */
+      rxTracking?: boolean;
+    }
   /**
    * 0.5.0. Capture an Inspector snapshot of `serial`'s screen: from the SDK when the session's app on that device is
    * linked at device protocol ≥ 4 and on top, else from uiautomator. Answered with `inspection` (to every client) or
@@ -1266,7 +1312,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 8;
+export const DEVICE_PROTOCOL_VERSION = 9;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1289,6 +1335,8 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * `liveEdits`; server → SDK `setViewProperty` and `revertViewProperties`, answered by `viewPropertyResult`. The SDK
  * applies edits only on a link with the link proof (a v7+ session link), else it answers `unauthenticated`. Below v8
  * neither side sends any of it.
+ * v9 (0.9.0): stall origins. `stall` may carry `outerFrames`, `rx` and `coroutine` (all optional), and `config`
+ * carries `rxTracking` (appended last, v9 links only). Below v9 neither side sends them.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -1297,6 +1345,7 @@ export const DEVICE_PROTOCOL_V5 = 5;
 export const DEVICE_PROTOCOL_V6 = 6;
 export const DEVICE_PROTOCOL_V7 = 7;
 export const DEVICE_PROTOCOL_V8 = 8;
+export const DEVICE_PROTOCOL_V9 = 9;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -1399,6 +1448,12 @@ export type DeviceMessage =
       truncated: boolean;
       screen: string | null;
       debugger: boolean;
+      /** v9. Sent only when `truncated` cut frames off before them (StallSample.outerFrames). */
+      outerFrames?: StackFrame[];
+      /** v9 (StallSample.rx). */
+      rx?: StallRx;
+      /** v9 (StallSample.coroutine). */
+      coroutine?: string;
     }
   /** v2. Coalesced StrictMode violation(s) with the same violation + stack, at most one per stack per second. */
   | {
@@ -1547,7 +1602,14 @@ export type GatewayMessage =
   /** The server will close the connection; the SDK retries with backoff. */
   | { type: 'bye'; reason: 'no_session' | 'package_mismatch' | 'protocol_error' | 'too_many_connections' }
   /** v2. Current SDK options; sent right after `welcome` and whenever they change. */
-  | { type: 'config'; stallThresholdMs: number; strictMode: boolean; inflateTracking: boolean }
+  | {
+      type: 'config';
+      stallThresholdMs: number;
+      strictMode: boolean;
+      inflateTracking: boolean;
+      /** v9 links only, last. */
+      rxTracking?: boolean;
+    }
   /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
   | { type: 'inspect'; requestId: number }
   /**

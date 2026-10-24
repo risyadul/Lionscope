@@ -10,6 +10,7 @@ export const LAYOUT_KEYS = {
   screenSize: 'lionscope.layout.screenSize',
   clipboardShare: 'lionscope.layout.clipboardShare',
   viewMode: 'lionscope.layout.viewMode',
+  stallsBreakdown: 'lionscope.layout.stallsBreakdown',
 } as const;
 
 function storage(): Storage | null {

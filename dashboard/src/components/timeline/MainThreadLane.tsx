@@ -10,8 +10,10 @@ import {
   culpritLabel,
   frameMethod,
   hitTestMarks,
+  originText,
   SEVERITY_COLORS,
   stallColor,
+  stallOrigin,
   stallSeverity,
   summarizeWindow,
   type FeedItem,
@@ -30,7 +32,7 @@ const SEVERITIES: readonly StallSeverity[] = [1, 2, 3];
 const SEVERITY_KEYS: Record<StallSeverity, string> = { 1: '<500', 2: '500+', 3: '1 s+' };
 
 const LANE_HINT =
-  'Bars: main-thread blocks caught by the SDK watchdog, drawn at their start; height and color show how long the thread was blocked (the scale stops at 2 s, longer bars get a caret). Hatched gray: a debugger was attached, so it is probably a breakpoint. Teal diamonds on the rail under the baseline: StrictMode violations. Gold bars on the rail above them: layout inflations of 16 ms or more, drawn over their duration. Click a stall for its stack, a layout for the Layouts tab.';
+  'Bars: main-thread blocks caught by the SDK watchdog, drawn at their start; height and color show how long the thread was blocked (the scale stops at 2 s, longer bars get a caret). Hatched gray: a debugger was attached, so it is probably a breakpoint. Teal diamonds on the rail under the baseline: StrictMode violations. Gold bars on the rail above them: layout inflations of 16 ms or more, drawn over their duration. A stall’s tooltip names its origin: the RxJava chain, coroutine, Handler post, frame, input or lifecycle callback the main thread was running. Click a stall for its stack, a layout for the Layouts tab.';
 
 type Props = {
   stalls: readonly StallSample[];
@@ -127,6 +129,9 @@ function StallTip({ item }: { item: FeedItem }) {
       <p className="stall-tip-line mono" data-none={culprit === null || undefined}>
         {culpritLabel(culprit)}
       </p>
+      {item.sample.frames.length > 0 && (
+        <p className="stall-tip-origin">{originText(stallOrigin(item.sample))}</p>
+      )}
       <p className="stall-tip-meta mono">{where}</p>
     </>
   );
@@ -165,7 +170,7 @@ export function MainThreadLane({
   const [inflateHover, setInflateHover] = useState<Hover | null>(null);
 
   const feed = useMemo(
-    () => buildFeed(stalls, strictMode, { fromTs, toTs, filter: 'all', culprit: null }),
+    () => buildFeed(stalls, strictMode, { fromTs, toTs, filter: 'all', culprit: null, origin: null }),
     [stalls, strictMode, fromTs, toTs],
   );
   const { stallItems, violationItems } = useMemo(() => {

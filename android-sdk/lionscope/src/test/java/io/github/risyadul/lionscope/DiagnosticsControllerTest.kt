@@ -40,6 +40,22 @@ internal class FakeStrictMode : StrictModeSwitch {
     }
 }
 
+internal class FakeRxTracking : RxTracking {
+    var enabled = false
+        private set
+    val changes = ArrayList<Boolean>()
+
+    override fun setEnabled(enabled: Boolean) {
+        if (enabled != this.enabled) changes += enabled
+        this.enabled = enabled
+    }
+
+    override var currentTask: Any? = null
+
+    override fun describe(task: Any, frames: (Array<StackTraceElement>) -> List<StackFrame>): RxOrigin? =
+        RxOrigin(task.javaClass.name, null, emptyList())
+}
+
 class DiagnosticsControllerTest {
 
     private val link = FakeLink()
@@ -159,5 +175,46 @@ class DiagnosticsControllerTest {
         main.runPosted()
         welcome(DEVICE_PROTOCOL_V5) // The same app later joins a session.
         assertTrue(watchdog.isRunning)
+    }
+
+    @Test
+    fun rxTrackingRunsOnlyInAV9SessionWithTheOptionOn() {
+        val rx = FakeRxTracking()
+        val link = FakeLink()
+        DiagnosticsController(link, main, FakeWatchdog(), strictMode = null, rx = rx)
+        link.welcome(true, DEVICE_PROTOCOL_V8)
+        main.runPosted()
+        assertFalse(rx.enabled) // An older server can't receive what it finds.
+
+        link.welcome(false)
+        main.runPosted()
+        link.welcome(true, DEVICE_PROTOCOL_V9)
+        main.runPosted()
+        assertFalse(rx.enabled) // Waits for the session's config.
+        link.config(SdkOptions(150, strictMode = false))
+        main.runPosted()
+        assertTrue(rx.enabled) // On by default, in the background too.
+
+        link.config(SdkOptions(150, strictMode = false, rxTracking = false))
+        main.runPosted()
+        assertFalse(rx.enabled)
+        link.config(SdkOptions(150, strictMode = false))
+        main.runPosted()
+        assertTrue(rx.enabled)
+
+        link.welcome(false) // Disconnected.
+        main.runPosted()
+        assertFalse(rx.enabled)
+        assertEquals(listOf(true, false, true, false), rx.changes)
+    }
+
+    @Test
+    fun anInspectOnlyLinkNeverTurnsRxTrackingOn() {
+        val rx = FakeRxTracking()
+        val link = FakeLink()
+        DiagnosticsController(link, main, FakeWatchdog(), strictMode = null, rx = rx)
+        link.welcome(true, DEVICE_PROTOCOL_V9, inspectOnly = true)
+        main.runPosted()
+        assertTrue(rx.changes.isEmpty())
     }
 }

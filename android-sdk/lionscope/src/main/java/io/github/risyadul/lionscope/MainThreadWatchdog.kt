@@ -30,6 +30,8 @@ internal interface Watchdog {
  * frequent sample (keyed by the innermost [KEY_FRAMES] frames). Blocks longer than [maxBlockMs] (or [maxSamples]
  * samples) are reported at that point with the time elapsed so far, then ignored until they end. The time from a
  * block's start to the next tick post (≤ [INTERVAL_MS]) is not counted. [report] is never called under the lock.
+ * With each sample it reads the Rx task running on main ([rxTask], kept only when the same before and after the
+ * stack) and the main thread's name ([threadName]); a representative stack keeps those of its first sample.
  */
 internal class StallDetector(
     private val clock: WatchdogClock,
@@ -41,6 +43,8 @@ internal class StallDetector(
     private val report: (Stall) -> Unit,
     private val maxSamples: Int = MAX_SAMPLES,
     private val maxBlockMs: Long = MAX_BLOCK_MS,
+    private val rxTask: () -> Any? = { null },
+    private val threadName: () -> String? = { null },
 ) {
     class Stall(
         /** Wall-clock ms when the late tick was posted. */
@@ -54,6 +58,11 @@ internal class StallDetector(
         /** Top screen when the block was first sampled. */
         val screen: String?,
         val debugger: Boolean,
+        /** Outermost elements of a cut stack, at most [MAX_OUTER_FRAMES], none of them in [stack] (empty otherwise). */
+        val outer: Array<StackTraceElement> = emptyArray(),
+        /** The Rx task the main thread ran (see [RxTracking]), null outside Rx work. */
+        val rxTask: Any? = null,
+        val threadName: String? = null,
     )
 
     private inner class Tick(val postedNanos: Long, val postedWallMs: Long) : Runnable {
@@ -65,7 +74,13 @@ internal class StallDetector(
         }
     }
 
-    private class StackCount(val stack: Array<StackTraceElement>, val cut: Boolean) {
+    private class StackCount(
+        val stack: Array<StackTraceElement>,
+        val cut: Boolean,
+        val outer: Array<StackTraceElement>,
+        val rxTask: Any?,
+        val threadName: String?,
+    ) {
         var count = 0
     }
 
@@ -134,9 +149,11 @@ internal class StallDetector(
     }
 
     private fun sample(current: Tick) {
+        val taskBefore = rxTask()
         val stack = sampleStack()
         // The tick ran while the stack was taken: the sample may show what ran after the block.
         if (current.ranAtNanos != NOT_RUN) return
+        val task = rxTask().takeIf { it === taskBefore }
         if (samples == 0) {
             screen = screenName()
             debugger = debuggerAttached()
@@ -144,8 +161,15 @@ internal class StallDetector(
         samples++
         val key = ArrayList(stack.asList().subList(0, minOf(KEY_FRAMES, stack.size)))
         stacks.getOrPut(key) {
-            val cut = stack.size > StackFrames.MAX_SAMPLED_ELEMENTS
-            StackCount(if (cut) stack.copyOf(StackFrames.MAX_SAMPLED_ELEMENTS).requireNoNulls() else stack, cut)
+            val kept = StackFrames.MAX_SAMPLED_ELEMENTS
+            val cut = stack.size > kept
+            StackCount(
+                stack = if (cut) stack.copyOf(kept).requireNoNulls() else stack,
+                cut = cut,
+                outer = if (cut) stack.copyOfRange(maxOf(kept, stack.size - MAX_OUTER_FRAMES), stack.size) else NO_ELEMENTS,
+                rxTask = task,
+                threadName = threadName(),
+            )
         }.count++
     }
 
@@ -172,6 +196,9 @@ internal class StallDetector(
             durationMs = durationNanos / NANOS_PER_MS_D,
             stack = representative.stack,
             stackCut = representative.cut,
+            outer = representative.outer,
+            rxTask = representative.rxTask,
+            threadName = representative.threadName,
             samples = samples,
             screen = screen,
             debugger = debugger,
@@ -186,6 +213,7 @@ internal class StallDetector(
         private const val NANOS_PER_MS = 1_000_000L
         private const val NANOS_PER_MS_D = 1_000_000.0
         private const val NOT_RUN = Long.MIN_VALUE
+        private val NO_ELEMENTS = emptyArray<StackTraceElement>()
     }
 }
 
@@ -202,6 +230,8 @@ internal class MainThreadWatchdog(
     private val report: (StallDetector.Stall) -> Unit,
     private val debuggerAttached: () -> Boolean = Debug::isDebuggerConnected,
     private val clock: WatchdogClock = WatchdogClock.System,
+    private val rxTask: () -> Any? = { null },
+    private val threadName: () -> String? = { null },
 ) : Watchdog {
     private class Running(val detector: StallDetector, val thread: Thread)
 
@@ -227,6 +257,8 @@ internal class MainThreadWatchdog(
             screenName = screenName,
             debuggerAttached = debuggerAttached,
             report = { stall -> guarded { report(stall) } },
+            rxTask = rxTask,
+            threadName = threadName,
         )
         lateinit var started: Running
         val thread = Thread({ loop(started) }, "lionscope-watchdog")

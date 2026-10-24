@@ -62,9 +62,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionEight() {
-        assertEquals(8, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V8, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionNine() {
+        assertEquals(9, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V9, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -572,6 +572,11 @@ class DeviceMessagesTest {
             truncated = message["truncated"] as Boolean,
             screen = message["screen"] as String?,
             debugger = message["debugger"] as Boolean,
+            outerFrames = message.stackFrames("outerFrames"),
+            rx = (message["rx"] as Map<*, *>?)?.let { rx ->
+                RxOrigin(rx.str("task"), rx["consumer"] as String?, rx.stackFrames("subscribedAt"))
+            },
+            coroutine = message["coroutine"] as String?,
         )
         "strictmode" -> DeviceMessages.strictMode(
             ts = message.num("ts").toLong(),
@@ -684,7 +689,7 @@ class DeviceMessagesTest {
         omitted = (this["omitted"] as String?)?.let { omitted -> HttpBodyOmission.values().single { it.wire == omitted } },
     )
 
-    private fun Map<*, *>.stackFrames() = (this["frames"] as List<*>).map {
+    private fun Map<*, *>.stackFrames(key: String = "frames") = (this[key] as List<*>? ?: emptyList<Any>()).map {
         val frame = it as Map<*, *>
         StackFrame(
             className = frame.str("className"),

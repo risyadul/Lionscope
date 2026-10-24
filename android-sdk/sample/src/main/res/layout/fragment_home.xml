@@ -38,6 +38,18 @@
             android:layout_height="wrap_content"
             android:text="@string/read_file" />
 
+        <Button
+            android:id="@+id/rx_stall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/rx_stall" />
+
+        <Button
+            android:id="@+id/coroutine_stall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/coroutine_stall" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

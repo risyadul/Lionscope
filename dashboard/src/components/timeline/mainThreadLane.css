@@ -109,6 +109,14 @@
   overflow-wrap: anywhere;
 }
 
+.stall-tip-origin {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stall-tip-meta {
   padding-top: 2px;
   color: var(--ink-muted);

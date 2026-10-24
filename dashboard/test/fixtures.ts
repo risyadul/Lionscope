@@ -184,7 +184,7 @@ export const SDK_V2: SdkStatus = {
   apiLevel: 34,
   framesActive: true,
   protocolVersion: 2,
-  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true },
+  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true, rxTracking: true },
 };
 
 /** A live protocol-v3 SDK link on Android 14 with the default options. */
@@ -192,7 +192,7 @@ export const SDK_V3: SdkStatus = {
   ...SDK_V2,
   sdkVersion: '0.4.0',
   protocolVersion: 3,
-  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true },
+  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true, rxTracking: true },
 };
 
 export function inflate(ts: number, overrides: Partial<InflateSample> = {}): InflateSample {
@@ -234,6 +234,13 @@ export const SDK_V7: SdkStatus = {
   ...SDK_V3,
   sdkVersion: '0.7.0',
   protocolVersion: 7,
+};
+
+/** A live protocol-v9 SDK link (stall origins: Rx and coroutine facts, the rxTracking option). */
+export const SDK_V9: SdkStatus = {
+  ...SDK_V7,
+  sdkVersion: '0.9.0',
+  protocolVersion: 9,
 };
 
 /** A completed GET of api.example.com that took 120 ms. */

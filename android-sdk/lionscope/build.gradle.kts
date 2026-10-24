@@ -51,6 +51,7 @@ dependencies {
     compileOnly(libs.navigation.runtime.sdk)
     compileOnly(libs.kotlin.stdlib)
     compileOnly(libs.okhttp)
+    compileOnly(libs.rxjava2)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.stdlib)
@@ -61,6 +62,7 @@ dependencies {
     testImplementation(libs.navigation.runtime.sdk)
     testImplementation(libs.okhttp)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.rxjava2)
 }
 
 /** Inputs every unit-test run gets (the AGP ones and [testOkHttp5]). */

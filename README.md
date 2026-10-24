@@ -108,6 +108,40 @@ that happened while a debugger was attached.
 The threshold is chosen in the Stalls tab (100, 150, 250, 500 or 1000 ms; default 150 ms). The watchdog runs only
 while a dashboard is connected at protocol v2 and an activity is started.
 
+**Where the work came from (0.9.0).** With RxJava's `observeOn(AndroidSchedulers.mainThread())` or a coroutine on
+`Dispatchers.Main`, the main-thread stack shows the scheduler or the dispatcher and the lambda, not who scheduled
+it. Each stall therefore also gets an **origin**, and the Stalls tab's **By origin** view ranks them like the
+culprit lines (count, total and worst blocked time; a row filters the events):
+
+- **RxJava**: the operator whose task ran (`observeOn`, `subscribeOn`, `timer`…) and **the line that subscribed
+  the chain** (`HomeViewModel.load (HomeViewModel.kt:40)`, with its stack in the stall detail), plus the
+  chain's final consumer. The subscribe site comes from the SDK's RxJava 2 hooks (below); without them the
+  origin still names the operator and the first app frame it ran.
+- **Coroutine**: the dispatcher (`Dispatchers.Main`, Compose's `AndroidUiDispatcher`), the continuation that
+  was resumed (`HomeViewModel$refresh$1`, at its current line) and, when the app runs kotlinx.coroutines debug
+  mode (`System.setProperty("kotlinx.coroutines.debug", "on")` in the debug `Application.onCreate`), the
+  coroutine's name and id (`refresh-cart#2`, from `CoroutineName`).
+- **Handler**: the posted `Runnable` (`lambda in HomeFragment`, `LiveData.postValue`) or the `Handler` that
+  handled the message; **Input** (an input event, a click or long press); **Frame** (layout and draw, animators,
+  Compose's frame); **Lifecycle** (activity, service and receiver callbacks); **Idle** (an idle handler).
+
+The origin is read from the stack's outermost frames (the Looper's dispatch), which SDK 0.9.0 sends even when
+the stack is longer than the 64 frames kept, so stalls from older SDKs get one too as long as their stack reaches
+the Looper. The Main thread lane's tooltip names the origin of each bar.
+
+**RxJava tracking (on by default, SDK 0.9.0, RxJava 2).** The switch in the Stalls tab installs two kinds of
+`RxJavaPlugins` hooks during a session: a schedule handler that marks which Rx task the main thread is running,
+and subscribe hooks that keep the stack of each `observeOn` subscription (kept as the VM captured it, at most 100
+per second; turned into frames only for a stall, and dropped with the chain). Each hook calls the one the app had
+installed before it, and is removed when the session ends or the switch goes off, unless the app has replaced it
+since (then it stays in the app's chain as a pass-through, and is never installed twice). Nothing is installed
+when `RxJavaPlugins` is locked down, outside a profiling session (an inspect-only link, no dashboard) or in an
+app without RxJava 2 (RxJava stays a compile-only dependency of the SDK). Measured on an API 36 emulator: the
+schedule handler costs nothing measurable, the subscribe hooks 1–3 µs per `observeOn` subscription (stack depth
+14–58), against 13–14 µs when the stack is materialised at subscribe time like RxJava's assembly tracking does.
+RxJava 3 is not hooked yet (its stalls still get an origin from the stack). The SDK's consumer ProGuard rules keep the
+names of the RxJava operators and fields the hooks read, for debug builds that are shrunk.
+
 **StrictMode (opt-in, off by default).** The Stalls tab has a toggle for it (Android 9 / API 28+). When on, the
 SDK extends the app's current main-thread and process StrictMode policies with disk read/write, network, custom
 slow call and leaked-closable detection, and reports each violation with its stack. It restores the app's
@@ -511,6 +545,9 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
   activity is started; StrictMode is off until you enable it, and its reporter thread stays idle (no work)
   after the first enable.
 - `Lionscope.okHttpInterceptor()` outside a profiling session is one volatile read and `chain.proceed`.
+- The RxJava hooks are installed only during a profiling session (see [RxJava tracking](#finding-the-line-that-blocks-the-main-thread));
+  a process that never had one has none. The Looper's message logging is not used (a `Printer` would cost about
+  3 µs per main-thread message and 17 µs per coroutine dispatch).
 - Its threads run at background priority (except the frame-metrics and watchdog threads, which must not be
   starved while the app is busy); a bounded outbound queue drops the oldest messages instead of growing; SDK errors are contained and
   never reach the app's crash handler.
@@ -537,8 +574,8 @@ Three ways in, one set of tools:
 
 | Tools                      | What they do                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls`, `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls` (by culprit line and by origin: the Rx chain's subscribe site, the coroutine, the posted Runnable), `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat`                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking, RxJava tracking)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                                                                                                                                                                                                                                                                                                                           |
 | Network (always)           | `get_network` (the app's HTTP requests in the last 1/5/10 min: method, URL, status, timings, sizes, mocked; filter by method, status class, host, text), `get_network_request` (one request's headers and timings; its bodies only with `--allow-network-bodies`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `set_view_property` / `revert_view_properties` (change a View of the snapshot live, temporarily: visibility, alpha, padding, margins, size, translation, elevation, colors, TextView text and size; SDK 0.8.0+, during a session), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator`, `set_network_mock`, `clear_network_mocks` (mock responses or failures, see [Network](#network-requests-and-mocks)) |
@@ -767,6 +804,11 @@ the interceptor stays a pass-through, and an older SDK simply sends no requests.
 may be up to 256 KB (other SDK lines keep the 64 KB cap), and the server's mock rules reach the SDK as flat lines of
 at most 512 KB.
 
+Stall origins use device protocol 9 (SDK and server 0.9.0): its stalls may carry the stack's outermost frames, the
+RxJava hooks' findings and the coroutine name, and `config` carries the RxJava switch. With an older server the
+SDK sends stalls as before and leaves its RxJava hooks off; stalls from an older SDK still get an origin from
+their stack.
+
 ## Security model
 
 - The server listens on `127.0.0.1` only. WebSocket upgrades are accepted only from a loopback Host/Origin
@@ -804,7 +846,9 @@ at most 512 KB.
   connected. If you run the adb server with `adb -a` (listen on all interfaces), that port is reachable from your
   network for that moment, so keep adb on its default loopback binding.
 - The SDK only sends screen class names / aliases, frame timings and, with stalls enabled, stack frames of the
-  main thread (class, method, file, line) and StrictMode messages, and only from debuggable builds. When you
+  main thread (class, method, file, line; with RxJava tracking also the Rx task's and consumer's class names and the
+  frames of the call that subscribed the chain, and a coroutine's name in debug mode) and StrictMode messages, and
+  only from debuggable builds. When you
   Inspect, it also sends the view tree, including the text on screen (never the text of password fields). Without
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could act as the server and
   receive that stream, including view trees if it asks for them: don't keep untrusted apps on a device you
@@ -850,6 +894,12 @@ at most 512 KB.
 - **Stall detection is sampled.** The watchdog works in about 50 ms steps, so durations are approximate and a
   block only slightly over the threshold can be missed. Time a tick waits in the main queue behind other work
   counts as blocked time.
+- **Origins have blind spots.** A coroutine's launch site is not known (Android has no coroutine debug probes):
+  the origin names the continuation that resumed, and its name only in kotlinx.coroutines debug mode. An Rx
+  chain subscribed before the session started, or whose `observeOn` is subscribed on another thread than the one
+  that called `subscribe` (an `observeOn` above a `subscribeOn`), has no subscribe site; only `observeOn` chains
+  get one. Work run by `Dispatchers.Main.immediate` or a trampoline runs inside whatever message was dispatching
+  and is attributed to that.
 - **Obfuscated SDKs keep their names short.** When a stall's culprit is a third-party SDK shipped with R8 or
   ProGuard, its frames read like `com.vendor.internal.b.a (SourceFile:22)`: the package says which SDK blocked
   the main thread, but the line number does not point at readable source.

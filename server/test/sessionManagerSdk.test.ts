@@ -122,7 +122,7 @@ describe('SessionManager SDK link', () => {
     expect(manager.setSdkOptions({ strictMode: true })).toBe(false);
     await start();
     expect(manager.setSdkOptions({ stallThresholdMs: 250 })).toBe(true);
-    const options = { stallThresholdMs: 250, strictMode: false, inflateTracking: true };
+    const options = { stallThresholdMs: 250, strictMode: false, inflateTracking: true, rxTracking: true };
     expect(manager.getSessionState().sdk?.options).toEqual(options);
     const last = messages.at(-1);
     expect(last?.type === 'session' && last.session.sdk?.options).toEqual(options);

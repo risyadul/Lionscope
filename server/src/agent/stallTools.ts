@@ -3,16 +3,20 @@ import { z } from 'zod';
 import type { StallSample } from '@lionscope/protocol';
 import {
   aggregateOffenders,
+  aggregateOrigins,
   culpritFrame,
   culpritKey,
   groupStrictMode,
+  originText,
   stallInWindow,
+  stallOrigin,
   summarizeWindow,
 } from '@lionscope/protocol/insights';
 import { defineTool, READ_ONLY, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
 import {
   culpritView,
   iso,
+  originView,
   round,
   stackLines,
   timeWindow,
@@ -49,7 +53,7 @@ function newestByCulprit(
 export const stallsTool = defineTool({
   name: 'get_stalls',
   title: 'Main-thread stalls',
-  description: `Main-thread blocks the in-app SDK watchdog caught (each at least the stall threshold, default 150 ms) in the window, as the dashboard's Stalls tab ranks them: offenders grouped by culprit line (the innermost app frame, else the innermost library frame), worst total blocked time first, with count, total/max ms and the screens they blocked; plus the newest stall events. Stalls with a debugger attached are counted apart (likely breakpoints). Pass includeStacks for each offender's newest stack, framework frames collapsed. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Main-thread blocks the in-app SDK watchdog caught (each at least the stall threshold, default 150 ms) in the window, as the dashboard's Stalls tab ranks them: offenders grouped by culprit line (the innermost app frame, else the innermost library frame), worst total blocked time first, with count, total/max ms and the screens they blocked; origins, the same stalls grouped by where the main-thread work came from (kind rx / coroutine / handler / frame / input / lifecycle / idle / unknown: the RxJava operator and the line that subscribed the chain, the coroutine's dispatcher, continuation and name, the posted Runnable, the Choreographer frame...), worst first; plus the newest stall events with their origin. Stalls with a debugger attached are counted apart (likely breakpoints). Pass includeStacks for each offender's newest stack and each Rx origin's subscribe stack, framework frames collapsed. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     window: windowInput,
@@ -65,6 +69,7 @@ export const stallsTool = defineTool({
     const summary = summarizeWindow(stalls, [], fromTs, toTs);
     const newest = includeStacks ? newestByCulprit(stalls, fromTs, toTs) : null;
     const offenders = aggregateOffenders(stalls, fromTs, toTs).slice(0, limit);
+    const origins = aggregateOrigins(stalls, fromTs, toTs).slice(0, limit);
     const events = stalls
       .filter((stall) => stallInWindow(stall, fromTs, toTs))
       .slice(-limit)
@@ -90,12 +95,24 @@ export const stallsTool = defineTool({
             ...(stack ? { stack: stackLines(stack) } : {}),
           };
         }),
+        origins: origins.map((group) => ({
+          ...originView(group.origin),
+          count: group.count,
+          totalMs: round(group.totalMs, 0),
+          maxMs: round(group.maxMs, 0),
+          screens: group.screens,
+          lastAt: iso(group.lastTs),
+          ...(includeStacks && group.origin.subscribedAt.length > 0
+            ? { subscribedAt: stackLines(group.origin.subscribedAt) }
+            : {}),
+        })),
         recentStalls: events.map((stall) => ({
           at: iso(stall.ts),
           durationMs: round(stall.durationMs, 0),
           screen: stall.screen,
           debugger: stall.debugger,
           ...culpritView(stall.frames),
+          origin: originText(stallOrigin(stall)),
         })),
       },
     };

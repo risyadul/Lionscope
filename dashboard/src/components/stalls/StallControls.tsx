@@ -13,6 +13,8 @@ type Props = {
   onChange: (patch: Partial<SdkOptions>) => void;
   /** Why the inflation switch alone is inert (a link below protocol v3); null when it can be used. */
   inflateBlocker?: string | null;
+  /** Why the RxJava switch alone is inert (a link below protocol v9); null when it can be used. */
+  rxBlocker?: string | null;
 };
 
 const THRESHOLD_OPTIONS: readonly SegmentedOption<number>[] = STALL_THRESHOLDS_MS.map((ms) => ({
@@ -31,10 +33,23 @@ const INFLATE_TITLE =
 
 export const INFLATE_UPDATE_HINT = 'Update the app’s Lionscope SDK to 0.4.0 for layout timing';
 
-/** Watchdog threshold and StrictMode switch; they reconfigure the SDK in the running app. */
-export function StallControls({ options, blocker, isPending, onChange, inflateBlocker = null }: Props) {
+const RX_TITLE =
+  'Hooks RxJava 2, chained with the app’s own plugins, to name the chain and the line that subscribed it for each stall. Costs about 1–3 µs per observeOn subscription; turning it off removes the hooks.';
+
+export const RX_UPDATE_HINT = 'Update the app’s Lionscope SDK to 0.9.0 for RxJava tracking';
+
+/** Watchdog threshold and the StrictMode, inflation and RxJava switches; they reconfigure the SDK in the running app. */
+export function StallControls({
+  options,
+  blocker,
+  isPending,
+  onChange,
+  inflateBlocker = null,
+  rxBlocker = null,
+}: Props) {
   const blockerId = useId();
   const inflateBlockerId = useId();
+  const rxBlockerId = useId();
   const isDisabled = blocker !== null;
   const isSending = !isDisabled && isPending;
   return (
@@ -84,9 +99,29 @@ export function StallControls({ options, blocker, isPending, onChange, inflateBl
         </span>
         Inflation tracking
       </button>
+      <button
+        type="button"
+        role="switch"
+        className="switch"
+        aria-checked={options.rxTracking}
+        disabled={isDisabled || rxBlocker !== null}
+        aria-describedby={rxBlocker !== null && !isDisabled ? rxBlockerId : undefined}
+        title={RX_TITLE}
+        onClick={() => onChange({ rxTracking: !options.rxTracking })}
+      >
+        <span className="switch-track" aria-hidden="true">
+          <span className="switch-thumb" />
+        </span>
+        RxJava tracking
+      </button>
       {!isDisabled && inflateBlocker !== null && (
         <p id={inflateBlockerId} className="stall-blocker">
           {inflateBlocker}
+        </p>
+      )}
+      {!isDisabled && rxBlocker !== null && (
+        <p id={rxBlockerId} className="stall-blocker">
+          {rxBlocker}
         </p>
       )}
       {isDisabled && (

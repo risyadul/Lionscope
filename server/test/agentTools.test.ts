@@ -242,6 +242,53 @@ describe('stalls and StrictMode', () => {
     expect((await run(agent, 'get_stalls')).offenders[0].stack).toBeUndefined();
   });
 
+  it('groups stalls by origin: the Rx chain with its subscribe site, the Handler message', async () => {
+    const rxStack = [
+      stackFrame('com.example.shop.home.HomeViewModel', 'render', 61, true),
+      stackFrame('io.reactivex.internal.observers.LambdaObserver', 'onNext', 63, false),
+      stackFrame(
+        'io.reactivex.internal.operators.observable.ObservableObserveOn$ObserveOnObserver',
+        'run',
+        255,
+        false,
+      ),
+      stackFrame('io.reactivex.android.schedulers.HandlerScheduler$ScheduledRunnable', 'run', 124, false),
+      stackFrame('android.os.Handler', 'handleCallback', 995, false),
+      ...HOME_STACK.slice(3),
+    ];
+    const site = [stackFrame('com.example.shop.home.HomeViewModel', 'load', 40, true)];
+    const rx = {
+      task: 'io.reactivex.internal.operators.observable.ObservableObserveOn$ObserveOnObserver',
+      consumer: 'com.example.shop.home.HomeViewModel$$ExternalSyntheticLambda1',
+      subscribedAt: site,
+    };
+    const withRx = fakeAgent({
+      stalls: [
+        stall(T0 + 10_000, 300),
+        stall(T0 + 20_000, 900, { frames: rxStack, rx }),
+        stall(T0 + 25_000, 400, { frames: rxStack, rx }),
+      ],
+    });
+    const result = await run(withRx, 'get_stalls', { includeStacks: true });
+    expect(result.origins).toHaveLength(2);
+    expect(result.origins[0]).toMatchObject({
+      kind: 'rx',
+      label: 'observeOn',
+      text: 'RxJava observeOn · HomeViewModel.load (HomeViewModel.kt:40)',
+      location: 'HomeViewModel.kt:40',
+      operator: 'observeOn',
+      consumer: rx.consumer,
+      count: 2,
+      totalMs: 1300,
+      maxMs: 900,
+      screens: ['Home'],
+      subscribedAt: ['at com.example.shop.home.HomeViewModel.load(HomeViewModel.kt:40)'],
+    });
+    expect(result.origins[1]).toMatchObject({ kind: 'handler', label: 'Handler message', count: 1 });
+    expect(result.recentStalls[0].origin).toBe('RxJava observeOn · HomeViewModel.load (HomeViewModel.kt:40)');
+    expect((await run(withRx, 'get_stalls')).origins[0].subscribedAt).toBeUndefined();
+  });
+
   it('groups violations by class and culprit, most occurrences first', async () => {
     const { violations } = await run(agent, 'get_strictmode');
     expect(violations).toHaveLength(2);
@@ -357,7 +404,7 @@ describe('session control', () => {
     expect(started.session).toMatchObject({ status: 'waiting_for_process', packageName: PKG });
     await run(agent, 'set_sdk_options', { stallThresholdMs: 250, strictMode: true });
     expect(agent.sdkOptionCalls).toEqual([
-      { stallThresholdMs: 250, strictMode: true, inflateTracking: undefined },
+      { stallThresholdMs: 250, strictMode: true, inflateTracking: undefined, rxTracking: undefined },
     ]);
     expect((await run(agent, 'stop_session')).session.status).toBe('idle');
   });

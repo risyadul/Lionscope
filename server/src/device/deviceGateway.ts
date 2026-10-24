@@ -6,6 +6,7 @@ import {
   DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_V8,
+  DEVICE_PROTOCOL_V9,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
@@ -272,13 +273,15 @@ function carriesProof(protocolVersion: number, mode: SdkLinkMode, proof: string 
 /** A mock rule set waits for 'drain' (only the latest one) while the socket buffers more than this. */
 export const MAX_PENDING_MOCK_BYTES = 1024 * 1024;
 
-function configMessage(options: SdkOptions): GatewayMessage {
-  return {
+/** `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` (last) on v9 links only. */
+export function configMessage(options: SdkOptions, protocolVersion: number): GatewayMessage {
+  const config = {
     type: 'config',
     stallThresholdMs: options.stallThresholdMs,
     strictMode: options.strictMode,
     inflateTracking: options.inflateTracking,
-  };
+  } as const;
+  return protocolVersion >= DEVICE_PROTOCOL_V9 ? { ...config, rxTracking: options.rxTracking } : config;
 }
 
 /** `Name: value` lines joined by `\n` (names are tokens, values hold no CR / LF): the SDK splits them back. */
@@ -626,8 +629,8 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       sendConfig: (options) => {
         // An inspect-only link gets no options (its SDK runs no collectors).
         if (protocolVersion < DEVICE_PROTOCOL_V2 || closing || mode === 'inspect') return;
-        if (handler) socket.write(gatewayLine(configMessage(options)));
-        else pendingConfig = configMessage(options);
+        if (handler) socket.write(gatewayLine(configMessage(options, protocolVersion)));
+        else pendingConfig = configMessage(options, protocolVersion);
       },
       sendMocks: (rev, rules) => {
         // Mocks belong to a profiling session: inspect-only links never get them.

@@ -26,6 +26,7 @@ import {
   stallColor,
   stallInWindow,
   stallKey,
+  stallOrigin,
   stallScaleMax,
   stallSeverity,
   stallsByScreen,
@@ -281,7 +282,7 @@ describe('offenders', () => {
 describe('feed', () => {
   const stalls = [stall(T0, 300), stall(T0 + 2000, 700, { frames: CART_STACK })];
   const violations = [violation(T0 + 1000), violation(T0 + 2000), violation(T0 + 2000), violation(T0 + 9000)];
-  const all = { fromTs: T0, toTs: T0 + 5000, filter: 'all' as const, culprit: null };
+  const all = { fromTs: T0, toTs: T0 + 5000, filter: 'all' as const, culprit: null, origin: null };
 
   it('interleaves newest first; at the same instant the stall leads', () => {
     const feed = buildFeed(stalls, violations, all);
@@ -314,6 +315,34 @@ describe('feed', () => {
     const cart = culpritKey(culpritFrame(CART_STACK));
     const narrowed = buildFeed(stalls, violations, { ...all, culprit: cart });
     expect(narrowed.map((item) => item.kind)).toEqual(['stall', 'strictmode', 'strictmode', 'strictmode']);
+  });
+
+  it('filters to one origin: stalls only, no debugger stalls', () => {
+    const posted = [
+      stackFrame('com.example.shop.cart.CartFragment', 'render', 'CartFragment.kt', 30, true),
+      stackFrame(
+        'com.example.shop.cart.CartFragment$$ExternalSyntheticLambda0',
+        'run',
+        'D8$$SyntheticClass',
+        0,
+      ),
+      stackFrame('android.os.Handler', 'handleCallback', 'Handler.java', 995),
+      stackFrame('android.os.Handler', 'dispatchMessage', 'Handler.java', 103),
+      stackFrame('android.os.Looper', 'loop', 'Looper.java', 338),
+    ];
+    const mixed = [
+      stall(T0, 300),
+      stall(T0 + 1000, 400, { frames: posted }),
+      stall(T0 + 1500, 9000, { frames: posted, debugger: true }),
+      stall(T0 + 2000, 700, { frames: CART_STACK }),
+    ];
+    const key = stallOrigin(mixed[1]!).key;
+    expect(key).not.toBe(stallOrigin(mixed[0]!).key);
+    const narrowed = buildFeed(mixed, violations, { ...all, origin: key });
+    expect(narrowed.map((item) => item.ts - T0)).toEqual([1000]);
+    // Even the StrictMode filter lists nothing: violations have no origin.
+    expect(buildFeed(mixed, violations, { ...all, filter: 'strictmode', origin: key })).toEqual([]);
+    expect(buildFeed(mixed, violations, { ...all, origin: 'no-such-origin' })).toEqual([]);
   });
 
   it('finds a selection anywhere in the buffer', () => {
@@ -350,6 +379,7 @@ describe('lane scale and hit testing', () => {
     toTs: T0 + 60_000,
     filter: 'all',
     culprit: null,
+    origin: null,
   });
   // 0.05 px per ms: the 400 ms stall is 20 px wide, the 20 ms one drawn at the 3 px minimum.
   const at = (ts: number, isOverRail = false) =>
@@ -378,7 +408,13 @@ describe('stalls without a stack', () => {
     const rows = aggregateOffenders([...empty, stall(T0 + 2000, 100)], T0, T0 + 5000);
     expect(rows[0]).toMatchObject({ key: NO_STACK_KEY, frame: null, count: 2, totalMs: 800 });
     expect(rows[0]?.screens).toEqual(['homepage', 'search']);
-    const feed = buildFeed(empty, [], { fromTs: T0, toTs: T0 + 5000, filter: 'all', culprit: NO_STACK_KEY });
+    const feed = buildFeed(empty, [], {
+      fromTs: T0,
+      toTs: T0 + 5000,
+      filter: 'all',
+      culprit: NO_STACK_KEY,
+      origin: null,
+    });
     expect(feed.map((item) => item.culprit)).toEqual([null, null]);
     expect(collapseStack([])).toEqual([]);
     expect(stackText([])).toBe('');
@@ -392,7 +428,7 @@ describe('window edges and filters', () => {
     expect(stallInWindow(longOne, T0, T0 + 10_000)).toBe(true);
     expect(stallInWindow(stall(T0 - 4000, 3000), T0, T0 + 10_000)).toBe(false);
     expect(stallInWindow(stall(T0 + 10_001, 100), T0, T0 + 10_000)).toBe(false);
-    const window = { fromTs: T0, toTs: T0 + 10_000, filter: 'all' as const, culprit: null };
+    const window = { fromTs: T0, toTs: T0 + 10_000, filter: 'all' as const, culprit: null, origin: null };
     expect(buildFeed([longOne], [], window).map((item) => item.ts)).toEqual([T0 - 4000]);
     expect(aggregateOffenders([longOne], T0, T0 + 10_000)[0]?.totalMs).toBe(5000);
     expect(summarizeWindow([longOne], [], T0, T0 + 10_000).count).toBe(1);
@@ -413,11 +449,12 @@ describe('window edges and filters', () => {
       toTs: T0 + 60_000,
       filter: 'stalls',
       culprit: row!.key,
+      origin: null,
     });
     expect(feed).toHaveLength(row!.count);
     // Unfiltered, the debugger stall is still listed.
     expect(
-      buildFeed(stalls, [], { fromTs: T0, toTs: T0 + 60_000, filter: 'stalls', culprit: null }),
+      buildFeed(stalls, [], { fromTs: T0, toTs: T0 + 60_000, filter: 'stalls', culprit: null, origin: null }),
     ).toHaveLength(3);
   });
 });

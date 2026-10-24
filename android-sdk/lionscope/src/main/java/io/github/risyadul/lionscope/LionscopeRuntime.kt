@@ -146,27 +146,34 @@ internal object LionscopeRuntime {
         Lionscope.installed = true
     }
 
-    /** Main-thread watchdog and (API 28+) StrictMode reporting; both inert until a v2 server says so. */
+    /**
+     * Main-thread watchdog, (API 28+) StrictMode reporting and the RxJava hooks; all inert until a session server
+     * says so (v2; v9 for the RxJava hooks).
+     */
     private fun diagnostics(
         link: DeviceLink,
         main: MainScheduler,
         screens: ScreenTracker,
         ownership: AppOwnership,
     ): DiagnosticsController {
-        val sink = DiagnosticsSink(link, ownership) { screens.topActivityClassName }
-        val mainThread by lazy { Looper.getMainLooper().thread }
+        val mainThread = Looper.getMainLooper().thread
+        // Inert until a v9 session turns it on; null without RxJava 2 in the app.
+        val rx = RxTracking.createIfPresent(mainThread)
+        val sink = DiagnosticsSink(link, ownership, rx) { screens.topActivityClassName }
         val watchdog = MainThreadWatchdog(
             main = main,
             sampleStack = { mainThread.stackTrace },
             screenName = { screens.currentScreenName },
             report = sink::stall,
+            rxTask = { rx?.currentTask },
+            threadName = { mainThread.name },
         )
         val strictMode = if (Build.VERSION.SDK_INT >= 28) {
             StrictModeController.create(main, { screens.currentScreenName }, sink::strictMode)
         } else {
             null
         }
-        return DiagnosticsController(link, main, watchdog, strictMode)
+        return DiagnosticsController(link, main, watchdog, strictMode, rx)
     }
 
     /**

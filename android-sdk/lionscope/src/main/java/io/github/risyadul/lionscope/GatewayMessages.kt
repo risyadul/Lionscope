@@ -40,6 +40,7 @@ internal sealed class GatewayMessage {
         private val STALL_THRESHOLD = Regex("\"stallThresholdMs\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)")
         private val STRICT_MODE = Regex("\"strictMode\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         private val INFLATE_TRACKING = Regex("\"inflateTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
+        private val RX_TRACKING = Regex("\"rxTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         /** A non-negative JSON integer that fits an Int. */
         private val REQUEST_ID = Regex("\"requestId\"\\s*:\\s*(\\d{1,10})(?![\\d.eE])")
 
@@ -136,7 +137,7 @@ internal sealed class GatewayMessage {
         /**
          * A missing or non-numeric threshold is the default; any other number snaps to the nearest allowed value
          * (the lower one on a tie). `strictMode` is on only for a literal `true`; `inflateTracking` (v3) is off only for
-         * a literal `false`, so a v2 server that never sends it leaves it on.
+         * a literal `false`, so a v2 server that never sends it leaves it on; so is `rxTracking` (v9).
          */
         private fun parseConfig(line: String): SdkOptions {
             val threshold = STALL_THRESHOLD.find(line)?.groupValues?.get(1)?.toDoubleOrNull()
@@ -145,7 +146,8 @@ internal sealed class GatewayMessage {
                 ?: SdkOptions.DEFAULT.stallThresholdMs
             val strictMode = STRICT_MODE.find(line)?.groupValues?.get(1) == "true"
             val inflateTracking = INFLATE_TRACKING.find(line)?.groupValues?.get(1) != "false"
-            return SdkOptions(threshold, strictMode, inflateTracking)
+            val rxTracking = RX_TRACKING.find(line)?.groupValues?.get(1) != "false"
+            return SdkOptions(threshold, strictMode, inflateTracking, rxTracking)
         }
     }
 }

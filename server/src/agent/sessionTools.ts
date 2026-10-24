@@ -39,16 +39,17 @@ export const stopSessionTool = defineTool({
 export const sdkOptionsTool = defineTool({
   name: 'set_sdk_options',
   title: 'Set SDK options',
-  description: `Changes the in-app SDK options of the running session (the Stalls tab controls): stallThresholdMs is the main-thread watchdog threshold (one of ${STALL_THRESHOLDS_MS.join(', ')} ms; default 150), strictMode turns StrictMode violation reporting on (it changes the app's StrictMode policy; default off), inflateTracking turns layout inflation timing on or off (default on). Omitted fields stay as they are. Returns the options now in effect.`,
+  description: `Changes the in-app SDK options of the running session (the Stalls tab controls): stallThresholdMs is the main-thread watchdog threshold (one of ${STALL_THRESHOLDS_MS.join(', ')} ms; default 150), strictMode turns StrictMode violation reporting on (it changes the app's StrictMode policy; default off), inflateTracking turns layout inflation timing on or off (default on), rxTracking turns the SDK's RxJava 2 hooks on or off (they name the Rx chain and its subscribe site for each stall; default on; SDK 0.9.0+). Omitted fields stay as they are. Returns the options now in effect.`,
   access: 'session',
   input: z.object({
     stallThresholdMs: z.literal(STALL_THRESHOLDS_MS).optional().describe('Watchdog threshold in ms.'),
     strictMode: z.boolean().optional().describe('Report StrictMode violations.'),
     inflateTracking: z.boolean().optional().describe('Time layout inflations.'),
+    rxTracking: z.boolean().optional().describe('Attribute stalls to RxJava chains.'),
   }),
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async run({ stallThresholdMs, strictMode, inflateTracking }, ctx) {
-    if (!ctx.sessions.setSdkOptions({ stallThresholdMs, strictMode, inflateTracking })) {
+  async run({ stallThresholdMs, strictMode, inflateTracking, rxTracking }, ctx) {
+    if (!ctx.sessions.setSdkOptions({ stallThresholdMs, strictMode, inflateTracking, rxTracking })) {
       throw new ToolError(NO_SESSION_MESSAGE);
     }
     const sdk = ctx.sessions.getSessionState().sdk;

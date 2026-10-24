@@ -270,7 +270,7 @@ describe('Inflation tracking toggle', () => {
     const names = within(panel(/Stalls/))
       .getAllByRole('switch')
       .map((el) => el.textContent);
-    expect(names).toEqual(['StrictMode', 'Inflation tracking']);
+    expect(names).toEqual(['StrictMode', 'Inflation tracking', 'RxJava tracking']);
     expect(toggle().getAttribute('aria-checked')).toBe('true');
     fireEvent.click(toggle());
     expect(options(all)).toEqual([{ type: 'setSdkOptions', inflateTracking: false }]);

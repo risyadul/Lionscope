@@ -146,12 +146,14 @@ export class SdkBridge {
       stallThresholdMs: changes.stallThresholdMs ?? previous.stallThresholdMs,
       strictMode: changes.strictMode ?? previous.strictMode,
       inflateTracking: changes.inflateTracking ?? previous.inflateTracking,
+      rxTracking: changes.rxTracking ?? previous.rxTracking,
     };
     this.update({ options });
     if (
       options.stallThresholdMs === previous.stallThresholdMs &&
       options.strictMode === previous.strictMode &&
-      options.inflateTracking === previous.inflateTracking
+      options.inflateTracking === previous.inflateTracking &&
+      options.rxTracking === previous.rxTracking
     ) {
       return;
     }
@@ -310,6 +312,7 @@ export class SdkBridge {
         const ts = this.eventTime('stall', message.ts, message.durationMs);
         if (ts === null) return;
         const { durationMs, frames, samples, truncated, debugger: debuggerAttached } = message;
+        const { outerFrames, rx, coroutine } = message;
         this.options.store.append('stalls', {
           ts,
           durationMs,
@@ -318,6 +321,10 @@ export class SdkBridge {
           truncated,
           screen: this.screenAt(ts, message.screen),
           debugger: debuggerAttached,
+          // 0.9.0 origin facts, only when the SDK sent them.
+          ...(outerFrames === undefined ? {} : { outerFrames }),
+          ...(rx === undefined ? {} : { rx }),
+          ...(coroutine === undefined ? {} : { coroutine }),
         });
         return;
       }

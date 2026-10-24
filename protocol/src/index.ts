@@ -37,6 +37,9 @@ import {
   MAX_MOCK_HEADERS,
   MAX_MOCK_URL_CHARS,
   MAX_NETWORK_MOCKS,
+  MAX_ORIGIN_TEXT_LENGTH,
+  MAX_OUTER_FRAMES,
+  MAX_RX_SITE_FRAMES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_EDIT_TEXT_CHARS,
@@ -69,6 +72,7 @@ import {
   type InspectorWindow,
   type NetworkMockInput,
   type ScreenClientMessage,
+  type StallRx,
   type ViewProperty,
   type ViewPropertyValue,
   type ViewState,
@@ -211,13 +215,15 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       stallThresholdMs: z.literal(STALL_THRESHOLDS_MS).optional(),
       strictMode: z.boolean().optional(),
       inflateTracking: z.boolean().optional(),
+      rxTracking: z.boolean().optional(),
     })
     .strict()
     .refine(
       (message) =>
         message.stallThresholdMs !== undefined ||
         message.strictMode !== undefined ||
-        message.inflateTracking !== undefined,
+        message.inflateTracking !== undefined ||
+        message.rxTracking !== undefined,
       'no SDK option given',
     ),
   z.object({ type: z.literal('inspect'), serial: serialSchema }).strict(),
@@ -499,6 +505,16 @@ const stackFrameSchema = z
   })
   .strip();
 
+const originText = textOf(MAX_ORIGIN_TEXT_LENGTH);
+
+const stallRxSchema = z
+  .object({
+    task: originText,
+    consumer: originText.nullable(),
+    subscribedAt: z.array(stackFrameSchema).max(MAX_RX_SITE_FRAMES),
+  })
+  .strip() satisfies z.ZodType<StallRx>;
+
 /** Bounds of the 0.5.0 Inspector messages (screen pixels, window counts, strings). */
 export const MAX_INSPECTOR_PIXELS = 100_000;
 export const MAX_INSPECTOR_WINDOWS = 32;
@@ -653,6 +669,9 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       truncated: z.boolean(),
       screen: text.nullable(),
       debugger: z.boolean(),
+      outerFrames: z.array(stackFrameSchema).max(MAX_OUTER_FRAMES).optional(),
+      rx: stallRxSchema.optional(),
+      coroutine: originText.optional(),
     })
     .strip(),
   z

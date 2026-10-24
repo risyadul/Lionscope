@@ -34,6 +34,8 @@ class StallDetectorTest {
 
     private var reportedUnderLock = false
     private var maxSamples = StallDetector.MAX_SAMPLES
+    private var rxTask: () -> Any? = { null }
+    private var threadName: String? = "main"
 
     private val detector by lazy {
         lateinit var self: StallDetector
@@ -52,6 +54,8 @@ class StallDetectorTest {
                 stalls += it
             },
             maxSamples = maxSamples,
+            rxTask = { rxTask() },
+            threadName = { threadName },
         )
         self
     }
@@ -242,5 +246,50 @@ class StallDetectorTest {
         idle(5)
         detector.close()
         assertTrue(stalls.isEmpty())
+    }
+
+    @Test
+    fun aCutStackKeepsItsOutermostFramesApart() {
+        val deep = (0 until 200).map { StackTraceElement("app.C$it", "m", "C.kt", it) }.toTypedArray()
+        sampler = { deep }
+        idle(2)
+        block(6)
+        val stall = stalls.single()
+        assertEquals(MAX_OUTER_FRAMES, stall.outer.size)
+        assertEquals("app.C184", stall.outer.first().className)
+        assertEquals("app.C199", stall.outer.last().className)
+    }
+
+    @Test
+    fun aStackJustOverTheKeptSizeHasNoOverlappingOuterFrames() {
+        val kept = StackFrames.MAX_SAMPLED_ELEMENTS
+        sampler = { (0 until kept + 3).map { StackTraceElement("app.C$it", "m", "C.kt", it) }.toTypedArray() }
+        idle(2)
+        block(6)
+        assertEquals(listOf("app.C$kept", "app.C${kept + 1}", "app.C${kept + 2}"), stalls.single().outer.map { it.className })
+        sampler = { blockStack }
+        block(6)
+        assertEquals(0, stalls[1].outer.size)
+    }
+
+    @Test
+    fun keepsTheRxTaskAndThreadNameOfTheFirstSample() {
+        val task = Any()
+        rxTask = { task }
+        threadName = "main @refresh#2"
+        idle(2)
+        block(6)
+        assertSame(task, stalls.single().rxTask)
+        assertEquals("main @refresh#2", stalls.single().threadName)
+    }
+
+    @Test
+    fun anRxTaskThatChangedDuringTheSampleIsDropped() {
+        var reads = 0
+        rxTask = { Any().also { reads++ } } // A different task on every read.
+        idle(2)
+        block(6)
+        assertEquals(null, stalls.single().rxTask)
+        assertTrue(reads >= 2)
     }
 }

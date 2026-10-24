@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { formatBlockMs, formatInteger } from '../../lib/format.ts';
 import {
   culpritLabel,
@@ -18,10 +18,12 @@ type Props = {
   /** `culpritKey` the event list is filtered to. */
   activeKey: string | null;
   onToggle: (key: string) => void;
+  /** The By line / By origin switch, in the section head. */
+  modeSwitch?: ReactNode;
 };
 
 /** Culprit lines ranked by total blocked time; a row filters the event list to that line. */
-export function OffendersTable({ offenders, debuggerCount, activeKey, onToggle }: Props) {
+export function OffendersTable({ offenders, debuggerCount, activeKey, onToggle, modeSwitch }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
   const worstTotal = offenders[0]?.totalMs ?? 0;
   const shown = isExpanded ? offenders : offenders.slice(0, OFFENDERS_PREVIEW);
@@ -38,6 +40,7 @@ export function OffendersTable({ offenders, debuggerCount, activeKey, onToggle }
           {debuggerCount > 0 &&
             ` · ${formatInteger(debuggerCount)} debugger ${debuggerCount === 1 ? 'stall' : 'stalls'} not counted`}
         </span>
+        {modeSwitch}
       </div>
       {offenders.length === 0 ? (
         <p className="stalls-note">No app stalls in this window — only StrictMode or debugger events.</p>

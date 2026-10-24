@@ -150,4 +150,12 @@ class GatewayMessageTest {
         assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":\"profile\"}"))
         assertFalse(inspectOnly("{\"type\":\"welcome\",\"protocolVersion\":5,\"mode\":null}"))
     }
+
+    @Test
+    fun rxTrackingIsOffOnlyForALiteralFalse() {
+        assertEquals(false, config("{\"type\":\"config\",\"stallThresholdMs\":250,\"strictMode\":true,\"inflateTracking\":true,\"rxTracking\":false}").rxTracking)
+        assertEquals(true, config("{\"type\":\"config\",\"stallThresholdMs\":150,\"strictMode\":false,\"inflateTracking\":true}").rxTracking)
+        assertEquals(true, config("{\"type\":\"config\",\"stallThresholdMs\":150,\"rxTracking\":\"false\"}").rxTracking)
+        assertTrue(SdkOptions.DEFAULT.rxTracking)
+    }
 }

@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 8
+internal const val DEVICE_PROTOCOL_VERSION = 9
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -36,6 +36,8 @@ internal const val LINK_NONCE_BYTES = 16
  * `revertViewProperties` (server → SDK) and `viewPropertyResult`.
  */
 internal const val DEVICE_PROTOCOL_V8 = 8
+/** First version with stall origins: `stall.outerFrames` / `rx` / `coroutine` and `config.rxTracking`. */
+internal const val DEVICE_PROTOCOL_V9 = 9
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link; every other line keeps [MAX_DEVICE_LINE_BYTES]. */
@@ -45,6 +47,12 @@ internal const val MAX_GATEWAY_LINE_BYTES = 512 * 1024
 internal const val MAX_SDK_FRAMES_PER_BATCH = 256
 /** Max frames per captured stack (innermost first); longer stacks are cut and flagged `truncated`. */
 internal const val MAX_STACK_FRAMES = 64
+/** `stall.outerFrames` keeps at most this many of a cut stack's outermost frames (v9). */
+internal const val MAX_OUTER_FRAMES = 16
+/** `stall.rx.subscribedAt` keeps at most this many frames of the subscribe call's stack (v9). */
+internal const val MAX_RX_SITE_FRAMES = 8
+/** `stall.rx.task` / `consumer` class names and `stall.coroutine` at most (v9). */
+internal const val MAX_ORIGIN_TEXT_LENGTH = 200
 /** `viewtree.deepestPath` keeps at most this many nodes (cut at the root end). */
 internal const val MAX_VIEW_PATH_NODES = 64
 /** `viewtree.topClasses` lists at most this many classes. */
@@ -93,13 +101,24 @@ internal class SdkFrame(
 
 /**
  * Per-session options pushed by the server in `config`; [DEFAULT] until the first one arrives. [inflateTracking] is
- * v3 (a v2 server never sends it: on).
+ * v3 (a v2 server never sends it: on), [rxTracking] v9 (only used on v9 links, where the server sends it).
  */
-internal data class SdkOptions(val stallThresholdMs: Long, val strictMode: Boolean, val inflateTracking: Boolean = true) {
+internal data class SdkOptions(
+    val stallThresholdMs: Long,
+    val strictMode: Boolean,
+    val inflateTracking: Boolean = true,
+    val rxTracking: Boolean = true,
+) {
     companion object {
-        val DEFAULT = SdkOptions(stallThresholdMs = 150, strictMode = false, inflateTracking = true)
+        val DEFAULT = SdkOptions(stallThresholdMs = 150, strictMode = false, inflateTracking = true, rxTracking = true)
     }
 }
+
+/**
+ * What the SDK's RxJava hooks saw for a stall (v9 `stall.rx`): the Rx task's class, the chain's final consumer class
+ * (null when not found) and the subscribe call's frames (empty when not captured).
+ */
+internal class RxOrigin(val task: String, val consumer: String?, val subscribedAt: List<StackFrame>)
 
 internal enum class StrictModePolicy(val wire: String) {
     THREAD("thread"),

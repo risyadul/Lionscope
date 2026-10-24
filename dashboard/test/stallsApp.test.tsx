@@ -295,12 +295,12 @@ describe('stalls without a stack', () => {
 
 const reply = (
   now: number,
-  options: { stallThresholdMs: number; strictMode: boolean; inflateTracking?: boolean },
+  options: { stallThresholdMs: number; strictMode: boolean; inflateTracking?: boolean; rxTracking?: boolean },
 ): ServerMessage => ({
   type: 'session',
   session: session({
     startedAt: now - 60_000,
-    sdk: { ...SDK_V2, options: { inflateTracking: true, ...options } },
+    sdk: { ...SDK_V2, options: { inflateTracking: true, rxTracking: true, ...options } },
   }),
 });
 const optionRequests = (sent: ClientMessage[]) => sent.filter((m) => m.type === 'setSdkOptions');

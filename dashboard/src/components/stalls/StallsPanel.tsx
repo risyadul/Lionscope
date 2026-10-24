@@ -1,8 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SdkOptions, StallSample, StrictModeSample } from '@lionscope/protocol/wire';
+import { useStoredState } from '../../hooks/useStoredState.ts';
 import { formatBlockMs } from '../../lib/format.ts';
+import { LAYOUT_KEYS } from '../../lib/layoutPrefs.ts';
 import {
   aggregateOffenders,
+  aggregateOrigins,
   buildFeed,
   countDebuggerStalls,
   culpritLabel,
@@ -11,7 +14,9 @@ import {
 } from '../../lib/stalls.ts';
 import type { StallsEmpty } from '../../lib/viewState.ts';
 import { SDK_GRADLE_SNIPPET } from '../topbar/SdkStatus.tsx';
+import { Segmented, type SegmentedOption } from '../ui/Segmented.tsx';
 import { OffendersTable } from './OffendersTable.tsx';
+import { OriginsTable } from './OriginsTable.tsx';
 import { StallControls } from './StallControls.tsx';
 import { StallDetail } from './StallDetail.tsx';
 import { StallFeed } from './StallFeed.tsx';
@@ -31,9 +36,24 @@ type Props = {
   isOptionsPending: boolean;
   onOptionsChange: (patch: Partial<SdkOptions>) => void;
   inflateBlocker: string | null;
+  rxBlocker: string | null;
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
 };
+
+/** How the offenders section ranks stalls: by culprit line, or by where the work came from. */
+type Breakdown = 'line' | 'origin';
+
+const BREAKDOWN_OPTIONS: readonly SegmentedOption<Breakdown>[] = [
+  { value: 'line', label: 'By line', title: 'Rank the app lines stalls were caught in' },
+  {
+    value: 'origin',
+    label: 'By origin',
+    title: 'Rank what the main thread was running: an RxJava chain, a coroutine, a Handler post, a frame…',
+  },
+];
+
+const parseBreakdown = (raw: string | null): Breakdown => (raw === 'origin' ? 'origin' : 'line');
 
 function EmptyPanel({ empty }: { empty: StallsEmpty }) {
   switch (empty.kind) {
@@ -129,19 +149,37 @@ export function StallsPanel({
   isOptionsPending,
   onOptionsChange,
   inflateBlocker,
+  rxBlocker,
   selectedKey,
   onSelect,
 }: Props) {
   const [filter, setFilter] = useState<FeedFilter>('all');
+  const [breakdown, setBreakdown] = useStoredState(LAYOUT_KEYS.stallsBreakdown, parseBreakdown);
+  // One of the two is set at a time: picking a line clears the origin and the other way round.
   const [culpritKey, setCulpritKey] = useState<string | null>(null);
+  const [originKey, setOriginKey] = useState<string | null>(null);
 
   const offenders = useMemo(() => aggregateOffenders(stalls, fromTs, toTs), [stalls, fromTs, toTs]);
+  // Origins are only classified while they are shown or filter the list.
+  const isOriginsNeeded = breakdown === 'origin' || originKey !== null;
+  const origins = useMemo(
+    () => (isOriginsNeeded ? aggregateOrigins(stalls, fromTs, toTs) : []),
+    [isOriginsNeeded, stalls, fromTs, toTs],
+  );
   const debuggerCount = useMemo(() => countDebuggerStalls(stalls, fromTs, toTs), [stalls, fromTs, toTs]);
-  // A culprit filter whose line left the window stops filtering.
+  // A culprit or origin filter whose rows left the window stops filtering.
   const activeOffender = offenders.find((offender) => offender.key === culpritKey) ?? null;
+  const activeOrigin = origins.find((group) => group.key === originKey) ?? null;
   const feed = useMemo(
-    () => buildFeed(stalls, strictMode, { fromTs, toTs, filter, culprit: activeOffender?.key ?? null }),
-    [stalls, strictMode, fromTs, toTs, filter, activeOffender],
+    () =>
+      buildFeed(stalls, strictMode, {
+        fromTs,
+        toTs,
+        filter,
+        culprit: activeOffender?.key ?? null,
+        origin: activeOrigin?.key ?? null,
+      }),
+    [stalls, strictMode, fromTs, toTs, filter, activeOffender, activeOrigin],
   );
   const selected = useMemo(
     () => (selectedKey === null ? null : findFeedItem(stalls, strictMode, selectedKey)),
@@ -167,6 +205,16 @@ export function StallsPanel({
     (row ?? body.querySelector<HTMLElement>('.feed-list') ?? body).focus();
   }, [shownKey]);
 
+  const modeSwitch = (
+    <Segmented
+      options={BREAKDOWN_OPTIONS}
+      value={breakdown}
+      onChange={setBreakdown}
+      label="Rank offenders"
+      className="offenders-mode"
+    />
+  );
+
   const step = (direction: -1 | 1) => {
     const next = feed[selectedIndex + direction];
     if (next) onSelect(next.key);
@@ -184,6 +232,7 @@ export function StallsPanel({
           isPending={isOptionsPending}
           onChange={onOptionsChange}
           inflateBlocker={inflateBlocker}
+          rxBlocker={rxBlocker}
         />
       </header>
       <div ref={bodyRef} className="stalls-body" tabIndex={-1}>
@@ -198,18 +247,37 @@ export function StallsPanel({
           <EmptyPanel empty={empty} />
         ) : (
           <>
-            <OffendersTable
-              offenders={offenders}
-              debuggerCount={debuggerCount}
-              activeKey={activeOffender?.key ?? null}
-              onToggle={(key) => setCulpritKey((current) => (current === key ? null : key))}
-            />
+            {breakdown === 'origin' ? (
+              <OriginsTable
+                origins={origins}
+                debuggerCount={debuggerCount}
+                activeKey={activeOrigin?.key ?? null}
+                onToggle={(key) => {
+                  setOriginKey((current) => (current === key ? null : key));
+                  setCulpritKey(null);
+                }}
+                modeSwitch={modeSwitch}
+              />
+            ) : (
+              <OffendersTable
+                offenders={offenders}
+                debuggerCount={debuggerCount}
+                activeKey={activeOffender?.key ?? null}
+                onToggle={(key) => {
+                  setCulpritKey((current) => (current === key ? null : key));
+                  setOriginKey(null);
+                }}
+                modeSwitch={modeSwitch}
+              />
+            )}
             <StallFeed
               items={feed}
               filter={filter}
               onFilterChange={setFilter}
               culprit={activeOffender === null ? null : culpritLabel(activeOffender.frame)}
               onClearCulprit={() => setCulpritKey(null)}
+              origin={activeOrigin?.origin ?? null}
+              onClearOrigin={() => setOriginKey(null)}
               onSelect={onSelect}
             />
           </>
