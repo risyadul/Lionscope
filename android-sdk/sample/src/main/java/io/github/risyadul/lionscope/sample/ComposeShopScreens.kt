@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope.sample
 
 import android.widget.RatingBar
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,23 +38,38 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
-/** A realistic list screen for the Compose Inspector: a header, then cards of a few composables each. */
+/**
+ * A realistic list screen for the Compose Inspector: a header, then cards of a few composables each, under an idle
+ * [ToastHost].
+ */
 @Composable
 fun CatalogScreen(onProduct: (Int) -> Unit, onLogin: () -> Unit, onPromo: () -> Unit) {
-    Surface(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.testTag("catalog"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Compose shop", style = MaterialTheme.typography.headlineSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onLogin) { Text("Sign in") }
-                        OutlinedButton(onClick = onPromo) { Text("Promo") }
+    Box(Modifier.fillMaxSize()) {
+        Surface(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.testTag("catalog"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Compose shop", style = MaterialTheme.typography.headlineSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onLogin) { Text("Sign in") }
+                            OutlinedButton(onClick = onPromo) { Text("Promo") }
+                        }
                     }
                 }
+                items(PRODUCTS) { product -> ProductCard(product, onClick = { onProduct(product.id) }) }
             }
-            items(PRODUCTS) { product -> ProductCard(product, onClick = { onProduct(product.id) }) }
         }
+        ToastHost()
     }
+}
+
+/**
+ * Where an app would show its toasts, idle: a full-size Box drawn over the whole screen that paints nothing. Picking
+ * on the screen in the Inspector looks through it to the catalog below (it stays in the tree).
+ */
+@Composable
+fun ToastHost() {
+    Box(Modifier.fillMaxSize().padding(bottom = 32.dp))
 }
 
 @Composable
