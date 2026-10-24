@@ -98,7 +98,7 @@ export const VIEW_EDIT_MESSAGES: Readonly<Record<ViewEditError, string>> = {
   not_editable: 'This property cannot be edited live on this element.',
   password: 'The text of a password field is never read or changed.',
   invalid_value: 'That value is out of range or malformed for this property.',
-  old_sdk: "The app's Lionscope SDK is older than 0.8.0: update it to edit views live.",
+  old_sdk: "The app's Lionscope SDK is older than 0.9.0: update it to edit views live.",
   no_link: "The app's SDK link is gone (it reconnected or closed): inspect again and retry.",
   rate_limited: 'Too many edits at once on this device: wait a moment and retry.',
   limit: 'The app already has the most live edits it keeps: revert some first.',

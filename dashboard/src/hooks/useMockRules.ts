@@ -54,7 +54,7 @@ const OFFLINE = 'Offline — waiting for the server.';
 export function mockBlocker(isOpen: boolean, isSessionActive: boolean, mocks: NetworkMocksState | null) {
   if (!isOpen) return OFFLINE;
   if (!isSessionActive) return 'Start a session to add mocks: rules belong to the running session.';
-  if (mocks === null) return 'This Lionscope server can’t mock requests — update it to 0.7.0.';
+  if (mocks === null) return 'This Lionscope server can’t mock requests — update it to 0.9.0.';
   return null;
 }
 

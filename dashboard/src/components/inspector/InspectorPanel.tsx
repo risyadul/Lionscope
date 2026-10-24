@@ -41,7 +41,7 @@ export const InspectorPanel = memo(function InspectorPanel() {
         <p>
           Press <strong>Inspect</strong> in the device toolbar to freeze the screen, hover to find a view and
           click to see its attributes and where it came from: the XML layout of a view, the Kotlin line that
-          calls a composable. Apps with the Lionscope SDK (0.5.2 or newer) give the sources without a session;
+          calls a composable. Apps with the Lionscope SDK (0.9.0 or newer) give the sources without a session;
           older SDKs need Start.
         </p>
         <div className="inspect-empty-actions">

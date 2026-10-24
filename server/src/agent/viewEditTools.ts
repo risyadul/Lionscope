@@ -21,7 +21,7 @@ export const NEXT_SNAPSHOT_WAIT_MS = 8000;
 export const TEMPORARY_NOTE =
   "Temporary: the edit lasts until it is reverted, the app sets the property itself (e.g. a RecyclerView row is rebound) or the view is recreated. Setters can run the app's own listeners (a TextWatcher, a layout listener).";
 const NO_EDITS =
-  'Live view editing is not available in this server. Start a Lionscope 0.8.0+ server with --allow-device-control.';
+  'Live view editing is not available in this server. Start a Lionscope 0.9.0+ server with --allow-device-control.';
 
 const nodeId = z
   .number()
@@ -117,7 +117,7 @@ function sides(
 export const setViewPropertyTool = defineTool({
   name: 'set_view_property',
   title: 'Set a view property live',
-  description: `Changes a property of a View in the app running on the device, live, through the Lionscope SDK (0.8.0+), by nodeId of the current Inspector snapshot (inspect_screen or get_inspector_selection, whose \`editable\` lists what a node accepts). Properties: visibility (visible|invisible|gone), alpha (0-1), enabled (boolean), paddingLeft/Top/Right/Bottom (0-2000 px), marginLeft/Top/Right/Bottom (-2000..2000 px, MarginLayoutParams only), padding / margin (one number for all sides or [left, top, right, bottom]), layoutWidth / layoutHeight (match_parent, wrap_content or "<n>px", 0-10000; not on window roots), translationX / translationY (-10000..10000 px), elevation (0-1000 px), backgroundColor (#RRGGBB or #AARRGGBB), and on TextViews text (at most ${MAX_EDIT_TEXT_CHARS} characters; never on password fields), textSize (1-200 sp), textColor. Composables and uiautomator snapshots are read-only: change them in code. Needs a profiling session (start_session, then inspect_screen): the app takes edits only from a session's SDK link with the link proof, so on an inspect-only snapshot it fails saying so (snapshot.editBlocked in inspect_screen). ${TEMPORARY_NOTE} Returns the live edits in the app and the element in the snapshot taken right after (its new nodeId and values); the dashboard shows it too. Use it to try a fix before changing the layout file. Device control.`,
+  description: `Changes a property of a View in the app running on the device, live, through the Lionscope SDK (0.9.0+), by nodeId of the current Inspector snapshot (inspect_screen or get_inspector_selection, whose \`editable\` lists what a node accepts). Properties: visibility (visible|invisible|gone), alpha (0-1), enabled (boolean), paddingLeft/Top/Right/Bottom (0-2000 px), marginLeft/Top/Right/Bottom (-2000..2000 px, MarginLayoutParams only), padding / margin (one number for all sides or [left, top, right, bottom]), layoutWidth / layoutHeight (match_parent, wrap_content or "<n>px", 0-10000; not on window roots), translationX / translationY (-10000..10000 px), elevation (0-1000 px), backgroundColor (#RRGGBB or #AARRGGBB), and on TextViews text (at most ${MAX_EDIT_TEXT_CHARS} characters; never on password fields), textSize (1-200 sp), textColor. Composables and uiautomator snapshots are read-only: change them in code. Needs a profiling session (start_session, then inspect_screen): the app takes edits only from a session's SDK link with the link proof, so on an inspect-only snapshot it fails saying so (snapshot.editBlocked in inspect_screen). ${TEMPORARY_NOTE} Returns the live edits in the app and the element in the snapshot taken right after (its new nodeId and values); the dashboard shows it too. Use it to try a fix before changing the layout file. Device control.`,
   access: 'device',
   input: z.object({
     nodeId,

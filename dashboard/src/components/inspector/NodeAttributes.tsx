@@ -135,7 +135,7 @@ function readOnlyReason(
     return `A composable can’t be edited live: change it in code${source === null ? '' : ` (${source})`}.`;
   }
   if (snapshot.source !== 'sdk') return 'Editing views live needs the Lionscope SDK in the app.';
-  return 'Update the app’s Lionscope SDK to 0.8.0 to edit views live.';
+  return 'Update the app’s Lionscope SDK to 0.9.0 to edit views live.';
 }
 
 /** Where a view's or a composable's source line points, and why one may be missing. */

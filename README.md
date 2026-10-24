@@ -222,7 +222,7 @@ after the app changes its top screen (never continuously), and the refresh butto
 <img width="710" alt="Layout Inspector on the sample app: the frozen screen with the first card's Share button selected and labelled MaterialButton 231 × 126, and the Inspector tab with the view tree, its ancestor path, source view_dashboard_actions.xml:15 (end of start tag), owner HomeFragment in MainActivity, text, bounds and size" src="docs/images/dashboard-inspector.png">
 
 - **Where the tree comes from.** With the SDK in the app (Lionscope 0.5.0 or later) the SDK walks the app's own
-  views and the badge reads `SDK`. From SDK 0.5.2 on this needs no profiling session: while a dashboard shows the
+  views and the badge reads `SDK`. From SDK 0.9.0 on this needs no profiling session: while a dashboard shows the
   Inspector for a device (the Inspector view or tab), and for 5 minutes after the last Inspect of it (yours or an
   agent's), the server keeps an inspect-only link to the debuggable SDK apps on that device. On that link the SDK
   only reports which screen is on top and answers Inspect: no frames, watchdog, StrictMode or layout reports until
@@ -230,12 +230,12 @@ after the app changes its top screen (never continuously), and the refresh butto
   then says `SDK connecting` if it didn't). Apps with SDK 0.5.0 or 0.5.1 still link only during a session (badge:
   `SDK needs a session`), and if another Lionscope server already holds the device's link the badge says
   `SDK link busy`. On Android 10 and later that is every window of the app, dialogs included; below
-  Android 10 it is the top Activity and its dialogs, and without layout sources. From 0.6.0 the SDK also reads
+  Android 10 it is the top Activity and its dialogs, and without layout sources. From 0.9.0 the SDK also reads
   Compose (below). Otherwise (no SDK in the app, an older SDK, Compose it cannot read, other apps and system UI) the
   server falls back to the accessibility tree, read by its UI helper (see the agent tools' notes on its side
   effects) or `uiautomator dump`, and the badge says `uiautomator` with the reason. uiautomator has fewer nodes and
   no source, owner, padding or margin; those fields show a dash.
-- **Compose.** The SDK (0.6.0 or later, with or without a session) reads the composition of every `ComposeView` (a
+- **Compose.** The SDK (0.9.0 or later, with or without a session) reads the composition of every `ComposeView` (a
   `setContent {}` Activity, a ComposeView in an XML layout, a Compose dialog or popup window), the way Android Studio's Layout Inspector does: it turns
   Compose's tooling data on when it starts, before anything is composed. A node is a composable **called from your
   code**, so `Button` is one but the `Surface`, `Row` and `Layout` inside it are not (calls whose call site is in
@@ -272,7 +272,7 @@ android:value="false" />`) cannot be read: the badge says why (restart the app).
 
 #### Editing views live
 
-With SDK 0.8.0 or later in the app, the attributes of a selected **View** can be changed on the running app, to try
+With SDK 0.9.0 or later in the app, the attributes of a selected **View** can be changed on the running app, to try
 a fix before touching the layout file: visibility, alpha, enabled, padding and margins (the box-model figure takes
 a number per side), layout width and height (`match_parent`, `wrap_content` or pixels), translation, elevation and
 the background color, and on a TextView its text, text size (sp) and text color (`#RRGGBB` or `#AARRGGBB`). Edit a
@@ -293,7 +293,7 @@ to the app says so too.
   original value: every edited field has a **Revert** button, and the tab's header shows "N live edits
   (temporary)" with **Revert all**. A value the app has set since is left alone, never "reverted" over.
 - **What can't be edited.** Composables (change them in code: the tab shows the call site), uiautomator
-  snapshots, apps with an SDK older than 0.8.0, and the text of password fields, which is never read, shown or set.
+  snapshots, apps with an SDK older than 0.9.0, and the text of password fields, which is never read, shown or set.
   Margins need `MarginLayoutParams`; a window's root view has no layout size to edit, and an autosizing TextView no
   text size.
 - **A background color replaces the background.** Until it is reverted the view has a plain color instead of its
@@ -311,7 +311,7 @@ to the app says so too.
 
 ### Network: requests and mocks
 
-With SDK 0.7.0 or later and one line in the app's `OkHttpClient`, the **Network** tab lists the app's HTTP requests
+With SDK 0.9.0 or later and one line in the app's `OkHttpClient`, the **Network** tab lists the app's HTTP requests
 during a profiling session: method, host and path, status, duration and size, with failed, pending and mocked ones
 marked; filter by text, method and status class (2xx … 5xx, failed). Select one for its overview, request and
 response headers, bodies (JSON pretty-printed) and timing (waiting for the headers, then reading the body). The
@@ -460,7 +460,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.5.1"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.9.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -527,7 +527,7 @@ Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`
 same API (its interceptor only passes requests on):
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.5.1"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.9.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -578,7 +578,7 @@ Three ways in, one set of tools:
 | Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking, RxJava tracking)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                                                                                                                                                                                                                                                                                                                           |
 | Network (always)           | `get_network` (the app's HTTP requests in the last 1/5/10 min: method, URL, status, timings, sizes, mocked; filter by method, status class, host, text), `get_network_request` (one request's headers and timings; its bodies only with `--allow-network-bodies`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `set_view_property` / `revert_view_properties` (change a View of the snapshot live, temporarily: visibility, alpha, padding, margins, size, translation, elevation, colors, TextView text and size; SDK 0.8.0+, during a session), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator`, `set_network_mock`, `clear_network_mocks` (mock responses or failures, see [Network](#network-requests-and-mocks)) |
+| Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `set_view_property` / `revert_view_properties` (change a View of the snapshot live, temporarily: visibility, alpha, padding, margins, size, translation, elevation, colors, TextView text and size; SDK 0.9.0+, during a session), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id or description), `screenshot` (720 px short edge), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `launch_app`, `boot_emulator`, `shutdown_emulator`, `set_network_mock`, `clear_network_mocks` (mock responses or failures, see [Network](#network-requests-and-mocks)) |
 
 **"Why is this button misaligned?"** Select the element in the dashboard's Layout Inspector (Inspect, then click
 it) and ask about "this element": the agent calls `get_inspector_selection` and gets what the Inspector tab
@@ -589,7 +589,7 @@ device control on, `inspect_screen` takes a snapshot itself (with a query to fin
 you see) and `select_inspector_node` points you at the node it means, marked **AI**. For a node the agent selected
 itself, `get_inspector_selection` returns its structure only (class, id, layout source, owner, bounds), never its
 text or an image: an agent without device control can't read the screen that way. Without the SDK in the app the
-snapshot comes from uiautomator, without layout sources or owners. With device control, SDK 0.8.0+ and a profiling
+snapshot comes from uiautomator, without layout sources or owners. With device control, SDK 0.9.0+ and a profiling
 session the agent can also try its fix on the running app: `set_view_property { nodeId, property: "padding", value: [16, 8, 16, 8] }`
 answers with the element as the next snapshot shows it, and `revert_view_properties` undoes it (the edits are
 temporary either way; see [Editing views live](#editing-views-live)).
@@ -799,7 +799,7 @@ protocol 1, and stalls and StrictMode are simply unavailable. The server drops i
 messages instead of closing the link. A 0.1.0 server only accepts
 protocol version 1 and closes the connection on unknown message types.
 
-The network inspector needs device protocol 7 on both sides (SDK and server 0.7.0 or later): with an older server
+The network inspector needs device protocol 7 on both sides (SDK and server 0.9.0 or later): with an older server
 the interceptor stays a pass-through, and an older SDK simply sends no requests. HTTP request and response lines
 may be up to 256 KB (other SDK lines keep the 64 KB cap), and the server's mock rules reach the SDK as flat lines of
 at most 512 KB.
@@ -826,7 +826,7 @@ their stack.
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and answers nothing (not even `welcome`) until the hello's PID is verified with `pidof` on the
   device it came from; every refusal looks the same, so a probe can't learn which app is being profiled. Each
-  device with an inspect-only link (0.5.2) gets its own gateway listener, so a link is always tied to its device;
+  device with an inspect-only link (0.9.0) gets its own gateway listener, so a link is always tied to its device;
   only debuggable apps are linked that way, and an Inspect only asks the app Android reports in the foreground.
   The `adb reverse tcp:8700` mapping for inspect links exists only while someone inspects that device, and is
   never taken from (or removed for) another running Lionscope server.
@@ -862,12 +862,12 @@ their stack.
   `android.permission.DUMP` (only the shell and the system hold it, so no other app can set the key). The welcome
   then carries an HMAC-SHA256 of a fresh nonce from the SDK's hello under that key, and the SDK records requests and
   accepts mock rules only when it checks out. An app listening on that port in place of the server therefore gets
-  no network data, can't inject mocks and can't edit views (0.8.0); it can still receive the screens, frames, stalls
+  no network data, can't inject mocks and can't edit views (0.9.0); it can still receive the screens, frames, stalls
   and Inspector view trees described above. Requests are kept in memory only (10 minutes, 32 MB) and never written to disk;
   bodies go to AI agents only with `--allow-network-bodies`. Mock rules are sent to the app only on its session link,
   are cleared when the session stops, and need `--allow-device-control` when an agent sets them (they change what
   the app sees).
-- Live view edits (0.8.0) reach only the app of the current Inspector snapshot, through the SDK link that captured
+- Live view edits (0.9.0) reach only the app of the current Inspector snapshot, through the SDK link that captured
   it, and only views of that app's latest capture (by a key the SDK gives each View object; a recreated view gets a
   new one). They change what the app does (a disabled button enabled, a label rewritten), so the SDK applies them only
   on a link with the link proof above (a profiling session) and answers anything else `unauthenticated`. The dashboard sends one only when you commit a field; agents need `--allow-device-control`. Values are
@@ -973,7 +973,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.5.1`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.9.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

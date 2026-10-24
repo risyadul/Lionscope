@@ -191,7 +191,7 @@ describe('which nodes get editors', () => {
 
     setup(inspectorSnapshot());
     expect(
-      within(attrs()).getByText('Update the app’s Lionscope SDK to 0.8.0 to edit views live.'),
+      within(attrs()).getByText('Update the app’s Lionscope SDK to 0.9.0 to edit views live.'),
     ).toBeTruthy();
     expect(within(attrs()).queryByRole('switch')).toBeNull();
   });
