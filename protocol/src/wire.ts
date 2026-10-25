@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -1132,6 +1132,37 @@ export function editableProperties(node: InspectorNode): ViewProperty[] {
 }
 
 // ---------------------------------------------------------------------------
+// Location (0.10.0): put a device somewhere else, like the Android Studio emulator's Location controls
+//
+// Emulators get the point as their GPS fix (gRPC setGps, or `adb emu geo fix` without gRPC): apps see a real
+// location. Physical devices (Android 12+) get it from test providers that `cmd location` adds for the shell
+// (`gps`, `network`, `fused`), refreshed every second: apps see `Location.isMock()` = true. The server removes
+// them again on Reset, when it stops, and (after a crash) the next time it sees the device.
+// ---------------------------------------------------------------------------
+
+/** How a location reaches the device: the emulator's own GPS, or Android's test (mock) location providers. */
+export type LocationMethod = 'emulator' | 'mock_provider';
+
+/** Physical devices need `cmd location` test providers, added in Android 12 (API 31). */
+export const MIN_MOCK_LOCATION_API = 31;
+
+/** A location Lionscope put on a device; it stays until it is reset, the device goes away or the server stops. */
+export interface DeviceLocation {
+  serial: string;
+  /** WGS 84 degrees: -90..90 and -180..180. */
+  latitude: number;
+  longitude: number;
+  method: LocationMethod;
+  /** When it was set (laptop epoch ms). */
+  since: number;
+  /**
+   * Something that keeps apps from seeing it, e.g. the device's location switch is off. Null when nothing is
+   * known to be wrong.
+   */
+  warning: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
@@ -1186,6 +1217,8 @@ export type ServerMessage =
       message?: string;
       liveEdits?: number;
     }
+  /** 0.10.0. Every location Lionscope has put on a device; sent on connect and on every change. */
+  | { type: 'locations'; locations: DeviceLocation[] }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -1208,6 +1241,7 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'httpExchange',
   'networkMocks',
   'viewEdit',
+  'locations',
   'error',
 ]);
 
@@ -1289,7 +1323,17 @@ export type ClientMessage =
       snapshotId: string;
       nodeId?: number;
       property?: ViewProperty | ViewPropertyGroup;
-    };
+    }
+  /**
+   * 0.10.0. Put `serial` at this point (WGS 84 degrees) until `clearLocation`. Answered with the `locations` broadcast,
+   * a refusal (a physical device below Android 12, one that refuses mock locations) with `setLocation_failed`.
+   */
+  | { type: 'setLocation'; serial: string; latitude: number; longitude: number }
+  /**
+   * 0.10.0. Undo `setLocation`: a physical device gets its real location back, an emulator the GPS fix it had before.
+   * Answered with the `locations` broadcast.
+   */
+  | { type: 'clearLocation'; serial: string };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

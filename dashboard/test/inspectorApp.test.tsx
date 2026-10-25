@@ -700,7 +700,7 @@ describe('device toolbar', () => {
     await push(snapshotMsg());
     expect(toolbar().contains(fps())).toBe(false);
     expect(within(toolbar()).queryByRole('button', { name: /Refresh/ })).toBeNull();
-    // Power, rotate x2, clipboard, screenshot, inspect, the size control and the emulator's shut down.
-    expect(toolbar().children).toHaveLength(8);
+    // Power, rotate x2, clipboard, location, screenshot, inspect, the size control and the emulator's shut down.
+    expect(toolbar().children).toHaveLength(9);
   });
 });

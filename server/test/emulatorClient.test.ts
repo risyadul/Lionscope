@@ -194,6 +194,17 @@ describe('EmulatorController client', () => {
     expect(emulator.vmStates).toEqual(['SHUTDOWN']);
   });
 
+  it('reads the GPS fix and moves it, without the Location window overriding it', async () => {
+    expect(await connect().getGps()).toEqual({ latitude: 37.422, longitude: -122.084 });
+    await client.setGps({ latitude: -6.2088, longitude: 106.8456 });
+    expect(emulator.gpsWrites.at(-1)).toMatchObject({
+      passiveUpdate: false,
+      latitude: -6.2088,
+      longitude: 106.8456,
+    });
+    expect(await client.getGps()).toEqual({ latitude: -6.2088, longitude: 106.8456 });
+  });
+
   it('refuses a proto without the EmulatorController service', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'lionscope-proto-'));
     try {

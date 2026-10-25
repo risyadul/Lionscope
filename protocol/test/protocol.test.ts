@@ -210,6 +210,35 @@ describe('Inspector client messages', () => {
   });
 });
 
+describe('location messages', () => {
+  it('parses setLocation and clearLocation', () => {
+    for (const message of [
+      { type: 'setLocation', serial: 'emulator-5554', latitude: -6.2088, longitude: 106.8456 },
+      { type: 'setLocation', serial: 'R58M123ABC', latitude: 90, longitude: -180 },
+      { type: 'clearLocation', serial: 'R58M123ABC' },
+    ]) {
+      expect(parseClientMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+    }
+  });
+
+  it('rejects coordinates out of range or not numbers, bad serials and extra fields', () => {
+    for (const message of [
+      { type: 'setLocation', serial: 'emulator-5554', latitude: 90.1, longitude: 0 },
+      { type: 'setLocation', serial: 'emulator-5554', latitude: 0, longitude: -180.5 },
+      { type: 'setLocation', serial: 'emulator-5554', latitude: '1', longitude: 0 },
+      { type: 'setLocation', serial: 'emulator-5554', latitude: 0 },
+      { type: 'setLocation', serial: 'emulator-5554; reboot', latitude: 0, longitude: 0 },
+      { type: 'setLocation', serial: 'emulator-5554', latitude: 0, longitude: 0, accuracy: 3 },
+      { type: 'clearLocation' },
+    ]) {
+      expect(parseClientMessage(JSON.stringify(message)).ok).toBe(false);
+    }
+    expect(
+      parseClientMessage('{"type":"setLocation","serial":"emulator-5554","latitude":1e999,"longitude":0}').ok,
+    ).toBe(false);
+  });
+});
+
 describe('emulator messages', () => {
   it.each(['Pixel_9a', 'Medium_Phone_API_36.1', 'tv-1080p', 'a'])('accepts the AVD name %s', (name) => {
     expect(isValidAvdName(name)).toBe(true);

@@ -9,6 +9,7 @@ import type {
   GatewayEmulators,
   GatewayInspectLinks,
   GatewayInspector,
+  GatewayLocations,
   GatewayManager,
   GatewayViewEdits,
   WsGateway,
@@ -136,6 +137,7 @@ describe('WebSocket gateway back-pressure', () => {
       'httpExchange',
       'inspection',
       'inspectorSelection',
+      'locations',
       'networkMocks',
       'session',
       'snapshot',
@@ -342,7 +344,7 @@ describe('WebSocket gateway Inspector', () => {
     await withGateway({ ...inspector, current: snapshot, selection }, async (port) => {
       const client = await Client.open(port);
       expect(await client.waitFor('inspectorSelection')).toEqual({ type: 'inspectorSelection', selection });
-      const types = client.messages.map((message) => message.type);
+      const types = client.messages.map((message) => message.type).filter((type) => type !== 'locations');
       expect(types.slice(-2)).toEqual(['inspection', 'inspectorSelection']);
       client.close();
     });
@@ -624,6 +626,91 @@ describe('WebSocket gateway network', () => {
         message: 'message too large',
       });
       expect(client.messages.filter((message) => message.type === 'error')).toHaveLength(2);
+      client.close();
+    });
+  });
+});
+
+describe('WebSocket gateway locations', () => {
+  async function withGateway(
+    locations: GatewayLocations | undefined,
+    run: (port: number) => Promise<void>,
+  ): Promise<void> {
+    const server = createServer();
+    let port = 0;
+    const gateway = createWsGateway({
+      server,
+      manager,
+      emulators,
+      inspector,
+      ...(locations ? { locations } : {}),
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    try {
+      await run(port);
+    } finally {
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  const location = {
+    serial: 'emulator-5554',
+    latitude: -6.2,
+    longitude: 106.8,
+    method: 'emulator' as const,
+    since: 1,
+    warning: null,
+  };
+
+  it('sends the locations on connect and passes set and clear on, with refusals to the sender', async () => {
+    const calls: unknown[] = [];
+    const locations: GatewayLocations = {
+      getLocations: () => [location],
+      setLocation: async (serial, point) => {
+        calls.push(['set', serial, point]);
+        if (point.latitude === 0) throw new PublicError('The device refused mock locations: nope');
+        return location;
+      },
+      clearLocation: async (serial) => {
+        calls.push(['clear', serial]);
+        return true;
+      },
+    };
+    await withGateway(locations, async (port) => {
+      const client = await Client.open(port);
+      expect(await client.waitFor('locations')).toEqual({ type: 'locations', locations: [location] });
+      client.send({ type: 'setLocation', serial: 'emulator-5554', latitude: -6.2, longitude: 106.8 });
+      client.send({ type: 'clearLocation', serial: 'emulator-5554' });
+      client.send({ type: 'setLocation', serial: 'emulator-5554', latitude: 0, longitude: 0 });
+      expect(await client.waitFor('error')).toEqual({
+        type: 'error',
+        code: 'setLocation_failed',
+        message: 'The device refused mock locations: nope',
+      });
+      expect(calls).toEqual([
+        ['set', 'emulator-5554', { latitude: -6.2, longitude: 106.8 }],
+        ['clear', 'emulator-5554'],
+        ['set', 'emulator-5554', { latitude: 0, longitude: 0 }],
+      ]);
+      // Out of range: refused before it reaches the service.
+      client.send({ type: 'setLocation', serial: 'emulator-5554', latitude: 91, longitude: 0 });
+      expect(await client.waitFor('error', (message) => message.code === 'bad_request')).toBeTruthy();
+      expect(calls).toHaveLength(3);
+      client.close();
+    });
+  });
+
+  it('refuses locations without a location service, and sends an empty list', async () => {
+    await withGateway(undefined, async (port) => {
+      const client = await Client.open(port);
+      expect(await client.waitFor('locations')).toEqual({ type: 'locations', locations: [] });
+      client.send({ type: 'clearLocation', serial: 'emulator-5554' });
+      expect(await client.waitFor('error')).toMatchObject({ code: 'clearLocation_failed' });
       client.close();
     });
   });

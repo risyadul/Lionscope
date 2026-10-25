@@ -6,6 +6,7 @@ import type {
   AppInfo,
   CpuSample,
   DeviceInfo,
+  DeviceLocation,
   EmulatorInfo,
   FrameBreakdownSample,
   FrameSample,
@@ -114,6 +115,10 @@ export interface DashboardState {
   networkMocks: NetworkMocksState | null;
   /** The latest refused `setNetworkMock`, for the mock editor (it also shows as `lastError`). */
   mockError: ServerError | null;
+  /** Locations Lionscope put on devices (0.10.0); null until the server sends them (older servers never do). */
+  locations: DeviceLocation[] | null;
+  /** The latest refused `setLocation` / `clearLocation`, for the Location panel (it also shows as `lastError`). */
+  locationError: ServerError | null;
   /** The latest answers to this client's live view edits, oldest first (at most MAX_VIEW_EDIT_ANSWERS). */
   viewEditAnswers: ViewEditAnswer[];
   /** Count of `viewEdit` messages: the answers past the one a reader saw last are the newest ones. */
@@ -148,6 +153,10 @@ export const ADB_UNAVAILABLE_CODE = 'adb_unavailable';
 export const SDK_LINK_UNAVAILABLE_CODE = 'sdk_link_unavailable';
 /** The server refused a `setNetworkMock` (no session, too many rules, an unknown id, …). */
 export const SET_NETWORK_MOCK_FAILED_CODE = 'setNetworkMock_failed';
+export const LOCATION_FAILED_CODES: ReadonlySet<string> = new Set([
+  'setLocation_failed',
+  'clearLocation_failed',
+]);
 /** Mirrors the server's span buffer cap; the oldest spans go first. */
 export const MAX_SCREEN_SPANS = 2000;
 /** Caps on the stall / StrictMode buffers (the oldest go first); the server's byte limits are tighter. */
@@ -199,6 +208,8 @@ export function createInitialState(): DashboardState {
     httpDetail: null,
     networkMocks: null,
     mockError: null,
+    locations: null,
+    locationError: null,
     viewEditAnswers: [],
     viewEditSeq: 0,
     latestTs: 0,
@@ -690,6 +701,8 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return { ...state, httpDetail: { id: msg.id, exchange: msg.exchange } };
     case 'networkMocks':
       return { ...state, networkMocks: msg.mocks };
+    case 'locations':
+      return { ...state, locations: msg.locations };
     case 'viewEdit': {
       const { type: _type, ...answer } = msg;
       return {
@@ -705,7 +718,9 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       const adbUnavailable = msg.code === ADB_UNAVAILABLE_CODE ? msg.message : state.adbUnavailable;
       const sdkLinkError = msg.code === SDK_LINK_UNAVAILABLE_CODE ? msg.message : state.sdkLinkError;
       const mockError = msg.code === SET_NETWORK_MOCK_FAILED_CODE ? lastError : state.mockError;
-      return { ...state, lastError, errorSeq: id, adbUnavailable, sdkLinkError, mockError };
+      const locationError =
+        msg.code !== undefined && LOCATION_FAILED_CODES.has(msg.code) ? lastError : state.locationError;
+      return { ...state, lastError, errorSeq: id, adbUnavailable, sdkLinkError, mockError, locationError };
     }
   }
 }

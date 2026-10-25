@@ -3,6 +3,7 @@ import type {
   EmulatorClient,
   EmulatorRpcError,
   FrameStreamHandlers,
+  GpsPoint,
   InputStream,
   ScreenFrame,
 } from '../../src/emulator/emulatorClient.ts';
@@ -141,6 +142,22 @@ export class FakeEmulatorClient implements EmulatorClient {
   async setRotationZ(z: number): Promise<void> {
     this.rotations.push(z);
     this.rotationZ = z;
+  }
+
+  gps: GpsPoint = { latitude: 37.422, longitude: -122.084 };
+  /** setGps calls, in order; `gpsFailure` makes getGps and setGps fail. */
+  readonly gpsSets: GpsPoint[] = [];
+  gpsFailure: Error | null = null;
+
+  async getGps(): Promise<GpsPoint> {
+    if (this.gpsFailure) throw this.gpsFailure;
+    return this.gps;
+  }
+
+  async setGps(point: GpsPoint): Promise<void> {
+    if (this.gpsFailure) throw this.gpsFailure;
+    this.gpsSets.push(point);
+    this.gps = point;
   }
 
   shutdown(): Promise<void> {

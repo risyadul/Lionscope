@@ -75,9 +75,21 @@ export interface EmulatorClient {
    * in the guest or by another client (never this client's own setClipboard).
    */
   streamClipboard(handlers: ClipboardStreamHandlers): { cancel(): void };
+  /** The GPS fix the emulator reports, in WGS 84 degrees. */
+  getGps(): Promise<GpsPoint>;
+  /**
+   * Move the GPS fix (also stops the emulator's Location window, when it has one, from overriding it every second
+   * with its own point).
+   */
+  setGps(point: GpsPoint): Promise<void>;
   /** Graceful shutdown (saves the Quick Boot snapshot unless the emulator runs with -no-snapshot-save). */
   shutdown(): Promise<void>;
   close(): void;
+}
+
+export interface GpsPoint {
+  latitude: number;
+  longitude: number;
 }
 
 export type EmulatorClientFactory = (endpoint: GrpcEndpoint) => EmulatorClient;
@@ -109,6 +121,8 @@ interface RawController extends grpc.Client {
   setClipboard: UnaryMethod<object>;
   streamClipboard(request: object, metadata: grpc.Metadata): grpc.ClientReadableStream<{ text?: string }>;
   setVmState: UnaryMethod<object>;
+  getGps: UnaryMethod<{ latitude?: number; longitude?: number }>;
+  setGps: UnaryMethod<object>;
   streamScreenshot(request: object, metadata: grpc.Metadata): grpc.ClientReadableStream<RawImage>;
   streamInputEvent(
     metadata: grpc.Metadata,
@@ -286,6 +300,14 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
             stream.cancel();
           },
         };
+      },
+      async getGps() {
+        const gps = await unary('getGps', raw.getGps, {});
+        return { latitude: gps.latitude ?? 0, longitude: gps.longitude ?? 0 };
+      },
+      async setGps({ latitude, longitude }) {
+        // passiveUpdate false: the Location window (an emulator with a window) no longer resends its own point.
+        await unary('setGps', raw.setGps, { passiveUpdate: false, latitude, longitude, satellites: 12 });
       },
       async shutdown() {
         await unary('setVmState', raw.setVmState, { state: 'SHUTDOWN' });

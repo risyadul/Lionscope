@@ -12,6 +12,7 @@ import {
   tapTool,
 } from './deviceTools.ts';
 import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
+import { clearLocationTool, getLocationTool, setLocationTool } from './locationTools.ts';
 import { revertViewPropertiesTool, setViewPropertyTool } from './viewEditTools.ts';
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
 import { logcatTool } from './logTools.ts';
@@ -43,6 +44,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   logcatTool,
   networkTool,
   networkRequestTool,
+  getLocationTool,
   startSessionTool,
   stopSessionTool,
   sdkOptionsTool,
@@ -61,6 +63,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   launchAppTool,
   setNetworkMockTool,
   clearNetworkMocksTool,
+  setLocationTool,
+  clearLocationTool,
   bootEmulatorTool,
   shutdownEmulatorTool,
 ];

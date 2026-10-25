@@ -117,3 +117,10 @@ export const InspectIcon = () => (
     <path d="M5.5 5.5l5 1.8-2.1.9-.9 2.1z" />
   </Icon>
 );
+
+export const PinIcon = () => (
+  <Icon>
+    <path d="M7 12.5s3.75-3.6 3.75-6.6a3.75 3.75 0 0 0-7.5 0c0 3 3.75 6.6 3.75 6.6z" />
+    <circle cx="7" cy="5.9" r="1.3" />
+  </Icon>
+);

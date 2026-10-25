@@ -17,6 +17,7 @@ import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
+import type { LocationService } from '../location/locationService.ts';
 import type { ViewEditOutcome, ViewEdits } from '../inspector/viewEdits.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 
@@ -109,6 +110,9 @@ export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
 /** What the gateway needs from the live view edits. */
 export type GatewayViewEdits = Pick<ViewEdits, 'set' | 'revert'>;
 
+/** What the gateway needs from the device locations. */
+export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
+
 export interface WsGatewayOptions {
   server: Server;
   manager: GatewayManager;
@@ -118,6 +122,8 @@ export interface WsGatewayOptions {
   inspectLinks?: GatewayInspectLinks;
   /** Live view edits (`setViewProperty` / `revertViewProperties`); omitted = they are refused. */
   viewEdits?: GatewayViewEdits;
+  /** Device locations (`setLocation` / `clearLocation`); omitted = they are refused. */
+  locations?: GatewayLocations;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -149,6 +155,8 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   clearNetworkMocks: 'Could not remove the mock rules',
   setViewProperty: 'Could not edit the view',
   revertViewProperties: 'Could not revert the edits',
+  setLocation: 'Could not change the location',
+  clearLocation: 'Could not reset the location',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -165,6 +173,7 @@ function viewEditMessage(requestId: number, outcome: ViewEditOutcome): ServerMes
   };
 }
 export const NO_SESSION_MESSAGE = 'No profiling session: start one before changing SDK options';
+export const NO_LOCATIONS_MESSAGE = 'This server cannot change device locations';
 
 export function createWsGateway(options: WsGatewayOptions): WsGateway {
   const { server, manager, emulators, inspector } = options;
@@ -300,6 +309,18 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         await answerEdit(ws, requestId, (edits) => edits.revert({ snapshotId, nodeId, property }));
         return;
       }
+      case 'setLocation': {
+        // Answered by the `locations` broadcast (a refusal by `setLocation_failed` to this client).
+        if (!options.locations) throw new PublicError(NO_LOCATIONS_MESSAGE);
+        const { serial, latitude, longitude } = message;
+        await options.locations.setLocation(serial, { latitude, longitude });
+        return;
+      }
+      case 'clearLocation':
+        // Answered by the `locations` broadcast (none when no location was set there).
+        if (!options.locations) throw new PublicError(NO_LOCATIONS_MESSAGE);
+        await options.locations.clearLocation(message.serial);
+        return;
     }
   };
 
@@ -357,6 +378,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     const inspection = inspector.current;
     if (inspection) send(ws, { type: 'inspection', snapshot: inspection });
     send(ws, { type: 'inspectorSelection', selection: inspector.selection });
+    send(ws, { type: 'locations', locations: options.locations?.getLocations() ?? [] });
   });
 
   const pingTimer = setInterval(() => {
