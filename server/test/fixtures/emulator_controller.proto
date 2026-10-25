@@ -36,6 +36,18 @@ service EmulatorController {
     rpc setVmState(VmRunState) returns (google.protobuf.Empty) {}
     rpc getDisplayConfigurations(google.protobuf.Empty)
             returns (DisplayConfigurations) {}
+    rpc setGps(GpsState) returns (google.protobuf.Empty) {}
+    rpc getGps(google.protobuf.Empty) returns (GpsState) {}
+}
+
+message GpsState {
+    bool passiveUpdate = 1;
+    double latitude = 2;
+    double longitude = 3;
+    double speed = 4;
+    double bearing = 5;
+    double altitude = 6;
+    int32 satellites = 7;
 }
 
 message VmRunState {

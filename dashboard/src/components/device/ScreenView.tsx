@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { ScreenErrorCode, ScreenNavButton, ScreenSize } from '@lionscope/protocol/wire';
 import { DEFAULT_SCREEN_SIZE, SCREEN_SIZES } from '@lionscope/protocol/wire';
 import { useElementSize } from '../../hooks/useElementSize.ts';
@@ -15,6 +15,7 @@ import {
   ClipboardIcon,
   HomeIcon,
   InspectIcon,
+  PinIcon,
   PowerIcon,
   RecentsIcon,
   RotateLeftIcon,
@@ -22,6 +23,8 @@ import {
 } from './icons.tsx';
 import { InspectorOverlay } from '../inspector/InspectorOverlay.tsx';
 import { useInspectorContext } from '../inspector/InspectorContext.tsx';
+import { useLocationContext } from '../location/LocationContext.tsx';
+import { LocationPanel } from '../location/LocationPanel.tsx';
 import { ClipboardToast } from './ClipboardToast.tsx';
 import { useClipboardShare } from './useClipboardShare.ts';
 import { useScreenInput } from './useScreenInput.ts';
@@ -52,12 +55,27 @@ type ToolButtonProps = {
   /** Tooltip, when it should say more than the label. */
   title?: string;
   className?: string;
+  id?: string;
+  /** The id of the element it opens (with `isPressed` saying whether it is open). */
+  controls?: string;
 };
 
-export function ToolButton({ label, icon, disabled, onClick, isPressed, title, className }: ToolButtonProps) {
+export function ToolButton({
+  label,
+  icon,
+  disabled,
+  onClick,
+  isPressed,
+  title,
+  className,
+  id,
+  controls,
+}: ToolButtonProps) {
   return (
     <button
+      id={id}
       type="button"
+      aria-controls={controls}
       className={`btn btn--icon device-tool${className ? ` ${className}` : ''}`}
       aria-label={label}
       aria-pressed={isPressed}
@@ -186,6 +204,15 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
     streamEvents.current = { onOpen: onSocketOpen, onClipboard: onRemoteClipboard };
   }, [onSocketOpen, onRemoteClipboard]);
   const inspector = useInspectorContext();
+  const locations = useLocationContext();
+  const [isLocationOpen, setLocationOpen] = useState(false);
+  const locationId = useId();
+  const closeLocation = () => {
+    setLocationOpen(false);
+    // Closed from inside the panel (Esc, ×): focus goes back to its button rather than to the page.
+    document.getElementById(`${locationId}-button`)?.focus();
+  };
+  const isLocationSet = locations?.locations?.some((location) => location.serial === serial) ?? false;
   const frozen = inspector !== null && inspector.isActive ? inspector.snapshot : null;
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
@@ -235,6 +262,23 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
           isPressed={clipboard.isEnabled}
           onClick={() => clipboard.setEnabled(!clipboard.isEnabled)}
         />
+        {locations !== null && (
+          <ToolButton
+            label="Location"
+            title={
+              isLocationSet
+                ? `Location changed by Lionscope: open to move or reset it`
+                : `Change the ${kind}’s location`
+            }
+            icon={<PinIcon />}
+            disabled={false}
+            isPressed={isLocationOpen}
+            id={`${locationId}-button`}
+            controls={isLocationOpen ? `${locationId}-panel` : undefined}
+            className={`device-location${isLocationSet ? ' is-set' : ''}`}
+            onClick={() => setLocationOpen(!isLocationOpen)}
+          />
+        )}
         <ToolButton
           label="Screenshot"
           icon={<CameraIcon />}
@@ -264,6 +308,18 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
         />
         {endTool}
       </div>
+      {locations !== null && isLocationOpen && (
+        <div className="loc-anchor">
+          <LocationPanel
+            id={`${locationId}-panel`}
+            serial={serial}
+            label={label}
+            kind={kind}
+            controller={locations}
+            onClose={closeLocation}
+          />
+        </div>
+      )}
 
       <div ref={stageRef} className="device-stage">
         <div className="device-bezel" data-orientation={orientation} data-status={state.status}>

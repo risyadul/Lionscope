@@ -58,6 +58,9 @@ export class FakeEmulator {
   clipboard = 'initial clip';
   readonly clipboardSets: string[] = [];
   readonly clipboardCalls: grpc.ServerWritableStream<object, object>[] = [];
+  /** The GPS fix (the emulator's default is the Googleplex), and every setGps request. */
+  gps = { latitude: 37.422, longitude: -122.084 };
+  readonly gpsWrites: Record<string, unknown>[] = [];
   private server: grpc.Server | null = null;
 
   async start(): Promise<number> {
@@ -180,6 +183,12 @@ export class FakeEmulator {
         this.rotationZ = z;
         const skins = ['PORTRAIT', 'LANDSCAPE', 'REVERSE_PORTRAIT', 'REVERSE_LANDSCAPE'] as const;
         this.rotation = skins[(((Math.round(z / 90) % 4) + 4) % 4) as 0 | 1 | 2 | 3];
+        return {};
+      }),
+      getGps: unary(() => ({ passiveUpdate: true, ...this.gps, satellites: 4 })),
+      setGps: unary((request) => {
+        this.gpsWrites.push(request);
+        this.gps = { latitude: Number(request.latitude), longitude: Number(request.longitude) };
         return {};
       }),
       setVmState: unary((request) => {

@@ -3,7 +3,8 @@ import type { ServerResponse } from 'node:http';
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "connect-src 'self' ws://localhost:* ws://127.0.0.1:*",
-  "img-src 'self' data:",
+  // The Location panel's map: OpenStreetMap tiles, loaded only while it is open.
+  "img-src 'self' data: https://tile.openstreetmap.org",
   "style-src 'self'",
   "font-src 'self'",
   "object-src 'none'",

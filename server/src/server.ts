@@ -13,6 +13,7 @@ import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway, SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
 import { InspectLinks } from './device/inspectLinks.ts';
+import { LocationService } from './location/locationService.ts';
 import { createEmulatorHost } from './emulator/emulatorHost.ts';
 import type { EmulatorHost } from './emulator/emulatorHost.ts';
 import { EmulatorManager } from './emulator/emulatorManager.ts';
@@ -101,6 +102,14 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     pollMs: options.emulatorPollMs,
     stopSessionOn: (serial) => manager.stopSessionOn(serial),
   });
+  const locations = new LocationService({
+    adb: options.adb,
+    emulatorClient: (serial) => {
+      const target = emulators.mirrorTarget(serial);
+      return target.ok && emulatorHost.createClient ? emulatorHost.createClient(target.endpoint) : null;
+    },
+    broadcast: (message) => gateway?.broadcast(message),
+  });
   // Every inspect-only listener shares one hello budget (the session gateway keeps its own: inspect traffic must
   // not starve the session's app).
   const sharedHellos = new TokenBucket(SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND);
@@ -115,7 +124,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     adb: options.adb,
     broadcast: (message) => {
       // A change in the adb device list can be an emulator starting or stopping.
-      if (message.type === 'devices') emulators.setDevices(message.devices);
+      if (message.type === 'devices') {
+        emulators.setDevices(message.devices);
+        locations.setDevices(message.devices);
+      }
       gateway?.broadcast(message);
     },
     devicePollMs: options.devicePollMs,
@@ -157,6 +169,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     emulators,
     inspector,
     viewEdits,
+    locations,
     adb: options.adb,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
@@ -226,6 +239,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     inspector,
     inspectLinks,
     viewEdits,
+    locations,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,
@@ -294,9 +308,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
-      // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, and the emulators
-      // this server booted.
+      // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, the emulators
+      // this server booted, and the real locations of physical devices.
       await Promise.all([
+        locations.close(),
         screenGateway.close(),
         uiHelper.close(),
         inspectLinks.close(),

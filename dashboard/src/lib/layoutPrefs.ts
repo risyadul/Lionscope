@@ -11,6 +11,9 @@ export const LAYOUT_KEYS = {
   clipboardShare: 'lionscope.layout.clipboardShare',
   viewMode: 'lionscope.layout.viewMode',
   stallsBreakdown: 'lionscope.layout.stallsBreakdown',
+  /** The point last sent from the Location panel, and the places saved there. */
+  locationLast: 'lionscope.location.last',
+  locationPlaces: 'lionscope.location.places',
 } as const;
 
 function storage(): Storage | null {

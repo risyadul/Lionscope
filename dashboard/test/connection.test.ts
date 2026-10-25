@@ -102,6 +102,7 @@ describe('parseServerMessage', () => {
       httpExchange: true,
       networkMocks: true,
       viewEdit: true,
+      locations: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

@@ -150,6 +150,33 @@
   color: var(--ink);
 }
 
+/* Location: a dot while Lionscope has moved the device. */
+.device-location {
+  position: relative;
+}
+
+.device-location.is-set {
+  color: var(--event);
+}
+
+.device-location[aria-pressed='true'] {
+  border-color: var(--event);
+  background: var(--event-wash);
+  color: var(--ink);
+}
+
+.device-location.is-set::after {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid var(--surface);
+  border-radius: 50%;
+  background: var(--event);
+  content: '';
+}
+
 /* Shut down the emulator: the toolbar's last tool, past the fps readout, apart from the device keys. */
 .device-shutdown:hover:not(:disabled) {
   color: var(--critical);
@@ -183,8 +210,8 @@
   color: var(--ink-muted);
 }
 
-/* The toolbar is one row of up to 7 tools (power, rotate x2, clipboard, screenshot, inspect, shut down) and the
-   frame-size control: about 356 px at full size. Below that the column (296 px at the narrowest, also in the phone
+/* The toolbar is one row of up to 8 tools (power, rotate x2, clipboard, location, screenshot, inspect, shut down) and
+   the frame-size control: about 386 px at full size. Below that the column (296 px at the narrowest, also in the phone
    drawer) tightens in two steps; the fps readout lives under the screen, so it never competes for this row. */
 @container device-screen (max-width: 360px) {
   .device-toolbar {
@@ -209,12 +236,19 @@
 
 @container device-screen (max-width: 316px) {
   .device-toolbar .device-tool {
-    width: 24px;
+    width: 22px;
   }
 
   .device-size > button {
-    min-width: 24px;
+    min-width: 22px;
     padding: 0 2px;
+  }
+}
+
+/* The phone drawer at 320 px. */
+@container device-screen (max-width: 290px) {
+  .device-toolbar {
+    padding-inline: 6px;
   }
 }
 

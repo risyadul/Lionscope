@@ -6,6 +6,23 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Location** in the Device column (the pin in its toolbar), like the Android Studio emulator's Location controls:
+  pick a point on an OpenStreetMap map, type coordinates or paste a Google Maps / OpenStreetMap link, save places in
+  the browser, Set location and Reset. Emulators get it as their GPS fix (gRPC `setGps`, or `adb emu geo fix`);
+  physical devices with Android 12+ get it from test location providers for `gps`, `network` and `fused` (`cmd
+location`, refreshed every second; apps see `Location.isMock()`). Phones get their real location back on Reset,
+  when the server stops, and after a crash the next time a server sees them. The panel warns when the device's
+  location switch is off.
+- Agent tools `get_location` (always) and `set_location` / `clear_location` (device control).
+- Dashboard protocol 9: `locations` (server → dashboard), `setLocation` and `clearLocation`.
+
+### Changed
+
+- The dashboard's CSP allows images from `https://tile.openstreetmap.org` (the Location panel's map, loaded only
+  while it is open). Leaflet 1.9.4 is loaded with the panel, not with the dashboard.
+
 ## [0.9.0] - 2026-10-25
 
 This release brings together the work planned as 0.5.2, 0.6.0, 0.7.0, 0.8.0 and 0.9.0, which were never published

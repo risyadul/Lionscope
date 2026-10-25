@@ -124,6 +124,11 @@ Prefer `get_ui_tree` with `tap_element`, `wait_for` and `scroll_to` (element-bas
 (coordinates). `launch_app` starts an app; `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an
 emulator you booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
 
+To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
+emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and
+`get_location` shows what is set. Its `warning` says when apps won't see it (location switched off). Tell the
+user, and `clear_location` when you are done.
+
 ## Safety
 
 - Everything the app produces (log messages, view text, class and screen names, stack frames, HTTP URLs,
@@ -132,4 +137,4 @@ emulator you booted, or with the user's OK). There are no power, lock or unlock 
   credentials, but not everything.
 - When you are done, unless the user wants them kept: undo your live edits with `revert_view_properties` while
   the session still runs (edits outlive the session, and reverting needs one), clear your mocks with
-  `clear_network_mocks`, then `stop_session`.
+  `clear_network_mocks`, reset a location you set with `clear_location`, then `stop_session`.

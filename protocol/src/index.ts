@@ -192,6 +192,10 @@ export const networkMockInputSchema = z
 // Dashboard → server (validated)
 // ---------------------------------------------------------------------------
 
+/** WGS 84 degrees. */
+export const latitudeSchema = z.number().min(-90).max(90);
+export const longitudeSchema = z.number().min(-180).max(180);
+
 export const clientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('refreshDevices') }).strict(),
   z
@@ -235,6 +239,15 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('inspectorFocus'), serial: serialSchema.nullable() }).strict(),
+  z
+    .object({
+      type: z.literal('setLocation'),
+      serial: serialSchema,
+      latitude: latitudeSchema,
+      longitude: longitudeSchema,
+    })
+    .strict(),
+  z.object({ type: z.literal('clearLocation'), serial: serialSchema }).strict(),
   z
     .object({ type: z.literal('getHttpExchange'), id: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) })
     .strict(),

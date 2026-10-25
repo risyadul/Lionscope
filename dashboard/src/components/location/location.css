@@ -1,0 +1,384 @@
+/* Location panel: over the device stage, under the toolbar, as wide as the column. */
+
+.loc-anchor {
+  position: relative;
+  z-index: 20;
+  flex: none;
+  height: 0;
+}
+
+.loc-panel {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  left: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: min(640px, calc(100vh - var(--topbar-h) - 120px));
+  padding: var(--space-3);
+  overflow-y: auto;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  transform-origin: top center;
+  animation: loc-in 160ms var(--ease-out) both;
+}
+
+@keyframes loc-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-panel {
+    animation: none;
+  }
+}
+
+.loc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.loc-title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+/* How the point reaches the device: the emulator's GPS, or a phone's mock providers. */
+.loc-kind {
+  padding: 1px 6px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-overline);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.loc-close {
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+/* Map ---------------------------------------------------------------------------- */
+
+.loc-map-frame {
+  position: relative;
+  flex: none;
+  height: 220px;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+}
+
+.loc-map {
+  width: 100%;
+  height: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+}
+
+.loc-map-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+  text-align: center;
+}
+
+/* Leaflet's own chrome, toned to the instrument (`.loc-map.leaflet-container` outranks leaflet.css, which loads later). */
+.loc-map.leaflet-container {
+  background: var(--surface-sunk);
+  cursor: crosshair;
+}
+
+.loc-map.leaflet-container .leaflet-control-zoom a {
+  color: var(--ink);
+}
+
+.loc-map.leaflet-container .leaflet-control-attribution {
+  font-size: 10px;
+}
+
+.loc-map.leaflet-container .leaflet-control-attribution a {
+  color: var(--ink-2);
+}
+
+/* OSM tiles are light only: darkened (not inverted, so parks stay green and water blue) in the dark theme. */
+@media (prefers-color-scheme: dark) {
+  .loc-map.leaflet-container .leaflet-tile-pane {
+    filter: brightness(0.72) contrast(1.08) saturate(0.85);
+  }
+
+  .loc-map.leaflet-container .leaflet-control-zoom a,
+  .loc-map.leaflet-container .leaflet-control-attribution {
+    background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+    color: var(--ink);
+  }
+}
+
+/* Pins: the point to send (draggable, focus blue) and the device's set location (event violet). */
+.loc-pin {
+  background: none;
+  border: none;
+}
+
+.loc-pin-head {
+  position: absolute;
+  top: 0;
+  left: 1px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--surface-raised);
+  border-radius: 50% 50% 50% 0;
+  background: var(--focus);
+  box-shadow: 0 2px 6px rgba(17, 20, 24, 0.35);
+  transform: rotate(-45deg) translate(-2px, 2px);
+}
+
+.loc-pin-head::after {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  content: '';
+}
+
+.loc-pin--draft {
+  cursor: grab;
+}
+
+.loc-pin--active .loc-pin-head {
+  background: var(--event);
+}
+
+/* Input ---------------------------------------------------------------------------- */
+
+.loc-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.loc-label {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.loc-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.loc-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+.loc-input:focus-visible {
+  border-color: var(--focus);
+  outline: 2px solid color-mix(in srgb, var(--focus) 30%, transparent);
+  outline-offset: 0;
+}
+
+.loc-input[aria-invalid='true'] {
+  border-color: var(--critical);
+}
+
+.loc-set {
+  flex: none;
+}
+
+.loc-error,
+.loc-warning,
+.loc-meta {
+  margin: 0;
+  font-size: var(--text-meta);
+  line-height: 1.45;
+}
+
+.loc-error {
+  color: var(--critical);
+}
+
+.loc-warning {
+  color: var(--jank-text);
+}
+
+.loc-meta {
+  color: var(--ink-muted);
+}
+
+/* Status ---------------------------------------------------------------------------- */
+
+.loc-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--rule-strong);
+  background: var(--surface-sunk);
+}
+
+.loc-status[data-state='set'] {
+  border-left-color: var(--event);
+  background: var(--event-wash);
+}
+
+.loc-status-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-small);
+}
+
+.loc-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+}
+
+.loc-status[data-state='set'] .loc-dot {
+  background: var(--event);
+}
+
+.loc-coords {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.loc-reset--force {
+  align-self: flex-start;
+  margin-left: 0;
+}
+
+.loc-reset {
+  flex: none;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+/* Saved places ---------------------------------------------------------------------- */
+
+.loc-places {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.loc-places-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.loc-places-head .overline {
+  margin: 0;
+}
+
+.loc-save {
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+.loc-place-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.loc-place {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--rule);
+}
+
+.loc-place-pick {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 6px var(--space-1);
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-small);
+  text-align: left;
+  cursor: pointer;
+}
+
+.loc-place-pick:hover {
+  background: var(--hover-wash);
+}
+
+.loc-place-pick:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.loc-place[data-current] .loc-place-name {
+  font-weight: 600;
+}
+
+.loc-place-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loc-place .loc-coords {
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.loc-place-remove {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.loc-place-remove:hover:not(:disabled) {
+  color: var(--critical);
+}
