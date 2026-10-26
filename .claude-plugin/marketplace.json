@@ -10,7 +10,7 @@
       "name": "lionscope",
       "source": "./",
       "description": "Profile and inspect an Android app: the Lionscope MCP server (read tools and sessions) and its skill",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "author": { "name": "risyadul" },
       "homepage": "https://github.com/risyadul/Lionscope",
       "repository": "https://github.com/risyadul/Lionscope",
@@ -18,14 +18,14 @@
       "keywords": ["android", "profiler", "layout-inspector", "mcp"],
       "skills": ["./skills/lionscope"],
       "mcpServers": {
-        "lionscope": { "command": "npx", "args": ["-y", "lionscope@0.9.0", "mcp"] }
+        "lionscope": { "command": "npx", "args": ["-y", "lionscope@0.10.0", "mcp"] }
       }
     },
     {
       "name": "lionscope-device-control",
       "source": "./",
       "description": "The same, plus the device tools: taps, screenshots, Inspector snapshots, live view edits, HTTP mocks, emulators",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "author": { "name": "risyadul" },
       "homepage": "https://github.com/risyadul/Lionscope",
       "repository": "https://github.com/risyadul/Lionscope",
@@ -33,7 +33,7 @@
       "keywords": ["android", "profiler", "layout-inspector", "mcp", "device-control"],
       "skills": ["./skills/lionscope"],
       "mcpServers": {
-        "lionscope": { "command": "npx", "args": ["-y", "lionscope@0.9.0", "mcp", "--allow-device-control"] }
+        "lionscope": { "command": "npx", "args": ["-y", "lionscope@0.10.0", "mcp", "--allow-device-control"] }
       }
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "lionscope-workspace",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Lionscope — lightweight Android profiler and Layout Inspector in your browser, with MCP tools for AI agents",
   "license": "Apache-2.0",

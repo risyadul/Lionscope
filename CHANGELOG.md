@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-27
+
 ### Added
 
 - **Location** in the Device column (the pin in its toolbar), like the Android Studio emulator's Location controls:
@@ -491,7 +493,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.9.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.10.0...HEAD
+[0.10.0]: https://github.com/risyadul/Lionscope/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/risyadul/Lionscope/compare/0.5.1...0.9.0
 [0.5.1]: https://github.com/risyadul/Lionscope/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/risyadul/Lionscope/compare/0.4.1...0.5.0
