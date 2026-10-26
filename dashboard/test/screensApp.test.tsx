@@ -120,14 +120,14 @@ describe('SDK status', () => {
     fireEvent.click(button);
     const dialog = screen.getByRole('dialog', { name: 'Add the Lionscope SDK' });
     expect(dialog.textContent).toContain(
-      'debugImplementation "com.github.risyadul.Lionscope:lionscope:0.9.0"',
+      'debugImplementation "com.github.risyadul.Lionscope:lionscope:0.10.0"',
     );
     // Public JitPack artifact, repository scoped to the Lionscope group; no mavenLocal, no credentials.
     expect(dialog.textContent).toContain(
       'maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }',
     );
     expect(dialog.textContent).toContain(
-      'releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.9.0"',
+      'releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.10.0"',
     );
     expect(dialog.textContent).not.toContain('mavenLocal');
     expect(dialog.textContent).toContain('dependencyResolutionManagement');

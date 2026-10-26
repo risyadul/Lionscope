@@ -10,7 +10,7 @@ description: >-
 license: Apache-2.0
 compatibility: Needs Node.js 22.12+, adb (Android SDK platform-tools) and an Android 7.0+ device or emulator.
 metadata:
-  version: 0.9.0
+  version: 0.10.0
   homepage: https://github.com/risyadul/Lionscope
 ---
 
@@ -23,10 +23,10 @@ Lionscope is a local Android profiler and Layout Inspector (server and dashboard
 
 - **MCP tools** (preferred): if tools named `status`, `get_summary`, `get_stalls`… from a `lionscope` MCP server
   are available, call them directly.
-- **Shell**: otherwise run `npx -y lionscope@0.9.0 query <tool> --<arg> <value>` against a running server; it
+- **Shell**: otherwise run `npx -y lionscope@0.10.0 query <tool> --<arg> <value>` against a running server; it
   prints the tool's JSON. Keep the version: a bare `npx lionscope` can run an older cached release that lacks
   tools. Short names work (`query summary`, `query stalls --window 5m`), `--json '{…}'` passes arguments as JSON
-  (needed for arrays and for text that looks like a number or `true`), and `npx -y lionscope@0.9.0 query --list`
+  (needed for arrays and for text that looks like a number or `true`), and `npx -y lionscope@0.10.0 query --list`
   prints every tool with its arguments. If no server is running, ask the user to start one with
   `npx lionscope@latest` (it stays in the foreground), or start it in the background yourself only when you are
   allowed to run long-lived processes.
@@ -52,10 +52,10 @@ logcat. Screens, stalls, layouts, network and the Inspector's layout sources nee
 JitPack (`maven { url = uri("https://jitpack.io") }` in the repositories):
 
 ```kotlin
-debugImplementation("com.github.risyadul.Lionscope:lionscope:0.9.0")
+debugImplementation("com.github.risyadul.Lionscope:lionscope:0.10.0")
 // Only when the app's code calls Lionscope (okHttpInterceptor(), trackNavigation()…): the release build needs
 // the no-op artifact with the same API, or it does not compile.
-releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.9.0")
+releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.10.0")
 ```
 
 ## Playbooks
