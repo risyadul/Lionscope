@@ -208,8 +208,11 @@ export function cropPng(
   return { png: encodeRgb(downscale(cropped, target), target), size: target };
 }
 
-/** Pixels with a luma at most this (of 255) count as black: video black is 16 (limited range), true black 0. */
-export const BLACK_LUMA = 24;
+/**
+ * Pixels with every channel at most this (of 255) count as black: video black is 16 (limited range), true black 0.
+ * Per channel, not by luma: pure blue has a luma of only 18.
+ */
+export const BLACK_LEVEL = 24;
 /**
  * A screen whose most common colour covers this share of its pixels is blank (one colour; a few icons allowed).
  * Measured at 1080×2424: Settings' main list 0.958, the black Clock screen saver (a clock and date) 0.99, screen off 1.
@@ -223,10 +226,10 @@ const BLACK_BUCKET = 4096;
 export interface ScreenStats {
   /** Mean Rec. 709 luma, 0 (black) to 1 (white). */
   meanLuminance: number;
-  /** Share of pixels brighter than BLACK_LUMA. */
+  /** Share of pixels with a channel above BLACK_LEVEL. */
   nonBlackRatio: number;
   /**
-   * Share of pixels of the most common colour: 4 bits per channel, and all black (luma ≤ BLACK_LUMA) as one, so
+   * Share of pixels of the most common colour: 4 bits per channel, and all black (every channel ≤ BLACK_LEVEL) as one, so
    * noise, dithering and black next to video black count as one colour.
    */
   dominantRatio: number;
@@ -265,7 +268,7 @@ export function screenStats(image: DecodedPng): ScreenStats {
       const b = pixels[at + 2] ?? 0;
       const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       lumaSum += luma;
-      const black = luma <= BLACK_LUMA;
+      const black = r <= BLACK_LEVEL && g <= BLACK_LEVEL && b <= BLACK_LEVEL;
       if (!black) nonBlack++;
       const color = black ? BLACK_BUCKET : ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
       colors[color] = (colors[color] ?? 0) + 1;

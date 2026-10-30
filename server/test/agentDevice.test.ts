@@ -134,6 +134,19 @@ describe('screen stats', () => {
     expect(dark).toMatchObject({ dominantRatio: 1, blank: true });
   });
 
+  it('does not count a dark but saturated colour as black', () => {
+    // Pure blue has a luma of 18: by luma it would be black.
+    expect(screenStats(image(400, 800, () => [0, 0, 255]))).toMatchObject({
+      nonBlackRatio: 1,
+      dominantRatio: 1,
+      blank: true,
+    });
+    // Blue under a black status bar is two colours, not one black.
+    const bar = screenStats(image(400, 800, (_x, y) => (y < 80 ? [0, 0, 0] : [0, 0, 255])));
+    expect(bar.nonBlackRatio).toBeCloseTo(0.9, 2);
+    expect(bar.blank).toBe(false);
+  });
+
   it('is not fooled by patterns in phase with its sampling grid', () => {
     // At 1080×2400 a fixed grid would sample every 4th pixel at one phase.
     const checkerboard = screenStats(image(1080, 2400, (x, y) => Array(3).fill((x + y) % 2 === 0 ? 255 : 0)));
