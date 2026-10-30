@@ -108,6 +108,7 @@ interface LinkEntry {
 export class SdkBridge {
   private current: SdkStatus = DISCONNECTED_SDK;
   private active: LinkEntry | null = null;
+  private linkedOnce = false;
   private readonly pending = new Set<LinkEntry>();
   private readonly frames = new SdkFrameAggregator();
   private readonly refusals: ErrorThrottle;
@@ -128,6 +129,11 @@ export class SdkBridge {
 
   get status(): SdkStatus {
     return this.current;
+  }
+
+  /** A verified link was live at some point of this session (it stays true after the link drops). */
+  get everLinked(): boolean {
+    return this.linkedOnce;
   }
 
   /** The verified live link (Inspector snapshots are asked of it), null while there is none. */
@@ -250,6 +256,7 @@ export class SdkBridge {
     this.active = entry;
     // The app reconnected (or restarted): the screen span and gfxinfo pause carry over to the new link.
     previous?.link.close();
+    this.linkedOnce = true;
     // Calls still open on the old link get no response anymore.
     if (previous) this.options.store.http.linkClosed(previous.link);
     this.update({

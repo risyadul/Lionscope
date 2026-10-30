@@ -8,6 +8,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
+  it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
   as `get_ui_tree` lists it. Where the dump has hints, it keeps matching once the field has text, unlike `text` (an
   empty field reports its hint as its text). Where it has none (older Android versions), it matches the text of any
@@ -43,6 +45,13 @@ All notable changes to Lionscope are documented here. The format is based on
   again when its checked state changed. This adds about 300 ms plus a dump (a few hundred ms with the UI helper, 1
   to 2 s with `uiautomator`); `readBack: false` skips it.
 - The error for a selector without fields names all of them: `Pass text, id, desc or hint to find the element`.
+
+### Fixed
+
+- `get_stalls` and `get_strictmode` report the current SDK link (`sdk.connected`) and, when an empty result comes from
+  a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
+  StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
+  has not seen a single request.
 
 ## [0.10.0] - 2026-10-27
 

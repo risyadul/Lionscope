@@ -127,9 +127,9 @@ hints). `tap_element` returns the element after the tap (`after`, `checked`, `sc
 field after typing (`field`, `sameField`, `matches`; pass `field` so `matches` can compare with the text before):
 read them before assuming the action worked. `type_text` inserts at the caret, which lands where the field was
 tapped: to add to a filled field use `type_text --text <text> --mode append`, to overwrite it `--mode replace`
-(with `--text ""` it clears the field). `launch_app` starts an app; `boot_emulator` / `shutdown_emulator` manage
-AVDs (shut down only an emulator you booted, or with the user's OK).
-There are no power, lock or unlock keys: never try to unlock a phone.
+(with `--text ""` it clears the field). `launch_app` starts an app and `stop_app` force-stops one (its unsaved
+state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
+booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
 
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and
