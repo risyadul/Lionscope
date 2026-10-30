@@ -248,6 +248,16 @@ export class SessionManager implements SdkLinkTarget {
     return this.session?.httpExchangeCount ?? 0;
   }
 
+  /** Whether the current (or last) session's SDK was linked at some point, even if it dropped since. */
+  getSdkEverLinked(): boolean {
+    return this.session?.sdkEverLinked ?? false;
+  }
+
+  /** HTTP exchanges the current (or last) session has seen in all, not only those still kept. */
+  getHttpExchangesSeen(): number {
+    return this.session?.httpExchangesSeen ?? 0;
+  }
+
   /** The session's mock rules; none without a session (they end with it). */
   getNetworkMocks(): NetworkMocksState {
     return this.session?.networkMocks ?? EMPTY_MOCKS;

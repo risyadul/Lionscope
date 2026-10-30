@@ -1,7 +1,7 @@
 /**
  * The UI tree of a `uiautomator dump` as agent-friendly elements: one per node in dump order (the index is
  * stable for one dump), bounds in device pixels of the current rotation, and selectors that find an element
- * by text, content description or resource id.
+ * by text, content description, resource id or hint.
  */
 import type { Size } from '../emulator/screenInput.ts';
 import type { RawUiHierarchy, RawUiNode } from './uiXml.ts';
@@ -162,18 +162,35 @@ export interface UiSelector {
   text?: string | undefined;
   id?: string | undefined;
   desc?: string | undefined;
+  /** A field's hint (its placeholder), which stays when the field has text. */
+  hint?: string | undefined;
   /** Whole-value, case-sensitive matches instead of case-insensitive substrings. */
   exact?: boolean | undefined;
 }
 
 export function hasSelector(selector: UiSelector): boolean {
-  return selector.text !== undefined || selector.id !== undefined || selector.desc !== undefined;
+  return (
+    selector.text !== undefined ||
+    selector.id !== undefined ||
+    selector.desc !== undefined ||
+    selector.hint !== undefined
+  );
 }
 
 function matchesValue(value: string | null, wanted: string | undefined, exact: boolean): boolean {
   if (wanted === undefined) return true;
   if (value === null) return false;
   return exact ? value === wanted : value.toLowerCase().includes(wanted.toLowerCase());
+}
+
+/**
+ * A field's hint; a field without one in the dump (older Android versions don't report it) shows its hint as its
+ * text while it is empty.
+ */
+function matchesHint(element: UiElement, wanted: string | undefined, exact: boolean): boolean {
+  if (wanted === undefined) return true;
+  if (element.hint !== null) return matchesValue(element.hint, wanted, exact);
+  return element.editable && matchesValue(element.text, wanted, exact);
 }
 
 /**
@@ -187,6 +204,7 @@ export function findElements(tree: UiTree, selector: UiSelector): UiElement[] {
       (matchesValue(element.text, selector.text, exact) ||
         (selector.text !== undefined && matchesValue(element.desc, selector.text, exact))) &&
       matchesValue(element.desc, selector.desc, exact) &&
+      matchesHint(element, selector.hint, exact) &&
       (selector.id === undefined || element.id === selector.id || element.resourceId === selector.id) &&
       visibleBounds(element.bounds, tree.screen) !== null,
   );

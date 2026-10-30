@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_SDK_OPTIONS } from '@lionscope/protocol';
+import { DISCONNECTED_SDK } from '../src/device/sdkBridge.ts';
 import { mcpInstructions } from '../src/agent/mcpServer.ts';
 import { AGENT_TOOLS, availableTools, callTool, DEVICE_CONTROL_DISABLED } from '../src/agent/registry.ts';
 import type { ToolOutcome } from '../src/agent/registry.ts';
@@ -249,6 +251,56 @@ describe('stalls and StrictMode', () => {
     ]);
     expect(result.recentStalls[0].durationMs).toBe(2000);
     expect((await run(agent, 'get_stalls')).offenders[0].stack).toBeUndefined();
+  });
+
+  it('says an empty result is not measured when no SDK is connected', async () => {
+    const bare = fakeAgent({});
+    for (const name of ['get_stalls', 'get_strictmode']) {
+      const result = await run(bare, name);
+      expect(result.sdk).toEqual({ connected: false });
+      expect(result.note).toContain('not measured');
+    }
+  });
+
+  it('reports the SDK as connected, and notes zero StrictMode results only while it is off', async () => {
+    const sdk = {
+      connected: true,
+      sdkVersion: '0.10.0',
+      processName: PKG,
+      apiLevel: 35,
+      framesActive: false,
+      options: { ...DEFAULT_SDK_OPTIONS, stallThresholdMs: 150, strictMode: false },
+    };
+    const linked = fakeAgent({});
+    linked.session = { ...RUNNING, sdk };
+    expect(await run(linked, 'get_stalls')).toMatchObject({ sdk: { connected: true } });
+    expect((await run(linked, 'get_stalls')).note).toBeUndefined();
+    expect((await run(linked, 'get_strictmode')).note).toContain('set_sdk_options');
+    linked.session = { ...RUNNING, sdk: { ...sdk, options: { ...sdk.options, strictMode: true } } };
+    expect((await run(linked, 'get_strictmode')).note).toBeUndefined();
+  });
+
+  it('keeps quiet about a stopped session whose SDK was linked, and about results that exist', async () => {
+    const stopped = fakeAgent({});
+    stopped.session = {
+      ...RUNNING,
+      status: 'idle',
+      sdk: {
+        ...DISCONNECTED_SDK,
+        sdkVersion: '0.10.0',
+        options: { ...DEFAULT_SDK_OPTIONS, strictMode: true },
+      },
+    };
+    stopped.sdkEverLinked = true;
+    for (const name of ['get_stalls', 'get_strictmode']) {
+      const result = await run(stopped, name);
+      expect(result.sdk).toEqual({ connected: false });
+      expect(result.note).toBeUndefined();
+    }
+    const unlinked = fakeAgent({ stalls: [stall(T0 + 10_000, 300)], strictMode: [violation(T0 + 10_000)] });
+    for (const name of ['get_stalls', 'get_strictmode']) {
+      expect((await run(unlinked, name)).note).toBeUndefined();
+    }
   });
 
   it('groups stalls by origin: the Rx chain with its subscribe site, the Handler message', async () => {

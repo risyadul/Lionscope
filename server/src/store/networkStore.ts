@@ -117,6 +117,7 @@ export class NetworkStore {
   private readonly maxExchanges: number;
   private readonly maxBytes: number;
   private bytes = 0;
+  private seen = 0;
   private orphans = 0;
   private duplicates = 0;
   private ended = false;
@@ -137,6 +138,11 @@ export class NetworkStore {
     return this.entries.size;
   }
 
+  /** Exchanges that started in this session, kept or pruned. */
+  get totalSeen(): number {
+    return this.seen;
+  }
+
   get totalBytes(): number {
     return this.bytes;
   }
@@ -151,6 +157,7 @@ export class NetworkStore {
     if (this.ended) return;
     let ids = this.links.get(link);
     if (ids?.has(message.id)) return this.duplicate('httpRequest');
+    this.seen += 1;
     const detail: HttpExchangeDetail = {
       id: ++lastExchangeId,
       ts,

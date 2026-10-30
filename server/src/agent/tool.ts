@@ -52,6 +52,8 @@ export type AgentSessions = Pick<
   | 'setSdkOptions'
   | 'getHttpExchange'
   | 'getHttpExchangeCount'
+  | 'getHttpExchangesSeen'
+  | 'getSdkEverLinked'
   | 'getCrashes'
   | 'getNetworkMocks'
   | 'setNetworkMock'

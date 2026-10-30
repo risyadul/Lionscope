@@ -8,6 +8,7 @@ import {
   pressKeyTool,
   screenshotTool,
   shutdownEmulatorTool,
+  stopAppTool,
   swipeTool,
   tapTool,
 } from './deviceTools.ts';
@@ -62,6 +63,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   typeTextTool,
   pressKeyTool,
   launchAppTool,
+  stopAppTool,
   setNetworkMockTool,
   clearNetworkMocksTool,
   setLocationTool,
