@@ -19,6 +19,8 @@ import type { ExecOptions } from '../src/adb/adb.ts';
 import { FakeAdb, fixture } from './helpers/fakes.ts';
 
 const DUMP = fixture('ui-dump.xml');
+/** The empty email field's text and id in DUMP. */
+const EMAIL = 'text="" resource-id="com.example.shop:id/email"';
 const SCREEN = { width: 1080, height: 2400 };
 const tree = () => buildUiTree(parseUiXml(DUMP), SCREEN);
 
@@ -112,6 +114,28 @@ describe('the UI tree', () => {
     expect(findElements(t, { desc: 'Remember me' })).toEqual([]);
     const label = findElements(t, { text: 'Home' })[0];
     expect(label && clickTarget(t, label).selected).toBe(true);
+  });
+
+  it('matches a field by its hint, also once it has text', () => {
+    const t = tree();
+    expect(findElements(t, { hint: 'mail' }).map((element) => element.id)).toEqual(['email']);
+    expect(findElements(t, { hint: 'mail', exact: true })).toEqual([]);
+    expect(findElements(t, { hint: 'Password', id: 'password' })).toHaveLength(1);
+    const filled = buildUiTree(
+      parseUiXml(DUMP.replace(EMAIL, 'text="a@b.c" resource-id="com.example.shop:id/email"')),
+      SCREEN,
+    );
+    expect(findElements(filled, { hint: 'Email' }).map((element) => element.text)).toEqual(['a@b.c']);
+    // Without a hint attribute, an empty field shows its hint as its text; a label with that text is no field.
+    const legacy = buildUiTree(
+      parseUiXml(
+        `<hierarchy rotation="0">${node('class="android.widget.EditText" text="First name"')}${node('class="android.widget.TextView" text="First name"')}</hierarchy>`,
+      ),
+      SCREEN,
+    );
+    expect(findElements(legacy, { hint: 'first name' }).map((element) => element.className)).toEqual([
+      'EditText',
+    ]);
   });
 
   it('reads the display size from wm size and the rotation', () => {
@@ -322,7 +346,7 @@ describe('UI tools', () => {
     await expect(call('tap_element', { text: 'Pay now' })).rejects.toThrow(
       'Nothing on the screen matches text "Pay now"',
     );
-    await expect(call('tap_element', {})).rejects.toThrow('Pass text, id or desc');
+    await expect(call('tap_element', {})).rejects.toThrow('Pass text, id, desc or hint');
     await expect(call('tap_element', { desc: 'Remember me' })).rejects.toThrow('Nothing on the screen');
   });
 
@@ -367,11 +391,235 @@ describe('UI tools', () => {
     expect(end).toMatchObject({ found: false, swipes: 1, reachedEnd: true });
   });
 
-  it('types into a field it taps first', async () => {
-    const { call, inputs } = uiAgent([DUMP]);
-    expect(await call('type_text', { text: 'a@b.c', field: { id: 'email' } })).toMatchObject({ typed: 5 });
+  it('types into a field it taps first, then reads the field back', async () => {
+    const typed = DUMP.replace(EMAIL, 'text="a@b.c" resource-id="com.example.shop:id/email"');
+    const { call, inputs } = uiAgent([DUMP, typed]);
+    expect(await call('type_text', { text: 'a@b.c', field: { id: 'email' } })).toMatchObject({
+      typed: 5,
+      field: { id: 'email', text: 'a@b.c', hint: 'Email' },
+      sameField: true,
+      matches: true,
+    });
     expect(inputs()).toEqual(['input tap 540 315', "input text 'a@b.c'"]);
     const ambiguous = await call('type_text', { text: 'x', field: { id: 'title' } });
     expect(ambiguous).toMatchObject({ typed: 0, field: { ambiguous: true } });
+  });
+
+  it('reports a field that did not take the text, and finds a filled field by its hint', async () => {
+    // The field still shows its hint as its text: nothing arrived.
+    const unchanged = DUMP.replace(EMAIL, 'text="Email" resource-id="com.example.shop:id/email"');
+    const { call } = uiAgent([unchanged]);
+    expect(await call('type_text', { text: 'a@b.c', field: { hint: 'Email' } })).toMatchObject({
+      field: { id: 'email' },
+      matches: false,
+    });
+    const filled = DUMP.replace(EMAIL, 'text="old@b.c" resource-id="com.example.shop:id/email"');
+    const again = uiAgent([filled]);
+    expect(await again.call('type_text', { text: 'x', field: { hint: 'email' } })).toMatchObject({
+      field: { text: 'old@b.c' },
+      matches: false,
+    });
+    expect(again.inputs()).toEqual(['input tap 540 315', "input text 'x'"]);
+  });
+
+  it('compares with the field as it was before typing', async () => {
+    const jakarta = DUMP.replace(EMAIL, 'text="Jakarta" resource-id="com.example.shop:id/email"');
+    // Typing did nothing: the field already showed the text.
+    expect(
+      await uiAgent([jakarta]).call('type_text', { text: 'Jakarta', field: { id: 'email' } }),
+    ).toMatchObject({ matches: false });
+    const grown = DUMP.replace(EMAIL, 'text="Jakarta Jakarta" resource-id="com.example.shop:id/email"');
+    expect(
+      await uiAgent([jakarta, grown]).call('type_text', { text: ' Jakarta', field: { id: 'email' } }),
+    ).toMatchObject({ matches: true });
+    // A dump without hint attributes shows an empty field's hint as its text.
+    const legacy = (text: string) =>
+      `<hierarchy rotation="0"><node class="android.widget.EditText" text="${text}" focused="true" clickable="true" package="com.example.shop" bounds="[40,300][1040,420]" /></hierarchy>`;
+    expect(
+      await uiAgent([legacy('First name'), legacy('Ann')]).call('type_text', {
+        text: 'Ann',
+        field: { hint: 'First name' },
+      }),
+    ).toMatchObject({ matches: true });
+    // Without field there is nothing from before to compare with.
+    expect(await uiAgent([jakarta]).call('type_text', { text: 'Jakarta' })).toMatchObject({
+      field: { text: 'Jakarta' },
+      matches: null,
+      note: expect.stringContaining('pass field'),
+    });
+    expect(await uiAgent([jakarta]).call('type_text', { text: 'Bandung' })).toMatchObject({ matches: false });
+  });
+
+  it('follows a field the keyboard moved up', async () => {
+    // adjustPan: the screen moved up 600 px to keep the field above the keyboard.
+    const panned = DUMP.replace(
+      'text="" resource-id="com.example.shop:id/email" class="android.widget.EditText" package="com.example.shop" content-desc="" hint="Email" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[42,250][1038,380]"',
+      'text="a@b.c" resource-id="com.example.shop:id/email" class="android.widget.EditText" package="com.example.shop" content-desc="" hint="Email" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[42,1850][1038,1980]"',
+    );
+    expect(panned).not.toBe(DUMP);
+    expect(
+      await uiAgent([DUMP, panned]).call('type_text', { text: 'a@b.c', field: { id: 'email' } }),
+    ).toMatchObject({
+      field: { text: 'a@b.c', bounds: [42, 1850, 1038, 1980] },
+      sameField: true,
+      matches: true,
+    });
+  });
+
+  it('follows a compose box that moved up and widened, but not a twin field in a list', async () => {
+    const box = (bounds: string, text: string) =>
+      `<hierarchy rotation="0"><node class="android.widget.EditText" text="${text}" hint="Text message" resource-id="com.example.shop:id/compose" focused="true" clickable="true" package="com.example.shop" bounds="${bounds}" /></hierarchy>`;
+    // The keyboard pushed it up; with text, the icons beside it are hidden and it grew to the right.
+    expect(
+      await uiAgent([box('[147,2130][639,2277]', 'Text message'), box('[147,1373][765,1520]', 'hello')]).call(
+        'type_text',
+        { text: 'hello', field: { id: 'compose' } },
+      ),
+    ).toMatchObject({ sameField: true, field: { text: 'hello' }, matches: true });
+    // Two rows with the same field id: the focus moved to the second one.
+    const rows = (focus: number, second: string) =>
+      `<hierarchy rotation="0">${[1, 2]
+        .map(
+          (row) =>
+            `<node class="android.widget.EditText" text="${row === 2 ? second : ''}" resource-id="com.example.shop:id/qty" focused="${focus === row}" clickable="true" package="com.example.shop" bounds="[40,${row * 200}][1040,${row * 200 + 150}]" />`,
+        )
+        .join('')}</hierarchy>`;
+    const twin = await uiAgent([rows(1, ''), rows(2, '3')]).call('type_text', {
+      text: '3',
+      field: { nth: 1, id: 'qty' },
+    });
+    expect(twin).toMatchObject({ sameField: false });
+    expect(twin.field).not.toHaveProperty('text');
+  });
+
+  it('leaves out the text of a field other than the one tapped', async () => {
+    const code = (focus: number, second: string) =>
+      `<hierarchy rotation="0"><node class="android.widget.FrameLayout" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="android.widget.EditText" text="" resource-id="com.example.shop:id/code1" focused="${focus === 1}" clickable="true" package="com.example.shop" bounds="[40,300][240,420]" /><node class="android.widget.EditText" text="${second}" resource-id="com.example.shop:id/code2" focused="${focus === 2}" clickable="true" package="com.example.shop" bounds="[280,300][480,420]" /></node></hierarchy>`;
+    // The first box took one digit and moved the focus on to the second.
+    const result = await uiAgent([code(1, ''), code(2, '4')]).call('type_text', {
+      text: '84',
+      field: { id: 'code1' },
+    });
+    expect(result).toMatchObject({ field: { id: 'code2' }, sameField: false, matches: false });
+    expect(result.field).not.toHaveProperty('text');
+    expect(result.note).toContain('not the one tapped');
+  });
+
+  it('never echoes what was typed into a password field', async () => {
+    const focusedPassword = DUMP.replace('focused="true"', 'focused="false"').replace(
+      'focused="false" scrollable="false" long-clickable="true" password="true"',
+      'focused="true" scrollable="false" long-clickable="true" password="true"',
+    );
+    const { call } = uiAgent([focusedPassword]);
+    const result = await call('type_text', { text: 'hunter2', field: { id: 'password' } });
+    expect(result).toMatchObject({ typed: 7, field: { id: 'password' }, matches: null });
+    expect(result.field.flags).toContain('password');
+    expect(JSON.stringify(result)).not.toContain('hunter2');
+  });
+
+  it('says so when no field can be read back after typing', async () => {
+    const noFocus = DUMP.replace('focused="true"', 'focused="false"');
+    expect(await uiAgent([noFocus]).call('type_text', { text: 'x' })).toMatchObject({
+      typed: 1,
+      field: null,
+      matches: null,
+      note: expect.stringContaining('No focused text field'),
+    });
+    const { call, inputs } = uiAgent([DUMP, 'hang']);
+    expect(await call('type_text', { text: 'x', field: { id: 'email' } })).toMatchObject({
+      typed: 1,
+      field: null,
+      matches: null,
+      note: `Could not read the field back: ${UI_DUMP_TIMEOUT}`,
+    });
+    expect(inputs()).toEqual(['input tap 540 315', "input text 'x'"]);
+  });
+
+  it('reads the tapped element back after the tap', async () => {
+    const toggle = (checked: boolean) =>
+      `<hierarchy rotation="0"><node class="android.widget.FrameLayout" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="android.widget.Switch" text="Dark mode" resource-id="com.example.shop:id/dark" checkable="true" checked="${checked}" clickable="true" package="com.example.shop" bounds="[0,300][1080,420]" /></node></hierarchy>`;
+    const switched = await uiAgent([toggle(false), toggle(true)]).call('tap_element', { text: 'dark mode' });
+    expect(switched).toMatchObject({
+      tapped: true,
+      element: { id: 'dark' },
+      after: { id: 'dark' },
+      checked: { before: false, after: true },
+      screenChanged: true,
+    });
+    expect(switched.element.flags).not.toContain('checked');
+    expect(switched.after.flags).toContain('checked');
+    // The tap opened another screen.
+    expect(await uiAgent([toggle(false), DUMP]).call('tap_element', { text: 'dark mode' })).toMatchObject({
+      tapped: true,
+      after: null,
+      note: expect.stringContaining('moved or is gone'),
+    });
+    const { call, commands } = uiAgent([toggle(false)]);
+    const quick = await call('tap_element', { text: 'dark mode', readBack: false });
+    expect(quick).toMatchObject({ tapped: true, element: { id: 'dark' } });
+    expect(quick).not.toHaveProperty('after');
+    expect(commands.filter((command) => command.startsWith('uiautomator'))).toHaveLength(1);
+  });
+
+  it('reports the switch inside a tapped row', async () => {
+    // A Preference: the row takes the tap, its Switch is not clickable.
+    const preference = (checked: boolean) =>
+      `<hierarchy rotation="0"><node class="android.widget.LinearLayout" clickable="true" package="com.example.shop" bounds="[0,300][1080,480]"><node class="android.widget.TextView" text="Dark theme" package="com.example.shop" bounds="[40,320][800,400]" /><node class="android.widget.Switch" checkable="true" checked="${checked}" package="com.example.shop" bounds="[900,340][1040,440]" /></node></hierarchy>`;
+    const result = await uiAgent([preference(false), preference(true)]).call('tap_element', {
+      text: 'Dark theme',
+    });
+    expect(result).toMatchObject({
+      element: { class: 'LinearLayout', label: 'Dark theme' },
+      after: { class: 'LinearLayout' },
+      checked: { before: false, after: true },
+    });
+  });
+
+  it('finds a toggle again when its text shows its state', async () => {
+    const toggle = (id: string, label: string, checked: boolean) =>
+      `<hierarchy rotation="0"><node class="android.widget.ToggleButton" text="${label}"${id} checkable="true" checked="${checked}" clickable="true" package="com.example.shop" bounds="[40,300][400,420]" /></hierarchy>`;
+    const id = ' resource-id="com.example.shop:id/follow"';
+    expect(
+      await uiAgent([toggle(id, 'Follow', false), toggle(id, 'Following', true)]).call('tap_element', {
+        text: 'Follow',
+      }),
+    ).toMatchObject({ after: { text: 'Following' }, checked: { before: false, after: true } });
+    // Without an id, another toggle in its place can't be told apart.
+    expect(
+      await uiAgent([toggle('', 'Follow', false), toggle('', 'Following', true)]).call('tap_element', {
+        text: 'Follow',
+      }),
+    ).toMatchObject({ after: null, checked: { before: false, after: null } });
+  });
+
+  it('reports no checked state for a row with several toggles', async () => {
+    const row = `<hierarchy rotation="0"><node class="android.widget.LinearLayout" clickable="true" package="com.example.shop" bounds="[0,300][1080,480]"><node class="android.widget.TextView" text="Notifications" package="com.example.shop" bounds="[40,320][600,400]" /><node class="android.widget.CheckBox" checkable="true" package="com.example.shop" bounds="[700,340][840,440]" /><node class="android.widget.Switch" checkable="true" package="com.example.shop" bounds="[900,340][1040,440]" /></node></hierarchy>`;
+    const result = await uiAgent([row]).call('tap_element', { text: 'Notifications' });
+    expect(result).toMatchObject({ tapped: true, after: { class: 'LinearLayout' }, screenChanged: false });
+    expect(result).not.toHaveProperty('checked');
+  });
+
+  it('does not take another row that slid into the tapped place for the tapped one', async () => {
+    const rows = (...titles: string[]) =>
+      `<hierarchy rotation="0"><node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" package="com.example.shop" bounds="[0,0][1080,2400]">${titles
+        .map(
+          (title, i) =>
+            `<node class="android.widget.LinearLayout" clickable="true" package="com.example.shop" bounds="[0,${i * 200}][1080,${i * 200 + 200}]"><node class="android.widget.TextView" text="${title}" resource-id="com.example.shop:id/title" package="com.example.shop" bounds="[40,${i * 200 + 40}][1040,${i * 200 + 160}]" /></node>`,
+        )
+        .join('')}</node></hierarchy>`;
+    // Swiping the first row away deletes it: the second one moves up into its place.
+    const deleted = await uiAgent([rows('Order 1', 'Order 2'), rows('Order 2')]).call('tap_element', {
+      text: 'Order 1',
+    });
+    expect(deleted).toMatchObject({ tapped: true, after: null, screenChanged: true });
+    expect(deleted.note).toContain('moved or is gone');
+    // The same title in the same place on another screen is found again, but the screen changed.
+    const next = await uiAgent([rows('Next', 'Step 1'), rows('Next', 'Step 2')]).call('tap_element', {
+      text: 'Next',
+    });
+    expect(next).toMatchObject({ after: { label: 'Next' }, screenChanged: true });
+    expect(await uiAgent([rows('Next')]).call('tap_element', { text: 'Next' })).toMatchObject({
+      screenChanged: false,
+    });
   });
 });

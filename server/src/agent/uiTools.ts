@@ -1,7 +1,8 @@
 /**
  * Element-based device control (opt-in like the other device tools): the UI hierarchy from
- * `uiautomator dump`, and taps, waits and scrolls aimed at elements found by text, description or id.
- * Element taps land on the element's exact center, unlike coordinates read off a scaled screenshot.
+ * `uiautomator dump`, and taps, waits and scrolls aimed at elements found by text, description, id or hint.
+ * Element taps land on the element's exact center, unlike coordinates read off a scaled screenshot. Taps and
+ * typing read the screen back afterwards, so the answer shows what the action did.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
@@ -28,6 +29,7 @@ import {
   firstScrollable,
   hasSelector,
   isActionable,
+  MAX_UI_TEXT_CHARS,
   tapPoint,
   visibleBounds,
   visibleFraction,
@@ -39,6 +41,8 @@ const MAX_CANDIDATES = 10;
 const LONG_PRESS_MS = 800;
 /** After tapping a field, before typing: the keyboard and focus need a moment. */
 const FOCUS_SETTLE_MS = 300;
+/** After a tap or typing, before the dump that reads the result back: the app needs a frame or two to show it. */
+const READBACK_SETTLE_MS = 300;
 /** After a scroll swipe, before the next dump: lets the fling settle. */
 const SCROLL_SETTLE_MS = 500;
 /** Longest a get_ui_tree / tap_element / type_text call may take, retries included. */
@@ -111,36 +115,131 @@ const selectorFields = {
     .describe('Visible text (case-insensitive substring unless exact).'),
   id: z.string().min(1).max(200).optional().describe('Resource id: entry name (`login_button`) or full id.'),
   desc: z.string().min(1).max(200).optional().describe('Content description (accessibility label).'),
-  exact: z.boolean().default(false).describe('Match text / desc exactly (case-sensitive).'),
+  hint: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "A field's hint (placeholder text), as get_ui_tree lists it: it keeps matching once the field has text. Where the dump has no hints (older Android), it matches a field's text instead.",
+    ),
+  exact: z.boolean().default(false).describe('Match text / desc / hint exactly (case-sensitive).'),
 };
 
 function describeSelector(selector: UiSelector): string {
-  return Object.entries({ text: selector.text, id: selector.id, desc: selector.desc })
+  return Object.entries({ text: selector.text, id: selector.id, desc: selector.desc, hint: selector.hint })
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key} "${value}"`)
     .join(', ');
 }
 
 function requireSelector(selector: UiSelector): void {
-  if (!hasSelector(selector)) throw new ToolError('Pass text, id or desc to find the element');
+  if (!hasSelector(selector)) throw new ToolError('Pass text, id, desc or hint to find the element');
 }
 
+/** A dump of the screen after an action, or why there is none (the action itself has happened). */
+async function readBack(ctx: AgentContext, serial: string, deadline: number): Promise<UiTree | string> {
+  await sleep(READBACK_SETTLE_MS);
+  try {
+    return (await dumpUi(ctx, serial, { deadline })).tree;
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return error.message;
+  }
+}
+
+/** What names an element: its text or desc, else (a row, a Preference) the first text inside it. */
+function titleOf(tree: UiTree, element: UiElement): string | null {
+  if (element.text !== null || element.desc !== null) return `${element.text ?? ''}|${element.desc ?? ''}`;
+  for (let i = element.index + 1; i < tree.elements.length; i++) {
+    const other = tree.elements[i];
+    if (!other || other.depth <= element.depth) break;
+    const text = other.text ?? other.desc;
+    if (text !== null) return text;
+  }
+  return null;
+}
+
+/**
+ * The element in a later dump: same package, class, id and bounds, and the same title unless it is a field, or a
+ * toggle with an id whose checked state changed (a ToggleButton's ON / OFF, a Follow / Following chip). A different
+ * row slid into the same place (an item deleted) is not the element.
+ */
+function findAgain(before: UiTree, element: UiElement, later: UiTree): UiElement | null {
+  const bounds = element.bounds.join();
+  const title = titleOf(before, element);
+  return (
+    later.elements.find(
+      (other) =>
+        other.package === element.package &&
+        other.className === element.className &&
+        other.id === element.id &&
+        other.bounds.join() === bounds &&
+        (element.editable ||
+          titleOf(later, other) === title ||
+          (element.checkable && element.id !== null && other.checked !== element.checked)),
+    ) ?? null
+  );
+}
+
+/** The element if it is checkable, else the only checkable element inside it (a Preference's Switch). */
+function toggleOf(tree: UiTree, element: UiElement): UiElement | null {
+  if (element.checkable) return element;
+  let toggle: UiElement | null = null;
+  for (let i = element.index + 1; i < tree.elements.length; i++) {
+    const other = tree.elements[i];
+    if (!other || other.depth <= element.depth) break;
+    if (!other.checkable) continue;
+    // Several: which one the tap changed is unknown.
+    if (toggle) return null;
+    toggle = other;
+  }
+  return toggle;
+}
+
+/** Everything a dump shows, to tell whether the screen changed. */
+function screenKey(tree: UiTree): string {
+  return tree.elements
+    .map((e) => `${elementSignature(e)}${e.checked}${e.selected}${e.focused}${e.enabled}`)
+    .join(';');
+}
+
+type View = ReturnType<typeof elementView>;
+
 type TapOutcome =
-  | { tapped: true; element: ReturnType<typeof elementView>; at: { x: number; y: number }; long: boolean }
+  | {
+      tapped: true;
+      element: View;
+      at: { x: number; y: number };
+      long: boolean;
+      after?: View | null;
+      checked?: { before: boolean; after: boolean | null };
+      screenChanged?: boolean;
+      note?: string;
+    }
   | {
       tapped: false;
       ambiguous: true;
       matches: number;
-      candidates: ReturnType<typeof elementView>[];
+      candidates: View[];
       hint: string;
     };
 
-/** Finds one element (by index of the last listing, or a selector) and taps the center of its visible part. */
+/**
+ * Finds one element (by index of the last listing, or a selector) and taps the center of its visible part; with
+ * readBack, then reads the screen again and returns that element as it is after the tap. `taken` is the element
+ * that took the tap, as it was before (null when nothing was tapped).
+ */
 export async function tapElement(
   ctx: AgentContext,
   serial: string,
-  target: UiSelector & { index?: number | undefined; nth?: number | undefined; long?: boolean },
-): Promise<TapOutcome> {
+  target: UiSelector & {
+    index?: number | undefined;
+    nth?: number | undefined;
+    long?: boolean;
+    readBack?: boolean;
+  },
+): Promise<{ outcome: TapOutcome; taken: UiElement | null }> {
   const deadline = performance.now() + ELEMENT_CALL_MS;
   let tree: UiTree;
   let element: UiElement | undefined;
@@ -154,7 +253,7 @@ export async function tapElement(
     element = tree.elements[target.index];
     if (!element || elementSignature(element) !== elementSignature(listed)) {
       throw new ToolError(
-        'The screen changed since get_ui_tree listed that index: list it again, or select by text, id or desc',
+        'The screen changed since get_ui_tree listed that index: list it again, or select by text, id, desc or hint',
       );
     }
   } else {
@@ -167,13 +266,14 @@ export async function tapElement(
       );
     }
     if (matches.length > 1 && target.nth === undefined) {
-      return {
+      const outcome: TapOutcome = {
         tapped: false,
         ambiguous: true,
         matches: matches.length,
         candidates: matches.slice(0, MAX_CANDIDATES).map((match) => elementView(tree, match, true)),
         hint: 'Several elements match: pass nth (1 = first listed) or a more specific selector (exact, id).',
       };
+      return { outcome, taken: null };
     }
     element = matches[(target.nth ?? 1) - 1];
     if (!element) throw new ToolError(`Only ${matches.length} elements match ${describeSelector(target)}`);
@@ -187,7 +287,32 @@ export async function tapElement(
     long ? `swipe ${at.x} ${at.y} ${at.x} ${at.y} ${LONG_PRESS_MS}` : `tap ${at.x} ${at.y}`,
   );
   const taken = clickTarget(tree, element);
-  return { tapped: true, element: elementView(tree, taken === element ? element : taken, true), at, long };
+  const tapped = { tapped: true as const, element: elementView(tree, taken, true), at, long };
+  if (target.readBack !== true) return { outcome: tapped, taken };
+  const later = await readBack(ctx, serial, deadline);
+  if (typeof later === 'string') {
+    return {
+      outcome: { ...tapped, after: null, note: `Could not read the screen after the tap: ${later}` },
+      taken,
+    };
+  }
+  const again = findAgain(tree, taken, later);
+  const toggle = toggleOf(tree, taken);
+  const toggleAfter = again && toggleOf(later, again);
+  const outcome: TapOutcome = {
+    ...tapped,
+    after: again && elementView(later, again, true),
+    ...(toggle
+      ? { checked: { before: toggle.checked, after: toggleAfter ? toggleAfter.checked : null } }
+      : {}),
+    screenChanged: screenKey(later) !== screenKey(tree),
+    ...(again
+      ? {}
+      : {
+          note: 'The element moved or is gone (another screen opened, the keyboard shifted the layout, or a list item was removed): get_ui_tree shows the screen now',
+        }),
+  };
+  return { outcome, taken };
 }
 
 export const uiTreeTool = defineTool({
@@ -245,7 +370,7 @@ export const uiTreeTool = defineTool({
 export const tapElementTool = defineTool({
   name: 'tap_element',
   title: 'Tap an element',
-  description: `Taps an element found by text (visible text or content description), id or desc (all given fields must match; text and desc are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press). If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what was tapped. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Taps an element found by text (visible text or content description), id, desc or hint, a field's placeholder (all given fields must match; text, desc and hint are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press). If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what took the tap as it was before (element) and, from a fresh dump about ${READBACK_SETTLE_MS} ms later: after, the same element (same place and title) or null with a note when it moved or is gone; checked {before, after} for a switch or checkbox, the tapped one or the only one inside the tapped row; screenChanged, whether anything on the screen differs (content that changes on its own, such as a timer, a carousel or a loading list, sets it too: false is the reliable signal that the tap changed nothing). readBack false skips that second dump. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     ...selectorFields,
@@ -258,19 +383,24 @@ export const tapElementTool = defineTool({
       .optional()
       .describe('Which match to tap when several do (1 = first).'),
     long: z.boolean().default(false).describe('Long press instead of a tap.'),
+    readBack: z
+      .boolean()
+      .default(true)
+      .describe('Read the element again after the tap (adds a dump, a few hundred ms to 2 s).'),
     serial: optionalSerial,
   }),
   annotations: INPUT,
   async run(args, ctx) {
     const serial = targetSerial(ctx, args.serial);
-    return { data: { untrusted: UNTRUSTED_NOTE, serial, ...(await tapElement(ctx, serial, args)) } };
+    const { outcome } = await tapElement(ctx, serial, args);
+    return { data: { untrusted: UNTRUSTED_NOTE, serial, ...outcome } };
   },
 });
 
 export const waitForTool = defineTool({
   name: 'wait_for',
   title: 'Wait for an element',
-  description: `Polls the screen until an element matching text, id or desc appears (or, with gone, disappears), up to timeoutMs (default 10 s, at most 30 s). Use it after a tap that opens a screen or dialog, or while something loads. Returns met (true / false on timeout), the time it took and the element. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Polls the screen until an element matching text, id, desc or hint appears (or, with gone, disappears), up to timeoutMs (default 10 s, at most 30 s). Use it after a tap that opens a screen or dialog, or while something loads. Returns met (true / false on timeout), the time it took and the element. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     ...selectorFields,
@@ -334,7 +464,7 @@ function treeKey(tree: UiTree): string {
 export const scrollToTool = defineTool({
   name: 'scroll_to',
   title: 'Scroll to an element',
-  description: `Swipes inside the first scrollable container on the screen (or the whole screen) until an element matching text, id or desc is at least half visible, then returns it without tapping (follow with tap_element). direction down reveals what is further down (the finger moves up). Stops after maxSwipes (default 10, at most 15) or at the end of the list. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Swipes inside the first scrollable container on the screen (or the whole screen) until an element matching text, id, desc or hint is at least half visible, then returns it without tapping (follow with tap_element). direction down reveals what is further down (the finger moves up). Stops after maxSwipes (default 10, at most 15) or at the end of the list. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     ...selectorFields,
@@ -379,10 +509,80 @@ export const scrollToTool = defineTool({
   },
 });
 
+/**
+ * Whether an element of a later dump (`later`) is the tapped one, or lies inside it. The keyboard may pan or
+ * scroll a field, and the row around it may resize it (a compose box hides its icons once it has text): the only
+ * element with the tapped one's package, class and id (else hint) is that field wherever it is. When several
+ * share them (a list of fields), it must not have moved.
+ */
+function isTapped(element: UiElement, tapped: UiElement, later: UiTree): boolean {
+  const twin = (other: UiElement) =>
+    other.package === tapped.package &&
+    other.className === tapped.className &&
+    (tapped.id !== null ? other.id === tapped.id : tapped.hint !== null && other.hint === tapped.hint);
+  if (twin(element) && later.elements.filter(twin).length === 1) return true;
+  if (
+    element.package === tapped.package &&
+    element.className === tapped.className &&
+    element.id === tapped.id
+  )
+    return element.bounds.join() === tapped.bounds.join();
+  const [x1, y1, x2, y2] = tapped.bounds;
+  const [ex1, ey1, ex2, ey2] = element.bounds;
+  return ex1 >= x1 && ey1 >= y1 && ex2 <= x2 && ey2 <= y2;
+}
+
+/**
+ * The field typed into, in a dump after typing: the focused editable element, else the tapped field (or a field
+ * inside what was tapped).
+ */
+function typedField(tree: UiTree, tapped: UiElement | null): UiElement | null {
+  const focused = tree.elements.find((element) => element.focused && element.editable);
+  if (focused) return focused;
+  return (
+    (tapped && tree.elements.find((element) => element.editable && isTapped(element, tapped, tree))) ?? null
+  );
+}
+
+/** A field's text as typed: '' when it is empty and shows its hint instead; null for a password field. */
+function fieldText(field: UiElement): string | null {
+  if (field.password) return null;
+  return field.text === field.hint ? '' : (field.text ?? '');
+}
+
+/**
+ * Whether the field shows what was typed: it contains it and grew by its length since `before` (or, empty
+ * before, holds just it). Null when the dump can't tell, with the reason.
+ */
+function typedMatches(
+  field: UiElement,
+  typed: string,
+  before: string | null,
+): { matches: boolean | null; note?: string } {
+  const text = fieldText(field);
+  if (text === null)
+    return { matches: null, note: 'A password field does not report its text: check the result another way' };
+  if (text.length >= MAX_UI_TEXT_CHARS || (before?.length ?? 0) >= MAX_UI_TEXT_CHARS) {
+    return {
+      matches: null,
+      note: `The UI tree cuts text at ${MAX_UI_TEXT_CHARS} characters: the field's text can't be compared`,
+    };
+  }
+  if (!text.includes(typed)) return { matches: false };
+  // An empty field without a hint attribute in the dump showed its hint as its text before (but unchanged text
+  // means nothing arrived).
+  if (before !== null)
+    return { matches: text !== before && (text.length === before.length + typed.length || text === typed) };
+  return {
+    matches: null,
+    note: 'The field may have held this text before typing: pass field, so it is compared with the field as it was',
+  };
+}
+
 export const typeTextTool = defineTool({
   name: 'type_text',
   title: 'Type text',
-  description: `Types text into the focused field, as the keyboard would; pass field (text, id or desc, like tap_element) to tap the field first. Printable ASCII only (not the sequence %s, which adb input types as a space), up to ${MAX_SCREEN_TEXT_CHARS} characters; use press_key enter to submit. If field matches several elements, nothing is typed and the candidates come back. Device control.`,
+  description: `Types text into the focused field, as the keyboard would; pass field (text, id, desc or hint, like tap_element; hint keeps matching once the field has text, where get_ui_tree lists hints) to tap the field first. Printable ASCII only (not the sequence %s, which adb input types as a space), up to ${MAX_SCREEN_TEXT_CHARS} characters; use press_key enter to submit. If field matches several elements, nothing is typed and the candidates come back. Then reads the field back from a fresh dump (about ${READBACK_SETTLE_MS} ms later): field is the focused field as it is now (null with a note when there is none); with field given, sameField says whether it is the one tapped (if not, its text is left out). matches says whether the text arrived: the field contains it and grew by its length (null when that can't be told: a password field, whose text is never returned, or no field given and the text found there may have been there before). Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     text: z
@@ -400,9 +600,15 @@ export const typeTextTool = defineTool({
   annotations: INPUT,
   async run({ text, field, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
+    const deadline = performance.now() + ELEMENT_CALL_MS;
+    let tapped: UiElement | null = null;
+    let before: string | null = null;
     if (field) {
       const focused = await tapElement(ctx, serial, field);
-      if (!focused.tapped) return { data: { untrusted: UNTRUSTED_NOTE, serial, typed: 0, field: focused } };
+      if (!focused.outcome.tapped)
+        return { data: { untrusted: UNTRUSTED_NOTE, serial, typed: 0, field: focused.outcome } };
+      tapped = focused.taken;
+      if (tapped?.editable) before = fieldText(tapped);
       await sleep(FOCUS_SETTLE_MS);
     }
     try {
@@ -411,6 +617,45 @@ export const typeTextTool = defineTool({
       // The text may be a password: it must not reach an error or a log line.
       throw new ToolError(`Typing on ${serial} failed`);
     }
-    return { data: { serial, typed: text.length } };
+    const typed = { untrusted: UNTRUSTED_NOTE, serial, typed: text.length };
+    const later = await readBack(ctx, serial, deadline);
+    if (typeof later === 'string') {
+      return {
+        data: { ...typed, field: null, matches: null, note: `Could not read the field back: ${later}` },
+      };
+    }
+    const found = typedField(later, tapped);
+    if (!found) {
+      return {
+        data: {
+          ...typed,
+          field: null,
+          matches: null,
+          note: 'No focused text field on the screen after typing: get_ui_tree shows the screen now',
+        },
+      };
+    }
+    if (tapped && !isTapped(found, tapped, later)) {
+      // Another field than the one tapped: its text could be what was typed, if it is a secret, so it is left out.
+      const { text: _text, ...view } = elementView(later, found);
+      const { matches } = typedMatches(found, text, null);
+      return {
+        data: {
+          ...typed,
+          field: view,
+          sameField: false,
+          matches,
+          note: 'The focused field is not the one tapped (focus moved on, as in a code field that advances, or the tap missed): its text is left out',
+        },
+      };
+    }
+    return {
+      data: {
+        ...typed,
+        field: elementView(later, found),
+        ...(tapped ? { sameField: true } : {}),
+        ...typedMatches(found, text, before),
+      },
+    };
   },
 });
