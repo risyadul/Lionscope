@@ -6,6 +6,11 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
+  it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
+
 ## [0.10.0] - 2026-10-27
 
 ### Added
