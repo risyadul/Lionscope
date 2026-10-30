@@ -2,7 +2,8 @@ import { crc32, deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { describeArgs } from '../src/adb/adb.ts';
 import { AGENT_KEYCODES, inputTextArgument, parseResolvedActivity } from '../src/agent/deviceTools.ts';
-import { decodePng, fitShortEdge, pngSize, scalePng } from '../src/agent/png.ts';
+import { decodePng, fitShortEdge, pngSize, scalePng, screenStats } from '../src/agent/png.ts';
+import type { DecodedPng } from '../src/agent/png.ts';
 import { callTool } from '../src/agent/registry.ts';
 import { fakeAgent, PKG } from './helpers/agentFixtures.ts';
 import { FakeAdb, FakeChild } from './helpers/fakes.ts';
@@ -99,6 +100,50 @@ describe('PNG scaling', () => {
   });
 });
 
+describe('screen stats', () => {
+  /** An opaque RGBA image, colour by pixel. */
+  function image(width: number, height: number, color: (x: number, y: number) => number[]): DecodedPng {
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) pixels.set([...color(x, y), 255], (y * width + x) * 4);
+    }
+    return { width, height, channels: 4, pixels };
+  }
+
+  it('calls a black screen with a strip of status bar icons blank', () => {
+    // Half of the top 1% white (icons in the status bar), the rest black.
+    const stats = screenStats(
+      image(1080, 2400, (x, y) => (y < 24 && x % 8 < 4 ? [255, 255, 255] : [0, 0, 0])),
+    );
+    expect(stats).toEqual({ meanLuminance: 0.005, nonBlackRatio: 0.005, dominantRatio: 0.995, blank: true });
+  });
+
+  it('counts video black and noise as black and as one colour', () => {
+    const stats = screenStats(image(400, 800, (x, y) => [16 + ((x + y) % 3), 16, 17]));
+    expect(stats).toMatchObject({ nonBlackRatio: 0, dominantRatio: 1, blank: true });
+    expect(stats.meanLuminance).toBeCloseTo(16.5 / 255, 2);
+  });
+
+  it('does not call a split or busy screen blank, but does a white one', () => {
+    expect(screenStats(image(400, 800, (x) => (x < 200 ? [0, 0, 0] : [255, 255, 255])))).toEqual({
+      meanLuminance: 0.5,
+      nonBlackRatio: 0.5,
+      dominantRatio: 0.5,
+      blank: false,
+    });
+    expect(screenStats(image(400, 800, () => [255, 255, 255]))).toMatchObject({
+      meanLuminance: 1,
+      blank: true,
+    });
+    // A white page with 3% text pixels.
+    const text = screenStats(
+      image(400, 800, (x, y) => (y % 10 === 0 && x % 10 < 3 ? [0, 0, 0] : [250, 250, 250])),
+    );
+    expect(text).toMatchObject({ dominantRatio: 0.97, blank: false });
+    expect(screenStats(decodePng(rgbaPng(64, 64, noise(64, 64))) as DecodedPng).blank).toBe(false);
+  });
+});
+
 describe('device tools', () => {
   /**
    * adb whose `exec-out screencap -p` answers with a 1080×2400 PNG and whose `wm size` / `dumpsys input` report
@@ -133,7 +178,17 @@ describe('device tools', () => {
     const shot = await callTool(agent.ctx, 'screenshot', {}, true);
     expect(shot).toMatchObject({
       ok: true,
-      result: { serial: 'emulator-5554', width: 720, height: 1600, deviceWidth: 1080, deviceHeight: 2400 },
+      result: {
+        serial: 'emulator-5554',
+        width: 720,
+        height: 1600,
+        deviceWidth: 1080,
+        deviceHeight: 2400,
+        meanLuminance: 0.784,
+        nonBlackRatio: 1,
+        dominantRatio: 1,
+        blank: true,
+      },
       image: { mimeType: 'image/png' },
     });
     expect(await callTool(agent.ctx, 'tap', { x: 360, y: 800 }, true)).toMatchObject({ ok: true });

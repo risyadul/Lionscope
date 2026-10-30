@@ -8,6 +8,7 @@ import {
   SESSION_ADB_UNAVAILABLE,
   SessionManager,
 } from '../src/session/sessionManager.ts';
+import { NO_SESSION_MARKERS_MESSAGE } from '../src/session/runMarkers.ts';
 import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
@@ -247,6 +248,20 @@ describe('SessionManager', () => {
     const state = await manager.stopSession();
     expect(state).toMatchObject({ status: 'idle', serial: 'emulator-5554', packageName: PKG, pid: null });
     expect(manager.getSnapshot().cpu.length).toBeGreaterThan(0);
+    await manager.close();
+  });
+
+  it('keeps markers per session: refused without one, readable once stopped, cleared by a new start', async () => {
+    const { manager } = setup();
+    expect(() => manager.mark('run-1')).toThrow(PublicError);
+    expect(manager.getMarkers()).toEqual([]);
+    await manager.startSession('emulator-5554', PKG);
+    expect(manager.mark('run-1').marker).toEqual({ label: 'run-1', ts: Date.now() });
+    await manager.stopSession();
+    expect(() => manager.mark('run-2')).toThrow(NO_SESSION_MARKERS_MESSAGE);
+    expect(manager.getMarkers().map((marker) => marker.label)).toEqual(['run-1']);
+    await manager.startSession('emulator-5554', PKG);
+    expect(manager.getMarkers()).toEqual([]);
     await manager.close();
   });
 

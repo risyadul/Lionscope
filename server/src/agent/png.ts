@@ -158,12 +158,19 @@ function encodeRgb(rgb: Buffer, size: Size): Buffer {
   ]);
 }
 
-/** The PNG with its short edge scaled down to at most `maxShortEdge`, and its new size. */
-export function scalePng(data: Buffer, maxShortEdge: number): { png: Buffer; size: Size } {
+/**
+ * The PNG with its short edge scaled down to at most `maxShortEdge`, and its new size. `decoded`: the PNG already
+ * decoded (null: not decodable), to decode it only once.
+ */
+export function scalePng(
+  data: Buffer,
+  maxShortEdge: number,
+  decoded?: DecodedPng | null,
+): { png: Buffer; size: Size } {
   const size = pngSize(data);
   const target = fitShortEdge(size, maxShortEdge);
   if (target.width === size.width && target.height === size.height) return { png: data, size };
-  const image = decodePng(data);
+  const image = decoded === undefined ? decodePng(data) : decoded;
   if (!image) return { png: data, size };
   return { png: encodeRgb(downscale(image, target), target), size: target };
 }
@@ -199,4 +206,57 @@ export function cropPng(
   };
   const cropped: DecodedPng = { width, height, channels: image.channels, pixels };
   return { png: encodeRgb(downscale(cropped, target), target), size: target };
+}
+
+/** Pixels with a luma at most this (of 255) count as black: video black is 16 (limited range), true black 0. */
+export const BLACK_LUMA = 24;
+/**
+ * A screen whose most common colour covers this share of its pixels is blank (one colour; a few icons allowed).
+ * Measured at 1080×2424: Settings' main list 0.958, the black Clock screen saver (a clock and date) 0.99, screen off 1.
+ */
+export const BLANK_DOMINANT_RATIO = 0.98;
+/** About this many pixels are sampled, on a regular grid. */
+const STATS_SAMPLES = 1 << 17;
+
+export interface ScreenStats {
+  /** Mean Rec. 709 luma, 0 (black) to 1 (white). */
+  meanLuminance: number;
+  /** Share of pixels brighter than BLACK_LUMA. */
+  nonBlackRatio: number;
+  /** Share of pixels of the most common colour (4 bits per channel, so noise and dithering count as one). */
+  dominantRatio: number;
+  /** dominantRatio ≥ BLANK_DOMINANT_RATIO: the screen is essentially one colour (black, white or any other). */
+  blank: boolean;
+}
+
+/** Brightness and uniformity of a screenshot, from a grid of about STATS_SAMPLES of its pixels. */
+export function screenStats(image: DecodedPng): ScreenStats {
+  const { width, height, channels, pixels } = image;
+  const step = Math.max(1, Math.floor(Math.sqrt((width * height) / STATS_SAMPLES)));
+  const colors = new Uint32Array(4096);
+  let samples = 0;
+  let lumaSum = 0;
+  let nonBlack = 0;
+  for (let y = Math.floor(step / 2); y < height; y += step) {
+    for (let x = Math.floor(step / 2); x < width; x += step) {
+      const at = (y * width + x) * channels;
+      const r = pixels[at] ?? 0;
+      const g = pixels[at + 1] ?? 0;
+      const b = pixels[at + 2] ?? 0;
+      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      lumaSum += luma;
+      if (luma > BLACK_LUMA) nonBlack++;
+      const color = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+      colors[color] = (colors[color] ?? 0) + 1;
+      samples++;
+    }
+  }
+  const dominantRatio = Math.max(...colors) / samples;
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  return {
+    meanLuminance: round(lumaSum / samples / 255),
+    nonBlackRatio: round(nonBlack / samples),
+    dominantRatio: round(dominantRatio),
+    blank: dominantRatio >= BLANK_DOMINANT_RATIO,
+  };
 }

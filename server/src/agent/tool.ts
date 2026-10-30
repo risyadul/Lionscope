@@ -58,6 +58,8 @@ export type AgentSessions = Pick<
   | 'getNetworkMocks'
   | 'setNetworkMock'
   | 'clearNetworkMocks'
+  | 'mark'
+  | 'getMarkers'
 >;
 
 export type AgentEmulators = Pick<EmulatorManager, 'getEmulators' | 'refresh' | 'boot' | 'shutdown'>;

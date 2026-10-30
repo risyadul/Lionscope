@@ -29,6 +29,8 @@ import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
 import type { MockOrigin } from './mockRules.ts';
 import { ProfilingSession } from './profilingSession.ts';
 import type { CollectorIntervals } from './profilingSession.ts';
+import { NO_SESSION_MARKERS_MESSAGE } from './runMarkers.ts';
+import type { RunMarker } from './runMarkers.ts';
 
 export const DEFAULT_DEVICE_POLL_MS = 2000;
 /** Consecutive `adb devices` failures before an active session is put into error. */
@@ -278,6 +280,18 @@ export class SessionManager implements SdkLinkTarget {
     const session = this.session;
     if (!session || session.isStopped) return false;
     return session.clearNetworkMocks(id);
+  }
+
+  /** Mark `label` now in the running session (RunMarkers.mark). Throws a PublicError without one. */
+  mark(label: string): { marker: RunMarker; replacedTs: number | null } {
+    const session = this.session;
+    if (!session || session.isStopped) throw new PublicError(NO_SESSION_MARKERS_MESSAGE);
+    return session.mark(label);
+  }
+
+  /** Markers of the current (or last) session, oldest first. */
+  getMarkers(): RunMarker[] {
+    return this.session?.runMarkers() ?? [];
   }
 
   /** Poll `adb devices -l` every devicePollMs until close(). */

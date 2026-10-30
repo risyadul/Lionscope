@@ -5,6 +5,7 @@ import { mcpInstructions } from '../src/agent/mcpServer.ts';
 import { AGENT_TOOLS, availableTools, callTool, DEVICE_CONTROL_DISABLED } from '../src/agent/registry.ts';
 import type { ToolOutcome } from '../src/agent/registry.ts';
 import { NO_SESSION_MESSAGE } from '../src/http/wsGateway.ts';
+import { NO_SESSION_MARKERS_MESSAGE } from '../src/session/runMarkers.ts';
 import {
   breakdown,
   fakeAgent,
@@ -562,6 +563,97 @@ describe('get_crashes', () => {
     expect((await run(agent, 'get_crashes', { since: 60_000 })).total).toBe(2);
     expect((await run(agent, 'get_crashes', { since: new Date(T0 + 15_000).toISOString() })).total).toBe(1);
     expect(await run(fakeAgent(), 'get_crashes')).toMatchObject({ total: 0, returned: 0, crashes: [] });
+  });
+});
+
+describe('mark', () => {
+  /** A running session whose clock the test moves; logs and crashes at T0 + 10 s and T0 + 50 s. */
+  function markedAgent() {
+    const agent = fakeAgent({
+      logs: [
+        logEntry(T0 + 10_000, { level: 'E', tag: 'Checkout', message: 'Payment failed' }),
+        logEntry(T0 + 50_000, { level: 'W', message: 'retrying' }),
+      ],
+    });
+    agent.crashes = [T0 + 10_000, T0 + 50_000].map((ts) => ({
+      ts,
+      pid: 4321,
+      tid: 4321,
+      kind: 'java' as const,
+      thread: 'main',
+      process: PKG,
+      exception: 'java.lang.IllegalStateException',
+      message: null,
+      stack: [],
+      droppedLines: 0,
+    }));
+    let clock = T0;
+    agent.ctx.now = () => clock;
+    const markAt = (ts: number, label: string) => {
+      clock = ts;
+      return run(agent, 'mark', { label });
+    };
+    return { agent, markAt };
+  }
+
+  it('marks the session clock and lists every marker, oldest first', async () => {
+    const { agent, markAt } = markedAgent();
+    expect(await markAt(T0 + 5000, 'run-1')).toEqual({
+      marker: { label: 'run-1', time: new Date(T0 + 5000).toISOString() },
+      replaced: null,
+      markers: [{ label: 'run-1', time: new Date(T0 + 5000).toISOString() }],
+    });
+    await markAt(T0 + 30_000, 'run-2');
+    const again = await markAt(T0 + 40_000, 'run-1');
+    expect(again.replaced).toBe(new Date(T0 + 5000).toISOString());
+    expect(again.markers.map((marker: { label: string }) => marker.label)).toEqual(['run-2', 'run-1']);
+    expect((await run(agent, 'status')).markers).toEqual(again.markers);
+  });
+
+  it('bounds search_logcat and get_crashes by markers: sinceMarker inclusive, untilMarker exclusive', async () => {
+    const { agent, markAt } = markedAgent();
+    await markAt(T0 + 10_000, 'run-1');
+    await markAt(T0 + 30_000, 'run-2');
+    const lines = async (args: object) =>
+      (await run(agent, 'search_logcat', args)).lines.map((line: { message: string }) => line.message);
+    expect(await lines({ sinceMarker: 'run-1' })).toEqual(['Payment failed', 'retrying']);
+    expect(await lines({ sinceMarker: 'run-1', untilMarker: 'run-2' })).toEqual(['Payment failed']);
+    expect(await lines({ sinceMarker: 'run-2' })).toEqual(['retrying']);
+    expect(await lines({ since: new Date(T0).toISOString(), untilMarker: 'run-1' })).toEqual([]);
+    expect((await run(agent, 'get_crashes', { sinceMarker: 'run-2' })).total).toBe(1);
+    expect((await run(agent, 'get_crashes', { untilMarker: 'run-2' })).total).toBe(1);
+  });
+
+  it('refuses unknown labels (listing the known ones), since with sinceMarker, and bad labels', async () => {
+    const { agent, markAt } = markedAgent();
+    expect(await callTool(agent.ctx, 'search_logcat', { sinceMarker: 'run-1' }, false)).toMatchObject({
+      ok: false,
+      error: 'No marker "run-1" in this session (none yet: set one with mark)',
+    });
+    await markAt(T0, 'warmup');
+    await markAt(T0 + 1, 'run-1');
+    expect(await callTool(agent.ctx, 'get_crashes', { untilMarker: 'run-9' }, false)).toMatchObject({
+      ok: false,
+      error: 'No marker "run-9" in this session (markers: warmup, run-1)',
+    });
+    expect(
+      await callTool(agent.ctx, 'search_logcat', { since: 1000, sinceMarker: 'run-1' }, false),
+    ).toMatchObject({ ok: false, error: 'Pass since or sinceMarker, not both' });
+    for (const label of ['', 'run 1', 'x'.repeat(41), 'run;reboot']) {
+      expect(await callTool(agent.ctx, 'mark', { label }, false)).toMatchObject({
+        ok: false,
+        code: 'invalid_arguments',
+      });
+    }
+  });
+
+  it('needs a running session', async () => {
+    const agent = fakeAgent({}, { session: { ...RUNNING, status: 'idle' } });
+    expect(await callTool(agent.ctx, 'mark', { label: 'run-1' }, false)).toEqual({
+      ok: false,
+      code: 'failed',
+      error: NO_SESSION_MARKERS_MESSAGE,
+    });
   });
 });
 

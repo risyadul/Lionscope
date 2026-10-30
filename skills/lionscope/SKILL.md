@@ -122,6 +122,18 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.10.0")
    capture is on but `get_network` stays empty while the app clearly uses the network, the interceptor is
    probably missing.
 
+### Repeated runs: "does it fail every time?"
+
+1. `mark --label run-1` (a running session is needed) right before each repetition (`stop_app`, `launch_app`, the
+   steps), with a new label per run. Markers are on the clock logcat lines are timed on, so no clock math and no
+   `adb logcat -c` (which empties the device's log buffers for every reader).
+2. Count per run: `search_logcat --sinceMarker run-1 --untilMarker run-2 --query <text>` (`matched`), and
+   `get_crashes --sinceMarker run-1 --untilMarker run-2`. The last run takes only `--sinceMarker`. Marking a
+   label again moves it to now; `status` lists the markers, and a new session starts without any.
+3. With device control, `screenshot` at the same step of each run: `blank` says the screen is one colour (a video
+   area that stayed black, with only status bar icons on top); `nonBlackRatio` and `meanLuminance` say how much
+   of it is lit.
+
 ### Verify a fix
 
 Take the same steps on the same screen before and after the change, with the same window, and compare the same
