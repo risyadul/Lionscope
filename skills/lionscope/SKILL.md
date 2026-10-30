@@ -140,6 +140,12 @@ tapped: to add to a filled field use `type_text --text <text> --mode append`, to
 state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
 booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
 
+Each device tool call is a round trip of hundreds of ms. To reproduce a race that needs inputs close together
+(two taps 50 ms apart, a tap then BACK before a delayed job runs), use `run_inputs` with a list of steps
+(`tap`, `tap_element`, `key`, `wait`) run in one adb call; from the shell, `run_inputs --steps '<JSON list>'`.
+Its elements are found before anything is sent. The real spacing is the wait plus the cost of each input (tens of ms):
+read `atMs` / `tookMs` in the result instead of assuming the waits were exact.
+
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and
 `get_location` shows what is set. Its `warning` says when apps won't see it (location switched off). Tell the

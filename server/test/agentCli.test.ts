@@ -102,6 +102,19 @@ describe('lionscope query and lionscope mcp against a running server', () => {
       expect(explicit.code).toBe(0);
     });
 
+    it('takes a list argument as JSON', async () => {
+      const steps = '[{"type":"key","key":"power"}]';
+      const args = ['--allow-device-control', '--port', String(port)];
+      expect(await query('run-inputs', ...args, '--steps', steps)).toMatchObject({
+        code: 1,
+        value: { error: expect.stringContaining('steps.0.key') },
+      });
+      expect(await query('run-inputs', ...args, '--steps', '[{')).toMatchObject({
+        code: 1,
+        value: { error: expect.stringContaining('--steps is not valid JSON') },
+      });
+    });
+
     it('fails with a JSON error and exit code 1', async () => {
       expect(await query('stalls', '--port', String(port), '--limit', '500')).toMatchObject({
         code: 1,

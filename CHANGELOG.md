@@ -8,6 +8,14 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Agent tool `run_inputs` (device control): a timed sequence of taps (screenshot pixels, like `tap`), element taps
+  (the selectors of `tap_element`), keys (those of `press_key`) and waits, run on the device in one `adb shell`, so
+  inputs can be tens of ms apart instead of one tool round trip each (#9). At most 100 steps and 60 s of waits.
+  Every element is resolved from one fresh UI dump and every coordinate mapped before the first input is sent: a
+  selector that matches nothing, or several without `nth`, fails the call with nothing sent. The result gives each
+  step's end and duration as measured by the device's shell clock (`$EPOCHREALTIME`), which show the cost of each
+  `input` on top of the waits. A step that fails stops the sequence.
+- `lionscope query` takes a list or object argument as JSON (`--steps '[...]'`).
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
