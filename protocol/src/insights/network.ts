@@ -162,8 +162,9 @@ const isJsonSpace = (char: string | undefined): boolean =>
  * JSON text with the value of every sensitive key (any depth; strings, numbers, objects, arrays alike) replaced by
  * `"‹redacted›"`. Works on text cut short (a captured body's first 64 KB): a sensitive value that runs past the end
  * is dropped. Anything that is not JSON passes through unchanged, except a `"name": value` that looks like one.
+ * `isSensitive` replaces the name rule (logcat's is narrower).
  */
-export function redactJsonText(text: string): string {
+export function redactJsonText(text: string, isSensitive = isSensitiveName): string {
   let out = '';
   const stack: string[] = [];
   let expectKey = false;
@@ -194,7 +195,7 @@ export function redactJsonText(text: string): string {
     expectKey = false;
     let colon = i;
     while (isJsonSpace(text[colon])) colon++;
-    if (text[colon] !== ':' || !isSensitiveName(jsonKey(token))) continue;
+    if (text[colon] !== ':' || !isSensitive(jsonKey(token))) continue;
     let value = colon + 1;
     while (isJsonSpace(text[value])) value++;
     out += text.slice(i, value);
@@ -221,16 +222,17 @@ const XML_ELEMENT = /<([A-Za-z_][\w.:-]*)(\s[^<>]*)?>([^<]*)<\/\1\s*>/g;
 const XML_ATTRIBUTE = /(\s)([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"]*"|'[^']*')/g;
 const localName = (name: string): string => name.slice(name.lastIndexOf(':') + 1);
 
-/** XML text with the text of sensitive elements (`<password>…</password>`) and sensitive attribute values replaced. */
-export function redactXmlText(text: string): string {
+/**
+ * XML text with the text of sensitive elements (`<password>…</password>`) and sensitive attribute values replaced.
+ * `isSensitive` replaces the name rule (logcat's is narrower).
+ */
+export function redactXmlText(text: string, isSensitive = isSensitiveName): string {
   return text
     .replace(XML_ELEMENT, (match: string, name: string, attributes: string | undefined) =>
-      isSensitiveName(localName(name)) ? `<${name}${attributes ?? ''}>${HTTP_REDACTED}</${name}>` : match,
+      isSensitive(localName(name)) ? `<${name}${attributes ?? ''}>${HTTP_REDACTED}</${name}>` : match,
     )
     .replace(XML_ATTRIBUTE, (match: string, space: string, name: string, equals: string, value: string) =>
-      isSensitiveName(localName(name))
-        ? `${space}${name}${equals}${value[0]}${HTTP_REDACTED}${value[0]}`
-        : match,
+      isSensitive(localName(name)) ? `${space}${name}${equals}${value[0]}${HTTP_REDACTED}${value[0]}` : match,
     );
 }
 

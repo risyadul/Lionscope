@@ -361,7 +361,9 @@ app's call. At most 20 requests per second are recorded; the rest are counted.
 `auth`, `session`, `password` / `passwd`, `credential`, `signature`, `jwt` or `appcheck`, is `key`, `code`, `sig`,
 `pass` or `pwd`, or ends in `-key`, `_key`, `Key` (and the like for `sig`, `pass`, `pwd`). User names and passwords
 in URLs (`user:pass@`) and the query of URLs in `Location`, `Content-Location`, `Referer` and `Link` headers are
-redacted too, and so are URLs and such pairs inside error messages. Redaction goes by name: a secret under an
+redacted too, and so are URLs and such pairs inside error messages. `search_logcat` redacts log messages the same
+way before it matches or returns them (header lines, JSON, `name=value` pairs, URLs, plus `Bearer` values and JWTs);
+the dashboard's Logcat panel shows lines as logged. Redaction goes by name: a secret under an
 innocent name (`"data": "<token>"`) or in a GraphQL query's text is not caught. Requests stay in the server's
 memory only (the last 10 minutes, at most 5000 requests or 32 MB) and are never written to disk. AI agents get the list, headers and timings, but bodies only when you opt in
 with `--allow-network-bodies` (see [Use with AI agents](#use-with-ai-agents)).
