@@ -346,6 +346,12 @@ export class UiHelpers {
     return this.helpers.get(serial)?.alive === true;
   }
 
+  /** The device's API level (ro.build.version.sdk), read once; null when getprop gave none in `timeoutMs`. */
+  async apiLevel(serial: string, timeoutMs: number): Promise<number | null> {
+    if (!this.apiLevels.has(serial)) await this.readApiLevel(serial, timeoutMs);
+    return this.apiLevels.get(serial) ?? null;
+  }
+
   /** A dump within `timeoutMs`; throws UiHelperError, after which the helper on that device is stopped. */
   dump(serial: string, timeoutMs: number): Promise<HelperDump> {
     return this.serialized(serial, async () => {

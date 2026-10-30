@@ -14,6 +14,17 @@ All notable changes to Lionscope are documented here. The format is based on
   as `get_ui_tree` lists it. Where the dump has hints, it keeps matching once the field has text, unlike `text` (an
   empty field reports its hint as its text). Where it has none (older Android versions), it matches the text of any
   editable field instead, so it finds an empty field by its hint but not a filled one.
+- `type_text` `mode`: `cursor` (the default, as before: text goes in at the caret, which lands where the tap
+  landed), `append` (the caret goes to the end of the text first) and `replace` (the field's text is deleted
+  first); `replace` with `text: ""` clears the field. Both need a focused text field, read from a new dump before
+  any key: the one given as `field` must have taken the focus (one that opens a picker instead gets no key), and
+  without `field` the focused one is used. An empty field gets no keys. Android 13+ gets ctrl+End, or ctrl+A and
+  Delete (`input keycombination`). Older versions, or a device whose version can't be read, have no ctrl key from
+  adb: `append` presses End, which reaches the end of the caret's line only in a multi-line field, and `replace`
+  deletes as many characters as the UI tree shows (End then Delete, or Delete and Forward delete around the caret
+  when the text has line breaks), so it refuses a password field, whose text the tree hides. In a multi-line field
+  whose text wraps without line breaks, part of it may stay (the dump does not say a field is multi-line);
+  `matches` then says `false`.
 
 ### Changed
 
