@@ -13,6 +13,7 @@ export class TimeWindowBuffer<T extends { ts: number }> {
   private sizes: number[] = [];
   private head = 0;
   private bytes = 0;
+  private droppedTs: number | null = null;
 
   constructor(
     readonly windowMs: number,
@@ -26,6 +27,11 @@ export class TimeWindowBuffer<T extends { ts: number }> {
 
   get totalBytes(): number {
     return this.bytes;
+  }
+
+  /** The newest `ts` among the items dropped so far (null: none was): the buffer is complete after it. */
+  get droppedThroughTs(): number | null {
+    return this.droppedTs;
   }
 
   push(...items: T[]): void {
@@ -93,6 +99,8 @@ export class TimeWindowBuffer<T extends { ts: number }> {
   }
 
   private dropHead(): void {
+    const ts = this.items[this.head]?.ts ?? -Infinity;
+    this.droppedTs = Math.max(this.droppedTs ?? -Infinity, ts);
     if (this.byteLimit) this.bytes -= this.sizes[this.head] ?? 0;
     this.head += 1;
   }

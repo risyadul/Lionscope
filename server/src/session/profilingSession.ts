@@ -37,6 +37,8 @@ import { LogBatcher, startLogcatStream } from './logcatStream.ts';
 import type { LogcatStream } from './logcatStream.ts';
 import { MockRules, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
 import type { MockOrigin } from './mockRules.ts';
+import { NO_SESSION_MARKERS_MESSAGE, RunMarkers } from './runMarkers.ts';
+import type { RunMarker } from './runMarkers.ts';
 
 export interface CollectorIntervals {
   cpuMs: number;
@@ -111,6 +113,7 @@ export class ProfilingSession {
   private readonly store: SessionStore;
   private readonly sdk: SdkBridge;
   private readonly mocks: MockRules;
+  private readonly markers = new RunMarkers();
 
   constructor(options: ProfilingSessionOptions) {
     if (!isValidSerial(options.serial)) throw new Error('invalid adb serial');
@@ -199,6 +202,11 @@ export class ProfilingSession {
     return this.store.snapshot();
   }
 
+  /** See SessionStore.logsDroppedThrough. */
+  logsDroppedThrough(): number | null {
+    return this.store.logsDroppedThrough();
+  }
+
   /** Change this session's SDK options (partial); the session is re-announced and live links get `config`. */
   setSdkOptions(changes: Partial<SdkOptions>): void {
     this.sdk.setOptions(changes);
@@ -235,6 +243,17 @@ export class ProfilingSession {
     if (id !== undefined) return this.mocks.remove(id);
     this.mocks.clear();
     return true;
+  }
+
+  /** Mark `label` now (see RunMarkers.mark); refused once the session stopped. */
+  mark(label: string): { marker: RunMarker; replacedTs: number | null } {
+    if (this.stopped) throw new PublicError(NO_SESSION_MARKERS_MESSAGE);
+    return this.markers.mark(label, this.now());
+  }
+
+  /** The session's markers, oldest first (still readable once it stopped). */
+  runMarkers(): RunMarker[] {
+    return this.markers.list();
   }
 
   /** The top screen as the SDK last reported it, null when unknown or in the background. */
