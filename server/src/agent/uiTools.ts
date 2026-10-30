@@ -20,7 +20,7 @@ import {
   SCROLL_SETTLE_MS,
   targetSerial,
 } from './deviceTools.ts';
-import { aboveKeyboard, imeFrame, onKeyboard } from './ime.ts';
+import { aboveKeyboard, inside, screenInsets } from './insets.ts';
 import { fitShortEdge } from './png.ts';
 import { defineTool, ToolError, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
 import type { AgentContext } from './tool.ts';
@@ -45,6 +45,11 @@ const MAX_CANDIDATES = 10;
 const LONG_PRESS_MS = 800;
 /** After tapping a field, before typing: the keyboard and focus need a moment. */
 const FOCUS_SETTLE_MS = 300;
+/**
+ * The part of an element above the keyboard is tapped only when it is at least this share of the screen's short
+ * edge high (about 24 dp on a phone), or half the element's visible height.
+ */
+const MIN_ABOVE_KEYBOARD = 0.06;
 /** Android 13 (API 33) is the first whose `input keycombination` holds ctrl down for the next key (ctrl+A). */
 const KEY_COMBINATION_MIN_API = 33;
 const KEYCODE_FORWARD_DEL = 112;
@@ -237,6 +242,36 @@ type TapOutcome =
  * readBack, then reads the screen again and returns that element as it is after the tap. `taken` is the element
  * that took the tap, as it was before (null when nothing was tapped).
  */
+function isAncestor(tree: UiTree, ancestor: UiElement, element: UiElement): boolean {
+  for (let current = element.parent; current !== null; current = tree.elements[current]?.parent ?? null) {
+    if (current === ancestor.index) return true;
+  }
+  return false;
+}
+
+/**
+ * Where to tap an element whose center a docked keyboard covers: the center of its part above the keyboard. Null
+ * when that part is a sliver (see MIN_ABOVE_KEYBOARD), or when another element that takes taps holds the point
+ * (not the element's ancestors or descendants): apps often lift a button bar or an input row above the keyboard.
+ */
+function pointAboveKeyboard(tree: UiTree, element: UiElement, ime: Bounds): { x: number; y: number } | null {
+  const visible = visibleBounds(element.bounds, tree.screen);
+  const above = visible && aboveKeyboard(visible, ime);
+  if (!visible || !above) return null;
+  const shortEdge = Math.min(tree.screen.width, tree.screen.height);
+  const needed = Math.min(shortEdge * MIN_ABOVE_KEYBOARD, (visible[3] - visible[1]) / 2);
+  if (above[3] - above[1] < needed) return null;
+  const at = tapPoint(above, tree.screen);
+  if (!at) return null;
+  const covers = (other: UiElement) =>
+    other !== element &&
+    (other.clickable || other.longClickable || other.checkable || other.editable) &&
+    !isAncestor(tree, other, element) &&
+    !isAncestor(tree, element, other) &&
+    inside(other.bounds, at);
+  return tree.elements.some(covers) ? null : at;
+}
+
 export async function tapElement(
   ctx: AgentContext,
   serial: string,
@@ -249,7 +284,8 @@ export async function tapElement(
 ): Promise<{ outcome: TapOutcome; taken: UiElement | null }> {
   const deadline = performance.now() + ELEMENT_CALL_MS;
   // Where the keyboard is: a dump shows no keyboard, and one taken while it slid in has the layout from before.
-  const ime = await imeFrame(ctx, serial);
+  const keyboard = screenInsets(ctx, serial).then((insets) => insets?.ime ?? null);
+  let ime: Bounds | null;
   let tree: UiTree;
   let element: UiElement | undefined;
   if (target.index !== undefined) {
@@ -259,6 +295,7 @@ export async function tapElement(
         'No element with that index: call get_ui_tree first (indexes belong to its listing)',
       );
     tree = (await dumpUi(ctx, serial, { deadline })).tree;
+    ime = await keyboard;
     element = tree.elements[target.index];
     if (!element || elementSignature(element) !== elementSignature(listed)) {
       throw new ToolError(
@@ -267,6 +304,7 @@ export async function tapElement(
     }
   } else {
     requireSelector(target);
+    ime = await keyboard;
     tree = ime ? (await dumpUi(ctx, serial, { deadline })).tree : await recentTree(ctx, serial, deadline);
     const matches = distinctTargets(tree, findElements(tree, target));
     if (matches.length === 0) {
@@ -289,14 +327,11 @@ export async function tapElement(
   }
   let at = tapPoint(element.bounds, tree.screen);
   if (!at) throw new ToolError('The element is off the screen: scroll_to it first');
-  if (ime && onKeyboard(ime, at)) {
-    // A docked keyboard over its lower part: the center of the part above it.
-    const visible = visibleBounds(element.bounds, tree.screen);
-    const above = visible && aboveKeyboard(visible, ime);
-    at = above && tapPoint(above, tree.screen);
+  if (ime && inside(ime, at)) {
+    at = pointAboveKeyboard(tree, element, ime);
     if (!at) {
       throw new ToolError(
-        `The keyboard covers the element (the keyboard starts at y ${ime[1]}): nothing was tapped. Hide it with press_key back, or scroll the element above it, then tap again`,
+        `The keyboard covers the element (the keyboard starts at y ${ime[1]}, in device pixels): nothing was tapped. Hide the keyboard with press_key back, then tap again`,
       );
     }
   }
@@ -390,7 +425,7 @@ export const uiTreeTool = defineTool({
 export const tapElementTool = defineTool({
   name: 'tap_element',
   title: 'Tap an element',
-  description: `Taps an element found by text (visible text or content description), id, desc or hint, a field's placeholder (all given fields must match; text, desc and hint are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press); the part under the soft keyboard is not visible, and an element the keyboard covers is not tapped (the error says so: hide it with press_key back, or scroll). If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what took the tap as it was before (element) and, from a fresh dump about ${READBACK_SETTLE_MS} ms later: after, the same element (same place and title) or null with a note when it moved or is gone; checked {before, after} for a switch or checkbox, the tapped one or the only one inside the tapped row; screenChanged, whether anything on the screen differs (content that changes on its own, such as a timer, a carousel or a loading list, sets it too: false is the reliable signal that the tap changed nothing). readBack false skips that second dump. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Taps an element found by text (visible text or content description), id, desc or hint, a field's placeholder (all given fields must match; text, desc and hint are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press); the part under the soft keyboard is not visible: above a docked keyboard the part above it is tapped when it is high enough and no other element takes taps there, else nothing is tapped and the error says to hide the keyboard with press_key back first (scroll_to does not know about the keyboard). Other windows on top (dialogs of other apps, overlays) are not checked. If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what took the tap as it was before (element) and, from a fresh dump about ${READBACK_SETTLE_MS} ms later: after, the same element (same place and title) or null with a note when it moved or is gone; checked {before, after} for a switch or checkbox, the tapped one or the only one inside the tapped row; screenChanged, whether anything on the screen differs (content that changes on its own, such as a timer, a carousel or a loading list, sets it too: false is the reliable signal that the tap changed nothing). readBack false skips that second dump. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     ...selectorFields,

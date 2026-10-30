@@ -35,11 +35,15 @@ All notable changes to Lionscope are documented here. The format is based on
 - `search_logcat` returns `retained` (`entries`, `capacity`, `oldest`, `newest`): how far back the log buffer
   reaches, so an empty result can be told apart from lines already dropped.
 - `tap` and `swipe` take `readBack`: they compare a screenshot from before with one taken 300 ms after a tap or
-  500 ms after a swipe (so a fling can settle) and return `screenChanged` (more than 0.1% of the screen differs)
-  and `changedShare` (how much differs, in 8×8 px squares; a list scrolled by half a screen gives about 0.1). A
-  screenshot sees what the UI tree doesn't (a map, a canvas, a game), but anything that changes on its own (an
-  animation, the status bar clock, a scroll bar fading out) sets it too, so `false` is the reliable signal. Two
-  black screenshots (a secure window) give `null` with a `note`. Off by default: it adds 1 to 3 s.
+  500 ms after a swipe (so a fling can settle), leaving out the status and navigation bars (their clock and icons
+  change on their own), and return `screenChanged` (four or more 8×8 px squares differ, a 16×16 px area: a
+  checkbox) and `changedShare` (how much of the screen differs; a list scrolled by half a screen gives about 0.1).
+  A screenshot sees what the UI tree doesn't (a map, a canvas, a game), but anything else that changes on its own
+  (a blinking caret, 14 squares on an emulator; an animation; a scroll bar fading out) sets it too, so `false` is
+  the reliable signal: on a still Settings screen 60 of 60 comparisons found no square changed, also across a
+  clock minute. An app that is black in both screenshots (a secure window) gives `null` with a `note`, as does a
+  screenshot after the input that can't be read; one before it that can't be read fails the call before anything
+  is sent. Off by default: it adds 1 to 3 s.
 - `tap` returns a `warning` when the point is on the soft keyboard (the tap goes to a key, not the app).
 
 ### Changed
@@ -67,10 +71,12 @@ All notable changes to Lionscope are documented here. The format is based on
 - `tap_element` tapped elements under the soft keyboard and reported `tapped: true`, though the tap landed on a key
   (typing a letter into the focused field). The UI dump shows the app's window only, and an app drawn edge to edge
   keeps its elements behind the keyboard, so their bounds looked tappable. `tap_element` now reads the keyboard's
-  frame from `dumpsys window` (about 50 ms) before it taps: it taps the part of the element above a docked keyboard,
-  and an element the keyboard covers is not tapped; the error says to hide the keyboard (`press_key back`) or
-  scroll. While the keyboard is shown it also takes a new dump instead of one up to a second old, which may predate
-  the keyboard's layout change.
+  frame from `dumpsys window` (50 to 150 ms on an emulator) before it taps. It taps the part of the element above a
+  docked keyboard when that part is high enough (about 24 dp, or half the element) and no other element that
+  takes taps is there (a button bar the app lifted above the keyboard); otherwise nothing is tapped, and the error
+  says to hide the keyboard with `press_key back` first. While the keyboard is shown it also takes a new dump
+  instead of one up to a second old, which may predate the keyboard's layout change. Other windows on top are not
+  checked.
 - `get_stalls` and `get_strictmode` report the current SDK link (`sdk.connected`) and, when an empty result comes from
   a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
   StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session

@@ -2,8 +2,15 @@ import { crc32, deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { describeArgs } from '../src/adb/adb.ts';
 import { AGENT_KEYCODES, inputTextArgument, parseResolvedActivity } from '../src/agent/deviceTools.ts';
-import { IME_COMMAND } from '../src/agent/ime.ts';
-import { decodePng, fitShortEdge, pngSize, scalePng, screenDifference } from '../src/agent/png.ts';
+import { INSETS_COMMAND } from '../src/agent/insets.ts';
+import {
+  decodePng,
+  decodeScreenshot,
+  fitShortEdge,
+  pngSize,
+  scalePng,
+  screenDifference,
+} from '../src/agent/png.ts';
 import { callTool } from '../src/agent/registry.ts';
 import { fakeAgent, PKG } from './helpers/agentFixtures.ts';
 import { FakeAdb, FakeChild } from './helpers/fakes.ts';
@@ -72,24 +79,48 @@ describe('screen comparison', () => {
     return rgbaPng(64, 48, pixels);
   };
 
-  it('gives the share of 8×8 squares that changed', () => {
-    expect(screenDifference(flat(200), flat(200))).toEqual({ share: 0, blank: false });
-    // One square of 8 × 6.
-    expect(screenDifference(flat(200), withSquare(200, 40))).toEqual({ share: 1 / 48, blank: false });
+  const decoded = (png: Buffer) => {
+    const image = decodeScreenshot(png);
+    if (!image) throw new Error('not decoded');
+    return image;
+  };
+  const compare = (a: Buffer, b: Buffer, skip: [number, number, number, number][] = []) =>
+    screenDifference(decoded(a), decoded(b), skip);
+
+  it('counts the 8×8 squares that changed, leaving out the given areas', () => {
+    expect(compare(flat(200), flat(200))).toEqual({ changed: 0, cells: 48, blank: false });
+    expect(compare(flat(200), withSquare(200, 40))).toEqual({ changed: 1, cells: 48, blank: false });
+    // The square is in a left-out area (a status bar).
+    expect(compare(flat(200), withSquare(200, 40), [[0, 0, 64, 8]])).toEqual({
+      changed: 0,
+      cells: 40,
+      blank: false,
+    });
     // Small shifts (noise, antialiasing) don't count.
-    expect(screenDifference(flat(200), withSquare(200, 190))?.share).toBe(0);
-    expect(screenDifference(flat(200), rgbaPng(48, 64, Buffer.alloc(size, 200)))).toEqual({
-      share: 1,
+    expect(compare(flat(200), withSquare(200, 190)).changed).toBe(0);
+    // Another size: the screen rotated.
+    expect(compare(flat(200), rgbaPng(48, 64, Buffer.alloc(size, 200)))).toEqual({
+      changed: 48,
+      cells: 48,
       blank: false,
     });
   });
 
-  it('says when both are black, and when one is not a PNG it reads', () => {
-    expect(screenDifference(flat(0), flat(0))).toEqual({ share: 0, blank: true });
-    expect(screenDifference(flat(0), withSquare(0, 255))?.blank).toBe(false);
+  it('says when everything compared is black in both', () => {
+    expect(compare(flat(0), flat(0)).blank).toBe(true);
+    expect(compare(flat(0), withSquare(0, 255)).blank).toBe(false);
+    // A secure window under a lit status bar.
+    expect(compare(withSquare(0, 255), withSquare(0, 255), [[0, 0, 64, 8]]).blank).toBe(true);
+  });
+
+  it('reads only whole PNGs it can decode', () => {
     // Color type 0 (grayscale) is not decoded.
-    const grayscale = Buffer.concat([flat(0).subarray(0, 25), Buffer.from([0]), flat(0).subarray(26)]);
-    expect(screenDifference(flat(0), grayscale)).toBeNull();
+    expect(
+      decodeScreenshot(Buffer.concat([flat(0).subarray(0, 25), Buffer.from([0]), flat(0).subarray(26)])),
+    ).toBeNull();
+    expect(decodeScreenshot(Buffer.alloc(0))).toBeNull();
+    expect(decodeScreenshot(Buffer.from('error: closed'))).toBeNull();
+    expect(decodeScreenshot(flat(0).subarray(0, 60))).toBeNull();
   });
 });
 
@@ -158,11 +189,11 @@ describe('device tools', () => {
     };
     return { agent: fakeAgent({}, { adb }), adb, display, screenshots: () => shot };
   }
-  /** Shell commands other than the display-size and keyboard probes. */
+  /** Shell commands other than the display-size and insets probes. */
   const shellCommands = (adb: FakeAdb) =>
     adb.execCalls
       .map((args) => args.join(' '))
-      .filter((command) => !command.includes('shell wm size;') && !command.endsWith(IME_COMMAND));
+      .filter((command) => !command.includes('shell wm size;') && !command.endsWith(INSETS_COMMAND));
 
   it('screenshots at 720 px and maps taps and swipes back to device pixels', async () => {
     const { agent, adb } = deviceAgent();
@@ -212,8 +243,8 @@ describe('device tools', () => {
   });
 
   it('warns when a tap lands on the soft keyboard', async () => {
-    const keyboard = 'InsetsSource id=3 type=ime frame=[0,1500][1080,2400] visible=true flags=';
-    const { agent, adb } = deviceAgent((command) => (command === IME_COMMAND ? keyboard : ''));
+    const keyboard = '        InsetsSource id=3 type=ime frame=[0,1500][1080,2400] visible=true flags=';
+    const { agent, adb } = deviceAgent((command) => (command === INSETS_COMMAND ? keyboard : ''));
     const space = { width: 720, height: 1600 };
     expect(await callTool(agent.ctx, 'tap', { x: 360, y: 1400, ...space }, true)).toMatchObject({
       ok: true,
@@ -229,41 +260,75 @@ describe('device tools', () => {
   });
 
   it('compares screenshots from before and after a tap or swipe on request', async () => {
-    const plain = rgbaPng(108, 240, Buffer.alloc(108 * 240 * 4, 200));
-    const scrolled = rgbaPng(
-      108,
-      240,
-      Buffer.from(Buffer.alloc(108 * 240 * 4, 200).map((value, i) => (i < 108 * 120 * 4 ? 40 : value))),
-    );
+    /** A 108×240 screenshot, gray with the rows from `top` to `bottom` and columns up to `right` set to `value`. */
+    const shot = (value = 200, top = 0, bottom = 0, right = 108, base = 200) => {
+      const pixels = Buffer.alloc(108 * 240 * 4, base);
+      for (let y = top; y < bottom; y++) pixels.fill(value, y * 108 * 4, (y * 108 + right) * 4);
+      return rgbaPng(108, 240, pixels);
+    };
+    // The status bar of these screenshots (in their pixels).
+    const insets = (command: string) =>
+      command === INSETS_COMMAND
+        ? '        InsetsSource id=b740000 type=statusBars frame=[0,0][108,16] visible=true flags='
+        : '';
     const space = { width: 720, height: 1600 };
+    const tap = { x: 1, y: 1, ...space, readBack: true };
     const swipe = { x1: 360, y1: 1400, x2: 360, y2: 400, ...space };
-    const moved = deviceAgent(undefined, [plain, scrolled]);
+    const moved = deviceAgent(insets, [shot(), shot(40, 16, 128)]);
     expect(await callTool(moved.agent.ctx, 'swipe', { ...swipe, readBack: true }, true)).toMatchObject({
       ok: true,
       result: { from: { x: 540, y: 2100 }, screenChanged: true, changedShare: 0.5 },
     });
     expect(moved.screenshots()).toBe(2);
-    const still = deviceAgent(undefined, [plain, plain]);
-    expect(
-      await callTool(still.agent.ctx, 'tap', { x: 1, y: 1, ...space, readBack: true }, true),
-    ).toMatchObject({
+    const still = deviceAgent(insets, [shot(), shot()]);
+    expect(await callTool(still.agent.ctx, 'tap', tap, true)).toMatchObject({
       ok: true,
       result: { tapped: { x: 2, y: 2 }, screenChanged: false, changedShare: 0 },
     });
+    // A checkbox-sized change (16×16 px) counts; one 8×8 square, or the status bar's clock, does not.
+    for (const [after, changed] of [
+      [shot(40, 96, 112, 16), true],
+      [shot(40, 96, 104, 8), false],
+      [shot(40, 0, 16), false],
+    ] as const) {
+      const agent = deviceAgent(insets, [shot(), after]).agent;
+      expect(await callTool(agent.ctx, 'tap', tap, true)).toMatchObject({
+        result: { screenChanged: changed },
+      });
+    }
     // Without readBack: no screenshot, no screenChanged.
     const quick = deviceAgent();
     const result = await callTool(quick.agent.ctx, 'swipe', swipe, true);
     expect(result.ok && result.result).not.toHaveProperty('screenChanged');
     expect(quick.screenshots()).toBe(0);
-    // A secure window is captured black: the effect is unknown.
-    const black = rgbaPng(108, 240, Buffer.alloc(108 * 240 * 4, 0));
-    const secure = deviceAgent(undefined, [black, black]);
-    expect(
-      await callTool(secure.agent.ctx, 'tap', { x: 1, y: 1, ...space, readBack: true }, true),
-    ).toMatchObject({
+    // A secure window is captured black, under a lit status bar: the effect is unknown.
+    const secure = deviceAgent(insets, [shot(255, 0, 16, 108, 0)]);
+    expect(await callTool(secure.agent.ctx, 'tap', tap, true)).toMatchObject({
       ok: true,
       result: { screenChanged: null, note: expect.stringContaining('secure window') },
     });
+  });
+
+  it('sends nothing when the screenshot before is unreadable, and never fails after sending', async () => {
+    const plain = rgbaPng(108, 240, Buffer.alloc(108 * 240 * 4, 200));
+    const tap = { x: 1, y: 1, width: 720, height: 1600, readBack: true };
+    const before = deviceAgent(undefined, [Buffer.from('error: closed')]);
+    expect(await callTool(before.agent.ctx, 'tap', tap, true)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('nothing was sent'),
+    });
+    expect(shellCommands(before.adb)).toEqual([]);
+    for (const after of [plain.subarray(0, 100), Buffer.alloc(0)]) {
+      const cut = deviceAgent(undefined, [plain, after]);
+      expect(await callTool(cut.agent.ctx, 'tap', tap, true)).toMatchObject({
+        ok: true,
+        result: {
+          tapped: { x: 2, y: 2 },
+          screenChanged: null,
+          note: expect.stringContaining('after the input'),
+        },
+      });
+    }
   });
 
   it('types quoted text and presses only navigation keys', async () => {

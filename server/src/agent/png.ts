@@ -201,20 +201,34 @@ export function cropPng(
   return { png: encodeRgb(downscale(cropped, target), target), size: target };
 }
 
+/** A screenshot decoded for screenDifference, null when it is not a PNG this decoder reads (or is cut short). */
+export function decodeScreenshot(data: Buffer): DecodedPng | null {
+  try {
+    return isPng(data) ? decodePng(data) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Two screenshots are compared in squares of this side (px), whose mean color must move by more than CELL_DELTA. */
 const CELL_PX = 8;
 const CELL_DELTA = 16;
 
 /**
- * How much of the screen differs between two screenshots: the share of 8×8 px squares whose mean color moved by
- * more than 16 of 255 on a channel, 1 for screenshots of different sizes (the screen rotated). blank: both are
- * entirely black, as a secure window is captured. Null when one can't be decoded.
+ * How two screenshots differ, in 8×8 px squares whose mean color moved by more than 16 of 255 on a channel,
+ * leaving out the squares whose center is in `skip` (the system bars): `changed` of `cells` (all of them when the
+ * sizes differ: the screen rotated). blank: every square compared is black in both, as a secure window is
+ * captured.
  */
-export function screenDifference(before: Buffer, after: Buffer): { share: number; blank: boolean } | null {
-  const a = decodePng(before);
-  const b = decodePng(after);
-  if (!a || !b) return null;
-  if (a.width !== b.width || a.height !== b.height) return { share: 1, blank: false };
+export function screenDifference(
+  a: DecodedPng,
+  b: DecodedPng,
+  skip: readonly (readonly [number, number, number, number])[] = [],
+): { changed: number; cells: number; blank: boolean } {
+  const cellsOf = (image: DecodedPng) => Math.ceil(image.width / CELL_PX) * Math.ceil(image.height / CELL_PX);
+  if (a.width !== b.width || a.height !== b.height) {
+    return { changed: cellsOf(b), cells: cellsOf(b), blank: false };
+  }
   let cells = 0;
   let changed = 0;
   let lit = false;
@@ -222,6 +236,9 @@ export function screenDifference(before: Buffer, after: Buffer): { share: number
     for (let cx = 0; cx < a.width; cx += CELL_PX) {
       const yEnd = Math.min(a.height, cy + CELL_PX);
       const xEnd = Math.min(a.width, cx + CELL_PX);
+      const midX = (cx + xEnd) / 2;
+      const midY = (cy + yEnd) / 2;
+      if (skip.some(([x1, y1, x2, y2]) => midX >= x1 && midX < x2 && midY >= y1 && midY < y2)) continue;
       // Per channel the sum before minus the sum after; total is zero when the square is black in both.
       let red = 0;
       let green = 0;
@@ -249,5 +266,5 @@ export function screenDifference(before: Buffer, after: Buffer): { share: number
       if (Math.abs(red) > limit || Math.abs(green) > limit || Math.abs(blue) > limit) changed++;
     }
   }
-  return { share: cells > 0 ? changed / cells : 0, blank: !lit };
+  return { changed, cells, blank: !lit };
 }

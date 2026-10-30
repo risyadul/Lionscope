@@ -13,7 +13,7 @@ import {
   visibleFraction,
 } from '../src/agent/uiTree.ts';
 import { decodeEntities, MAX_UI_NODES, parseUiXml, UiXmlError } from '../src/agent/uiXml.ts';
-import { aboveKeyboard, IME_COMMAND, onKeyboard, parseImeFrame } from '../src/agent/ime.ts';
+import { aboveKeyboard, inside, INSETS_COMMAND, parseInsets } from '../src/agent/insets.ts';
 import { fakeAgent } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
 import type { ExecOptions } from '../src/adb/adb.ts';
@@ -189,45 +189,68 @@ describe('the UI tree', () => {
   });
 });
 
-/** `dumpsys window displays` about a keyboard shown with `frame` (Android 14+). */
+/** `dumpsys window displays` (filtered as INSETS_COMMAND does) with a keyboard shown with `frame` (Android 14+). */
 const imeLine = (frame: string) =>
   `        InsetsSource id=3 type=ime frame=${frame} visibleFrame=${frame} visible=true flags= sideHint=BOTTOM boundingRects=null\n`;
 
-describe('the soft keyboard', () => {
-  it('reads its frame while it is shown, from Android 11 and 14+ output', () => {
-    expect(parseImeFrame(imeLine('[0,1541][1080,2424]'))).toEqual([0, 1541, 1080, 2424]);
-    // Hidden: an empty frame, or visible=false.
+/** INSETS_COMMAND's output on an Android 16 emulator, the keyboard hidden. */
+const INSETS = [
+  '  Display: mDisplayId=0 (organized)',
+  '        InsetsSource id=a21d0001 type=navigationBars frame=[0,2298][1080,2424] visible=true flags=INSETS_ROUNDED_CORNER sideHint=BOTTOM boundingRects=null',
+  '        InsetsSource id=a21d0004 type=systemGestures frame=[0,0][0,0] visible=true flags= sideHint=NONE boundingRects=null',
+  '        InsetsSource id=3 type=ime frame=[0,0][0,0] visibleFrame=[0,2424][1080,2424] visible=false flags= sideHint=NONE boundingRects=null',
+  '        InsetsSource id=27 type=displayCutout frame=[0,0][1080,142] visible=true flags= sideHint=TOP boundingRects=null',
+  '        InsetsSource id=b740000 type=statusBars frame=[0,0][1080,142] visible=true flags= sideHint=TOP boundingRects=null',
+].join('\n');
+
+describe('the soft keyboard and the system bars', () => {
+  it('reads the bars, and the keyboard while it is shown, from Android 11 and 14+ output', () => {
+    expect(parseInsets(INSETS)).toEqual({
+      ime: null,
+      bars: [
+        [0, 2298, 1080, 2424],
+        [0, 0, 1080, 142],
+      ],
+    });
+    expect(parseInsets(INSETS + '\n' + imeLine('[0,1541][1080,2424]'))?.ime).toEqual([0, 1541, 1080, 2424]);
     expect(
-      parseImeFrame(
-        'InsetsSource id=3 type=ime frame=[0,0][0,0] visibleFrame=[0,2424][1080,2424] visible=false flags= sideHint=NONE',
-      ),
-    ).toBeNull();
-    expect(
-      parseImeFrame('InsetsSource id=3 type=ime frame=[0,1541][1080,2424] visible=false flags='),
+      parseInsets('InsetsSource id=3 type=ime frame=[0,1541][1080,2424] visible=false flags=')?.ime,
     ).toBeNull();
     // Older: ITYPE_IME, no id; the visible frame wins over the frame.
     expect(
-      parseImeFrame(
+      parseInsets(
         'InsetsSource type=ITYPE_IME frame=[0,1300][1080,2400] visibleFrame=[0,1500][1080,2400] visible=true',
-      ),
+      )?.ime,
     ).toEqual([0, 1500, 1080, 2400]);
-    expect(parseImeFrame('InsetsSource type=ITYPE_IME frame=[0,1300][1080,2400] visible=true')).toEqual([
+    expect(parseInsets('InsetsSource type=ITYPE_IME frame=[0,1300][1080,2400] visible=true')?.ime).toEqual([
       0, 1300, 1080, 2400,
     ]);
-    expect(parseImeFrame('')).toBeNull();
+    expect(parseInsets('')).toBeNull();
+    // A provider's copy of a source is not the source.
     expect(
-      parseImeFrame('InsetsSource id=1 type=navigationBars frame=[0,2298][1080,2424] visible=true'),
+      parseInsets('        mSource=InsetsSource id=3 type=ime frame=[0,1541][1080,2424] visible=true flags='),
     ).toBeNull();
+  });
+
+  it('takes the default display, wherever it is listed', () => {
+    const other = [
+      '  Display: mDisplayId=2',
+      '        InsetsSource id=3 type=ime frame=[0,0][0,0] visible=false flags=',
+      '        InsetsSource id=4 type=statusBars frame=[0,0][1920,60] visible=true flags=',
+    ].join('\n');
+    const shown = INSETS + '\n' + imeLine('[0,1541][1080,2424]');
+    expect(parseInsets(`${other}\n${shown}`)).toEqual(parseInsets(shown));
+    expect(parseInsets(`${shown}\n${other}`)?.ime).toEqual([0, 1541, 1080, 2424]);
   });
 
   it('tells a point on it and the part of an element above it', () => {
     const ime: [number, number, number, number] = [0, 1500, 1080, 2400];
-    expect(onKeyboard(ime, { x: 540, y: 1500 })).toBe(true);
-    expect(onKeyboard(ime, { x: 540, y: 1499 })).toBe(false);
-    expect(onKeyboard(null, { x: 540, y: 2000 })).toBe(false);
+    expect(inside(ime, { x: 540, y: 1500 })).toBe(true);
+    expect(inside(ime, { x: 540, y: 1499 })).toBe(false);
+    expect(inside(null, { x: 540, y: 2000 })).toBe(false);
     expect(aboveKeyboard([0, 560, 1080, 2200], ime)).toEqual([0, 560, 1080, 1500]);
     expect(aboveKeyboard([0, 1600, 1080, 2200], ime)).toBeNull();
-    // A floating keyboard narrower than the element.
+    // A keyboard narrower than the element.
     expect(aboveKeyboard([0, 560, 1080, 2200], [100, 1500, 900, 2000])).toBeNull();
   });
 });
@@ -255,7 +278,7 @@ function uiAgent(
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
     commands.push(command);
-    if (command === IME_COMMAND && ime !== undefined) return imeLine(ime);
+    if (command === INSETS_COMMAND && ime !== undefined) return INSETS + '\n' + imeLine(ime);
     if (!command.startsWith('uiautomator dump')) return '';
     const file = /uiautomator dump (\S+)/.exec(command)?.[1] ?? '';
     expect(command).toContain(`rm -f ${file}`);
@@ -722,7 +745,7 @@ describe('UI tools', () => {
   it('does not tap an element the keyboard covers, and taps the part of one above it', async () => {
     const covered = uiAgent([DUMP], { ime: '[0,1500][1080,2400]' });
     await expect(covered.call('tap_element', { text: 'list' })).rejects.toThrow(
-      'The keyboard covers the element (the keyboard starts at y 1500): nothing was tapped. Hide it with press_key back',
+      'The keyboard covers the element (the keyboard starts at y 1500, in device pixels): nothing was tapped. Hide the keyboard with press_key back, then tap again',
     );
     expect(covered.inputs()).toEqual([]);
     // The list's center is above the keyboard.
@@ -734,10 +757,34 @@ describe('UI tools', () => {
     expect(await high.call('tap_element', { id: 'list', readBack: false })).toMatchObject({
       at: { x: 540, y: 780 },
     });
-    // A floating keyboard over its center.
-    const floating = uiAgent([DUMP], { ime: '[100,1200][900,1700]' });
-    await expect(floating.call('tap_element', { id: 'list' })).rejects.toThrow('The keyboard covers');
-    expect(floating.inputs()).toEqual([]);
+    // A keyboard narrower than the list, over its center.
+    const narrow = uiAgent([DUMP], { ime: '[100,1200][900,1700]' });
+    await expect(narrow.call('tap_element', { id: 'list' })).rejects.toThrow('The keyboard covers');
+    // Only a sliver (40 px) of the list is above it.
+    const sliver = uiAgent([DUMP], { ime: '[0,600][1080,2400]' });
+    await expect(sliver.call('tap_element', { id: 'list' })).rejects.toThrow('The keyboard covers');
+    expect([...narrow.inputs(), ...sliver.inputs()]).toEqual([]);
+  });
+
+  it('does not tap above the keyboard where another element would take the tap', async () => {
+    const screen = (bar: string) =>
+      `<hierarchy rotation="0"><node class="android.widget.FrameLayout" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="android.widget.LinearLayout" clickable="true" package="com.example.shop" bounds="[0,800][1080,1400]"><node class="android.widget.TextView" text="Order 7" package="com.example.shop" bounds="[40,820][1040,1380]" /></node></node>${bar}</node></hierarchy>`;
+    // The app lifted its button bar above the keyboard, over the row's visible part.
+    const lifted = uiAgent(
+      [
+        screen(
+          '<node class="android.widget.Button" text="Send" clickable="true" package="com.example.shop" bounds="[0,850][1080,1000]" />',
+        ),
+      ],
+      { ime: '[0,1000][1080,2400]' },
+    );
+    await expect(lifted.call('tap_element', { text: 'Order 7' })).rejects.toThrow('The keyboard covers');
+    expect(lifted.inputs()).toEqual([]);
+    const clear = uiAgent([screen('')], { ime: '[0,1000][1080,2400]' });
+    expect(await clear.call('tap_element', { text: 'Order 7', readBack: false })).toMatchObject({
+      at: { x: 540, y: 910 },
+      element: { class: 'LinearLayout' },
+    });
   });
 
   it('reads the screen again instead of a recent dump while the keyboard is shown', async () => {
