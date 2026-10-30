@@ -290,7 +290,11 @@ function isAncestor(tree: UiTree, ancestor: UiElement, element: UiElement): bool
  * The dump gives no drawing order, so a clickable view under the element refuses too, and a bar that eats touches
  * without being clickable (a Compose Surface) is not seen.
  */
-function pointAboveKeyboard(tree: UiTree, element: UiElement, ime: Bounds): { x: number; y: number } | null {
+export function pointAboveKeyboard(
+  tree: UiTree,
+  element: UiElement,
+  ime: Bounds,
+): { x: number; y: number } | null {
   const visible = visibleBounds(element.bounds, tree.screen);
   const above = visible && aboveKeyboard(visible, ime);
   if (!visible || !above) return null;

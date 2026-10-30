@@ -163,7 +163,8 @@ Each device tool call is a round trip of hundreds of ms. To reproduce a race tha
 (two taps 50 ms apart, a tap then BACK before a delayed job runs), use `run_inputs` with a list of steps
 (`tap`, `tap_element`, `key`, `wait`) run in one adb call; from the shell, `run_inputs --steps '<JSON list>'`.
 Its elements are found before anything is sent, on the screen as it is then: a `tap_element` step can't aim at
-something an earlier step opens (use a `tap` from a screenshot of that screen, or a separate call). The real spacing
+something an earlier step opens (use a `tap` from a screenshot of that screen, or a separate call), nor at one under
+the soft keyboard (hide it with `press_key back` in a call before). The real spacing
 is the wait plus the cost of each input (tens of ms): read `atMs` / `tookMs` in the result instead of assuming the
 waits were exact. If the result has `incomplete`, check the screen before running the sequence again.
 
