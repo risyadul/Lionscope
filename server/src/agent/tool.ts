@@ -45,6 +45,7 @@ export type AgentSessions = Pick<
   | 'getDevices'
   | 'getSessionState'
   | 'getSnapshot'
+  | 'getLogsDroppedThrough'
   | 'refreshDevices'
   | 'listApps'
   | 'startSession'

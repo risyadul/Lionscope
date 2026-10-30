@@ -11,13 +11,16 @@ All notable changes to Lionscope are documented here. The format is based on
 - Agent tool `mark` (session): names the current moment of the running session, e.g. `run-3` before the third
   repetition of a test. `search_logcat` and `get_crashes` take `sinceMarker` (instead of `since`) and
   `untilMarker`, so lines and crashes can be counted per run without clock math or clearing the device's log
-  buffer. Markers are on the clock logcat lines are timed on (the device clock plus the offset measured at the
-  session start); marking a label again moves it, `status` lists them and a new session starts without any. They
-  are not shown in the dashboard.
+  buffer; a range that ends before it starts is refused. Markers are on the clock logcat lines are timed on (the
+  device clock plus the offset measured at the session start); marking a label again moves it, `status` lists the
+  newest 20 and a new session starts without any. They are not shown in the dashboard.
+- `search_logcat` and `get_crashes` return the resolved time `range`, and `search_logcat` `complete`: false once
+  lines of that range have been dropped from the log buffer, so a count taken too late does not read as zero.
 - `screenshot` returns `meanLuminance`, `nonBlackRatio`, `dominantRatio` and `blank` of the full-size capture, to
   tell across runs whether a screen rendered or stayed black without comparing images: `blank` means one colour
-  covers at least 98% of the pixels (a black video area with only status bar icons on top, also a sparse page of
-  any colour). The image is unchanged.
+  covers at least 98% of the pixels, all near-black shades counting as one (a black video area with only status
+  bar icons on top, also a sparse page of any colour). The image is unchanged; a capture that can't be decoded
+  gets null numbers.
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)

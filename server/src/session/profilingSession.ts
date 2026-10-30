@@ -202,6 +202,11 @@ export class ProfilingSession {
     return this.store.snapshot();
   }
 
+  /** See SessionStore.logsDroppedThrough. */
+  logsDroppedThrough(): number | null {
+    return this.store.logsDroppedThrough();
+  }
+
   /** Change this session's SDK options (partial); the session is re-announced and live links get `config`. */
   setSdkOptions(changes: Partial<SdkOptions>): void {
     this.sdk.setOptions(changes);

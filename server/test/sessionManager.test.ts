@@ -253,13 +253,19 @@ describe('SessionManager', () => {
 
   it('keeps markers per session: refused without one, readable once stopped, cleared by a new start', async () => {
     const { manager } = setup();
-    expect(() => manager.mark('run-1')).toThrow(PublicError);
+    await expect(manager.mark('run-1')).rejects.toThrow(PublicError);
     expect(manager.getMarkers()).toEqual([]);
     await manager.startSession('emulator-5554', PKG);
-    expect(manager.mark('run-1').marker).toEqual({ label: 'run-1', ts: Date.now() });
+    expect((await manager.mark('run-1')).marker).toEqual({ label: 'run-1', ts: Date.now() });
     await manager.stopSession();
-    expect(() => manager.mark('run-2')).toThrow(NO_SESSION_MARKERS_MESSAGE);
+    await expect(manager.mark('run-2')).rejects.toThrow(NO_SESSION_MARKERS_MESSAGE);
     expect(manager.getMarkers().map((marker) => marker.label)).toEqual(['run-1']);
+    // Not awaited: the mark still lands on the new session, after its start.
+    const started = manager.startSession('emulator-5554', PKG);
+    const marked = manager.mark('run-3');
+    await started;
+    await marked;
+    expect(manager.getMarkers().map((marker) => marker.label)).toEqual(['run-3']);
     await manager.startSession('emulator-5554', PKG);
     expect(manager.getMarkers()).toEqual([]);
     await manager.close();

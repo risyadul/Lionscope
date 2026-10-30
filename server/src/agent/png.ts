@@ -215,48 +215,70 @@ export const BLACK_LUMA = 24;
  * Measured at 1080×2424: Settings' main list 0.958, the black Clock screen saver (a clock and date) 0.99, screen off 1.
  */
 export const BLANK_DOMINANT_RATIO = 0.98;
-/** About this many pixels are sampled, on a regular grid. */
+/** About this many pixels are sampled, one at a pseudo-random spot of each cell of a grid. */
 const STATS_SAMPLES = 1 << 17;
+/** Colour buckets: 4 bits per channel, plus one for every black pixel. */
+const BLACK_BUCKET = 4096;
 
 export interface ScreenStats {
   /** Mean Rec. 709 luma, 0 (black) to 1 (white). */
   meanLuminance: number;
   /** Share of pixels brighter than BLACK_LUMA. */
   nonBlackRatio: number;
-  /** Share of pixels of the most common colour (4 bits per channel, so noise and dithering count as one). */
+  /**
+   * Share of pixels of the most common colour: 4 bits per channel, and all black (luma ≤ BLACK_LUMA) as one, so
+   * noise, dithering and black next to video black count as one colour.
+   */
   dominantRatio: number;
   /** dominantRatio ≥ BLANK_DOMINANT_RATIO: the screen is essentially one colour (black, white or any other). */
   blank: boolean;
 }
 
-/** Brightness and uniformity of a screenshot, from a grid of about STATS_SAMPLES of its pixels. */
+/**
+ * Brightness and uniformity of a screenshot, from about STATS_SAMPLES of its pixels: one per cell of a grid, at a
+ * pseudo-random (but fixed) spot in the cell, so a regular pattern such as a checkerboard or striped rows is not
+ * read as one of its colours.
+ */
 export function screenStats(image: DecodedPng): ScreenStats {
   const { width, height, channels, pixels } = image;
   const step = Math.max(1, Math.floor(Math.sqrt((width * height) / STATS_SAMPLES)));
-  const colors = new Uint32Array(4096);
+  const colors = new Uint32Array(BLACK_BUCKET + 1);
+  let seed = 0x2545f491;
+  /** xorshift32: a spot in the cell, the same for every call. */
+  const jitter = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) % step;
+  };
   let samples = 0;
   let lumaSum = 0;
   let nonBlack = 0;
-  for (let y = Math.floor(step / 2); y < height; y += step) {
-    for (let x = Math.floor(step / 2); x < width; x += step) {
+  for (let cellY = 0; cellY < height; cellY += step) {
+    for (let cellX = 0; cellX < width; cellX += step) {
+      // Clamped: the last row and column of cells may be cut off by the edge.
+      const y = Math.min(height - 1, cellY + jitter());
+      const x = Math.min(width - 1, cellX + jitter());
       const at = (y * width + x) * channels;
       const r = pixels[at] ?? 0;
       const g = pixels[at + 1] ?? 0;
       const b = pixels[at + 2] ?? 0;
       const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       lumaSum += luma;
-      if (luma > BLACK_LUMA) nonBlack++;
-      const color = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+      const black = luma <= BLACK_LUMA;
+      if (!black) nonBlack++;
+      const color = black ? BLACK_BUCKET : ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
       colors[color] = (colors[color] ?? 0) + 1;
       samples++;
     }
   }
-  const dominantRatio = Math.max(...colors) / samples;
   const round = (value: number) => Math.round(value * 1000) / 1000;
+  const dominantRatio = round(Math.max(...colors) / samples);
   return {
     meanLuminance: round(lumaSum / samples / 255),
     nonBlackRatio: round(nonBlack / samples),
-    dominantRatio: round(dominantRatio),
+    dominantRatio,
+    // From the rounded value, so the two never disagree.
     blank: dominantRatio >= BLANK_DOMINANT_RATIO,
   };
 }

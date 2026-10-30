@@ -127,12 +127,15 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.10.0")
 1. `mark --label run-1` (a running session is needed) right before each repetition (`stop_app`, `launch_app`, the
    steps), with a new label per run. Markers are on the clock logcat lines are timed on, so no clock math and no
    `adb logcat -c` (which empties the device's log buffers for every reader).
-2. Count per run: `search_logcat --sinceMarker run-1 --untilMarker run-2 --query <text>` (`matched`), and
-   `get_crashes --sinceMarker run-1 --untilMarker run-2`. The last run takes only `--sinceMarker`. Marking a
-   label again moves it to now; `status` lists the markers, and a new session starts without any.
+2. Count each run right after it ends, before the next one: `search_logcat --sinceMarker run-1 --query <text>`
+   (`matched`). The log buffer keeps the newest 5000 lines, under a minute for a chatty app, so counting all runs
+   at the end undercounts the early ones: `complete: false` in the result says lines of the range were already
+   dropped. Crashes are kept for the whole session: `get_crashes --sinceMarker run-1 --untilMarker run-2` works
+   at any time. Marking a label again moves it to now; `status` lists the markers, and a new session starts
+   without any.
 3. With device control, `screenshot` at the same step of each run: `blank` says the screen is one colour (a video
    area that stayed black, with only status bar icons on top); `nonBlackRatio` and `meanLuminance` say how much
-   of it is lit.
+   of it is lit. A secure window (FLAG_SECURE, DRM-protected video) is captured black even while it plays.
 
 ### Verify a fix
 

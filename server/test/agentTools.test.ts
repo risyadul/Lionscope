@@ -601,13 +601,28 @@ describe('mark', () => {
     expect(await markAt(T0 + 5000, 'run-1')).toEqual({
       marker: { label: 'run-1', time: new Date(T0 + 5000).toISOString() },
       replaced: null,
-      markers: [{ label: 'run-1', time: new Date(T0 + 5000).toISOString() }],
+      markers: { total: 1, newest: [{ label: 'run-1', time: new Date(T0 + 5000).toISOString() }] },
     });
     await markAt(T0 + 30_000, 'run-2');
     const again = await markAt(T0 + 40_000, 'run-1');
     expect(again.replaced).toBe(new Date(T0 + 5000).toISOString());
-    expect(again.markers.map((marker: { label: string }) => marker.label)).toEqual(['run-2', 'run-1']);
+    expect(again.markers.newest.map((marker: { label: string }) => marker.label)).toEqual(['run-2', 'run-1']);
     expect((await run(agent, 'status')).markers).toEqual(again.markers);
+  });
+
+  it('lists only the newest 20 markers, in results, status and errors', async () => {
+    const { agent, markAt } = markedAgent();
+    for (let i = 1; i <= 25; i++) await markAt(T0 + i, `run-${i}`);
+    const { markers } = await run(agent, 'status');
+    expect(markers.total).toBe(25);
+    expect(markers.newest.map((marker: { label: string }) => marker.label)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `run-${i + 6}`),
+    );
+    const unknown = await callTool(agent.ctx, 'search_logcat', { sinceMarker: 'run-99' }, false);
+    expect(unknown).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('newest 20 of 25 markers: run-6,'),
+    });
   });
 
   it('bounds search_logcat and get_crashes by markers: sinceMarker inclusive, untilMarker exclusive', async () => {
@@ -622,6 +637,28 @@ describe('mark', () => {
     expect(await lines({ since: new Date(T0).toISOString(), untilMarker: 'run-1' })).toEqual([]);
     expect((await run(agent, 'get_crashes', { sinceMarker: 'run-2' })).total).toBe(1);
     expect((await run(agent, 'get_crashes', { untilMarker: 'run-2' })).total).toBe(1);
+  });
+
+  it('gives the resolved range, and says when lines of it were already dropped', async () => {
+    const { agent, markAt } = markedAgent();
+    await markAt(T0 + 10_000, 'run-1');
+    await markAt(T0 + 30_000, 'run-2');
+    const search = (args: object) => run(agent, 'search_logcat', args);
+    expect(await search({ sinceMarker: 'run-1', untilMarker: 'run-2' })).toMatchObject({
+      range: { from: new Date(T0 + 10_000).toISOString(), until: new Date(T0 + 30_000).toISOString() },
+      complete: true,
+    });
+    expect(await search({})).toMatchObject({ range: { from: null, until: null }, complete: true });
+    expect((await search({ since: 5000 })).range.from).toBe(new Date(T0 + 25_000).toISOString());
+    expect((await run(agent, 'get_crashes', { untilMarker: 'run-2' })).range).toEqual({
+      from: null,
+      until: new Date(T0 + 30_000).toISOString(),
+    });
+    // The buffer dropped lines up to run-1's time: run-1 is incomplete, run-2 is not.
+    agent.logsDroppedThrough = T0 + 10_000;
+    expect((await search({ sinceMarker: 'run-1' })).complete).toBe(false);
+    expect((await search({})).complete).toBe(false);
+    expect((await search({ sinceMarker: 'run-2' })).complete).toBe(true);
   });
 
   it('refuses unknown labels (listing the known ones), since with sinceMarker, and bad labels', async () => {
@@ -640,11 +677,35 @@ describe('mark', () => {
       await callTool(agent.ctx, 'search_logcat', { since: 1000, sinceMarker: 'run-1' }, false),
     ).toMatchObject({ ok: false, error: 'Pass since or sinceMarker, not both' });
     for (const label of ['', 'run 1', 'x'.repeat(41), 'run;reboot']) {
-      expect(await callTool(agent.ctx, 'mark', { label }, false)).toMatchObject({
+      for (const [name, args] of [
+        ['mark', { label }],
+        ['search_logcat', { sinceMarker: label }],
+        ['get_crashes', { untilMarker: label }],
+      ] as const) {
+        expect(await callTool(agent.ctx, name, args, false)).toMatchObject({
+          ok: false,
+          code: 'invalid_arguments',
+        });
+      }
+    }
+  });
+
+  it('refuses a range that ends before it starts (a label marked again)', async () => {
+    const { agent, markAt } = markedAgent();
+    await markAt(T0 + 10_000, 'run-1');
+    await markAt(T0 + 30_000, 'run-2');
+    await markAt(T0 + 40_000, 'run-1');
+    for (const name of ['search_logcat', 'get_crashes']) {
+      expect(
+        await callTool(agent.ctx, name, { sinceMarker: 'run-1', untilMarker: 'run-2' }, false),
+      ).toMatchObject({
         ok: false,
-        code: 'invalid_arguments',
+        error: `untilMarker "run-2" (${new Date(T0 + 30_000).toISOString()}) is not after the start of the range (${new Date(T0 + 40_000).toISOString()}); was a label marked again?`,
       });
     }
+    expect(
+      await callTool(agent.ctx, 'search_logcat', { sinceMarker: 'run-1', untilMarker: 'run-1' }, false),
+    ).toMatchObject({ ok: false });
   });
 
   it('needs a running session', async () => {

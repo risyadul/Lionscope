@@ -124,6 +124,32 @@ describe('screen stats', () => {
     expect(stats.meanLuminance).toBeCloseTo(16.5 / 255, 2);
   });
 
+  it('counts black and video black as one colour, also across a 4-bit boundary', () => {
+    // Grey noise 14..17 (straddles 15 / 16), black bars at 0 around a video area at 16, #121212 under a #000 bar.
+    const noisy = screenStats(image(1080, 2400, (x, y) => Array(3).fill(14 + ((x * 7 + y * 13) % 4))));
+    expect(noisy).toMatchObject({ nonBlackRatio: 0, dominantRatio: 1, blank: true });
+    const letterbox = screenStats(image(1080, 2400, (_x, y) => Array(3).fill(y < 800 || y >= 1600 ? 0 : 16)));
+    expect(letterbox).toMatchObject({ dominantRatio: 1, blank: true });
+    const dark = screenStats(image(1080, 2400, (_x, y) => Array(3).fill(y < 80 ? 0 : 0x12)));
+    expect(dark).toMatchObject({ dominantRatio: 1, blank: true });
+  });
+
+  it('is not fooled by patterns in phase with its sampling grid', () => {
+    // At 1080×2400 a fixed grid would sample every 4th pixel at one phase.
+    const checkerboard = screenStats(image(1080, 2400, (x, y) => Array(3).fill((x + y) % 2 === 0 ? 255 : 0)));
+    expect(checkerboard.nonBlackRatio).toBeCloseTo(0.5, 1);
+    expect(checkerboard.blank).toBe(false);
+    const stripes = screenStats(image(1080, 2400, (_x, y) => Array(3).fill(y % 4 === 2 ? 255 : 0)));
+    expect(stripes.nonBlackRatio).toBeCloseTo(0.25, 1);
+    expect(stripes.blank).toBe(false);
+  });
+
+  it('decides blank on the dominantRatio it reports', () => {
+    // 100×100 is sampled whole: 9796 of 10000 pixels black reads 0.98, and blank must agree.
+    const stats = screenStats(image(100, 100, (x, y) => (y * 100 + x < 9796 ? [0, 0, 0] : [255, 255, 255])));
+    expect(stats).toMatchObject({ dominantRatio: 0.98, blank: true });
+  });
+
   it('does not call a split or busy screen blank, but does a white one', () => {
     expect(screenStats(image(400, 800, (x) => (x < 200 ? [0, 0, 0] : [255, 255, 255])))).toEqual({
       meanLuminance: 0.5,
@@ -149,9 +175,11 @@ describe('device tools', () => {
    * adb whose `exec-out screencap -p` answers with a 1080×2400 PNG and whose `wm size` / `dumpsys input` report
    * `display` (rotate it to turn the device); other shell commands go to `shellReply` and are recorded.
    */
-  function deviceAgent(shellReply: (command: string) => string = () => '') {
+  function deviceAgent(
+    shellReply: (command: string) => string = () => '',
+    screenshot = rgbaPng(1080, 2400, Buffer.alloc(1080 * 2400 * 4, 200)),
+  ) {
     const display = { orientation: 0 };
-    const screenshot = rgbaPng(1080, 2400, Buffer.alloc(1080 * 2400 * 4, 200));
     const adb = new FakeAdb((args) => {
       const command = String(args.at(-1));
       if (command.startsWith('wm size;')) {
@@ -201,6 +229,33 @@ describe('device tools', () => {
       ok: false,
       error: expect.stringContaining('outside'),
     });
+  });
+
+  it('returns the image without stats when the capture cannot be decoded', async () => {
+    /** A 2×2 PNG with the given IHDR bit depth / color type and one raw row filter byte per row. */
+    const png = (bitDepth: number, colorType: number, filter: number) => {
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(2, 0);
+      ihdr.writeUInt32BE(2, 4);
+      ihdr[8] = bitDepth;
+      ihdr[9] = colorType;
+      const row = Buffer.alloc(1 + 2 * 4 * (bitDepth / 8));
+      row[0] = filter;
+      return Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        chunk('IHDR', ihdr),
+        chunk('IDAT', deflateSync(Buffer.concat([row, row]))),
+        chunk('IEND', Buffer.alloc(0)),
+      ]);
+    };
+    const noStats = { meanLuminance: null, nonBlackRatio: null, dominantRatio: null, blank: null };
+    // 16-bit samples (decodePng doesn't handle them), and a damaged one (filter type 7 does not exist).
+    for (const capture of [png(16, 6, 0), png(8, 6, 7)]) {
+      const { agent } = deviceAgent(() => '', capture);
+      const shot = await callTool(agent.ctx, 'screenshot', {}, true);
+      expect(shot).toMatchObject({ ok: true, result: { width: 2, height: 2, ...noStats } });
+      expect(shot.ok && shot.image?.data).toBe(capture.toString('base64'));
+    }
   });
 
   it('refuses a screenshot taken before the screen rotated, and maps onto the rotated screen', async () => {
