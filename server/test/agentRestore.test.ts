@@ -775,6 +775,49 @@ describe('DontKeepActivities', () => {
     expect(state.isOn('emulator-5554')).toBe(false);
   });
 
+  it('leaves a marked device alone when it only reconnects (a USB flicker mid-scenario)', async () => {
+    const { state, switches } = tracked();
+    await state.enable('emulator-5554', { live: false, stored: false });
+    const idle = () => session(null, 'idle');
+    state.setDevices([DEVICE], idle);
+    state.setDevices([], idle);
+    state.setDevices([DEVICE], idle);
+    await tick();
+    await tick();
+    expect(switches).toEqual([true]);
+    expect(state.isOn('emulator-5554')).toBe(true);
+  });
+
+  it('puts back as it was on an explicit switch-off, keeping a stored value the user had', async () => {
+    const { state, device } = tracked({ stored: true });
+    await state.enable('emulator-5554', await state.state('emulator-5554'));
+    expect(await state.disable('emulator-5554')).toBeNull();
+    expect(device).toEqual({ live: false, stored: true });
+    expect(state.isOn('emulator-5554')).toBe(false);
+  });
+
+  it('writes the stored value back even when the flag cannot be switched back', async () => {
+    let failing = false;
+    const { state, device, puts } = tracked({ helperFails: () => failing });
+    await state.enable('emulator-5554', { live: false, stored: false });
+    failing = true;
+    expect(await state.restore('emulator-5554')).toBe(false);
+    expect(puts).toEqual(['0']);
+    expect(device).toEqual({ live: true, stored: false });
+    expect(state.isOn('emulator-5554')).toBe(true);
+  });
+
+  it('switches it on after a put-back already running, and keeps it marked', async () => {
+    const { state, device, switches } = tracked();
+    await state.enable('emulator-5554', { live: false, stored: false });
+    const putBack = state.restore('emulator-5554');
+    expect(await state.enable('emulator-5554', { live: true, stored: true })).toBeNull();
+    expect(await putBack).toBe(true);
+    expect(switches).toEqual([true, false, true]);
+    expect(device.live).toBe(true);
+    expect(state.isOn('emulator-5554')).toBe(true);
+  });
+
   it('does not let a stuck device hold up closing', async () => {
     let hang = false;
     const { state } = tracked({ hang: () => hang });

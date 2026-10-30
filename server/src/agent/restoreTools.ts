@@ -321,7 +321,7 @@ function dontKeepNote(
   if (!enabled) {
     return failure === null
       ? null
-      : `Not verified: the activity manager could not be switched off (${failure}). The stored setting was cleared, so it is off after the next reboot at the latest; Lionscope tries again when the session stops, the device reconnects or Lionscope stops.`;
+      : `Not verified: the activity manager could not be switched off (${failure}). The stored setting was written (back to what it was before Lionscope turned it on, else off), so it is off after the next reboot at the latest; Lionscope tries again when the device reconnects or Lionscope stops.`;
   }
   const failed =
     failure === null
@@ -343,7 +343,7 @@ export const setDontKeepActivitiesTool = defineTool({
   name: 'set_dont_keep_activities',
   title: "Don't keep activities",
   description:
-    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch or it was on already). verified: false with destroyCheck.destroyed 0 means "not destroyed yet": Android does it at its next process-priority update. If it cannot be switched on, the call fails and nothing is changed. What Lionscope turned on it puts back as it was when the device\'s profiling session stops or Lionscope stops, and retries when the device reconnects (autoOff; status shows it per device). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
+    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch or it was on already). verified: false with destroyCheck.destroyed 0 means "not destroyed yet": Android does it at its next process-priority update. If it cannot be switched on, the call fails and nothing is changed. What Lionscope turned on it puts back as it was when the device\'s profiling session stops or Lionscope stops, and retries a failed put-back when the device reconnects (autoOff; status shows it per device). enabled: false on a device Lionscope switched on puts it back as it was. Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
   access: 'device',
   input: z.object({
     enabled: z

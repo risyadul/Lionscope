@@ -50,10 +50,12 @@ export interface DontKeepActivitiesOptions {
 export class DontKeepActivities {
   /** Devices where Lionscope switched it on and has not put it back yet, with what it was before. */
   private readonly owned = new Map<string, AlwaysFinishState>();
-  /** Devices listed as ready in the last device list (a device that comes back is retried). */
+  /** Devices whose put-back failed (gone at the time, or the helper failed): retried when listed again. */
+  private readonly pending = new Set<string>();
+  /** Devices listed as ready in the last device list. */
   private ready = new Set<string>();
-  /** A restore in progress per device: a second request waits for it instead of switching again. */
-  private readonly restoring = new Map<string, Promise<boolean>>();
+  /** A put-back in progress per device (null, or why it failed): a second request waits for it. */
+  private readonly restoring = new Map<string, Promise<string | null>>();
   private closing = false;
 
   constructor(private readonly options: DontKeepActivitiesOptions) {}
@@ -85,14 +87,25 @@ export class DontKeepActivities {
    */
   async enable(
     serial: string,
-    before: AlwaysFinishState,
+    stateBefore: AlwaysFinishState,
   ): Promise<{ failure: string; changed: boolean } | null> {
+    let before = stateBefore;
+    // A put-back still running would otherwise switch it off after this switch; what it leaves is the state before.
+    const running = this.restoring.get(serial);
+    if (running) {
+      await running;
+      before = await this.state(serial).catch(() => before);
+    }
     // Marked first (unless already marked: the first "before" is what gets put back), so that a switch that
     // happened despite an error is undone too.
     const owns = before.live && before.stored ? false : !this.owned.has(serial);
     if (owns) this.owned.set(serial, before);
     const failure = await this.helperSwitch(serial, true, HELPER_RUN_TIMEOUT_MS);
-    if (failure === null) return null;
+    if (failure === null) {
+      // On again on purpose: a put-back that failed earlier is no longer due.
+      this.pending.delete(serial);
+      return null;
+    }
     const now = await this.state(serial).catch(() => null);
     const changed = now === null || now.live !== before.live || now.stored !== before.stored;
     if (owns && !changed) this.owned.delete(serial);
@@ -100,10 +113,12 @@ export class DontKeepActivities {
   }
 
   /**
-   * Switches it off (an explicit request). Returns null, or why the activity manager could not be switched: then the
-   * stored setting is still cleared, and the device stays marked so that it is tried again later.
+   * Switches it off (an explicit request). On a device Lionscope switched on, it is put back as it was (a stored
+   * value the user had stays). Returns null, or why the activity manager could not be switched: then the stored
+   * setting is still written, and the device stays marked so that it is tried again later.
    */
   async disable(serial: string): Promise<string | null> {
+    if (this.owned.has(serial)) return this.putBack(serial, HELPER_RUN_TIMEOUT_MS);
     const failure = await this.helperSwitch(serial, false, HELPER_RUN_TIMEOUT_MS);
     if (failure === null) {
       this.owned.delete(serial);
@@ -117,20 +132,26 @@ export class DontKeepActivities {
    * Puts back what Lionscope changed, as it was before: the flag through the helper, then the stored setting if it
    * differed. The device stays marked until that worked. True when nothing is left to put back.
    */
-  restore(serial: string, timeoutMs = HELPER_RUN_TIMEOUT_MS): Promise<boolean> {
+  async restore(serial: string, timeoutMs = HELPER_RUN_TIMEOUT_MS): Promise<boolean> {
+    return (await this.putBack(serial, timeoutMs)) === null;
+  }
+
+  private putBack(serial: string, timeoutMs: number): Promise<string | null> {
     const running = this.restoring.get(serial);
     if (running) return running;
-    const restored = this.restoreNow(serial, timeoutMs).finally(() => this.restoring.delete(serial));
+    const restored = this.putBackNow(serial, timeoutMs).finally(() => this.restoring.delete(serial));
     this.restoring.set(serial, restored);
     return restored;
   }
 
-  private async restoreNow(serial: string, timeoutMs: number): Promise<boolean> {
+  private async putBackNow(serial: string, timeoutMs: number): Promise<string | null> {
     const before = this.owned.get(serial);
-    if (!before) return true;
-    const failure =
-      (await this.helperSwitch(serial, before.live, timeoutMs)) ??
-      (before.stored !== before.live
+    if (!before) return null;
+    const switchFailure = await this.helperSwitch(serial, before.live, timeoutMs);
+    // The stored value too: written back even when the flag could not be switched, so that a reboot at least
+    // brings back what was there (the helper's switch stores the flag's value).
+    const stored =
+      switchFailure !== null || before.stored !== before.live
         ? await this.shell(
             serial,
             `settings put global always_finish_activities ${before.stored ? 1 : 0}`,
@@ -138,15 +159,20 @@ export class DontKeepActivities {
             () => null,
             (error: unknown) => errorMessage(error),
           )
-        : null);
+        : null;
+    const failure = switchFailure ?? stored;
     if (failure !== null) {
-      log.warn(`Could not put "Don't keep activities" back on ${serial} (${failure}); trying again later`);
-      return false;
+      this.pending.add(serial);
+      log.warn(
+        `Could not put "Don't keep activities" back on ${serial} (${failure}); trying again when it is listed again`,
+      );
+      return failure;
     }
+    this.pending.delete(serial);
     // Switched again meanwhile (a new enable) only if the mark changed.
     if (this.owned.get(serial) === before) this.owned.delete(serial);
     log.info(`Put "Don't keep activities" back as it was on ${serial}`);
-    return true;
+    return null;
   }
 
   /**
@@ -166,8 +192,9 @@ export class DontKeepActivities {
   }
 
   /**
-   * The device list changed: a device that comes back while Lionscope still has to put the setting back (the
-   * restore failed while it was gone) is tried again, unless its session is still running.
+   * The device list changed: a device whose put-back failed (it was gone, or the helper failed) is tried again when
+   * it is listed as ready again, unless its session is running. Other marked devices are left alone: a USB flicker
+   * must not end a scenario that is still going on.
    */
   setDevices(devices: readonly DeviceInfo[], current: () => SessionState): void {
     const ready = new Set(
@@ -175,7 +202,7 @@ export class DontKeepActivities {
     );
     const session = current();
     for (const serial of ready) {
-      if (this.closing || this.ready.has(serial) || !this.owned.has(serial)) continue;
+      if (this.closing || this.ready.has(serial) || !this.pending.has(serial)) continue;
       if (session.serial === serial && !STOPPED_SESSION.has(session.status)) continue;
       void this.restore(serial);
     }

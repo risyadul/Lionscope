@@ -16,7 +16,7 @@ All notable changes to Lionscope are documented here. The format is based on
   `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
   back and checks that the activities in the background were destroyed; if it cannot be switched on, nothing is
   changed. What Lionscope turned on it puts back as it was when the device's profiling session stops or Lionscope
-  stops, retrying when a device that was gone then comes back, and `status` shows it per device
+  stops, retrying a failed put-back when the device comes back, and `status` shows it per device
   (`dontKeepActivities`).
   `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
   `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way

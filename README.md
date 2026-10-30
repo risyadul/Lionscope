@@ -829,8 +829,8 @@ does to an app in the background, and show that it happened:
   there were none or it was on already; `destroyed: 0` means not yet: Android does it at its next process-priority
   update). If it cannot be switched on, the call fails and nothing is changed. It applies to every app on the
   device until turned off with `enabled: false`. What Lionscope turned on it puts back as it was (the flag and the
-  stored setting) when the device's profiling session stops or Lionscope stops, and again when a device that was
-  gone then comes back (`autoOff`); `status` lists it per device (`dontKeepActivities`). A value that was already
+  stored setting) when the device's profiling session stops or Lionscope stops, and retries a failed put-back when
+  the device comes back (`autoOff`); `status` lists it per device (`dontKeepActivities`). A value that was already
   on before is left to you.
 - `simulate_process_death { packageName }` presses HOME, waits until the app's activity is stopped (its state
   saved), kills the process with `am kill` (only a background process, unlike `stop_app`'s force-stop, which
