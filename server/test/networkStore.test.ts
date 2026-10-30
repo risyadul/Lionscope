@@ -291,6 +291,17 @@ describe('NetworkStore', () => {
     expect(store.count()).toBe(1);
   });
 
+  it('counts every exchange the session saw, pruned ones too, but not repeated requests', () => {
+    const { store, advance } = setup();
+    const link = {};
+    store.request(link, T0, request(1));
+    store.request(link, T0, request(1));
+    store.request(link, T0 + 1000, request(2));
+    advance(WINDOW_MS * 2);
+    expect(store.count()).toBe(0);
+    expect(store.totalSeen).toBe(2);
+  });
+
   it('keeps the window by start time, evicting the oldest first', () => {
     const { store, advance } = setup();
     const link = {};
