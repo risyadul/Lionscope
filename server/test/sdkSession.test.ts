@@ -103,6 +103,20 @@ describe('ProfilingSession SDK link', () => {
     session.stop();
   });
 
+  it('remembers that an SDK was linked, after the link closes and after stop()', async () => {
+    const { session } = await setup();
+    expect(session.sdkEverLinked).toBe(false);
+    const handler = session.attachSdk(HELLO, new FakeLink());
+    expect(session.sdkEverLinked).toBe(false); // pending until its PID checks out
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.sdkEverLinked).toBe(true);
+    handler.onClose();
+    expect(session.state.sdk?.connected).toBe(false);
+    expect(session.sdkEverLinked).toBe(true);
+    session.stop();
+    expect(session.sdkEverLinked).toBe(true);
+  });
+
   it('refuses a link whose PID is not the app (spoofed package name), discarding its messages', async () => {
     const warn = vi.spyOn(log, 'warn');
     const { session, ofType, gfxinfoPolls, sendFrames } = await setup();

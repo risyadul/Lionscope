@@ -176,6 +176,8 @@ export interface FakeAgent {
   snapshot: Required<Snapshot>;
   session: SessionState;
   sdkOptionCalls: unknown[];
+  /** getSdkEverLinked answers true when set, or while the session's SDK is connected. */
+  sdkEverLinked: boolean;
   /** The session's mock rules (a real MockRules; `networkMocks` messages are dropped). */
   mocks: MockRules;
   /** What getHttpExchange answers, by id. */
@@ -192,6 +194,7 @@ export function fakeAgent(
     snapshot: { ...emptySnapshot(), ...snapshot },
     session: options.session ?? RUNNING,
     sdkOptionCalls: [],
+    sdkEverLinked: false,
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
     httpDetails: new Map(),
     ctx: undefined as unknown as FakeAgent['ctx'],
@@ -221,6 +224,8 @@ export function fakeAgent(
       },
       getHttpExchange: (id) => agent.httpDetails.get(id) ?? null,
       getHttpExchangeCount: () => agent.snapshot.http.length,
+      getHttpExchangesSeen: () => agent.snapshot.http.length,
+      getSdkEverLinked: () => agent.sdkEverLinked || agent.session.sdk?.connected === true,
       getNetworkMocks: () => agent.mocks.state,
       setNetworkMock: (input, origin) => {
         if (!running()) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);

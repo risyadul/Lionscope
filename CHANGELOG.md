@@ -11,6 +11,13 @@ All notable changes to Lionscope are documented here. The format is based on
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 
+### Fixed
+
+- `get_stalls` and `get_strictmode` report the current SDK link (`sdk.connected`) and, when an empty result comes from
+  a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
+  StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
+  has not seen a single request.
+
 ## [0.10.0] - 2026-10-27
 
 ### Added

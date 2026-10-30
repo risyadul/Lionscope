@@ -45,6 +45,9 @@ export const BODIES_UNTRUSTED =
 export const NO_CAPTURE =
   "No HTTP capture: the app's SDK link is not connected at device protocol v7 (Lionscope SDK 0.9.0 or later, with Lionscope.okHttpInterceptor() added to the app's OkHttpClient), or the server could not hand the app its link key over adb (status: sdk.network is unverified).";
 
+export const NO_EXCHANGES =
+  'Capture is on but no exchanges were seen: if the app makes requests, check that its OkHttpClient has Lionscope.okHttpInterceptor().';
+
 const statusClassInput = z
   .enum(['1xx', '2xx', '3xx', '4xx', '5xx', 'failed', 'pending'])
   .describe(
@@ -126,7 +129,7 @@ const headerLines = (headers: readonly HttpHeader[]): string[] =>
 export const networkTool = defineTool({
   name: 'get_network',
   title: 'HTTP requests',
-  description: `HTTP requests the app made through OkHttp (Retrofit, Ktor's OkHttp engine) in the window, as the dashboard's Network tab lists them, captured by the in-app SDK's interceptor (SDK 0.9.0+, Lionscope.okHttpInterceptor()): counts per status class, then the newest exchanges first with id, start time, method, URL (sensitive query values redacted), host, path, state (pending/complete/failed), status, time to headers and total duration in ms, request/response sizes in bytes, response type, the mock rule that answered it (mockId) and the failure (error). Filters: method, status class, host or URL substring, mocked. Also the active mock rules. Read headers and timings of one exchange with get_network_request; body texts need --allow-network-bodies (bodiesAvailable). ${UNTRUSTED_DESCRIPTION}`,
+  description: `HTTP requests the app made through OkHttp (Retrofit, Ktor's OkHttp engine) in the window, as the dashboard's Network tab lists them, captured by the in-app SDK's interceptor (SDK 0.9.0+, Lionscope.okHttpInterceptor()): counts per status class, then the newest exchanges first with id, start time, method, URL (sensitive query values redacted), host, path, state (pending/complete/failed), status, time to headers and total duration in ms, request/response sizes in bytes, response type, the mock rule that answered it (mockId) and the failure (error). Filters: method, status class, host or URL substring, mocked. Also the active mock rules; a note says when capture is on but the session has seen no request at all. Read headers and timings of one exchange with get_network_request; body texts need --allow-network-bodies (bodiesAvailable). ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     window: z
@@ -184,6 +187,9 @@ export const networkTool = defineTool({
         session: sessionView(session),
         capture,
         ...(capture ? {} : { captureNote: NO_CAPTURE }),
+        ...(capture && inWindow.length === 0 && ctx.sessions.getHttpExchangesSeen() === 0
+          ? { note: NO_EXCHANGES }
+          : {}),
         total: inWindow.length,
         counts,
         matching: matching.length,
