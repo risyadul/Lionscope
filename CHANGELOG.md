@@ -25,6 +25,15 @@ All notable changes to Lionscope are documented here. The format is based on
   when the text has line breaks), so it refuses a password field, whose text the tree hides. In a multi-line field
   whose text wraps without line breaks, part of it may stay (the dump does not say a field is multi-line);
   `matches` then says `false`.
+- Agent tool `get_crashes`: the app's crashes since the session started, read from logcat's `crash` buffer (the
+  package's process and its `<package>:*` processes, not just the PID being followed), so a crash is kept even when
+  the app's own logcat turns over within a minute, when the process died before Lionscope saw its PID (a
+  start-and-crash loop), and for the app's other processes (`:remote`). Uncaught Java/Kotlin exceptions
+  (`FATAL EXCEPTION`) and native crashes (crash_dump's report: signal, cause, abort message, backtrace), the last 50
+  per session, with time, pid, thread, process, exception and message, and the stack (every `Caused by`, the first
+  12 frames of each exception). Stored redacted; other apps' crash lines are passed over and never stored.
+- `search_logcat` returns `retained` (`entries`, `capacity`, `oldest`, `newest`): how far back the log buffer
+  reaches, so an empty result can be told apart from lines already dropped.
 
 ### Changed
 
@@ -52,6 +61,9 @@ All notable changes to Lionscope are documented here. The format is based on
   a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
   StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
   has not seen a single request.
+- `search_logcat` said it searched up to 10 minutes of logcat; the buffer holds the newest 5000 lines (at most 8 MB)
+  of those 10 minutes, which an app logging its HTTP traffic fills in well under a minute. The description now says
+  so.
 
 ### Security
 

@@ -2,7 +2,7 @@ import type { ServerMessage } from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 
-export type Collector = 'setup' | 'cpu' | 'frames' | 'memory' | 'logcat';
+export type Collector = 'setup' | 'cpu' | 'frames' | 'memory' | 'logcat' | 'crashes';
 export type ParsedCollector = Extract<Collector, 'cpu' | 'frames' | 'memory'>;
 
 /** Fixed client-facing messages for collector failures; details only go to the server log. */
@@ -12,6 +12,7 @@ export const PUBLIC_COLLECTOR_ERRORS: Readonly<Record<Collector, string>> = {
   frames: 'Frame sampling failed; retrying',
   memory: 'Memory sampling failed; retrying',
   logcat: 'Logcat stream failed; restarting',
+  crashes: 'Crash log stream failed; restarting',
 };
 
 /** Sent when a command keeps succeeding but its output can't be parsed (e.g. an OEM format change). */

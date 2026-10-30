@@ -21,6 +21,8 @@ import {
   violation,
 } from './helpers/agentFixtures.ts';
 import type { FakeAgent, Json } from './helpers/agentFixtures.ts';
+import type { AppCrash } from '../src/store/crashLog.ts';
+import { MAX_LOG_ENTRIES } from '../src/store/sessionStore.ts';
 
 async function run(agent: FakeAgent, name: string, args: unknown = {}, deviceControl = false) {
   const outcome: ToolOutcome = await callTool(agent.ctx, name, args, deviceControl);
@@ -47,7 +49,14 @@ describe('tool definitions', () => {
   });
 
   it('warns about app-controlled strings wherever a tool returns them', () => {
-    for (const name of ['get_summary', 'get_stalls', 'get_strictmode', 'get_layouts', 'search_logcat']) {
+    for (const name of [
+      'get_summary',
+      'get_stalls',
+      'get_strictmode',
+      'get_layouts',
+      'search_logcat',
+      'get_crashes',
+    ]) {
       expect(AGENT_TOOLS.find((tool) => tool.name === name)?.description).toContain('untrusted data');
     }
   });
@@ -443,6 +452,13 @@ describe('search_logcat', () => {
     expect((await run(agent, 'search_logcat', { since: 20_000 })).matched).toBe(1);
     expect((await run(agent, 'search_logcat', { since: new Date(T0 + 5000).toISOString() })).matched).toBe(2);
     expect((await run(agent, 'search_logcat', { limit: 1 })).returned).toBe(1);
+    expect((await run(agent, 'search_logcat', { query: 'nothing like it' })).retained).toEqual({
+      entries: 3,
+      capacity: MAX_LOG_ENTRIES,
+      oldest: new Date(T0).toISOString(),
+      newest: new Date(T0 + 50_000).toISOString(),
+    });
+    expect((await run(fakeAgent(), 'search_logcat')).retained).toMatchObject({ entries: 0, oldest: null });
     expect(await callTool(agent.ctx, 'search_logcat', { since: 'yesterday' }, false)).toMatchObject({
       ok: false,
     });
@@ -483,6 +499,69 @@ describe('search_logcat redaction', () => {
     expect((await run(agent, 'search_logcat', { query: 'fake-opaque' })).matched).toBe(0);
     expect((await run(agent, 'search_logcat', { query: 'eyJhbGci' })).matched).toBe(0);
     expect((await run(agent, 'search_logcat', { query: 'authorization' })).matched).toBe(1);
+  });
+});
+
+describe('get_crashes', () => {
+  const crash = (ts: number, overrides: Partial<AppCrash> = {}): AppCrash => ({
+    ts,
+    pid: 4321,
+    tid: 4321,
+    kind: 'java',
+    thread: 'main',
+    process: PKG,
+    exception: 'java.lang.IllegalStateException',
+    // As CrashLog stores it: redacted.
+    message: 'session expired for Bearer ‹redacted›',
+    stack: [
+      '\tat com.example.shop.CartActivity.onCreate(CartActivity.kt:42)',
+      'Caused by: java.io.IOException: refresh failed',
+      ...Array.from({ length: 20 }, (_, i) => `\tat com.example.shop.Api.call${i}(Api.kt:${i})`),
+      // Frames the store did not keep.
+      '… 40 more frames',
+      '\t... 12 more',
+    ],
+    droppedLines: 0,
+    ...overrides,
+  });
+  const agent = fakeAgent();
+  agent.crashes = [
+    crash(T0 - 30 * 60_000, {
+      kind: 'native',
+      exception: 'SIGSEGV',
+      message: 'Fatal signal 11 (SIGSEGV)',
+      stack: [],
+    }),
+    crash(T0 + 10_000),
+    crash(T0 + 20_000, { droppedLines: 4 }),
+  ];
+
+  it('lists the newest crashes, oldest first, with stacks cut per cause', async () => {
+    const result = await run(agent, 'get_crashes', { limit: 2 });
+    expect(result).toMatchObject({ total: 3, returned: 2 });
+    const [first, second] = result.crashes;
+    expect(first).toMatchObject({
+      time: new Date(T0 + 10_000).toISOString(),
+      kind: 'java',
+      thread: 'main',
+      process: PKG,
+      exception: 'java.lang.IllegalStateException',
+      message: 'session expired for Bearer ‹redacted›',
+    });
+    expect(first.stack.slice(0, 3)).toEqual([
+      'at com.example.shop.CartActivity.onCreate(CartActivity.kt:42)',
+      'Caused by: java.io.IOException: refresh failed',
+      'at com.example.shop.Api.call0(Api.kt:0)',
+    ]);
+    expect(first.stack.slice(-2)).toEqual(['… 48 more frames', '... 12 more']);
+    expect(first.stack).toHaveLength(2 + 12 + 2);
+    expect(second.stack.at(-1)).toBe('… 4 more lines not kept');
+  });
+
+  it('filters by time, and answers an empty list without crashes', async () => {
+    expect((await run(agent, 'get_crashes', { since: 60_000 })).total).toBe(2);
+    expect((await run(agent, 'get_crashes', { since: new Date(T0 + 15_000).toISOString() })).total).toBe(1);
+    expect(await run(fakeAgent(), 'get_crashes')).toMatchObject({ total: 0, returned: 0, crashes: [] });
   });
 });
 

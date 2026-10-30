@@ -27,6 +27,8 @@ import { FRAMESTATS_HISTORY_ROWS, parseFramestats } from '../parsers/gfxinfo.ts'
 import { parseMeminfo } from '../parsers/meminfo.ts';
 import { parseProcStat } from '../parsers/procStat.ts';
 import { parsePidList, parsePidof, parseUptime } from '../parsers/shellValues.ts';
+import { CrashLog } from '../store/crashLog.ts';
+import type { AppCrash } from '../store/crashLog.ts';
 import { SessionStore } from '../store/sessionStore.ts';
 import { CollectorErrorReporter } from './collectorErrors.ts';
 import { CollectorScheduler } from './collectorScheduler.ts';
@@ -101,6 +103,10 @@ export class ProfilingSession {
   private truncationWarned = false;
   private logcat: LogcatStream | null = null;
   private readonly logs: LogBatcher;
+  /** The `crash` buffer of every process, from the session's start: crashes need no PID (see followCrashes). */
+  private crashLogcat: LogcatStream | null = null;
+  private readonly crashLines: LogBatcher;
+  private readonly crashLog: CrashLog;
   private readonly errors: CollectorErrorReporter;
   private readonly store: SessionStore;
   private readonly sdk: SdkBridge;
@@ -141,6 +147,14 @@ export class ProfilingSession {
       windowMs,
       now: this.now,
       flush: (entries) => this.store.append('logs', ...entries),
+    });
+    this.crashLog = new CrashLog(this.packageName);
+    this.crashLines = new LogBatcher({
+      maxPending: 1000,
+      // Crashes are kept for the whole session, however old.
+      windowMs: Infinity,
+      now: this.now,
+      flush: (entries) => this.crashLog.add(entries),
     });
     this.mocks = new MockRules({ now: this.now, emit: this.emit });
     this.sdk = new SdkBridge({
@@ -246,6 +260,11 @@ export class ProfilingSession {
     return this.store.http.totalSeen;
   }
 
+  /** The session's crashes, oldest first (kept apart from the log buffer). */
+  crashes(): AppCrash[] {
+    return this.crashLog.list();
+  }
+
   /** HTTP exchanges kept (status counts them without building a snapshot). */
   get httpExchangeCount(): number {
     return this.store.http.count();
@@ -280,12 +299,16 @@ export class ProfilingSession {
     if (this.stopped) return;
     this.ready = true;
     this.onReady?.();
+    this.followCrashes();
     await this.scheduler.run('cpu', () => this.cpuTick());
     if (this.stopped) return;
     this.scheduler.loop('cpu', this.intervals.cpuMs, () => this.cpuTick(), this.intervals.cpuMs);
     this.scheduler.loop('frames', this.intervals.framesMs, () => this.framesTick(), 0);
     this.scheduler.loop('memory', this.intervals.memoryMs, () => this.memoryTick(), 0);
-    this.flushTimer = setInterval(() => this.logs.flush(), this.intervals.logFlushMs);
+    this.flushTimer = setInterval(() => {
+      this.logs.flush();
+      this.crashLines.flush();
+    }, this.intervals.logFlushMs);
   }
 
   /** Stop all collectors and release device resources. Idempotent. */
@@ -300,6 +323,9 @@ export class ProfilingSession {
     this.logs.flush();
     this.logcat?.stop();
     this.logcat = null;
+    this.crashLines.flush();
+    this.crashLogcat?.stop();
+    this.crashLogcat = null;
     for (const shell of Object.values(this.shells)) shell.close();
     this.status = finalStatus;
     this.error = error;
@@ -431,6 +457,55 @@ export class ProfilingSession {
       return;
     }
     this.logcat = stream;
+  }
+
+  /**
+   * Follow the `crash` buffer of every process from the session's start. Unlike the app's own logcat (`--pid`), it
+   * is not restarted when the PID changes, so it keeps a crash whose process died before the next `pidof`, one in a
+   * start-and-crash loop, and those of the app's other processes; CrashLog picks the app's by process name.
+   */
+  private followCrashes(): void {
+    this.crashLogcat?.stop();
+    this.crashLogcat = null;
+    if (this.stopped) return;
+    let stream: LogcatStream | null = null;
+    try {
+      stream = startLogcatStream({
+        adb: this.adb,
+        serial: this.serial,
+        pid: null,
+        buffer: 'crash',
+        clockOffsetMs: this.device.clockOffsetMs,
+        // Without a measured clock the session's start on the device clock is unknown: start from the buffer's last
+        // line instead, which CrashLog passes over (a report is only read from its first line on).
+        ...(this.device.clockMeasured
+          ? { since: this.startedAt - this.device.clockOffsetMs }
+          : { historyLines: 1 }),
+        resume: this.crashLines.resume,
+        onEntry: (entry, deviceTs) => this.crashLines.add(entry, deviceTs),
+        onExit: (reason) => {
+          if (this.crashLogcat !== stream) return;
+          this.crashLogcat = null;
+          this.restartCrashesLater(`${reason}; restarting`);
+        },
+      });
+    } catch (error) {
+      this.restartCrashesLater(error);
+      return;
+    }
+    this.crashLogcat = stream;
+  }
+
+  private restartCrashesLater(reason: unknown): void {
+    if (this.stopped) return;
+    this.errors.report('crashes', reason);
+    this.scheduler.schedule(
+      'crashes',
+      () => {
+        if (!this.crashLogcat) this.followCrashes();
+      },
+      this.intervals.logcatRestartMs,
+    );
   }
 
   private restartLogcatLater(pid: number, reason: unknown): void {

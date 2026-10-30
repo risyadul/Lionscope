@@ -17,6 +17,7 @@ import { FRAME_STAGES } from '@lionscope/protocol';
 import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
 import { PublicError } from '../../src/errors.ts';
 import { MockRules, NO_SESSION_MOCKS_MESSAGE } from '../../src/session/mockRules.ts';
+import type { AppCrash } from '../../src/store/crashLog.ts';
 import { emptySnapshot } from '../../src/store/sessionStore.ts';
 import { FakeAdb } from './fakes.ts';
 
@@ -182,6 +183,8 @@ export interface FakeAgent {
   mocks: MockRules;
   /** What getHttpExchange answers, by id. */
   httpDetails: Map<number, HttpExchangeDetail>;
+  /** What getCrashes answers. */
+  crashes: AppCrash[];
 }
 
 /** A context over a fixed snapshot; the clock stands at `now`. */
@@ -197,6 +200,7 @@ export function fakeAgent(
     sdkEverLinked: false,
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
     httpDetails: new Map(),
+    crashes: [],
     ctx: undefined as unknown as FakeAgent['ctx'],
   };
   const running = () => agent.session.status !== 'idle' && agent.session.status !== 'error';
@@ -226,6 +230,7 @@ export function fakeAgent(
       getHttpExchangeCount: () => agent.snapshot.http.length,
       getHttpExchangesSeen: () => agent.snapshot.http.length,
       getSdkEverLinked: () => agent.sdkEverLinked || agent.session.sdk?.connected === true,
+      getCrashes: () => agent.crashes,
       getNetworkMocks: () => agent.mocks.state,
       setNetworkMock: (input, origin) => {
         if (!running()) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);

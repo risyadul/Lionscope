@@ -124,7 +124,7 @@ function screenView(row: ScreenRow) {
 export const summaryTool = defineTool({
   name: 'get_summary',
   title: 'Performance summary',
-  description: `Headline numbers of the profiled app over a time window (default the last minute): CPU % (normalized to all cores), memory (PSS total and breakdown, MB), frames (mean/latest FPS, jank % = frames that missed their deadline, slow % = frames over one vsync, p50/p90/max frame time in ms, frame source sdk or gfxinfo, plus the dashboard stat strip's last-30-s jank and p90, null once frames stop arriving), main-thread stalls (count, blocked ms, worst), StrictMode violations, process restarts, the top ${TOP_ROWS} screens by jank and the top ${TOP_ROWS} app layouts by inflate time. Start with this, then drill down with get_screens, get_stalls, get_strictmode, get_layouts or search_logcat. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Headline numbers of the profiled app over a time window (default the last minute): CPU % (normalized to all cores), memory (PSS total and breakdown, MB), frames (mean/latest FPS, jank % = frames that missed their deadline, slow % = frames over one vsync, p50/p90/max frame time in ms, frame source sdk or gfxinfo, plus the dashboard stat strip's last-30-s jank and p90, null once frames stop arriving), main-thread stalls (count, blocked ms, worst), StrictMode violations, process restarts, the top ${TOP_ROWS} screens by jank and the top ${TOP_ROWS} app layouts by inflate time. Start with this, then drill down with get_screens, get_stalls, get_strictmode, get_layouts, get_crashes or search_logcat. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({ window: windowInput }),
   annotations: READ_ONLY,

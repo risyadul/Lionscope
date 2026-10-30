@@ -23,6 +23,7 @@ import { parseDevices } from '../parsers/devices.ts';
 import { buildAppList, parsePackageList } from '../parsers/packages.ts';
 import { parsePs } from '../parsers/ps.ts';
 import { parsePidList } from '../parsers/shellValues.ts';
+import type { AppCrash } from '../store/crashLog.ts';
 import { emptySnapshot } from '../store/sessionStore.ts';
 import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
 import type { MockOrigin } from './mockRules.ts';
@@ -235,6 +236,11 @@ export class SessionManager implements SdkLinkTarget {
   /** Headers and bodies of one HTTP exchange of the current (or last) session; null when it is not kept. */
   getHttpExchange(id: number): HttpExchangeDetail | null {
     return this.session?.httpExchange(id) ?? null;
+  }
+
+  /** Crashes of the current (or last) session, oldest first. */
+  getCrashes(): AppCrash[] {
+    return this.session?.crashes() ?? [];
   }
 
   /** HTTP exchanges kept by the current (or last) session. */

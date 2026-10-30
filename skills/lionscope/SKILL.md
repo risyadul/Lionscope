@@ -83,6 +83,15 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.10.0")
 3. Debugger stalls are counted apart (breakpoints); ignore them.
 4. `search_logcat --level E --since <iso>` around a stall's time for errors that came with it.
 
+### "Did the app crash?"
+
+1. `get_crashes`: the session's uncaught exceptions and native fatal signals (time, thread, exception, message,
+   stack with every `Caused by`), kept for the whole session. `processRestarts` in `get_summary` also counts
+   force-stops, so it does not tell a crash apart.
+2. `search_logcat --since <iso>` around a crash's time for what led up to it. The log buffer keeps the newest
+   5000 lines only (well under a minute in an app that logs its HTTP traffic): its `retained` field says how far
+   back it reaches, so an empty result before `retained.oldest` means "dropped", not "nothing logged".
+
 ### "What is this view?" / the element the user picked
 
 1. `get_inspector_selection`: the view or composable the user selected in the dashboard's Inspector, with its
