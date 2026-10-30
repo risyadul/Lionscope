@@ -139,6 +139,9 @@ tapped: to add to a filled field use `type_text --text <text> --mode append`, to
 (with `--text ""` it clears the field). `launch_app` starts an app and `stop_app` force-stops one (its unsaved
 state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
 booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
+`tap_element` refuses an element under the soft keyboard: hide it with `press_key --key back` (or scroll), then
+tap again. `tap` and `swipe` take `--read-back` to compare screenshots from before and after (`screenChanged`,
+`changedShare`), which also sees a map or canvas the UI tree doesn't.
 
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and

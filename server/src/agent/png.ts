@@ -200,3 +200,54 @@ export function cropPng(
   const cropped: DecodedPng = { width, height, channels: image.channels, pixels };
   return { png: encodeRgb(downscale(cropped, target), target), size: target };
 }
+
+/** Two screenshots are compared in squares of this side (px), whose mean color must move by more than CELL_DELTA. */
+const CELL_PX = 8;
+const CELL_DELTA = 16;
+
+/**
+ * How much of the screen differs between two screenshots: the share of 8×8 px squares whose mean color moved by
+ * more than 16 of 255 on a channel, 1 for screenshots of different sizes (the screen rotated). blank: both are
+ * entirely black, as a secure window is captured. Null when one can't be decoded.
+ */
+export function screenDifference(before: Buffer, after: Buffer): { share: number; blank: boolean } | null {
+  const a = decodePng(before);
+  const b = decodePng(after);
+  if (!a || !b) return null;
+  if (a.width !== b.width || a.height !== b.height) return { share: 1, blank: false };
+  let cells = 0;
+  let changed = 0;
+  let lit = false;
+  for (let cy = 0; cy < a.height; cy += CELL_PX) {
+    for (let cx = 0; cx < a.width; cx += CELL_PX) {
+      const yEnd = Math.min(a.height, cy + CELL_PX);
+      const xEnd = Math.min(a.width, cx + CELL_PX);
+      // Per channel the sum before minus the sum after; total is zero when the square is black in both.
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let total = 0;
+      for (let y = cy; y < yEnd; y++) {
+        for (let x = cx; x < xEnd; x++) {
+          const from = (y * a.width + x) * a.channels;
+          const to = (y * b.width + x) * b.channels;
+          const r1 = a.pixels[from] ?? 0;
+          const g1 = a.pixels[from + 1] ?? 0;
+          const b1 = a.pixels[from + 2] ?? 0;
+          const r2 = b.pixels[to] ?? 0;
+          const g2 = b.pixels[to + 1] ?? 0;
+          const b2 = b.pixels[to + 2] ?? 0;
+          red += r1 - r2;
+          green += g1 - g2;
+          blue += b1 - b2;
+          total += r1 + g1 + b1 + r2 + g2 + b2;
+        }
+      }
+      const limit = CELL_DELTA * (yEnd - cy) * (xEnd - cx);
+      cells++;
+      if (total > 0) lit = true;
+      if (Math.abs(red) > limit || Math.abs(green) > limit || Math.abs(blue) > limit) changed++;
+    }
+  }
+  return { share: cells > 0 ? changed / cells : 0, blank: !lit };
+}

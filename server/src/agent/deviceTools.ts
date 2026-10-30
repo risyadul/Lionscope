@@ -3,12 +3,14 @@
  * `input`), which works the same on emulators and physical devices, mirrored or not; emulators boot and shut
  * down through the dashboard's emulator manager. Power, sleep and lock keys are deliberately not offered.
  */
+import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { isValidAvdName } from '@lionscope/protocol';
 import { adbShell, execBinary } from '../adb/adb.ts';
 import type { Size } from '../emulator/screenInput.ts';
 import { displaySize, sameSize, SCREENSHOT_SHORT_EDGE } from './display.ts';
-import { pngSize, scalePng } from './png.ts';
+import { imeFrame, onKeyboard } from './ime.ts';
+import { pngSize, scalePng, screenDifference } from './png.ts';
 import { packageInput } from './sessionTools.ts';
 import { serialInput } from './statusTools.ts';
 import { defineTool, ToolError } from './tool.ts';
@@ -24,6 +26,15 @@ const INPUT_TIMEOUT_MS = 10_000;
 const LAUNCH_TIMEOUT_MS = 30_000;
 /** Sizes whose width / height ratios differ by more than this are different orientations or screens. */
 const ASPECT_TOLERANCE = 0.03;
+/** After a tap or typing, before the screen is read back: the app needs a frame or two to show the result. */
+export const READBACK_SETTLE_MS = 300;
+/** After a scroll swipe, before the screen is read again: lets the fling settle. */
+export const SCROLL_SETTLE_MS = 500;
+/**
+ * A screen counts as changed when more than this share of it differs: a blinking caret or a status bar icon
+ * (under 0.01% on an emulator) stays below, a scrolled list (10% or more) is far above.
+ */
+const SCREEN_CHANGED_SHARE = 0.001;
 
 /** Keys an agent may press: navigation and editing only. */
 export const AGENT_KEYCODES = {
@@ -179,28 +190,83 @@ export const screenshotTool = defineTool({
   },
 });
 
+const readBackInput = z
+  .boolean()
+  .default(false)
+  .describe(
+    'Compare screenshots from before and after: screenChanged (adds two screenshots and a wait, 1 to 3 s).',
+  );
+
+/**
+ * Runs `input` between two screenshots when `readBack`: screenChanged and changedShare, or null with a note when
+ * the screen can't be compared. A screenshot that fails before the input fails the call (nothing was sent).
+ */
+async function withReadBack(
+  ctx: AgentContext,
+  serial: string,
+  readBack: boolean,
+  settleMs: number,
+  command: string,
+) {
+  const before = readBack ? await screencap(ctx, serial) : null;
+  await input(ctx, serial, command);
+  if (!before) return {};
+  await sleep(settleMs);
+  const after = await screencap(ctx, serial).catch(() => null);
+  const difference = after && screenDifference(before, after);
+  if (!difference || difference.blank) {
+    return {
+      screenChanged: null,
+      note: difference?.blank
+        ? 'Both screenshots are black (a secure window is captured that way): the effect is unknown'
+        : 'Could not take or read a screenshot after the input: the effect is unknown',
+    };
+  }
+  return {
+    screenChanged: difference.share > SCREEN_CHANGED_SHARE,
+    changedShare: Math.round(difference.share * 1000) / 1000,
+  };
+}
+
 export const tapTool = defineTool({
   name: 'tap',
   title: 'Tap',
-  description:
-    'Taps the screen at (x, y) in the pixels of the last screenshot (or of width × height when given). Device control.',
+  description: `Taps the screen at (x, y) in the pixels of the last screenshot (or of width × height when given). A point on the soft keyboard gets a warning (the tap goes to the keyboard, not the app). readBack compares screenshots from before and ${READBACK_SETTLE_MS} ms after: screenChanged, whether more than ${SCREEN_CHANGED_SHARE * 100}% of the screen differs, and changedShare, how much (0-1; a list scrolled by half a screen gives about 0.1, a new screen about 0.4). It sees what the UI tree can't (canvas, maps, games, video), but content that changes on its own (an animation, a video, the status bar clock, a scroll bar fading) sets it too: false is the reliable signal that the tap changed nothing. A screen drawn more slowly than that may not show the result yet. Device control.`,
   access: 'device',
-  input: z.object({ x: z.number().min(0), y: z.number().min(0), ...coordinateSpace, serial: optionalSerial }),
+  input: z.object({
+    x: z.number().min(0),
+    y: z.number().min(0),
+    ...coordinateSpace,
+    readBack: readBackInput,
+    serial: optionalSerial,
+  }),
   annotations: INPUT,
-  async run({ x, y, width, height, serial: requested }, ctx) {
+  async run({ x, y, width, height, readBack, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
-    const [point] = await toDevicePoints(ctx, serial, { width, height }, [{ x, y }]);
+    const [points, ime] = await Promise.all([
+      toDevicePoints(ctx, serial, { width, height }, [{ x, y }]),
+      imeFrame(ctx, serial),
+    ]);
+    const [point] = points;
     if (!point) throw new ToolError('no point');
-    await input(ctx, serial, `tap ${point.x} ${point.y}`);
-    return { data: { serial, tapped: point } };
+    const effect = await withReadBack(ctx, serial, readBack, READBACK_SETTLE_MS, `tap ${point.x} ${point.y}`);
+    return {
+      data: {
+        serial,
+        tapped: point,
+        ...(onKeyboard(ime, point)
+          ? { warning: 'The point is on the soft keyboard: the tap went to the keyboard, not the app' }
+          : {}),
+        ...effect,
+      },
+    };
   },
 });
 
 export const swipeTool = defineTool({
   name: 'swipe',
   title: 'Swipe',
-  description:
-    'Drags from (x1, y1) to (x2, y2) over durationMs (default 300; a long duration at one point is a long press), in screenshot pixels like tap. To scroll a list down, swipe upwards. Device control.',
+  description: `Drags from (x1, y1) to (x2, y2) over durationMs (default 300; a long duration at one point is a long press), in screenshot pixels like tap. To scroll a list down, swipe upwards. readBack compares screenshots from before and ${SCROLL_SETTLE_MS} ms after the gesture (so a fling can settle), like tap: screenChanged and changedShare (a list that scrolled, a map that moved). Device control.`,
   access: 'device',
   input: z.object({
     x1: z.number().min(0),
@@ -209,10 +275,11 @@ export const swipeTool = defineTool({
     y2: z.number().min(0),
     durationMs: z.number().int().min(50).max(5000).default(300).describe('Gesture length in ms (50-5000).'),
     ...coordinateSpace,
+    readBack: readBackInput,
     serial: optionalSerial,
   }),
   annotations: INPUT,
-  async run({ x1, y1, x2, y2, durationMs, width, height, serial: requested }, ctx) {
+  async run({ x1, y1, x2, y2, durationMs, width, height, readBack, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
     const points = await toDevicePoints(ctx, serial, { width, height }, [
       { x: x1, y: y1 },
@@ -220,8 +287,14 @@ export const swipeTool = defineTool({
     ]);
     const [from, to] = points;
     if (!from || !to) throw new ToolError('no points');
-    await input(ctx, serial, `swipe ${from.x} ${from.y} ${to.x} ${to.y} ${durationMs}`);
-    return { data: { serial, from, to, durationMs } };
+    const effect = await withReadBack(
+      ctx,
+      serial,
+      readBack,
+      SCROLL_SETTLE_MS,
+      `swipe ${from.x} ${from.y} ${to.x} ${to.y} ${durationMs}`,
+    );
+    return { data: { serial, from, to, durationMs, ...effect } };
   },
 });
 

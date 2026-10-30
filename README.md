@@ -788,14 +788,18 @@ text: "Row 40" }` find elements by visible text or content description, resource
   nothing and returns the candidates; `nth` picks one. `tap_element` reads the element back after the tap
   (`after`, `null` when it moved or is gone; `checked` before and after for a switch, also the only one inside a
   tapped row; `screenChanged`, which content that changes on its own also sets, so `false` is the reliable
-  signal; `readBack: false` skips that dump). `type_text { text, field: { id: "email" } }` taps the field first,
+  signal; `readBack: false` skips that dump). An element under the soft keyboard is not tapped (the dump does
+  not show the keyboard, so `tap_element` reads its frame from `dumpsys window`): the part above a docked keyboard
+  is tapped, and one it covers fails with an error that says to hide the keyboard (`press_key back`) or scroll. `type_text { text, field: { id: "email" } }` taps the field first,
   then reads the field back (`field`, `sameField`, and `matches`: whether the text arrived). Text goes in at the
   caret (where the tap landed); `mode: "append"` types at the end, `mode: "replace"` instead of the field's text,
   and `replace` with `text: ""` clears the field. Password fields never return their text.
 - **By coordinates**: `screenshot`, then `tap` / `swipe` in the screenshot's pixels. Use it where the tree
   can't see: Jetpack Compose elements get a resource id only with `Modifier.testTag` plus
   `testTagsAsResourceId = true` (otherwise use their text or content description), and WebView, canvas, game
-  or video content may be missing from the tree.
+  or video content may be missing from the tree. `readBack: true` compares screenshots taken before and after
+  (300 ms after a tap, 500 ms after a swipe): `screenChanged` and `changedShare` (how much of the screen differs),
+  which also sees a map or canvas that moved; it adds 1 to 3 s. A `tap` on the soft keyboard returns a `warning`.
 
 The tree comes from Lionscope's UI helper (Android 7.0 and later): a small program the server runs on the device
 over adb that keeps one accessibility (UiAutomation) connection open, reads a screen in a few hundred ms and does

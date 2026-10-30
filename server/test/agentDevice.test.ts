@@ -2,7 +2,8 @@ import { crc32, deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { describeArgs } from '../src/adb/adb.ts';
 import { AGENT_KEYCODES, inputTextArgument, parseResolvedActivity } from '../src/agent/deviceTools.ts';
-import { decodePng, fitShortEdge, pngSize, scalePng } from '../src/agent/png.ts';
+import { IME_COMMAND } from '../src/agent/ime.ts';
+import { decodePng, fitShortEdge, pngSize, scalePng, screenDifference } from '../src/agent/png.ts';
 import { callTool } from '../src/agent/registry.ts';
 import { fakeAgent, PKG } from './helpers/agentFixtures.ts';
 import { FakeAdb, FakeChild } from './helpers/fakes.ts';
@@ -61,6 +62,37 @@ function noise(width: number, height: number): Buffer {
   return pixels;
 }
 
+describe('screen comparison', () => {
+  const size = 64 * 48 * 4;
+  const flat = (value: number) => rgbaPng(64, 48, Buffer.alloc(size, value));
+  /** Opaque gray `base`, with an 8×8 square at the top left set to `square`. */
+  const withSquare = (base: number, square: number) => {
+    const pixels = Buffer.alloc(size, base);
+    for (let y = 0; y < 8; y++) pixels.fill(square, y * 64 * 4, y * 64 * 4 + 8 * 4);
+    return rgbaPng(64, 48, pixels);
+  };
+
+  it('gives the share of 8×8 squares that changed', () => {
+    expect(screenDifference(flat(200), flat(200))).toEqual({ share: 0, blank: false });
+    // One square of 8 × 6.
+    expect(screenDifference(flat(200), withSquare(200, 40))).toEqual({ share: 1 / 48, blank: false });
+    // Small shifts (noise, antialiasing) don't count.
+    expect(screenDifference(flat(200), withSquare(200, 190))?.share).toBe(0);
+    expect(screenDifference(flat(200), rgbaPng(48, 64, Buffer.alloc(size, 200)))).toEqual({
+      share: 1,
+      blank: false,
+    });
+  });
+
+  it('says when both are black, and when one is not a PNG it reads', () => {
+    expect(screenDifference(flat(0), flat(0))).toEqual({ share: 0, blank: true });
+    expect(screenDifference(flat(0), withSquare(0, 255))?.blank).toBe(false);
+    // Color type 0 (grayscale) is not decoded.
+    const grayscale = Buffer.concat([flat(0).subarray(0, 25), Buffer.from([0]), flat(0).subarray(26)]);
+    expect(screenDifference(flat(0), grayscale)).toBeNull();
+  });
+});
+
 describe('PNG scaling', () => {
   it('decodes every filter type exactly', () => {
     const pixels = noise(7, 10);
@@ -101,12 +133,14 @@ describe('PNG scaling', () => {
 
 describe('device tools', () => {
   /**
-   * adb whose `exec-out screencap -p` answers with a 1080×2400 PNG and whose `wm size` / `dumpsys input` report
-   * `display` (rotate it to turn the device); other shell commands go to `shellReply` and are recorded.
+   * adb whose `exec-out screencap -p` answers with a 1080×2400 PNG (or `shots` in turn, the last one repeating) and
+   * whose `wm size` / `dumpsys input` report `display` (rotate it to turn the device); other shell commands go to
+   * `shellReply` and are recorded.
    */
-  function deviceAgent(shellReply: (command: string) => string = () => '') {
+  function deviceAgent(shellReply: (command: string) => string = () => '', shots: readonly Buffer[] = []) {
     const display = { orientation: 0 };
     const screenshot = rgbaPng(1080, 2400, Buffer.alloc(1080 * 2400 * 4, 200));
+    let shot = 0;
     const adb = new FakeAdb((args) => {
       const command = String(args.at(-1));
       if (command.startsWith('wm size;')) {
@@ -117,16 +151,18 @@ describe('device tools', () => {
     adb.spawn = () => {
       const child = new FakeChild();
       setImmediate(() => {
-        child.stdout.write(screenshot);
+        child.stdout.write(shots[Math.min(shot++, shots.length - 1)] ?? screenshot);
         child.exit(0);
       });
       return child;
     };
-    return { agent: fakeAgent({}, { adb }), adb, display };
+    return { agent: fakeAgent({}, { adb }), adb, display, screenshots: () => shot };
   }
-  /** Shell commands other than the display-size probes. */
+  /** Shell commands other than the display-size and keyboard probes. */
   const shellCommands = (adb: FakeAdb) =>
-    adb.execCalls.map((args) => args.join(' ')).filter((command) => !command.includes('shell wm size;'));
+    adb.execCalls
+      .map((args) => args.join(' '))
+      .filter((command) => !command.includes('shell wm size;') && !command.endsWith(IME_COMMAND));
 
   it('screenshots at 720 px and maps taps and swipes back to device pixels', async () => {
     const { agent, adb } = deviceAgent();
@@ -173,6 +209,61 @@ describe('device tools', () => {
     });
     await callTool(agent.ctx, 'tap', { x: 50, y: 50, width: 450, height: 1000 }, true);
     expect(shellCommands(adb)).toEqual(['-s emulator-5554 shell input tap 120 120']);
+  });
+
+  it('warns when a tap lands on the soft keyboard', async () => {
+    const keyboard = 'InsetsSource id=3 type=ime frame=[0,1500][1080,2400] visible=true flags=';
+    const { agent, adb } = deviceAgent((command) => (command === IME_COMMAND ? keyboard : ''));
+    const space = { width: 720, height: 1600 };
+    expect(await callTool(agent.ctx, 'tap', { x: 360, y: 1400, ...space }, true)).toMatchObject({
+      ok: true,
+      result: { tapped: { x: 540, y: 2100 }, warning: expect.stringContaining('on the soft keyboard') },
+    });
+    const above = await callTool(agent.ctx, 'tap', { x: 360, y: 400, ...space }, true);
+    expect(above.ok && above.result).not.toHaveProperty('warning');
+    // The tap is sent either way.
+    expect(shellCommands(adb)).toEqual([
+      '-s emulator-5554 shell input tap 540 2100',
+      '-s emulator-5554 shell input tap 540 600',
+    ]);
+  });
+
+  it('compares screenshots from before and after a tap or swipe on request', async () => {
+    const plain = rgbaPng(108, 240, Buffer.alloc(108 * 240 * 4, 200));
+    const scrolled = rgbaPng(
+      108,
+      240,
+      Buffer.from(Buffer.alloc(108 * 240 * 4, 200).map((value, i) => (i < 108 * 120 * 4 ? 40 : value))),
+    );
+    const space = { width: 720, height: 1600 };
+    const swipe = { x1: 360, y1: 1400, x2: 360, y2: 400, ...space };
+    const moved = deviceAgent(undefined, [plain, scrolled]);
+    expect(await callTool(moved.agent.ctx, 'swipe', { ...swipe, readBack: true }, true)).toMatchObject({
+      ok: true,
+      result: { from: { x: 540, y: 2100 }, screenChanged: true, changedShare: 0.5 },
+    });
+    expect(moved.screenshots()).toBe(2);
+    const still = deviceAgent(undefined, [plain, plain]);
+    expect(
+      await callTool(still.agent.ctx, 'tap', { x: 1, y: 1, ...space, readBack: true }, true),
+    ).toMatchObject({
+      ok: true,
+      result: { tapped: { x: 2, y: 2 }, screenChanged: false, changedShare: 0 },
+    });
+    // Without readBack: no screenshot, no screenChanged.
+    const quick = deviceAgent();
+    const result = await callTool(quick.agent.ctx, 'swipe', swipe, true);
+    expect(result.ok && result.result).not.toHaveProperty('screenChanged');
+    expect(quick.screenshots()).toBe(0);
+    // A secure window is captured black: the effect is unknown.
+    const black = rgbaPng(108, 240, Buffer.alloc(108 * 240 * 4, 0));
+    const secure = deviceAgent(undefined, [black, black]);
+    expect(
+      await callTool(secure.agent.ctx, 'tap', { x: 1, y: 1, ...space, readBack: true }, true),
+    ).toMatchObject({
+      ok: true,
+      result: { screenChanged: null, note: expect.stringContaining('secure window') },
+    });
   });
 
   it('types quoted text and presses only navigation keys', async () => {

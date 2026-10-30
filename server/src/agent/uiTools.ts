@@ -15,9 +15,12 @@ import {
   inputTextArgument,
   optionalSerial,
   PRINTABLE_ASCII,
+  READBACK_SETTLE_MS,
   SCREENSHOT_SHORT_EDGE,
+  SCROLL_SETTLE_MS,
   targetSerial,
 } from './deviceTools.ts';
+import { aboveKeyboard, imeFrame, onKeyboard } from './ime.ts';
 import { fitShortEdge } from './png.ts';
 import { defineTool, ToolError, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
 import type { AgentContext } from './tool.ts';
@@ -42,8 +45,6 @@ const MAX_CANDIDATES = 10;
 const LONG_PRESS_MS = 800;
 /** After tapping a field, before typing: the keyboard and focus need a moment. */
 const FOCUS_SETTLE_MS = 300;
-/** After a tap or typing, before the dump that reads the result back: the app needs a frame or two to show it. */
-const READBACK_SETTLE_MS = 300;
 /** Android 13 (API 33) is the first whose `input keycombination` holds ctrl down for the next key (ctrl+A). */
 const KEY_COMBINATION_MIN_API = 33;
 const KEYCODE_FORWARD_DEL = 112;
@@ -51,8 +52,6 @@ const KEYCODE_MOVE_END = 123;
 /** Key codes per `input keyevent` when a field is cleared key by key: each call has its own timeout. */
 const KEYS_PER_INPUT = 100;
 const API_LEVEL_TIMEOUT_MS = 5000;
-/** After a scroll swipe, before the next dump: lets the fling settle. */
-const SCROLL_SETTLE_MS = 500;
 /** Longest a get_ui_tree / tap_element / type_text call may take, retries included. */
 export const ELEMENT_CALL_MS = 45_000;
 /** Longest a scroll_to call may take (up to 15 swipes, each followed by a dump). */
@@ -249,6 +248,8 @@ export async function tapElement(
   },
 ): Promise<{ outcome: TapOutcome; taken: UiElement | null }> {
   const deadline = performance.now() + ELEMENT_CALL_MS;
+  // Where the keyboard is: a dump shows no keyboard, and one taken while it slid in has the layout from before.
+  const ime = await imeFrame(ctx, serial);
   let tree: UiTree;
   let element: UiElement | undefined;
   if (target.index !== undefined) {
@@ -266,7 +267,7 @@ export async function tapElement(
     }
   } else {
     requireSelector(target);
-    tree = await recentTree(ctx, serial, deadline);
+    tree = ime ? (await dumpUi(ctx, serial, { deadline })).tree : await recentTree(ctx, serial, deadline);
     const matches = distinctTargets(tree, findElements(tree, target));
     if (matches.length === 0) {
       throw new ToolError(
@@ -286,8 +287,19 @@ export async function tapElement(
     element = matches[(target.nth ?? 1) - 1];
     if (!element) throw new ToolError(`Only ${matches.length} elements match ${describeSelector(target)}`);
   }
-  const at = tapPoint(element.bounds, tree.screen);
+  let at = tapPoint(element.bounds, tree.screen);
   if (!at) throw new ToolError('The element is off the screen: scroll_to it first');
+  if (ime && onKeyboard(ime, at)) {
+    // A docked keyboard over its lower part: the center of the part above it.
+    const visible = visibleBounds(element.bounds, tree.screen);
+    const above = visible && aboveKeyboard(visible, ime);
+    at = above && tapPoint(above, tree.screen);
+    if (!at) {
+      throw new ToolError(
+        `The keyboard covers the element (the keyboard starts at y ${ime[1]}): nothing was tapped. Hide it with press_key back, or scroll the element above it, then tap again`,
+      );
+    }
+  }
   const long = target.long === true;
   await input(
     ctx,
@@ -378,7 +390,7 @@ export const uiTreeTool = defineTool({
 export const tapElementTool = defineTool({
   name: 'tap_element',
   title: 'Tap an element',
-  description: `Taps an element found by text (visible text or content description), id, desc or hint, a field's placeholder (all given fields must match; text, desc and hint are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press). If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what took the tap as it was before (element) and, from a fresh dump about ${READBACK_SETTLE_MS} ms later: after, the same element (same place and title) or null with a note when it moved or is gone; checked {before, after} for a switch or checkbox, the tapped one or the only one inside the tapped row; screenChanged, whether anything on the screen differs (content that changes on its own, such as a timer, a carousel or a loading list, sets it too: false is the reliable signal that the tap changed nothing). readBack false skips that second dump. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Taps an element found by text (visible text or content description), id, desc or hint, a field's placeholder (all given fields must match; text, desc and hint are case-insensitive substrings unless exact), or by index from the last get_ui_tree. Taps the exact center of its visible part (long: a long press); the part under the soft keyboard is not visible, and an element the keyboard covers is not tapped (the error says so: hide it with press_key back, or scroll). If several elements match and nth is not given, nothing is tapped and the candidates come back; nth = 1 picks the first in screen order. Returns what took the tap as it was before (element) and, from a fresh dump about ${READBACK_SETTLE_MS} ms later: after, the same element (same place and title) or null with a note when it moved or is gone; checked {before, after} for a switch or checkbox, the tapped one or the only one inside the tapped row; screenChanged, whether anything on the screen differs (content that changes on its own, such as a timer, a carousel or a loading list, sets it too: false is the reliable signal that the tap changed nothing). readBack false skips that second dump. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     ...selectorFields,
