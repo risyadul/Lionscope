@@ -52,10 +52,13 @@ All notable changes to Lionscope are documented here. The format is based on
   inputs can be tens of ms apart instead of one tool round trip each (#9). At most 100 steps, 60 s of waits, and 80 s
   for the waits plus 500 ms per input. Every element is resolved from one fresh UI dump and every coordinate mapped
   before the first input is sent: a selector that matches nothing, or several without `nth`, fails the call with
-  nothing sent, and a `tap_element` step can only aim at an element on the screen when the call starts. The result
-  gives each step's end and duration as measured by the device's shell clock (`$EPOCHREALTIME`), which show the cost
-  of each `input` on top of the waits. A step that fails stops the sequence; a sequence cut short (adb dropped, the
-  time ran out) returns the steps that ran with `incomplete`.
+  nothing sent, and a `tap_element` step can only aim at an element on the screen when the call starts. Its
+  `tap_element` steps get `tap_element`'s soft keyboard check, against the keyboard as it is when the call starts: an
+  element under the keyboard fails the call with nothing sent, unless enough of it shows above a docked keyboard to
+  tap there, and a note says when the keyboard could not be located. The result gives each step's end and duration
+  as measured by the device's shell clock (`$EPOCHREALTIME`), which show the cost of each `input` on top of the
+  waits. A step that fails stops the sequence; a sequence cut short (adb dropped, the time ran out) returns the steps
+  that ran with `incomplete`.
 - `lionscope query` takes a list or object argument as JSON: `run_inputs --steps '[...]'`, and also `type_text --field
 '{"hint":"Email"}'` and `set_network_mock --headers '{...}'`, which before could only be passed in `--json`.
 - `tap` and `swipe` take `readBack`: they compare a screenshot from before with one taken 300 ms after a tap or

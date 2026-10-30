@@ -816,6 +816,9 @@ dump and every coordinate mapped before the first input is sent, so a selector t
 without `nth`, fails the call with nothing sent. It also means a `tap_element` step must name an element that is on
 the screen when the call starts: for one that an earlier step opens (a dialog's OK), use a `tap` with coordinates
 from a screenshot of that screen, or a separate call, or a match on the current screen is tapped where it was. The
+soft keyboard is checked as `tap_element` checks it, as it is when the call starts: a `tap_element` step whose
+element the keyboard covers fails the call with nothing sent (hide the keyboard with `press_key back` first), unless
+enough of it shows above a docked keyboard to tap there. The
 spacing between two inputs is the wait plus what the input itself costs (`input` took 15-30 ms per tap on an Android
 16 emulator, a key more, and it costs more on older versions; a `sleep` runs 5-10 ms longer than asked): the result
 gives each step's end (`atMs`, from the start) and duration (`tookMs`) as the device's shell clock

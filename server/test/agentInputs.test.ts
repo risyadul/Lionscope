@@ -5,6 +5,7 @@ import {
   MAX_STEPS,
   parseScriptOutput,
 } from '../src/agent/inputTools.ts';
+import { INSETS_COMMAND } from '../src/agent/insets.ts';
 import { callTool } from '../src/agent/registry.ts';
 import { fakeAgent } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
@@ -48,17 +49,30 @@ function dumpMarkers(command: string): string[] {
   return [...command.matchAll(/echo (__LS_[0-9a-f]+_[A-Z]+__)/g)].map((match) => match[1] ?? '');
 }
 
+/** INSETS_COMMAND's output with the system bars, and a keyboard shown with frame `ime` (Android 12 format). */
+const insets = (ime?: string) =>
+  [
+    '  Display: mDisplayId=0',
+    '        InsetsSource type=ITYPE_STATUS_BAR frame=[0,0][1080,63] visible=true',
+    '        InsetsSource type=ITYPE_NAVIGATION_BAR frame=[0,2274][1080,2400] visible=true',
+    ime === undefined
+      ? '        InsetsSource type=ITYPE_IME frame=[0,0][0,0] visible=false'
+      : `        InsetsSource type=ITYPE_IME frame=${ime} visibleFrame=${ime} visible=true`,
+  ].join('\n');
+
 /** What `adb shell <script>` does: its output, then its exit code (or stderr and a code, or no end at all). */
 type ScriptRun =
   string | { output: string; stderr?: string; exit?: number | null; signal?: NodeJS.Signals; hang?: true };
 
 /**
  * adb answering `uiautomator dump` with the given dumps in turn (the last one repeats) and running run_inputs
- * scripts with `run`.
+ * scripts with `run`. `ime`, the keyboard's frame while it is shown; `readableInsets: false`, a device whose insets
+ * can't be read.
  */
 function inputAgent(
   dumpsInTurn: readonly string[] = [DUMP],
   run: (script: string) => ScriptRun = (script) => runScript(script),
+  { ime = undefined as string | undefined, readableInsets = true } = {},
 ) {
   const commands: string[] = [];
   /** The `adb shell <script>` children, in order. */
@@ -67,6 +81,7 @@ function inputAgent(
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
     commands.push(command);
+    if (command === INSETS_COMMAND) return readableInsets ? insets(ime) : '';
     if (command.startsWith('wm size;')) {
       return 'Physical size: 1080x2400\n__LIONSCOPE_ROTATION__\n  Viewport INTERNAL: displayId=0, orientation=0, logicalFrame=[0, 0, 1080, 2400]\n';
     }
@@ -108,7 +123,8 @@ function inputAgent(
     if (!outcome.ok) throw new Error(outcome.error);
     return outcome.result;
   };
-  return { agent, call, scripts, dumps, children };
+  const insetReads = () => commands.filter((command) => command === INSETS_COMMAND).length;
+  return { agent, call, scripts, dumps, children, insetReads };
 }
 
 describe('run_inputs script', () => {
@@ -159,6 +175,9 @@ describe('run_inputs script', () => {
     });
   });
 });
+
+/** Runs `steps` with run_inputs on `agent`. */
+const runSteps = (agent: ReturnType<typeof inputAgent>, steps: unknown[]) => agent.call({ steps });
 
 describe('run_inputs', () => {
   afterEach(() => {
@@ -262,6 +281,55 @@ describe('run_inputs', () => {
       }),
     ).rejects.toThrow('steps[1]: the element is off the screen');
     expect(scripts()).toEqual([]);
+  });
+
+  it('sends nothing when the keyboard covers an element, and taps the part of one above it', async () => {
+    const back = { type: 'key', key: 'back' };
+    const covered = inputAgent([DUMP], undefined, { ime: '[0,1500][1080,2400]' });
+    await expect(runSteps(covered, [back, { type: 'tap_element', text: 'list' }])).rejects.toThrow(
+      'steps[1]: the keyboard covers the element (the keyboard starts at y 1500, in device pixels): nothing was sent. Hide the keyboard with press_key back in a call before this one (a back step in the sequence is too late',
+    );
+    expect(covered.scripts()).toEqual([]);
+    // The list's center is above the keyboard.
+    expect((await runSteps(covered, [{ type: 'tap_element', id: 'list' }])).steps[0]).toMatchObject({
+      x: 540,
+      y: 1380,
+    });
+    // Its center is on the keyboard, its top part is not.
+    const high = inputAgent([DUMP], undefined, { ime: '[0,1000][1080,2400]' });
+    expect((await runSteps(high, [back, { type: 'tap_element', id: 'list' }])).steps[1]).toMatchObject({
+      x: 540,
+      y: 780,
+    });
+    // Only a sliver (40 px) of the list is above it.
+    const sliver = inputAgent([DUMP], undefined, { ime: '[0,600][1080,2400]' });
+    await expect(runSteps(sliver, [{ type: 'tap_element', id: 'list' }])).rejects.toThrow(
+      'steps[0]: the keyboard covers the element',
+    );
+    expect(sliver.scripts()).toEqual([]);
+    // A covered element later in the sequence refuses the whole call, the steps before it included.
+    await expect(
+      runSteps(covered, [
+        { type: 'tap_element', desc: 'search' },
+        back,
+        { type: 'tap_element', text: 'list' },
+      ]),
+    ).rejects.toThrow('steps[2]: the keyboard covers the element');
+    expect(covered.scripts()).toHaveLength(1);
+    // The keyboard is read once per call, beside the dump.
+    expect(high.insetReads()).toBe(1);
+  });
+
+  it('runs unchecked, and says so, when the keyboard can not be located', async () => {
+    const unknown = inputAgent([DUMP], undefined, { readableInsets: false });
+    const result = await runSteps(unknown, [{ type: 'tap_element', text: 'list' }]);
+    expect(result.steps[0]).toMatchObject({ x: 810, y: 2300 });
+    expect(result.note).toContain('keyboard check was skipped');
+    expect((await runSteps(inputAgent(), [{ type: 'tap_element', text: 'list' }])).note).toBeUndefined();
+    // Without tap_element steps, the keyboard is neither read nor mentioned.
+    const keys = inputAgent([DUMP], undefined, { readableInsets: false });
+    expect((await runSteps(keys, [{ type: 'key', key: 'back' }])).note).toBeUndefined();
+    expect(keys.insetReads()).toBe(0);
   });
 
   it('needs a screenshot (or width and height) for coordinate taps', async () => {
@@ -407,5 +475,12 @@ describe('run_inputs', () => {
     const failed = await first.call({ steps: [{ type: 'key', key: 'back' }] });
     expect(failed).toMatchObject({ steps: [], totalMs: null, failed: { index: 0 } });
     expect(failed.note).toBeUndefined();
+    // Beside the keyboard note.
+    const both = inputAgent([DUMP], (script) => runScript(script).replace(/ \d+\.\d+$/gm, ' 1793366413'), {
+      readableInsets: false,
+    });
+    expect((await runSteps(both, [{ type: 'tap_element', text: 'list' }])).note).toMatch(
+      /no timings.*keyboard check was skipped/,
+    );
   });
 });
