@@ -46,6 +46,7 @@ export type AgentSessions = Pick<
   | 'getDevices'
   | 'getSessionState'
   | 'getSnapshot'
+  | 'getLogsDroppedThrough'
   | 'refreshDevices'
   | 'listApps'
   | 'startSession'
@@ -59,6 +60,8 @@ export type AgentSessions = Pick<
   | 'getNetworkMocks'
   | 'setNetworkMock'
   | 'clearNetworkMocks'
+  | 'mark'
+  | 'getMarkers'
 >;
 
 export type AgentEmulators = Pick<EmulatorManager, 'getEmulators' | 'refresh' | 'boot' | 'shutdown'>;

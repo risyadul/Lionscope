@@ -122,6 +122,21 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.10.0")
    capture is on but `get_network` stays empty while the app clearly uses the network, the interceptor is
    probably missing.
 
+### Repeated runs: "does it fail every time?"
+
+1. `mark --label run-1` (a running session is needed) right before each repetition (`stop_app`, `launch_app`, the
+   steps), with a new label per run. Markers are on the clock logcat lines are timed on, so no clock math and no
+   `adb logcat -c` (which empties the device's log buffers for every reader).
+2. Count each run right after it ends, before the next one: `search_logcat --sinceMarker run-1 --query <text>`
+   (`matched`). The log buffer keeps the newest 5000 lines, under a minute for a chatty app, so counting all runs
+   at the end undercounts the early ones: `complete: false` in the result says lines of the range were already
+   dropped. Crashes are kept for the whole session: `get_crashes --sinceMarker run-1 --untilMarker run-2` works
+   at any time. Marking a label again moves it to now; `status` lists the markers, and a new session starts
+   without any.
+3. With device control, `screenshot` at the same step of each run: `blank` says the screen is one colour (a video
+   area that stayed black, with only status bar icons on top); `nonBlackRatio` and `meanLuminance` say how much
+   of it is lit. A secure window (FLAG_SECURE, DRM-protected video) is captured black even while it plays.
+
 ### Verify a fix
 
 Take the same steps on the same screen before and after the change, with the same window, and compare the same
@@ -139,6 +154,18 @@ tapped: to add to a filled field use `type_text --text <text> --mode append`, to
 (with `--text ""` it clears the field). `launch_app` starts an app and `stop_app` force-stops one (its unsaved
 state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
 booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
+`tap_element` refuses an element under the soft keyboard: hide it with `press_key --key back` first, then tap
+again (`scroll_to` doesn't account for the keyboard). `tap` and `swipe` take `--read-back` to compare screenshots from before and after (`screenChanged`,
+`changedShare`), which also sees a map or canvas the UI tree doesn't; `false` is reliable, `true` may be a caret
+or an animation. Pixel `screenChanged` is not `tap_element`'s, which compares UI trees.
+
+Each device tool call is a round trip of hundreds of ms. To reproduce a race that needs inputs close together
+(two taps 50 ms apart, a tap then BACK before a delayed job runs), use `run_inputs` with a list of steps
+(`tap`, `tap_element`, `key`, `wait`) run in one adb call; from the shell, `run_inputs --steps '<JSON list>'`.
+Its elements are found before anything is sent, on the screen as it is then: a `tap_element` step can't aim at
+something an earlier step opens (use a `tap` from a screenshot of that screen, or a separate call). The real spacing
+is the wait plus the cost of each input (tens of ms): read `atMs` / `tookMs` in the result instead of assuming the
+waits were exact. If the result has `incomplete`, check the screen before running the sequence again.
 
 ### Restore bugs (state lost after the app comes back)
 

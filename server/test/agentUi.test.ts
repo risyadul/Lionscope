@@ -13,6 +13,7 @@ import {
   visibleFraction,
 } from '../src/agent/uiTree.ts';
 import { decodeEntities, MAX_UI_NODES, parseUiXml, UiXmlError } from '../src/agent/uiXml.ts';
+import { aboveKeyboard, inside, INSETS_COMMAND, parseInsets } from '../src/agent/insets.ts';
 import { fakeAgent } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
 import type { ExecOptions } from '../src/adb/adb.ts';
@@ -188,6 +189,72 @@ describe('the UI tree', () => {
   });
 });
 
+/** `dumpsys window displays` (filtered as INSETS_COMMAND does) with a keyboard shown with `frame` (Android 14+). */
+const imeLine = (frame: string) =>
+  `        InsetsSource id=3 type=ime frame=${frame} visibleFrame=${frame} visible=true flags= sideHint=BOTTOM boundingRects=null\n`;
+
+/** INSETS_COMMAND's output on an Android 16 emulator, the keyboard hidden. */
+const INSETS = [
+  '  Display: mDisplayId=0 (organized)',
+  '        InsetsSource id=a21d0001 type=navigationBars frame=[0,2298][1080,2424] visible=true flags=INSETS_ROUNDED_CORNER sideHint=BOTTOM boundingRects=null',
+  '        InsetsSource id=a21d0004 type=systemGestures frame=[0,0][0,0] visible=true flags= sideHint=NONE boundingRects=null',
+  '        InsetsSource id=3 type=ime frame=[0,0][0,0] visibleFrame=[0,2424][1080,2424] visible=false flags= sideHint=NONE boundingRects=null',
+  '        InsetsSource id=27 type=displayCutout frame=[0,0][1080,142] visible=true flags= sideHint=TOP boundingRects=null',
+  '        InsetsSource id=b740000 type=statusBars frame=[0,0][1080,142] visible=true flags= sideHint=TOP boundingRects=null',
+].join('\n');
+
+describe('the soft keyboard and the system bars', () => {
+  it('reads the bars, and the keyboard while it is shown, from Android 11 and 14+ output', () => {
+    expect(parseInsets(INSETS)).toEqual({
+      ime: null,
+      bars: [
+        [0, 2298, 1080, 2424],
+        [0, 0, 1080, 142],
+      ],
+    });
+    expect(parseInsets(INSETS + '\n' + imeLine('[0,1541][1080,2424]'))?.ime).toEqual([0, 1541, 1080, 2424]);
+    expect(
+      parseInsets('InsetsSource id=3 type=ime frame=[0,1541][1080,2424] visible=false flags=')?.ime,
+    ).toBeNull();
+    // Older: ITYPE_IME, no id; the visible frame wins over the frame.
+    expect(
+      parseInsets(
+        'InsetsSource type=ITYPE_IME frame=[0,1300][1080,2400] visibleFrame=[0,1500][1080,2400] visible=true',
+      )?.ime,
+    ).toEqual([0, 1500, 1080, 2400]);
+    expect(parseInsets('InsetsSource type=ITYPE_IME frame=[0,1300][1080,2400] visible=true')?.ime).toEqual([
+      0, 1300, 1080, 2400,
+    ]);
+    expect(parseInsets('')).toBeNull();
+    // A provider's copy of a source is not the source.
+    expect(
+      parseInsets('        mSource=InsetsSource id=3 type=ime frame=[0,1541][1080,2424] visible=true flags='),
+    ).toBeNull();
+  });
+
+  it('takes the default display, wherever it is listed', () => {
+    const other = [
+      '  Display: mDisplayId=2',
+      '        InsetsSource id=3 type=ime frame=[0,0][0,0] visible=false flags=',
+      '        InsetsSource id=4 type=statusBars frame=[0,0][1920,60] visible=true flags=',
+    ].join('\n');
+    const shown = INSETS + '\n' + imeLine('[0,1541][1080,2424]');
+    expect(parseInsets(`${other}\n${shown}`)).toEqual(parseInsets(shown));
+    expect(parseInsets(`${shown}\n${other}`)?.ime).toEqual([0, 1541, 1080, 2424]);
+  });
+
+  it('tells a point on it and the part of an element above it', () => {
+    const ime: [number, number, number, number] = [0, 1500, 1080, 2400];
+    expect(inside(ime, { x: 540, y: 1500 })).toBe(true);
+    expect(inside(ime, { x: 540, y: 1499 })).toBe(false);
+    expect(inside(null, { x: 540, y: 2000 })).toBe(false);
+    expect(aboveKeyboard([0, 560, 1080, 2200], ime)).toEqual([0, 560, 1080, 1500]);
+    expect(aboveKeyboard([0, 1600, 1080, 2200], ime)).toBeNull();
+    // A keyboard narrower than the element.
+    expect(aboveKeyboard([0, 560, 1080, 2200], [100, 1500, 900, 2000])).toBeNull();
+  });
+});
+
 /** The markers a dump command asked for (they are random per call). */
 function markers(command: string): string[] {
   return [...command.matchAll(/echo (__LS_[0-9a-f]+_[A-Z]+__)/g)].map((match) => match[1] ?? '');
@@ -196,17 +263,26 @@ function markers(command: string): string[] {
 /**
  * adb that answers `uiautomator dump` with the given dumps in turn (the last one repeats) and `wm size` with
  * `wmSize`; an entry 'hang' makes that dump time out. With `api`, a UI helper that gives that API level (and no
- * dumps).
+ * dumps). `ime`, the keyboard's frame while it is shown; `insets: false`, a device whose insets can't be read.
  */
 function uiAgent(
   dumps: readonly string[],
-  { wmSize = 'Physical size: 1080x2400', api = undefined as number | undefined } = {},
+  {
+    wmSize = 'Physical size: 1080x2400',
+    api = undefined as number | undefined,
+    ime = undefined as string | undefined,
+    insets = true,
+  } = {},
 ) {
   let dumpIndex = 0;
   const commands: string[] = [];
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
     commands.push(command);
+    if (command === INSETS_COMMAND) {
+      if (!insets) return '';
+      return ime === undefined ? INSETS : INSETS + '\n' + imeLine(ime);
+    }
     if (!command.startsWith('uiautomator dump')) return '';
     const file = /uiautomator dump (\S+)/.exec(command)?.[1] ?? '';
     expect(command).toContain(`rm -f ${file}`);
@@ -668,6 +744,85 @@ describe('UI tools', () => {
       note: `Could not read the field back: ${UI_DUMP_TIMEOUT}`,
     });
     expect(inputs()).toEqual(['input tap 540 315', "input text 'x'"]);
+  });
+
+  it('does not tap an element the keyboard covers, and taps the part of one above it', async () => {
+    const covered = uiAgent([DUMP], { ime: '[0,1500][1080,2400]' });
+    await expect(covered.call('tap_element', { text: 'list' })).rejects.toThrow(
+      'The keyboard covers the element (the keyboard starts at y 1500, in device pixels): nothing was tapped. Hide the keyboard with press_key back, then tap again',
+    );
+    expect(covered.inputs()).toEqual([]);
+    // The list's center is above the keyboard.
+    expect(await covered.call('tap_element', { id: 'list', readBack: false })).toMatchObject({
+      at: { x: 540, y: 1380 },
+    });
+    // Its center is on the keyboard, its top part is not.
+    const high = uiAgent([DUMP], { ime: '[0,1000][1080,2400]' });
+    expect(await high.call('tap_element', { id: 'list', readBack: false })).toMatchObject({
+      at: { x: 540, y: 780 },
+    });
+    // A keyboard narrower than the list, over its center.
+    const narrow = uiAgent([DUMP], { ime: '[100,1200][900,1700]' });
+    await expect(narrow.call('tap_element', { id: 'list' })).rejects.toThrow('The keyboard covers');
+    // Only a sliver (40 px) of the list is above it.
+    const sliver = uiAgent([DUMP], { ime: '[0,600][1080,2400]' });
+    await expect(sliver.call('tap_element', { id: 'list' })).rejects.toThrow('The keyboard covers');
+    expect([...narrow.inputs(), ...sliver.inputs()]).toEqual([]);
+  });
+
+  it('does not tap above the keyboard where another element would take the tap', async () => {
+    const screen = (bar: string) =>
+      `<hierarchy rotation="0"><node class="android.widget.FrameLayout" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" package="com.example.shop" bounds="[0,0][1080,2400]"><node class="android.widget.LinearLayout" clickable="true" package="com.example.shop" bounds="[0,800][1080,1400]"><node class="android.widget.TextView" text="Order 7" package="com.example.shop" bounds="[40,820][1040,1380]" /></node></node>${bar}</node></hierarchy>`;
+    // The app lifted its button bar above the keyboard, over the row's visible part.
+    const lifted = uiAgent(
+      [
+        screen(
+          '<node class="android.widget.Button" text="Send" clickable="true" package="com.example.shop" bounds="[0,850][1080,1000]" />',
+        ),
+      ],
+      { ime: '[0,1000][1080,2400]' },
+    );
+    await expect(lifted.call('tap_element', { text: 'Order 7' })).rejects.toThrow('The keyboard covers');
+    expect(lifted.inputs()).toEqual([]);
+    const clear = uiAgent([screen('')], { ime: '[0,1000][1080,2400]' });
+    expect(await clear.call('tap_element', { text: 'Order 7', readBack: false })).toMatchObject({
+      at: { x: 540, y: 910 },
+      element: { class: 'LinearLayout' },
+    });
+  });
+
+  it('taps unchecked, and says so, when the keyboard can not be located', async () => {
+    const unknown = uiAgent([DUMP], { insets: false });
+    expect(await unknown.call('tap_element', { text: 'list', readBack: false })).toMatchObject({
+      tapped: true,
+      note: expect.stringContaining('keyboard check was skipped'),
+    });
+    expect(unknown.inputs()).toEqual(['input tap 810 2300']);
+    const known = await uiAgent([DUMP]).call('tap_element', { text: 'list', readBack: false });
+    expect(known).not.toHaveProperty('note');
+    // Beside the read-back note.
+    expect(
+      (
+        await uiAgent([DUMP, DUMP.replace('content-desc="List"', 'content-desc="Lists"')], {
+          insets: false,
+        }).call('tap_element', { text: 'list' })
+      ).note,
+    ).toMatch(/moved or is gone.*keyboard check was skipped/);
+  });
+
+  it('reads the screen again instead of a recent dump while the keyboard is shown', async () => {
+    // The keyboard finished sliding in after the last dump, and the layout moved up.
+    const moved = DUMP.replace('bounds="[930,80][1060,200]"', 'bounds="[930,300][1060,420]"');
+    const shown = uiAgent([DUMP, moved], { ime: '[0,1500][1080,2400]' });
+    await shown.call('get_ui_tree', {});
+    expect(await shown.call('tap_element', { desc: 'search', readBack: false })).toMatchObject({
+      at: { x: 995, y: 360 },
+    });
+    const hidden = uiAgent([DUMP, moved]);
+    await hidden.call('get_ui_tree', {});
+    expect(await hidden.call('tap_element', { desc: 'search', readBack: false })).toMatchObject({
+      at: { x: 995, y: 140 },
+    });
   });
 
   it('reads the tapped element back after the tap', async () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { isValidSerial } from '@lionscope/protocol';
 import type { DeviceInfo, EmulatorInfo, SessionState } from '@lionscope/protocol';
 import { isEmulatorSerial } from '../emulator/screenGateway.ts';
+import { markersView } from './logTools.ts';
 import { defineTool, READ_ONLY, ToolError, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
 import type { AgentContext } from './tool.ts';
 import { iso } from './views.ts';
@@ -103,6 +104,7 @@ export function statusData(ctx: AgentContext) {
     session: sessionView(session),
     sdk: sdkView(session),
     network: networkView(ctx, session),
+    markers: markersView(ctx.sessions.getMarkers()),
   };
 }
 
@@ -110,7 +112,7 @@ export const statusTool = defineTool({
   name: 'status',
   title: 'Lionscope status',
   description:
-    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror, dontKeepActivities = turned on by set_dont_keep_activities and not yet off); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options, network: active / unverified = the link key could not be handed to the app over adb / needs_sdk = SDK older than 0.9.0); HTTP capture (network: capture on while the SDK link is at protocol 7 and active, exchanges kept, mock rules total/enabled/applied); and whether device-control tools and network bodies are enabled. Use the serials it lists for list_apps and start_session. ' +
+    'Start here. Returns the Lionscope server version and dashboard URL; connected adb devices (serial, model, state, kind emulator/physical, canMirror, dontKeepActivities = turned on by set_dont_keep_activities and not yet off); Android Virtual Devices (AVD name, state off/booting/running/shutting_down, serial, managed = booted by this server); the profiling session (status idle/waiting_for_process/running/error, serial, packageName, pid, startedAt); the in-app SDK link (connected, version, apiLevel, protocol, options, network: active / unverified = the link key could not be handed to the app over adb / needs_sdk = SDK older than 0.9.0); HTTP capture (network: capture on while the SDK link is at protocol 7 and active, exchanges kept, mock rules total/enabled/applied); markers of the session (set with mark: total, and the newest 20, oldest first); and whether device-control tools and network bodies are enabled. Use the serials it lists for list_apps and start_session. ' +
     UNTRUSTED_DESCRIPTION,
   access: 'read',
   input: z.object({}),
