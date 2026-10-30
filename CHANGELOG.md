@@ -69,6 +69,22 @@ All notable changes to Lionscope are documented here. The format is based on
   screenshot after the input that can't be read; one before it that can't be read fails the call before anything
   is sent. Off by default: it adds 1 to 3 s.
 - `tap` returns a `warning` when the point is on the soft keyboard (the tap goes to a key, not the app).
+- Agent tools for state-restore scenarios (device control). `get_activity_instance`: the activity on screen, the
+  identity hash of its Activity object (`dumpsys activity top`) and the app's PID, with `recreated` and
+  `processRestarted` compared with the previous call for the same device and app. `set_dont_keep_activities`:
+  Developer options' "Don't keep activities", switched the way Settings does (the activity manager's
+  `setAlwaysFinish`, from a one-shot run of the UI helper's jar), so it takes effect at once; a plain
+  `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
+  back and checks that the activities in the background were destroyed; if it cannot be switched on, nothing is
+  changed. What Lionscope turned on it puts back as it was when the device's profiling session stops or Lionscope
+  stops, retrying a failed put-back when the device comes back, and `status` shows it per device
+  (`dontKeepActivities`).
+  `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
+  `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way
+  Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID, the top
+  activity before and after, and whether it was resumed (false, e.g., after a crash while restoring).
+  `bring_to_front`: brings an app's task back the same way, without killing it (unlike `launch_app`, which can
+  start the launcher activity on top of the task). The activity record formats of Android 7 to 16 are read.
 
 ### Changed
 

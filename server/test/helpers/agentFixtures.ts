@@ -14,6 +14,7 @@ import type {
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
+import { DontKeepActivities } from '../../src/agent/dontKeepActivities.ts';
 import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
 import { PublicError } from '../../src/errors.ts';
 import { MockRules, NO_SESSION_MOCKS_MESSAGE } from '../../src/session/mockRules.ts';
@@ -277,6 +278,8 @@ export function fakeAgent(
     now: () => options.now ?? T0 + 60_000,
     screenshots: new Map(),
     uiDumps: new Map(),
+    activityInstances: new Map(),
+    dontKeepActivities: new DontKeepActivities({ adb: agent.adb, helpers: () => agent.ctx.uiHelper }),
     deviceCalls: new Map(),
   };
   return agent;

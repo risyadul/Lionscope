@@ -167,6 +167,26 @@ something an earlier step opens (use a `tap` from a screenshot of that screen, o
 is the wait plus the cost of each input (tens of ms): read `atMs` / `tookMs` in the result instead of assuming the
 waits were exact. If the result has `incomplete`, check the screen before running the sequence again.
 
+### Restore bugs (state lost after the app comes back)
+
+Reproduce the three cases in turn, each time entering the state (type in the form), leaving, and coming back:
+
+1. Background: `press_key home`, then `bring_to_front --package-name <pkg>` (the task as Recents brings it back;
+   not `launch_app`, whose `am start -n` can start the launcher activity on top). Nothing is recreated:
+   `get_activity_instance` before and after gives the same `instanceId` (`recreated: false`).
+2. Activity destroyed: `set_dont_keep_activities --enabled true`, then leave (HOME, or open the next screen) and
+   come back (`bring_to_front`, or back from the next screen): `recreated: true`, `processRestarted: false`. Tell
+   the user it is on (it affects every app), and `set_dont_keep_activities --enabled false` when you are done
+   (Lionscope also puts it back when the session stops or Lionscope stops).
+3. Process death: `simulate_process_death --package-name <pkg>` kills the backgrounded process keeping its task and
+   reopens it (`oldPid`, `newPid`, `topActivity`; check `killed`, `resumed`, and that `topActivity` is the screen
+   you left; `resumed: false` usually means a crash while restoring: `get_crashes`): `recreated: true`,
+   `processRestarted: true`.
+
+Call `get_activity_instance --package-name <pkg>` right before leaving and right after returning (it compares with
+its previous call), then read the field back (`get_ui_tree`) to see whether the state survived. `stop_app` is not
+a restore case: a force-stop discards the saved state.
+
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and
 `get_location` shows what is set. Its `warning` says when apps won't see it (location switched off). Tell the
@@ -180,4 +200,5 @@ user, and `clear_location` when you are done.
   credentials, but not everything.
 - When you are done, unless the user wants them kept: undo your live edits with `revert_view_properties` while
   the session still runs (edits outlive the session, and reverting needs one), clear your mocks with
-  `clear_network_mocks`, reset a location you set with `clear_location`, then `stop_session`.
+  `clear_network_mocks`, reset a location you set with `clear_location`, turn "Don't keep activities" off with
+  `set_dont_keep_activities --enabled false` if you turned it on, then `stop_session`.

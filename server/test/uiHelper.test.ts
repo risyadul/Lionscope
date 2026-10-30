@@ -12,7 +12,10 @@ import {
   HELPER_CLOSED,
   HELPER_CRASHED,
   HELPER_FAILED,
+  HELPER_NO_RUN,
+  HELPER_REFUSED,
   HELPER_OLD_API,
+  HELPER_OLD_JAR_API,
   HELPER_TIMEOUT,
   HELPER_TOO_LARGE,
   resolveUiHelperJar,
@@ -452,4 +455,94 @@ describe('UI dumps with the helper', () => {
     await expect(failure).rejects.toThrow(UI_DUMP_FAILED);
     await expect(failure).rejects.toThrow(`${UI_HELPER_FAILED_TOO} (${HELPER_BUSY}).`);
   }, 10_000);
+});
+
+describe("the helper's one-shot always-finish run", () => {
+  /** FakeHelperAdb whose app_process run (an exec, not a long-lived child) prints `answer`. */
+  function oneShotAdb(answer: string, scenario: Scenario = {}): FakeHelperAdb {
+    const adb = new FakeHelperAdb(scenario);
+    const base = adb.execHandler;
+    adb.execHandler = (args) => {
+      const command = String(args.at(-1));
+      if (command.includes('app_process')) {
+        adb.commands.push(command);
+        return answer;
+      }
+      return base(args);
+    };
+    return adb;
+  }
+
+  it('pushes the jar under a fresh name, runs it once without a UiAutomation, and removes it', async () => {
+    const adb = oneShotAdb('some framework noise\nOK always-finish 1\n');
+    await helpers(adb).setAlwaysFinish(SERIAL, true, 5000);
+    expect(adb.pushes).toHaveLength(1);
+    const devicePath = String(adb.pushes[0]?.at(-1));
+    expect(devicePath).toMatch(/^\/data\/local\/tmp\/lionscope-ui-helper-v1-[0-9a-f]{12}\.jar$/);
+    expect(adb.commands).toContain(
+      `CLASSPATH=${devicePath} app_process / ${UI_HELPER_MAIN} always-finish 1 2>/dev/null || true`,
+    );
+    expect(adb.removals).toEqual([`rm -f ${devicePath}`]);
+    expect(adb.helpers).toHaveLength(0);
+  });
+
+  it('brings a task to the front and returns the start result', async () => {
+    const adb = oneShotAdb('OK task-to-front 2\n');
+    expect(await helpers(adb).taskToFront(SERIAL, 125, 5000)).toBe(2);
+    expect(
+      adb.commands.some((command) =>
+        command.endsWith(`${UI_HELPER_MAIN} task-to-front 125 2>/dev/null || true`),
+      ),
+    ).toBe(true);
+    expect(adb.removals).toHaveLength(1);
+  });
+
+  it("runs one device's one-shot commands in turn, so the last switch wins", async () => {
+    const adb = new FakeHelperAdb({});
+    const base = adb.execHandler;
+    const finished: string[] = [];
+    adb.execHandler = async (args) => {
+      const command = String(args.at(-1));
+      const value = / always-finish ([01]) /.exec(command)?.[1];
+      if (value === undefined) return base(args);
+      // The first switch is slow: run at once, the second would finish first.
+      if (value === '1') await new Promise((resolve) => setTimeout(resolve, 50));
+      finished.push(value);
+      return `OK always-finish ${value}\n`;
+    };
+    const manager = helpers(adb);
+    await Promise.all([
+      manager.setAlwaysFinish(SERIAL, true, 5000),
+      manager.setAlwaysFinish(SERIAL, false, 5000),
+    ]);
+    expect(finished).toEqual(['1', '0']);
+  });
+
+  it('turns an adb failure into a helper error, and still removes the jar', async () => {
+    const adb = new FakeHelperAdb({});
+    const base = adb.execHandler;
+    adb.execHandler = (args) => {
+      if (String(args.at(-1)).includes('app_process')) throw new Error('adb: device offline');
+      return base(args);
+    };
+    await expect(helpers(adb).taskToFront(SERIAL, 12, 5000)).rejects.toThrow(HELPER_NO_RUN);
+    expect(adb.removals).toHaveLength(1);
+  });
+
+  it('fails without its OK line, below API 23, with a bad jar, and once closed', async () => {
+    const refused = oneShotAdb('ERR always-finish\n');
+    await expect(helpers(refused).setAlwaysFinish(SERIAL, false, 5000)).rejects.toThrow(HELPER_REFUSED);
+    expect(refused.removals).toHaveLength(1);
+    const old = oneShotAdb('OK always-finish 1\n', { api: 22 });
+    await expect(helpers(old).setAlwaysFinish(SERIAL, true, 5000)).rejects.toThrow(HELPER_OLD_JAR_API);
+    expect(old.pushes).toHaveLength(0);
+    const badJar = oneShotAdb('OK always-finish 1\n');
+    await expect(
+      helpers(badJar, { jarSha256: '0'.repeat(64) }).setAlwaysFinish(SERIAL, true, 5000),
+    ).rejects.toThrow(HELPER_BAD_JAR);
+    expect(badJar.pushes).toHaveLength(0);
+    const closed = helpers(oneShotAdb('OK always-finish 1\n'));
+    await closed.close();
+    await expect(closed.setAlwaysFinish(SERIAL, true, 5000)).rejects.toThrow(HELPER_CLOSED);
+  });
 });

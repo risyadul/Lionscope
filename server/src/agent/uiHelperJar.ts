@@ -5,4 +5,4 @@ export const UI_HELPER_JAR_NAME = 'lionscope-ui-helper-v1.jar';
 /** Its protocol version, which the helper prints in its READY line. */
 export const UI_HELPER_PROTOCOL = '1';
 /** Built in rather than read next to the jar, so a swapped jar can't bring its own checksum. */
-export const UI_HELPER_JAR_SHA256 = '7f72732335160756a1295b5b23d5ad241884d9d11808c5ac3a05cd3fdf3bbdcf';
+export const UI_HELPER_JAR_SHA256 = '6912534db3c6edcdb9eb1c5fafe98e3d717bbbf59d3d49495d77bb56ad8471b2';

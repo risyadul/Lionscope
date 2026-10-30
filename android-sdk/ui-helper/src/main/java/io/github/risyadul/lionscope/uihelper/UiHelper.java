@@ -1,9 +1,11 @@
 package io.github.risyadul.lionscope.uihelper;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.app.ActivityManager;
 import android.app.UiAutomation;
 import android.graphics.Point;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.view.Display;
@@ -37,6 +39,10 @@ import java.util.regex.Pattern;
  * It exits on stdin EOF, on `exit`, and after {@link #IDLE_EXIT_MS} without a request. It never opens a socket.
  * Unlike uiautomator, a dump waits at most {@link #IDLE_MAX_MS} for the screen to settle and then reads it as it
  * is, so an animating screen never blocks it. Needs API 23+.
+ *
+ * <p>Run with two arguments instead, it connects nothing, does one thing, prints {@code OK <command> <value>} or
+ * {@code ERR <command>}, and exits: {@code always-finish 0|1} switches Developer options' "Don't keep
+ * activities" the way Settings does; {@code task-to-front <taskId>} brings a task back the way Recents does.
  */
 public final class UiHelper {
     static final String PROTOCOL = "1";
@@ -48,6 +54,7 @@ public final class UiHelper {
     /** UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES (API 24): TalkBack & co. keep running meanwhile. */
     private static final int FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES = 1;
     private static final Pattern NONCE = Pattern.compile("[0-9a-f]{1,32}");
+    private static final Pattern TASK_ID = Pattern.compile("[0-9]{1,9}");
     private static final Pattern OWN_JAR = Pattern.compile("/data/local/tmp/lionscope-ui-helper-[\\w.-]+\\.jar");
 
     private final UiAutomation automation;
@@ -62,6 +69,10 @@ public final class UiHelper {
     public static void main(String[] args) throws IOException {
         PrintStream out = new PrintStream(new FileOutputStream(FileDescriptor.out), false, "UTF-8");
         removeOwnJar();
+        if (args.length == 2 && (args[0].equals("always-finish") || args[0].equals("task-to-front"))) {
+            System.exit(runOnce(args[0], args[1], out));
+            return;
+        }
         if (Looper.getMainLooper() == null) Looper.prepareMainLooper();
         UiAutomation automation;
         try {
@@ -88,6 +99,70 @@ public final class UiHelper {
         String classpath = System.getenv("CLASSPATH");
         if (classpath != null && OWN_JAR.matcher(classpath).matches()) {
             if (!new File(classpath).delete()) System.err.println("Could not delete " + classpath);
+        }
+    }
+
+    /** A one-shot command; its exit code. */
+    static int runOnce(String command, String value, PrintStream out) {
+        try {
+            String result;
+            if (command.equals("always-finish") && (value.equals("0") || value.equals("1"))) {
+                alwaysFinish(value.equals("1"));
+                result = value;
+            } else if (command.equals("task-to-front") && TASK_ID.matcher(value).matches()) {
+                result = String.valueOf(taskToFront(Integer.parseInt(value)));
+            } else {
+                out.print("ERR " + command + "\n");
+                out.flush();
+                return 2;
+            }
+            out.print("OK " + command + " " + result + "\n");
+            out.flush();
+            return 0;
+        } catch (Throwable error) {
+            error.printStackTrace();
+            out.print("ERR " + command + "\n");
+            out.flush();
+            return 1;
+        }
+    }
+
+    /**
+     * IActivityManager.setAlwaysFinish, as Settings calls it (the shell user holds SET_ALWAYS_FINISH): it writes the
+     * global setting and switches the flag the activity manager acts on. Writing the setting alone (`settings put
+     * global always_finish_activities`) takes effect only after a reboot.
+     */
+    private static void alwaysFinish(boolean enabled) throws ReflectiveOperationException {
+        Class.forName("android.app.IActivityManager").getMethod("setAlwaysFinish", boolean.class)
+            .invoke(activityManager(), enabled);
+    }
+
+    /**
+     * startActivityFromRecents(taskId, null), as Recents calls it (the shell user holds START_TASKS_FROM_RECENTS):
+     * the task comes to the front as it is and its top activity resumes, started again if its process died. Unlike
+     * `am start` with the launcher intent, it never adds an activity to the task. Returns the start result
+     * (ActivityManager.START_TASK_TO_FRONT, 2, when the task had an activity).
+     */
+    private static int taskToFront(int taskId) throws ReflectiveOperationException {
+        Object service;
+        Class<?> serviceInterface;
+        if (Build.VERSION.SDK_INT >= 29) {
+            service = Class.forName("android.app.ActivityTaskManager").getDeclaredMethod("getService").invoke(null);
+            serviceInterface = Class.forName("android.app.IActivityTaskManager");
+        } else {
+            service = activityManager();
+            serviceInterface = Class.forName("android.app.IActivityManager");
+        }
+        Method start = serviceInterface.getMethod("startActivityFromRecents", int.class, Bundle.class);
+        return (Integer) start.invoke(service, taskId, null);
+    }
+
+    /** ActivityManager.getService() (API 26+), else ActivityManagerNative.getDefault(). */
+    private static Object activityManager() throws ReflectiveOperationException {
+        try {
+            return ActivityManager.class.getDeclaredMethod("getService").invoke(null);
+        } catch (NoSuchMethodException e) {
+            return Class.forName("android.app.ActivityManagerNative").getDeclaredMethod("getDefault").invoke(null);
         }
     }
 

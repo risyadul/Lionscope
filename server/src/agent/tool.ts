@@ -11,6 +11,7 @@ import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { ViewEdits } from '../inspector/viewEdits.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
+import type { DontKeepActivities } from './dontKeepActivities.ts';
 import type { UiHelpers } from './uiHelper.ts';
 import type { UiTree } from './uiTree.ts';
 
@@ -83,6 +84,13 @@ export interface ScreenshotSize {
   device: Size;
 }
 
+/** The activity on screen as get_activity_instance last read it. */
+export interface ActivityInstance {
+  activity: string;
+  instanceId: string;
+  pid: number | null;
+}
+
 export interface AgentContext {
   sessions: AgentSessions;
   emulators: AgentEmulators;
@@ -107,6 +115,10 @@ export interface AgentContext {
   uiDumps: Map<string, { at: number; tree: UiTree; listing: UiTree | null }>;
   /** The on-device UI helper, tried before `uiautomator dump`; without it every dump uses uiautomator. */
   uiHelper?: UiHelpers;
+  /** Per `<serial> <package>`, what get_activity_instance saw last (its recreated / processRestarted compare). */
+  activityInstances: Map<string, ActivityInstance>;
+  /** "Don't keep activities" as set_dont_keep_activities switched it, turned off again when the server stops. */
+  dontKeepActivities: DontKeepActivities;
   /** Device tools in flight per device (registry.ts caps them). */
   deviceCalls: Map<string, number>;
   /** Device-control tools are enabled for this call (set per call by the registry). */

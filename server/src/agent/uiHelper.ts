@@ -59,6 +59,11 @@ export const HELPER_NO_PUSH = 'it could not be copied to the device';
 export const HELPER_BAD_JAR = `${UI_HELPER_JAR_NAME} is missing or does not match its SHA-256 checksum`;
 export const HELPER_CLOSED = 'Lionscope is shutting down';
 export const HELPER_OLD_API = `it needs Android 7.0 (API ${UI_HELPER_MIN_API}) or later`;
+/** The jar's dex (android-sdk/ui-helper `minApi`): a one-shot run needs no accessibility connection. */
+export const UI_HELPER_MIN_JAR_API = 23;
+export const HELPER_OLD_JAR_API = `it needs Android 6.0 (API ${UI_HELPER_MIN_JAR_API}) or later`;
+export const HELPER_REFUSED = 'the system did not accept the request';
+export const HELPER_NO_RUN = 'adb could not run it (device gone, or no answer in time)';
 
 export function resolveUiHelperJar(
   moduleUrl: string = import.meta.url,
@@ -81,6 +86,35 @@ export async function readVerifiedHelperJar(jarPath: string, expectedSha256: str
   if (createHash('sha256').update(jar).digest('hex') !== expectedSha256)
     throw new UiHelperError(HELPER_BAD_JAR);
   return jar;
+}
+
+/** Where a helper jar goes on the device: a fresh name each time (the helper deletes it once it runs). */
+function devicePathFor(token: string): string {
+  return `/data/local/tmp/lionscope-ui-helper-v${UI_HELPER_PROTOCOL}-${token}.jar`;
+}
+
+/** `adb push` of exactly these bytes, from a private temporary copy (mkdtemp is 0700). */
+async function pushJar(
+  adb: Adb,
+  serial: string,
+  jar: Buffer,
+  devicePath: string,
+  timeoutMs: number,
+): Promise<void> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'lionscope-ui-helper-'));
+  try {
+    const copy = path.join(dir, UI_HELPER_JAR_NAME);
+    await writeFile(copy, jar, { mode: 0o600 });
+    await execBinary(adb, ['-s', serial, 'push', copy, devicePath], {
+      timeoutMs: Math.max(1, Math.min(PUSH_TIMEOUT_MS, Math.floor(timeoutMs))),
+      maxBytes: PUSH_OUTPUT_BYTES,
+    });
+  } catch (error) {
+    log.warn(`Pushing the UI helper to ${serial} failed: ${errorMessage(error)}`);
+    throw new UiHelperError(HELPER_NO_PUSH);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 /** A dump's XML, or null when the screen has no active window (uiautomator's "null root node"). */
@@ -106,7 +140,7 @@ interface Pending {
 /** One running helper on one device. */
 class HelperProcess {
   readonly token = randomBytes(6).toString('hex');
-  readonly devicePath = `/data/local/tmp/lionscope-ui-helper-v${UI_HELPER_PROTOCOL}-${this.token}.jar`;
+  readonly devicePath = devicePathFor(this.token);
   private child: ChildProcessLike | null = null;
   private exited = false;
   private readonly exitWaiters = new Set<() => void>();
@@ -131,7 +165,7 @@ class HelperProcess {
 
   async start(jar: Buffer, timeoutMs: number): Promise<void> {
     const deadline = performance.now() + timeoutMs;
-    await this.push(jar, timeoutMs);
+    await pushJar(this.adb, this.serial, jar, this.devicePath, timeoutMs);
     // Stopped (the server is closing) while the jar was on its way: nothing is started.
     if (this.stopping) throw new UiHelperError(HELPER_CLOSED);
     const remaining = deadline - performance.now();
@@ -171,24 +205,6 @@ class HelperProcess {
     throw new UiHelperError(
       line === 'ERR - busy' ? HELPER_BUSY : line === 'ERR - connect' ? HELPER_CONNECT : HELPER_NO_START,
     );
-  }
-
-  /** `adb push` of exactly these bytes, from a private temporary copy (mkdtemp is 0700). */
-  private async push(jar: Buffer, timeoutMs: number): Promise<void> {
-    const dir = await mkdtemp(path.join(tmpdir(), 'lionscope-ui-helper-'));
-    try {
-      const copy = path.join(dir, UI_HELPER_JAR_NAME);
-      await writeFile(copy, jar, { mode: 0o600 });
-      await execBinary(this.adb, ['-s', this.serial, 'push', copy, this.devicePath], {
-        timeoutMs: Math.max(1, Math.min(PUSH_TIMEOUT_MS, Math.floor(timeoutMs))),
-        maxBytes: PUSH_OUTPUT_BYTES,
-      });
-    } catch (error) {
-      log.warn(`Pushing the UI helper to ${this.serial} failed: ${errorMessage(error)}`);
-      throw new UiHelperError(HELPER_NO_PUSH);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   }
 
   /** The dump, or null for no active window; throws UiHelperError (UiHelperCrash when the process ended). */
@@ -393,6 +409,71 @@ export class UiHelpers {
         if (this.helpers.has(serial)) this.armIdle(serial);
       }
     });
+  }
+
+  /** Developer options' "Don't keep activities", switched the way Settings does it (`always-finish`). */
+  async setAlwaysFinish(serial: string, enabled: boolean, timeoutMs: number): Promise<void> {
+    await this.runOnce(serial, 'always-finish', enabled ? '1' : '0', timeoutMs);
+  }
+
+  /** Brings a task to the front the way Recents does (`task-to-front`); the start result, 2 when it was there. */
+  async taskToFront(serial: string, taskId: number, timeoutMs: number): Promise<number> {
+    return Number(await this.runOnce(serial, 'task-to-front', String(taskId), timeoutMs));
+  }
+
+  /**
+   * One run of the helper with a one-shot command, answered by `OK <command> <value>` (the value is returned). It
+   * connects no UiAutomation, but runs in turn with the device's other helper requests, so two switches of the same
+   * setting end in the order they were asked for. The jar is pushed under a fresh name and removed again.
+   */
+  private runOnce(
+    serial: string,
+    command: 'always-finish' | 'task-to-front',
+    value: string,
+    timeoutMs: number,
+  ): Promise<string> {
+    if (this.closed) return Promise.reject(new UiHelperError(HELPER_CLOSED));
+    const deadline = performance.now() + timeoutMs;
+    return this.serialized(serial, () => this.runOnceNow(serial, command, value, deadline));
+  }
+
+  private async runOnceNow(
+    serial: string,
+    command: string,
+    value: string,
+    deadline: number,
+  ): Promise<string> {
+    if (this.closed) throw new UiHelperError(HELPER_CLOSED);
+    const timeoutMs = deadline - performance.now();
+    if (timeoutMs <= 0) throw new UiHelperError(HELPER_TIMEOUT);
+    const api = await this.apiLevel(serial, timeoutMs);
+    if (api !== null && api < UI_HELPER_MIN_JAR_API) throw new UiHelperError(HELPER_OLD_JAR_API);
+    const jar = await readVerifiedHelperJar(
+      this.options.jarPath ?? resolveUiHelperJar(),
+      this.options.jarSha256 ?? UI_HELPER_JAR_SHA256,
+    );
+    const devicePath = devicePathFor(randomBytes(6).toString('hex'));
+    try {
+      await pushJar(this.options.adb, serial, jar, devicePath, deadline - performance.now());
+      // The answer is the OK line; a failure's exit code and stack trace (stderr) add nothing to it.
+      const output = await adbShell(
+        this.options.adb,
+        serial,
+        `CLASSPATH=${devicePath} app_process / ${UI_HELPER_MAIN} ${command} ${value} 2>/dev/null || true`,
+        { timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) },
+      ).catch((error: unknown) => {
+        log.warn(`UI helper ${command} on ${serial}: ${errorMessage(error)}`);
+        throw new UiHelperError(HELPER_NO_RUN);
+      });
+      const prefix = `OK ${command} `;
+      const answer = output.split(/\r?\n/).find((line) => line.startsWith(prefix));
+      if (answer === undefined) throw new UiHelperError(HELPER_REFUSED);
+      return answer.slice(prefix.length);
+    } finally {
+      await adbShell(this.options.adb, serial, `rm -f ${devicePath}`, { timeoutMs: ADB_TIMEOUT_MS }).catch(
+        () => undefined,
+      );
+    }
   }
 
   /** Stops every helper and removes their jars; later dumps go to uiautomator. */

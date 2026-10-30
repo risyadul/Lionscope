@@ -7,6 +7,7 @@ import type { Adb } from './adb/adb.ts';
 import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
 import { dumpUi, parseTopPackage, TOP_ACTIVITY_COMMAND } from './agent/uiDump.ts';
+import { DontKeepActivities } from './agent/dontKeepActivities.ts';
 import { UiHelpers } from './agent/uiHelper.ts';
 import type { AgentBaseContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
@@ -120,6 +121,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     route: (serial, hello, link) => manager.attachSdkOn(serial, hello, link),
     sessionPort: () => deviceGateway.address?.port ?? null,
   });
+  // "Don't keep activities" this server turned on: put back when the device's session stops or the server closes.
+  const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
   const manager: SessionManager = new SessionManager({
     adb: options.adb,
     broadcast: (message) => {
@@ -127,7 +130,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       if (message.type === 'devices') {
         emulators.setDevices(message.devices);
         locations.setDevices(message.devices);
+        dontKeepActivities.setDevices(message.devices, () => manager.getSessionState());
       }
+      if (message.type === 'session')
+        dontKeepActivities.sessionChanged(message.session, () => manager.getSessionState());
       gateway?.broadcast(message);
     },
     devicePollMs: options.devicePollMs,
@@ -178,7 +184,9 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     now: Date.now,
     screenshots: new Map(),
     uiDumps: new Map(),
+    activityInstances: new Map(),
     uiHelper,
+    dontKeepActivities,
     deviceCalls: new Map(),
   };
   const agentHttp = createAgentHttp({
@@ -313,7 +321,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       await Promise.all([
         locations.close(),
         screenGateway.close(),
-        uiHelper.close(),
+        // "Don't keep activities" is put back through the UI helper (at most 5 s), so the helpers close after it.
+        dontKeepActivities.close().finally(() => uiHelper.close()),
         inspectLinks.close(),
         manager.close(),
         emulators.close(),
