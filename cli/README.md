@@ -39,7 +39,7 @@ prints a tool's JSON result for shell-only agents (`npx lionscope query --list`)
 
 Nothing needs to be installed on the device. For screen names, per-frame `FrameMetrics`, stall lines and origins,
 the Inspector's layout sources and Compose tree, live view edits and the network inspector, add the optional
-debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.10.0"` from JitPack).
+debug-only SDK to the app (`debugImplementation "com.github.risyadul.Lionscope:lionscope:0.11.0"` from JitPack).
 
 Documentation, the SDK and the source: <https://github.com/risyadul/Lionscope>. Licensed under the
 [Apache License 2.0](LICENSE); bundled third-party licenses are in `dist/THIRD_PARTY_NOTICES.txt`.
