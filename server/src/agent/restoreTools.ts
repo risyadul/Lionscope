@@ -239,11 +239,81 @@ async function alwaysFinishLive(ctx: AgentContext, serial: string): Promise<bool
   return Number(count.trim()) > 0;
 }
 
+/**
+ * How long the destroy check waits. Android destroys them at its next process-priority update, which came after
+ * 1 to 7 s on an idle emulator (once not within 23 s; any activity being stopped brings one at once).
+ */
+const DESTROY_CHECK_MS = 10_000;
+
+/**
+ * Per activity record of `dumpsys activity activities` (every task), its lifecycle state and whether it still has a
+ * process. A record's `app=` line comes before its saved state, its state line after it.
+ */
+export function parseRecordStates(dump: string): Map<string, { state: string | null; attached: boolean }> {
+  const records = new Map<string, { state: string | null; attached: boolean }>();
+  let current: { state: string | null; attached: boolean } | null = null;
+  let appRead = false;
+  for (const line of dump.split(/\r?\n/)) {
+    const hist = /^\s*\* Hist\s+#\d+: (ActivityRecord\{\S+ u\d+ \S+ t\d+)( f)?\}/.exec(line)?.[1];
+    if (hist) {
+      current = { state: null, attached: false };
+      records.set(hist, current);
+      appRead = false;
+      continue;
+    }
+    if (!current) continue;
+    if (/^\s*\* Task\{/.test(line)) {
+      current = null;
+      continue;
+    }
+    const app = /^\s+app=(null|ProcessRecord\{)/.exec(line)?.[1];
+    if (app && !appRead) {
+      current.attached = app !== 'null';
+      appRead = true;
+    }
+    const state = /^\s+state=([A-Z_]+) delayedResume=(?:true|false) /.exec(line)?.[1];
+    if (state) current.state = state;
+  }
+  return records;
+}
+
+/** Stopped (or stopping) activities that still have their process: what the flag makes Android destroy. */
+const DESTROYABLE_STATES = new Set(['STOPPING', 'STOPPED']);
+
+async function recordStates(ctx: AgentContext, serial: string) {
+  return parseRecordStates(await shell(ctx, serial, 'dumpsys activity activities', DUMPSYS_TIMEOUT_MS));
+}
+
+/**
+ * The real effect: with the flag on, Android destroys every activity in the background that still has its process
+ * at its next process-priority update. Null when there was none to watch.
+ */
+async function destroyCheck(
+  ctx: AgentContext,
+  serial: string,
+  before: Map<string, { state: string | null; attached: boolean }>,
+): Promise<{ background: number; destroyed: number } | null> {
+  const watched = [...before]
+    .filter(([, record]) => record.attached && DESTROYABLE_STATES.has(record.state ?? ''))
+    .map(([id]) => id);
+  if (watched.length === 0) return null;
+  let destroyed = 0;
+  await poll(DESTROY_CHECK_MS, async () => {
+    const now = await recordStates(ctx, serial);
+    destroyed = watched.filter((id) => now.get(id)?.state === 'DESTROYED').length;
+    return destroyed > 0 ? true : null;
+  });
+  return { background: watched.length, destroyed };
+}
+
+const DONT_KEEP_NOTE =
+  'A global developer setting for every app on this device: tell the user, and call set_dont_keep_activities { enabled: false } when you are done.';
+
 export const setDontKeepActivitiesTool = defineTool({
   name: 'set_dont_keep_activities',
   title: "Don't keep activities",
   description:
-    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified is true when the activity manager reports the new state (`dumpsys activity processes`); use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
+    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch, then the flag alone counts). If the switch fails, only the stored value is written (fallback: true, verified: false, effective after a reboot). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
   access: 'device',
   input: z.object({
     enabled: z
@@ -254,28 +324,45 @@ export const setDontKeepActivitiesTool = defineTool({
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async run({ enabled, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
-    if (!ctx.uiHelper)
-      throw new ToolError('This server cannot change developer options (no on-device helper)');
-    try {
-      await ctx.uiHelper.setAlwaysFinish(serial, enabled, HELPER_RUN_TIMEOUT_MS);
-    } catch (error) {
-      if (!(error instanceof UiHelperError)) throw error;
-      throw new ToolError(`Could not switch "Don't keep activities" on ${serial}: ${error.message}`);
+    const before = enabled ? await recordStates(ctx, serial) : null;
+    let failure: string | null = ctx.uiHelper ? null : 'this server has no on-device helper';
+    if (ctx.uiHelper) {
+      try {
+        await ctx.uiHelper.setAlwaysFinish(serial, enabled, HELPER_RUN_TIMEOUT_MS);
+      } catch (error) {
+        if (!(error instanceof UiHelperError)) throw error;
+        failure = error.message;
+      }
+    }
+    if (failure !== null) {
+      // The stored value at least: Android reads it at the next boot.
+      await shell(ctx, serial, `settings put global always_finish_activities ${enabled ? 1 : 0}`);
     }
     const live = await alwaysFinishLive(ctx, serial);
+    const destroyed = before && failure === null && live ? await destroyCheck(ctx, serial, before) : null;
     const stored = (await shell(ctx, serial, 'settings get global always_finish_activities')).trim();
+    const verified = failure === null && live === enabled && (destroyed === null || destroyed.destroyed > 0);
     return {
       data: {
         serial,
         enabled,
-        verified: live === enabled,
+        verified,
         activityManager: live,
+        destroyCheck: destroyed,
         setting: stored === '1',
-        ...(enabled
+        ...(failure !== null
           ? {
-              note: 'A global developer setting for every app on this device: tell the user, and call set_dont_keep_activities { enabled: false } when you are done.',
+              fallback: true,
+              note: `The activity manager could not be switched (${failure}): only the stored setting was written, which Android reads at the next reboot. ${enabled ? DONT_KEEP_NOTE : ''}`.trim(),
             }
-          : {}),
+          : enabled
+            ? {
+                note:
+                  destroyed?.destroyed === 0
+                    ? `The flag is on, but none of the ${destroyed.background} activities in the background was destroyed within ${DESTROY_CHECK_MS / 1000} s: Android does it at its next process-priority update (leaving a screen brings one); check with get_activity_instance after leaving a screen. ${DONT_KEEP_NOTE}`
+                    : DONT_KEEP_NOTE,
+              }
+            : {}),
       },
     };
   },

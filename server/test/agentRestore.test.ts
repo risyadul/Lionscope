@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { callTool } from '../src/agent/registry.ts';
-import { fullComponent, parseTopActivities, parseTopRecord } from '../src/agent/restoreTools.ts';
+import {
+  fullComponent,
+  parseRecordStates,
+  parseTopActivities,
+  parseTopRecord,
+} from '../src/agent/restoreTools.ts';
 import type { UiHelpers } from '../src/agent/uiHelper.ts';
 import { HELPER_REFUSED, UiHelperError } from '../src/agent/uiHelper.ts';
 import { fakeAgent, PKG } from './helpers/agentFixtures.ts';
@@ -96,6 +101,14 @@ describe('restore scenario parsers', () => {
     expect(parseTopRecord(finishing, PKG)).toMatchObject({
       component: `${PKG}/${PKG}.checkout.CheckoutActivity`,
     });
+    expect([...parseRecordStates(recordsDump('STOPPED', 4321)).values()]).toEqual([
+      { state: 'STOPPED', attached: true },
+      { state: 'STOPPED', attached: true },
+    ]);
+    expect([...parseRecordStates(recordsDump('DESTROYED', null)).values()][0]).toEqual({
+      state: 'DESTROYED',
+      attached: false,
+    });
     expect(fullComponent('com.example.shop/com.example.lib.Screen')).toBe(
       'com.example.shop/com.example.lib.Screen',
     );
@@ -182,13 +195,23 @@ describe('get_activity_instance', () => {
 });
 
 describe('set_dont_keep_activities', () => {
-  function dontKeepAgent(options: { liveAfter: boolean; fail?: boolean }) {
+  /**
+   * A device whose helper switches the flag (unless `fail`); with the flag on, the shop's stopped CheckoutActivity
+   * (in the background with its process) is destroyed, unless `keeps`.
+   */
+  function dontKeepAgent(options: { fail?: boolean; keeps?: boolean; background?: boolean } = {}) {
+    const device = { live: false, stored: '0', destroyed: false };
     const calls: boolean[] = [];
     const adb = new FakeAdb((args) => {
       const command = String(args.at(-1));
-      if (command.startsWith('dumpsys activity processes')) return options.liveAfter ? '1\n' : '0\n';
-      if (command === 'settings get global always_finish_activities')
-        return options.liveAfter ? '1\n' : '0\n';
+      if (command.startsWith('dumpsys activity processes')) return device.live ? '1\n' : '0\n';
+      if (command === 'dumpsys activity activities') {
+        if (options.background === false) return 'Display #0 (activities from top to bottom):\n';
+        return device.destroyed ? recordsDump('DESTROYED', null) : recordsDump('STOPPED', 4321);
+      }
+      if (command === 'settings get global always_finish_activities') return `${device.stored}\n`;
+      const put = /^settings put global always_finish_activities ([01])$/.exec(command)?.[1];
+      if (put) device.stored = put;
       return '';
     });
     const agent = fakeAgent({}, { adb });
@@ -196,13 +219,17 @@ describe('set_dont_keep_activities', () => {
       setAlwaysFinish: async (_serial: string, enabled: boolean) => {
         calls.push(enabled);
         if (options.fail) throw new UiHelperError(HELPER_REFUSED);
+        device.live = enabled;
+        device.stored = enabled ? '1' : '0';
+        device.destroyed = enabled && !options.keeps;
       },
     } as unknown as UiHelpers;
-    return { agent, adb, calls };
+    return { agent, adb, calls, device };
   }
+  const commands = (adb: FakeAdb) => adb.execCalls.map((args) => String(args.at(-1)));
 
-  it('switches the flag through the helper and verifies it with the activity manager', async () => {
-    const { agent, adb, calls } = dontKeepAgent({ liveAfter: true });
+  it('switches the flag through the helper and verifies it and its effect', async () => {
+    const { agent, adb, calls } = dontKeepAgent();
     const on = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
     expect(on).toMatchObject({
       ok: true,
@@ -211,36 +238,62 @@ describe('set_dont_keep_activities', () => {
         enabled: true,
         verified: true,
         activityManager: true,
+        // Both stopped activities had their process; the fake destroys CheckoutActivity only.
+        destroyCheck: { background: 2, destroyed: 1 },
         setting: true,
       },
     });
     expect(JSON.stringify(on)).toContain('enabled: false');
     expect(calls).toEqual([true]);
-    expect(adb.execCalls.map((args) => args.at(-1))).toEqual([
-      'dumpsys activity processes | grep -c mAlwaysFinishActivities=true || true',
-      'settings get global always_finish_activities',
-    ]);
+    expect(commands(adb)[0]).toBe('dumpsys activity activities');
     const off = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true);
-    // The fake still reports it on: not verified.
     expect(off).toMatchObject({
       ok: true,
-      result: { enabled: false, verified: false, activityManager: true },
+      result: { enabled: false, verified: true, activityManager: false, destroyCheck: null, setting: false },
     });
     expect(off.ok && (off.result as Record<string, unknown>).note).toBeUndefined();
+    expect(commands(adb).some((command) => command.startsWith('settings put'))).toBe(false);
   });
 
-  it('reports a helper failure, a server without the helper, and needs device control', async () => {
-    const { agent, adb } = dontKeepAgent({ liveAfter: false, fail: true });
-    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true)).toEqual({
-      ok: false,
-      code: 'failed',
-      error: `Could not switch "Don't keep activities" on emulator-5554: ${HELPER_REFUSED}`,
+  it('counts the flag alone when nothing is in the background, and not when nothing gets destroyed', async () => {
+    const empty = dontKeepAgent({ background: false });
+    expect(
+      await callTool(empty.agent.ctx, 'set_dont_keep_activities', { enabled: true }, true),
+    ).toMatchObject({
+      result: { verified: true, activityManager: true, destroyCheck: null },
     });
-    expect(adb.execCalls).toHaveLength(0);
+    const keeps = dontKeepAgent({ keeps: true });
+    const kept = await callTool(keeps.agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
+    expect(kept).toMatchObject({
+      result: { verified: false, activityManager: true, destroyCheck: { background: 2, destroyed: 0 } },
+    });
+    expect(kept.ok && String((kept.result as Record<string, unknown>).note)).toContain(
+      'next process-priority update',
+    );
+  }, 20_000);
+
+  it('falls back to the stored setting, unverified, when the helper fails or is missing', async () => {
+    const { agent, adb, device } = dontKeepAgent({ fail: true });
+    const outcome = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: {
+        enabled: true,
+        verified: false,
+        activityManager: false,
+        destroyCheck: null,
+        setting: true,
+        fallback: true,
+      },
+    });
+    expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain(
+      `could not be switched (${HELPER_REFUSED})`,
+    );
+    expect(commands(adb)).toContain('settings put global always_finish_activities 1');
+    expect(device.stored).toBe('1');
     delete agent.ctx.uiHelper;
-    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true)).toMatchObject({
-      ok: false,
-      error: 'This server cannot change developer options (no on-device helper)',
+    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true)).toMatchObject({
+      result: { verified: false, setting: false, fallback: true },
     });
     expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, false)).toMatchObject({
       ok: false,

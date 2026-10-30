@@ -824,8 +824,10 @@ does to an app in the background, and show that it happened:
   is destroyed as soon as it leaves the screen (HOME, or the next screen opening). Like Settings, it calls the
   activity manager's `setAlwaysFinish` (from a one-shot run of the UI helper's jar), so it takes effect at once;
   `settings put global always_finish_activities 1` alone changes only the stored value, which the system reads
-  at boot. `verified` is the activity manager's own flag (`dumpsys activity processes`). It applies to every app
-  on the device until turned off with `enabled: false`.
+  at boot. `verified` needs the activity manager's own flag (`dumpsys activity processes`) and, when turning it
+  on, that the activities in the background that still had their process were destroyed (`destroyCheck`, null when
+  there were none). If the switch fails, only the stored value is written (`fallback: true`, `verified: false`). It
+  applies to every app on the device until turned off with `enabled: false`.
 - `simulate_process_death { packageName }` presses HOME, waits until the app's activity is stopped (its state
   saved), kills the process with `am kill` (only a background process, unlike `stop_app`'s force-stop, which
   discards the saved state and the task), checks that it is gone, and brings the task back the way Recents does

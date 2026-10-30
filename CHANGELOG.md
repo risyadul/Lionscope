@@ -14,7 +14,8 @@ All notable changes to Lionscope are documented here. The format is based on
   Developer options' "Don't keep activities", switched the way Settings does (the activity manager's
   `setAlwaysFinish`, from a one-shot run of the UI helper's jar), so it takes effect at once; a plain
   `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
-  back. `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
+  back and checks that the background activities were destroyed; if the switch fails, only the stored value is
+  written (`fallback`, unverified). `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
   `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way
   Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID and the top
   activity before and after.
