@@ -80,6 +80,13 @@ export interface ScreenshotSize {
   device: Size;
 }
 
+/** The activity on screen as get_activity_instance last read it. */
+export interface ActivityInstance {
+  activity: string;
+  instanceId: string;
+  pid: number | null;
+}
+
 export interface AgentContext {
   sessions: AgentSessions;
   emulators: AgentEmulators;
@@ -104,6 +111,8 @@ export interface AgentContext {
   uiDumps: Map<string, { at: number; tree: UiTree; listing: UiTree | null }>;
   /** The on-device UI helper, tried before `uiautomator dump`; without it every dump uses uiautomator. */
   uiHelper?: UiHelpers;
+  /** Per `<serial> <package>`, what get_activity_instance saw last (its recreated / processRestarted compare). */
+  activityInstances: Map<string, ActivityInstance>;
   /** Device tools in flight per device (registry.ts caps them). */
   deviceCalls: Map<string, number>;
   /** Device-control tools are enabled for this call (set per call by the registry). */

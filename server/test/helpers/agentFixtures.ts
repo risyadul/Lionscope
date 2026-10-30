@@ -264,6 +264,7 @@ export function fakeAgent(
     now: () => options.now ?? T0 + 60_000,
     screenshots: new Map(),
     uiDumps: new Map(),
+    activityInstances: new Map(),
     deviceCalls: new Map(),
   };
   return agent;

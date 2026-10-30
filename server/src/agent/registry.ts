@@ -24,6 +24,11 @@ import {
   networkTool,
   setNetworkMockTool,
 } from './networkTools.ts';
+import {
+  getActivityInstanceTool,
+  setDontKeepActivitiesTool,
+  simulateProcessDeathTool,
+} from './restoreTools.ts';
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
@@ -64,6 +69,9 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   pressKeyTool,
   launchAppTool,
   stopAppTool,
+  getActivityInstanceTool,
+  setDontKeepActivitiesTool,
+  simulateProcessDeathTool,
   setNetworkMockTool,
   clearNetworkMocksTool,
   setLocationTool,

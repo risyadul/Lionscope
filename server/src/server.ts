@@ -178,6 +178,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     now: Date.now,
     screenshots: new Map(),
     uiDumps: new Map(),
+    activityInstances: new Map(),
     uiHelper,
     deviceCalls: new Map(),
   };

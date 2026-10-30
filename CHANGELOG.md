@@ -8,6 +8,16 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Agent tools for state-restore scenarios (device control). `get_activity_instance`: the activity on screen, the
+  identity hash of its Activity object (`dumpsys activity top`) and the app's PID, with `recreated` and
+  `processRestarted` compared with the previous call for the same device and app. `set_dont_keep_activities`:
+  Developer options' "Don't keep activities", switched the way Settings does (the activity manager's
+  `setAlwaysFinish`, from a one-shot run of the UI helper's jar), so it takes effect at once; a plain
+  `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
+  back. `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
+  `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way
+  Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID and the top
+  activity before and after.
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
