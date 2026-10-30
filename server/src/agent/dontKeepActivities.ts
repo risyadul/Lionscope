@@ -113,12 +113,14 @@ export class DontKeepActivities {
   }
 
   /**
-   * Switches it off (an explicit request). On a device Lionscope switched on, it is put back as it was (a stored
-   * value the user had stays). Returns null, or why the activity manager could not be switched: then the stored
-   * setting is still written, and the device stays marked so that it is tried again later.
+   * Switches it off (an explicit request): the flag always ends off. On a device Lionscope switched on, the stored
+   * setting is put back as it was (a value the user had stays). Returns null, or why the activity manager could not
+   * be switched: then the stored setting is still written, and the device stays marked so that it is tried again.
    */
   async disable(serial: string): Promise<string | null> {
-    if (this.owned.has(serial)) return this.putBack(serial, HELPER_RUN_TIMEOUT_MS);
+    // A put-back running now may switch the flag back on (if it was on before Lionscope switched it).
+    await this.restoring.get(serial);
+    if (this.owned.has(serial)) return this.putBack(serial, HELPER_RUN_TIMEOUT_MS, false);
     const failure = await this.helperSwitch(serial, false, HELPER_RUN_TIMEOUT_MS);
     if (failure === null) {
       this.owned.delete(serial);
@@ -136,22 +138,24 @@ export class DontKeepActivities {
     return (await this.putBack(serial, timeoutMs)) === null;
   }
 
-  private putBack(serial: string, timeoutMs: number): Promise<string | null> {
+  /** `live`: the flag's value to end with (an explicit switch-off); default: what it was before. */
+  private putBack(serial: string, timeoutMs: number, live?: boolean): Promise<string | null> {
     const running = this.restoring.get(serial);
     if (running) return running;
-    const restored = this.putBackNow(serial, timeoutMs).finally(() => this.restoring.delete(serial));
+    const restored = this.putBackNow(serial, timeoutMs, live).finally(() => this.restoring.delete(serial));
     this.restoring.set(serial, restored);
     return restored;
   }
 
-  private async putBackNow(serial: string, timeoutMs: number): Promise<string | null> {
+  private async putBackNow(serial: string, timeoutMs: number, live?: boolean): Promise<string | null> {
     const before = this.owned.get(serial);
     if (!before) return null;
-    const switchFailure = await this.helperSwitch(serial, before.live, timeoutMs);
+    const target = live ?? before.live;
+    const switchFailure = await this.helperSwitch(serial, target, timeoutMs);
     // The stored value too: written back even when the flag could not be switched, so that a reboot at least
     // brings back what was there (the helper's switch stores the flag's value).
     const stored =
-      switchFailure !== null || before.stored !== before.live
+      switchFailure !== null || before.stored !== target
         ? await this.shell(
             serial,
             `settings put global always_finish_activities ${before.stored ? 1 : 0}`,

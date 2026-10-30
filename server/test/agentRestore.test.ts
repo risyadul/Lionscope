@@ -796,6 +796,23 @@ describe('DontKeepActivities', () => {
     expect(state.isOn('emulator-5554')).toBe(false);
   });
 
+  it('always ends with the flag off on an explicit switch-off, even if it was on before', async () => {
+    // On before but not stored (e.g. stored cleared by hand): Lionscope marked it when switching it on.
+    const { state, device } = tracked({ live: true, stored: false });
+    await state.enable('emulator-5554', await state.state('emulator-5554'));
+    expect(state.isOn('emulator-5554')).toBe(true);
+    expect(await state.disable('emulator-5554')).toBeNull();
+    expect(device).toEqual({ live: false, stored: false });
+    expect(state.isOn('emulator-5554')).toBe(false);
+    // The same while a put-back to "on" is running.
+    const racing = tracked({ live: true, stored: false });
+    await racing.state.enable('emulator-5554', await racing.state.state('emulator-5554'));
+    const putBack = racing.state.restore('emulator-5554');
+    expect(await racing.state.disable('emulator-5554')).toBeNull();
+    await putBack;
+    expect(racing.device.live).toBe(false);
+  });
+
   it('writes the stored value back even when the flag cannot be switched back', async () => {
     let failing = false;
     const { state, device, puts } = tracked({ helperFails: () => failing });
