@@ -121,9 +121,13 @@ numbers (jank %, p90, stall count and total ms, inflation ms). Start the session
 ## Operating the device (only with device control)
 
 Prefer `get_ui_tree` with `tap_element`, `wait_for` and `scroll_to` (element-based) over `screenshot` + `tap`
-(coordinates). `launch_app` starts an app and `stop_app` force-stops one (its unsaved state is lost, unlike
-HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you booted, or with the
-user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
+(coordinates). Select a text field by `hint` (its placeholder) rather than `text`: an empty field reports its hint
+as its text, so `text` stops matching once the field is filled (`hint` keeps matching where `get_ui_tree` lists
+hints). `tap_element` returns the element after the tap (`after`, `checked`, `screenChanged`) and `type_text` the
+field after typing (`field`, `sameField`, `matches`; pass `field` so `matches` can compare with the text before):
+read them before assuming the action worked. `launch_app` starts an app and `stop_app` force-stops one (its unsaved
+state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
+booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
 
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and

@@ -179,7 +179,8 @@ describe('device tools', () => {
     const { agent, adb } = deviceAgent();
     await callTool(agent.ctx, 'type_text', { text: "it's 5 $HOME" }, true);
     await callTool(agent.ctx, 'press_key', { key: 'back' }, true);
-    expect(shellCommands(adb)).toEqual([
+    // type_text also reads the field back with a UI dump.
+    expect(shellCommands(adb).filter((command) => command.includes(' shell input '))).toEqual([
       `-s emulator-5554 shell input text 'it'\\''s%s5%s$HOME'`,
       '-s emulator-5554 shell input keyevent 4',
     ]);

@@ -10,6 +10,30 @@ All notable changes to Lionscope are documented here. The format is based on
 
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
+- `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
+  as `get_ui_tree` lists it. Where the dump has hints, it keeps matching once the field has text, unlike `text` (an
+  empty field reports its hint as its text). Where it has none (older Android versions), it matches the text of any
+  editable field instead, so it finds an empty field by its hint but not a filled one.
+
+### Changed
+
+- `type_text` reads the field back after typing (from a new dump, about 300 ms later): `field` is the focused field
+  as it is now, and `matches` says whether the text arrived: the field contains it and grew by its length since
+  the tap. It is `null` when that can't be told: a password field (whose text is never returned), or no `field`
+  given and the text found may have been there before. With `field`, `sameField` says whether the focused field is
+  the one tapped (also when the keyboard moved it or it was resized, as long as no other field shares its id or
+  hint); when it is not (a code field that moves the focus on, a missed tap), its text is left out. When the field can't be read, `field` is `null` and a `note` says why;
+  the text is typed all the same.
+- `tap_element` reads the tapped element back after the tap: `after` is the element from a new dump (same place,
+  package and title), or `null` with a `note` when it moved or is gone (another screen opened, the keyboard moved
+  the layout, a list item was removed and the next one took its place). `checked` gives the `before` and `after`
+  state of a switch or checkbox, the tapped one or the only one inside a tapped row (a Preference), and
+  `screenChanged` whether anything on the screen differs. Content that changes on its own (a timer, a carousel, a
+  loading list) sets it too, so `false` is the reliable signal: the tap changed nothing. `element` is still the
+  element as it was before the tap. A toggle with an id whose text shows its state (Follow / Following) is found
+  again when its checked state changed. This adds about 300 ms plus a dump (a few hundred ms with the UI helper, 1
+  to 2 s with `uiautomator`); `readBack: false` skips it.
+- The error for a selector without fields names all of them: `Pass text, id, desc or hint to find the element`.
 
 ### Fixed
 
