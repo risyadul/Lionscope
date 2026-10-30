@@ -263,7 +263,7 @@ function markers(command: string): string[] {
 /**
  * adb that answers `uiautomator dump` with the given dumps in turn (the last one repeats) and `wm size` with
  * `wmSize`; an entry 'hang' makes that dump time out. With `api`, a UI helper that gives that API level (and no
- * dumps). `ime`, the keyboard's frame while it is shown.
+ * dumps). `ime`, the keyboard's frame while it is shown; `insets: false`, a device whose insets can't be read.
  */
 function uiAgent(
   dumps: readonly string[],
@@ -271,6 +271,7 @@ function uiAgent(
     wmSize = 'Physical size: 1080x2400',
     api = undefined as number | undefined,
     ime = undefined as string | undefined,
+    insets = true,
   } = {},
 ) {
   let dumpIndex = 0;
@@ -278,7 +279,10 @@ function uiAgent(
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
     commands.push(command);
-    if (command === INSETS_COMMAND && ime !== undefined) return INSETS + '\n' + imeLine(ime);
+    if (command === INSETS_COMMAND) {
+      if (!insets) return '';
+      return ime === undefined ? INSETS : INSETS + '\n' + imeLine(ime);
+    }
     if (!command.startsWith('uiautomator dump')) return '';
     const file = /uiautomator dump (\S+)/.exec(command)?.[1] ?? '';
     expect(command).toContain(`rm -f ${file}`);
@@ -785,6 +789,25 @@ describe('UI tools', () => {
       at: { x: 540, y: 910 },
       element: { class: 'LinearLayout' },
     });
+  });
+
+  it('taps unchecked, and says so, when the keyboard can not be located', async () => {
+    const unknown = uiAgent([DUMP], { insets: false });
+    expect(await unknown.call('tap_element', { text: 'list', readBack: false })).toMatchObject({
+      tapped: true,
+      note: expect.stringContaining('keyboard check was skipped'),
+    });
+    expect(unknown.inputs()).toEqual(['input tap 810 2300']);
+    const known = await uiAgent([DUMP]).call('tap_element', { text: 'list', readBack: false });
+    expect(known).not.toHaveProperty('note');
+    // Beside the read-back note.
+    expect(
+      (
+        await uiAgent([DUMP, DUMP.replace('content-desc="List"', 'content-desc="Lists"')], {
+          insets: false,
+        }).call('tap_element', { text: 'list' })
+      ).note,
+    ).toMatch(/moved or is gone.*keyboard check was skipped/);
   });
 
   it('reads the screen again instead of a recent dump while the keyboard is shown', async () => {

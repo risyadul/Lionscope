@@ -72,6 +72,16 @@ export async function screenInsets(ctx: AgentContext, serial: string): Promise<I
   }
 }
 
+/** Added to a tap's result when the insets could not be read: the tap was sent unchecked. */
+export const KEYBOARD_UNCHECKED =
+  'The soft keyboard check was skipped (dumpsys did not say where the keyboard is): if it is open, the tap may have hit a key';
+
+/** Two notes as one, either of them possibly absent. */
+export function joinNotes(...notes: (string | null | undefined)[]): string | undefined {
+  const present = notes.filter((note): note is string => typeof note === 'string' && note !== '');
+  return present.length > 0 ? present.join(' ') : undefined;
+}
+
 export function inside(bounds: Bounds | null, point: { x: number; y: number }): boolean {
   return (
     bounds !== null &&

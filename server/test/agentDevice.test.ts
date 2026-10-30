@@ -252,6 +252,13 @@ describe('device tools', () => {
     });
     const above = await callTool(agent.ctx, 'tap', { x: 360, y: 400, ...space }, true);
     expect(above.ok && above.result).not.toHaveProperty('warning');
+    expect(above.ok && above.result).not.toHaveProperty('note');
+    // Insets that can't be read: the tap is sent unchecked, and the result says so.
+    const unknown = deviceAgent();
+    expect(await callTool(unknown.agent.ctx, 'tap', { x: 360, y: 1400, ...space }, true)).toMatchObject({
+      ok: true,
+      result: { tapped: { x: 540, y: 2100 }, note: expect.stringContaining('keyboard check was skipped') },
+    });
     // The tap is sent either way.
     expect(shellCommands(adb)).toEqual([
       '-s emulator-5554 shell input tap 540 2100',

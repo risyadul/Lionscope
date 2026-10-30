@@ -9,7 +9,7 @@ import { isValidAvdName } from '@lionscope/protocol';
 import { adbShell, execBinary } from '../adb/adb.ts';
 import type { Size } from '../emulator/screenInput.ts';
 import { displaySize, sameSize, SCREENSHOT_SHORT_EDGE } from './display.ts';
-import { inside, screenInsets } from './insets.ts';
+import { inside, joinNotes, KEYBOARD_UNCHECKED, screenInsets } from './insets.ts';
 import type { Insets } from './insets.ts';
 import { decodeScreenshot, pngSize, scalePng, screenDifference } from './png.ts';
 import { packageInput } from './sessionTools.ts';
@@ -261,7 +261,15 @@ export const tapTool = defineTool({
     const [point] = points;
     if (!point) throw new ToolError('no point');
     const command = `tap ${point.x} ${point.y}`;
-    const effect = await withReadBack(ctx, serial, readBack, insets, READBACK_SETTLE_MS, command);
+    const effect: { note?: string } = await withReadBack(
+      ctx,
+      serial,
+      readBack,
+      insets,
+      READBACK_SETTLE_MS,
+      command,
+    );
+    const note = joinNotes(effect.note, insets === null ? KEYBOARD_UNCHECKED : null);
     return {
       data: {
         serial,
@@ -270,6 +278,7 @@ export const tapTool = defineTool({
           ? { warning: 'The point is on the soft keyboard: the tap went to the keyboard, not the app' }
           : {}),
         ...effect,
+        ...(note ? { note } : {}),
       },
     };
   },

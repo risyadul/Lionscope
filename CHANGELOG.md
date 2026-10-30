@@ -76,7 +76,8 @@ All notable changes to Lionscope are documented here. The format is based on
   takes taps is there (a button bar the app lifted above the keyboard); otherwise nothing is tapped, and the error
   says to hide the keyboard with `press_key back` first. While the keyboard is shown it also takes a new dump
   instead of one up to a second old, which may predate the keyboard's layout change. Other windows on top are not
-  checked.
+  checked. Where the keyboard can't be located (dumpsys fails or takes over 1.5 s, or Android before 11), it taps
+  as before and a `note` says the check was skipped; so does `tap`.
 - `get_stalls` and `get_strictmode` report the current SDK link (`sdk.connected`) and, when an empty result comes from
   a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
   StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
