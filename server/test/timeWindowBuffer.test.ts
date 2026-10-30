@@ -17,6 +17,16 @@ describe('TimeWindowBuffer', () => {
     expect(buffer.toArray(5000)).toEqual([]);
   });
 
+  it('remembers the newest timestamp it dropped', () => {
+    const buffer = new TimeWindowBuffer<{ ts: number }>(1000, 3);
+    buffer.push({ ts: 0 }, { ts: 500 });
+    expect(buffer.droppedThroughTs).toBeNull();
+    buffer.push({ ts: 600 }, { ts: 700 });
+    expect(buffer.droppedThroughTs).toBe(0);
+    buffer.toArray(1650);
+    expect(buffer.droppedThroughTs).toBe(600);
+  });
+
   it('caps the number of items', () => {
     const buffer = new TimeWindowBuffer<{ ts: number }>(1_000_000, 3);
     buffer.push({ ts: 1 }, { ts: 2 }, { ts: 3 }, { ts: 4 }, { ts: 5 });

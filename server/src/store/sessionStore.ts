@@ -224,6 +224,11 @@ export class SessionStore {
     return span.screen?.name ?? null;
   }
 
+  /** The newest `ts` of a log line already dropped (window, line or byte cap); null while none was. */
+  logsDroppedThrough(): number | null {
+    return this.buffers.logs.droppedThroughTs;
+  }
+
   snapshot(): Required<Snapshot> {
     const now = this.options.now();
     const streams = Object.fromEntries(

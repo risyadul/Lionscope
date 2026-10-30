@@ -8,17 +8,19 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
-- Agent tool `run_inputs` (device control): a timed sequence of taps (screenshot pixels, like `tap`), element taps
-  (the selectors of `tap_element`), keys (those of `press_key`) and waits, run on the device in one `adb shell`, so
-  inputs can be tens of ms apart instead of one tool round trip each (#9). At most 100 steps, 60 s of waits, and 80 s
-  for the waits plus 500 ms per input. Every element is resolved from one fresh UI dump and every coordinate mapped
-  before the first input is sent: a selector that matches nothing, or several without `nth`, fails the call with
-  nothing sent, and a `tap_element` step can only aim at an element on the screen when the call starts. The result
-  gives each step's end and duration as measured by the device's shell clock (`$EPOCHREALTIME`), which show the cost
-  of each `input` on top of the waits. A step that fails stops the sequence; a sequence cut short (adb dropped, the
-  time ran out) returns the steps that ran with `incomplete`.
-- `lionscope query` takes a list or object argument as JSON: `run_inputs --steps '[...]'`, and also `type_text --field
-'{"hint":"Email"}'` and `set_network_mock --headers '{...}'`, which before could only be passed in `--json`.
+- Agent tool `mark` (session): names the current moment of the running session, e.g. `run-3` before the third
+  repetition of a test. `search_logcat` and `get_crashes` take `sinceMarker` (instead of `since`) and
+  `untilMarker`, so lines and crashes can be counted per run without clock math or clearing the device's log
+  buffer; a range that ends before it starts is refused. Markers are on the clock logcat lines are timed on (the
+  device clock plus the offset measured at the session start); marking a label again moves it, `status` lists the
+  newest 20 and a new session starts without any. They are not shown in the dashboard.
+- `search_logcat` and `get_crashes` return the resolved time `range`, and `search_logcat` `complete`: false once
+  lines of that range have been dropped from the log buffer, so a count taken too late does not read as zero.
+- `screenshot` returns `meanLuminance`, `nonBlackRatio`, `dominantRatio` and `blank` of the full-size capture, to
+  tell across runs whether a screen rendered or stayed black without comparing images: `blank` means one colour
+  covers at least 98% of the pixels, all near-black shades counting as one (a black video area with only status
+  bar icons on top, also a sparse page of any colour). The image is unchanged; a capture that can't be decoded
+  gets null numbers.
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
@@ -45,6 +47,17 @@ All notable changes to Lionscope are documented here. The format is based on
   12 frames of each exception). Stored redacted; other apps' crash lines are passed over and never stored.
 - `search_logcat` returns `retained` (`entries`, `capacity`, `oldest`, `newest`): how far back the log buffer
   reaches, so an empty result can be told apart from lines already dropped.
+- Agent tool `run_inputs` (device control): a timed sequence of taps (screenshot pixels, like `tap`), element taps
+  (the selectors of `tap_element`), keys (those of `press_key`) and waits, run on the device in one `adb shell`, so
+  inputs can be tens of ms apart instead of one tool round trip each (#9). At most 100 steps, 60 s of waits, and 80 s
+  for the waits plus 500 ms per input. Every element is resolved from one fresh UI dump and every coordinate mapped
+  before the first input is sent: a selector that matches nothing, or several without `nth`, fails the call with
+  nothing sent, and a `tap_element` step can only aim at an element on the screen when the call starts. The result
+  gives each step's end and duration as measured by the device's shell clock (`$EPOCHREALTIME`), which show the cost
+  of each `input` on top of the waits. A step that fails stops the sequence; a sequence cut short (adb dropped, the
+  time ran out) returns the steps that ran with `incomplete`.
+- `lionscope query` takes a list or object argument as JSON: `run_inputs --steps '[...]'`, and also `type_text --field
+'{"hint":"Email"}'` and `set_network_mock --headers '{...}'`, which before could only be passed in `--json`.
 
 ### Changed
 
