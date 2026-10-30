@@ -154,6 +154,10 @@ tapped: to add to a filled field use `type_text --text <text> --mode append`, to
 (with `--text ""` it clears the field). `launch_app` starts an app and `stop_app` force-stops one (its unsaved
 state is lost, unlike HOME); `boot_emulator` / `shutdown_emulator` manage AVDs (shut down only an emulator you
 booted, or with the user's OK). There are no power, lock or unlock keys: never try to unlock a phone.
+`tap_element` refuses an element under the soft keyboard: hide it with `press_key --key back` first, then tap
+again (`scroll_to` doesn't account for the keyboard). `tap` and `swipe` take `--read-back` to compare screenshots from before and after (`screenChanged`,
+`changedShare`), which also sees a map or canvas the UI tree doesn't; `false` is reliable, `true` may be a caret
+or an animation. Pixel `screenChanged` is not `tap_element`'s, which compares UI trees.
 
 Each device tool call is a round trip of hundreds of ms. To reproduce a race that needs inputs close together
 (two taps 50 ms apart, a tap then BACK before a delayed job runs), use `run_inputs` with a list of steps

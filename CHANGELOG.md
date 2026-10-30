@@ -58,6 +58,17 @@ All notable changes to Lionscope are documented here. The format is based on
   time ran out) returns the steps that ran with `incomplete`.
 - `lionscope query` takes a list or object argument as JSON: `run_inputs --steps '[...]'`, and also `type_text --field
 '{"hint":"Email"}'` and `set_network_mock --headers '{...}'`, which before could only be passed in `--json`.
+- `tap` and `swipe` take `readBack`: they compare a screenshot from before with one taken 300 ms after a tap or
+  500 ms after a swipe (so a fling can settle), leaving out the status and navigation bars (their clock and icons
+  change on their own), and return `screenChanged` (four or more 8×8 px squares differ, a 16×16 px area: a
+  checkbox) and `changedShare` (how much of the screen differs; a list scrolled by half a screen gives about 0.1).
+  A screenshot sees what the UI tree doesn't (a map, a canvas, a game), but anything else that changes on its own
+  (a blinking caret, 14 squares on an emulator; an animation; a scroll bar fading out) sets it too, so `false` is
+  the reliable signal: on a still Settings screen 60 of 60 comparisons found no square changed, also across a
+  clock minute. An app that is black in both screenshots (a secure window) gives `null` with a `note`, as does a
+  screenshot after the input that can't be read; one before it that can't be read fails the call before anything
+  is sent. Off by default: it adds 1 to 3 s.
+- `tap` returns a `warning` when the point is on the soft keyboard (the tap goes to a key, not the app).
 
 ### Changed
 
@@ -88,6 +99,16 @@ All notable changes to Lionscope are documented here. The format is based on
 - `search_logcat` said it searched up to 10 minutes of logcat; the buffer holds the newest 5000 lines (at most 8 MB)
   of those 10 minutes, which an app logging its HTTP traffic fills in well under a minute. The description now says
   so.
+- `tap_element` tapped elements under the soft keyboard and reported `tapped: true`, though the tap landed on a key
+  (typing a letter into the focused field). The UI dump shows the app's window only, and an app drawn edge to edge
+  keeps its elements behind the keyboard, so their bounds looked tappable. `tap_element` now reads the keyboard's
+  frame from `dumpsys window` (50 to 150 ms on an emulator) before it taps. It taps the part of the element above a
+  docked keyboard when that part is high enough (about 24 dp, or half the element) and no other element that
+  takes taps is there (a button bar the app lifted above the keyboard); otherwise nothing is tapped, and the error
+  says to hide the keyboard with `press_key back` first. While the keyboard is shown it also takes a new dump
+  instead of one up to a second old, which may predate the keyboard's layout change. Other windows on top are not
+  checked. Where the keyboard can't be located (dumpsys fails or takes over 1.5 s, or Android before 11), it taps
+  as before and a `note` says the check was skipped; so does `tap`.
 
 ### Security
 

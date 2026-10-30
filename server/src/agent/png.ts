@@ -285,3 +285,71 @@ export function screenStats(image: DecodedPng): ScreenStats {
     blank: dominantRatio >= BLANK_DOMINANT_RATIO,
   };
 }
+
+/** A screenshot decoded for screenStats or screenDifference, null when it is not a PNG this decoder reads (or is cut short). */
+export function decodeScreenshot(data: Buffer): DecodedPng | null {
+  try {
+    return isPng(data) ? decodePng(data) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Two screenshots are compared in squares of this side (px), whose mean color must move by more than CELL_DELTA. */
+const CELL_PX = 8;
+const CELL_DELTA = 16;
+
+/**
+ * How two screenshots differ, in 8×8 px squares whose mean color moved by more than 16 of 255 on a channel,
+ * leaving out the squares whose center is in `skip` (the system bars): `changed` of `cells` (all of them when the
+ * sizes differ: the screen rotated). blank: every square compared is black in both, as a secure window is
+ * captured.
+ */
+export function screenDifference(
+  a: DecodedPng,
+  b: DecodedPng,
+  skip: readonly (readonly [number, number, number, number])[] = [],
+): { changed: number; cells: number; blank: boolean } {
+  const cellsOf = (image: DecodedPng) => Math.ceil(image.width / CELL_PX) * Math.ceil(image.height / CELL_PX);
+  if (a.width !== b.width || a.height !== b.height) {
+    return { changed: cellsOf(b), cells: cellsOf(b), blank: false };
+  }
+  let cells = 0;
+  let changed = 0;
+  let lit = false;
+  for (let cy = 0; cy < a.height; cy += CELL_PX) {
+    for (let cx = 0; cx < a.width; cx += CELL_PX) {
+      const yEnd = Math.min(a.height, cy + CELL_PX);
+      const xEnd = Math.min(a.width, cx + CELL_PX);
+      const midX = (cx + xEnd) / 2;
+      const midY = (cy + yEnd) / 2;
+      if (skip.some(([x1, y1, x2, y2]) => midX >= x1 && midX < x2 && midY >= y1 && midY < y2)) continue;
+      // Per channel the sum before minus the sum after; total is zero when the square is black in both.
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let total = 0;
+      for (let y = cy; y < yEnd; y++) {
+        for (let x = cx; x < xEnd; x++) {
+          const from = (y * a.width + x) * a.channels;
+          const to = (y * b.width + x) * b.channels;
+          const r1 = a.pixels[from] ?? 0;
+          const g1 = a.pixels[from + 1] ?? 0;
+          const b1 = a.pixels[from + 2] ?? 0;
+          const r2 = b.pixels[to] ?? 0;
+          const g2 = b.pixels[to + 1] ?? 0;
+          const b2 = b.pixels[to + 2] ?? 0;
+          red += r1 - r2;
+          green += g1 - g2;
+          blue += b1 - b2;
+          total += r1 + g1 + b1 + r2 + g2 + b2;
+        }
+      }
+      const limit = CELL_DELTA * (yEnd - cy) * (xEnd - cx);
+      cells++;
+      if (total > 0) lit = true;
+      if (Math.abs(red) > limit || Math.abs(green) > limit || Math.abs(blue) > limit) changed++;
+    }
+  }
+  return { changed, cells, blank: !lit };
+}
