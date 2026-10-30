@@ -143,8 +143,10 @@ booted, or with the user's OK). There are no power, lock or unlock keys: never t
 Each device tool call is a round trip of hundreds of ms. To reproduce a race that needs inputs close together
 (two taps 50 ms apart, a tap then BACK before a delayed job runs), use `run_inputs` with a list of steps
 (`tap`, `tap_element`, `key`, `wait`) run in one adb call; from the shell, `run_inputs --steps '<JSON list>'`.
-Its elements are found before anything is sent. The real spacing is the wait plus the cost of each input (tens of ms):
-read `atMs` / `tookMs` in the result instead of assuming the waits were exact.
+Its elements are found before anything is sent, on the screen as it is then: a `tap_element` step can't aim at
+something an earlier step opens (use a `tap` from a screenshot of that screen, or a separate call). The real spacing
+is the wait plus the cost of each input (tens of ms): read `atMs` / `tookMs` in the result instead of assuming the
+waits were exact. If the result has `incomplete`, check the screen before running the sequence again.
 
 To test location-based behaviour, `set_location --latitude -6.1754 --longitude 106.8272` moves the device (an
 emulator's GPS; on a physical Android 12+ device, mock location providers that apps can detect as mock), and

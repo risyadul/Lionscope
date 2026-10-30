@@ -798,16 +798,22 @@ text: "Row 40" }` find elements by visible text or content description, resource
   or video content may be missing from the tree.
 
 Each of those tools is one round trip, far too slow to put two taps 50 ms apart. `run_inputs` runs a sequence
-(at most 100 steps, waits at most 60 s in total) in one `adb shell` call: `{ "type": "tap", "x": 360, "y": 800 }`
-(screenshot pixels, like `tap`), `{ "type": "tap_element", "text": "Save" }` (the selectors of `tap_element`, plus
-`index` and `nth`), `{ "type": "key", "key": "back" }` (the keys of `press_key`) and `{ "type": "wait", "ms": 50 }`.
-Every element is found in one fresh UI dump and every coordinate mapped before the first input is sent, so a
-selector that matches nothing, or several without `nth`, fails the call with nothing sent. The spacing between
-two inputs is the wait plus what the input itself costs (`input` took 15-30 ms per tap on an Android 16 emulator,
-a key more, and it costs more on older versions where it starts a VM; a `sleep` runs 5-10 ms longer than asked):
-the result gives each step's end (`atMs`, from the start) and duration (`tookMs`) as the device's shell clock
-(`$EPOCHREALTIME`, Android 7.0+) measured them, and `totalMs`. A step that fails stops
-the sequence and is named in `failed`.
+in one `adb shell` call: `{ "type": "tap", "x": 360, "y": 800 }` (screenshot pixels, like `tap`),
+`{ "type": "tap_element", "text": "Save" }` (the selectors of `tap_element`, plus `index` and `nth`),
+`{ "type": "key", "key": "back" }` (the keys of `press_key`) and `{ "type": "wait", "ms": 50 }`. It takes at most 100
+steps, waits of at most 60 s in total, and at most 80 s for the waits plus 500 ms per input (what `input` can take on
+older Android, where it starts a VM), so that the sequence fits in one call. Every element is found in one fresh UI
+dump and every coordinate mapped before the first input is sent, so a selector that matches nothing, or several
+without `nth`, fails the call with nothing sent. It also means a `tap_element` step must name an element that is on
+the screen when the call starts: for one that an earlier step opens (a dialog's OK), use a `tap` with coordinates
+from a screenshot of that screen, or a separate call, or a match on the current screen is tapped where it was. The
+spacing between two inputs is the wait plus what the input itself costs (`input` took 15-30 ms per tap on an Android
+16 emulator, a key more, and it costs more on older versions; a `sleep` runs 5-10 ms longer than asked): the result
+gives each step's end (`atMs`, from the start) and duration (`tookMs`) as the device's shell clock
+(`$EPOCHREALTIME`, Android 7.0+) measured them, and `totalMs`, the end of the last step that finished. A step that
+fails stops the sequence and is named in `failed`. If the sequence stops otherwise (adb drops, the time runs out),
+`incomplete` says why and how many steps ran; later ones may have run too, so check the screen before running it
+again.
 
 The tree comes from Lionscope's UI helper (Android 7.0 and later): a small program the server runs on the device
 over adb that keeps one accessibility (UiAutomation) connection open, reads a screen in a few hundred ms and does

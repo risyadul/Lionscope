@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { buildInputScript, MAX_STEPS, parseScriptOutput } from '../src/agent/inputTools.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildInputScript,
+  INPUT_ESTIMATE_MS,
+  MAX_STEPS,
+  parseScriptOutput,
+} from '../src/agent/inputTools.ts';
 import { callTool } from '../src/agent/registry.ts';
 import { fakeAgent } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
-import { FakeAdb, fixture } from './helpers/fakes.ts';
+import { FakeAdb, FakeChild, fixture } from './helpers/fakes.ts';
 
 const DUMP = fixture('ui-dump.xml');
 const MARKER = '__LS_0123456789ab__';
@@ -13,9 +18,7 @@ const START = 1_793_366_413;
 /** The commands of a run_inputs script, each with the index of the step it belongs to. */
 function scriptSteps(script: string): { command: string; index: number }[] {
   return [
-    ...script.matchAll(
-      /(input tap \d+ \d+|input keyevent \d+|sleep [\d.]+) \|\| \{ echo "\$m F (\d+) \$\?"; exit 0; \}; t (\d+)/g,
-    ),
+    ...script.matchAll(/(input tap \d+ \d+|input keyevent \d+|sleep [\d.]+) \|\| f (\d+) \$\?; t (\d+)/g),
   ].map((match) => ({ command: match[1] ?? '', index: Number(match[3]) }));
 }
 
@@ -45,20 +48,22 @@ function dumpMarkers(command: string): string[] {
   return [...command.matchAll(/echo (__LS_[0-9a-f]+_[A-Z]+__)/g)].map((match) => match[1] ?? '');
 }
 
+/** What `adb shell <script>` does: its output, then its exit code (or stderr and a code, or no end at all). */
+type ScriptRun = string | { output: string; stderr?: string; exit?: number; hang?: true };
+
 /**
  * adb answering `uiautomator dump` with the given dumps in turn (the last one repeats) and running run_inputs
  * scripts with `run`.
  */
 function inputAgent(
   dumpsInTurn: readonly string[] = [DUMP],
-  run: (script: string) => string = (script) => runScript(script),
+  run: (script: string) => ScriptRun = (script) => runScript(script),
 ) {
   const commands: string[] = [];
   let dumpIndex = 0;
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
     commands.push(command);
-    if (command.startsWith('m=')) return run(command);
     if (command.startsWith('wm size;')) {
       return 'Physical size: 1080x2400\n__LIONSCOPE_ROTATION__\n  Viewport INTERNAL: displayId=0, orientation=0, logicalFrame=[0, 0, 1080, 2400]\n';
     }
@@ -72,6 +77,24 @@ function inputAgent(
         : `\n${topMarker}\n  topResumedActivity=ActivityRecord{1 u0 com.example.shop/.MainActivity t1}`;
     return `UI hierchary dumped to: ${file}\n${xmlMarker}\n${dump}\n${wmMarker}\nPhysical size: 1080x2400${top}`;
   });
+  adb.spawn = (args) => {
+    const script = String(args.at(-1));
+    commands.push(script);
+    const reply = run(script);
+    const {
+      output,
+      stderr = '',
+      exit = 0,
+      hang = false,
+    } = typeof reply === 'string' ? { output: reply } : reply;
+    const child = new FakeChild();
+    setImmediate(() => {
+      child.stdout.write(output);
+      child.stderr.write(stderr);
+      if (!hang) child.exit(exit);
+    });
+    return child;
+  };
   const agent = fakeAgent({}, { adb });
   const scripts = () => commands.filter((command) => command.startsWith('m='));
   const dumps = () => commands.filter((command) => command.startsWith('uiautomator dump'));
@@ -98,14 +121,15 @@ describe('run_inputs script', () => {
       [
         `m=${MARKER}`,
         't() { echo "$m $1 ${EPOCHREALTIME:-$(date +%s.%N)}"; }',
+        'f() { echo "$m F $1 $2"; exit 0; }',
         't S',
-        'input tap 540 1200 || { echo "$m F 0 $?"; exit 0; }',
+        'input tap 540 1200 || f 0 $?',
         't 0',
-        'sleep 0.050 || { echo "$m F 1 $?"; exit 0; }',
+        'sleep 0.050 || f 1 $?',
         't 1',
-        'input tap 995 140 || { echo "$m F 2 $?"; exit 0; }',
+        'input tap 995 140 || f 2 $?',
         't 2',
-        'input keyevent 4 || { echo "$m F 3 $?"; exit 0; }',
+        'input keyevent 4 || f 3 $?',
         't 3',
       ].join('; '),
     );
@@ -132,6 +156,10 @@ describe('run_inputs script', () => {
 });
 
 describe('run_inputs', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('runs taps, element taps, keys and waits in one shell call and times each step', async () => {
     const { call, scripts, dumps, agent } = inputAgent();
     const result = await call({
@@ -211,6 +239,23 @@ describe('run_inputs', () => {
     expect(scripts()).toEqual([]);
   });
 
+  it('sends nothing for a listed element that is off the screen', async () => {
+    const { call, agent, scripts } = inputAgent();
+    const listed = await callTool(agent.ctx, 'get_ui_tree', { filter: 'all' }, true);
+    const offScreen = (listed as Json).result.elements.find(
+      (element: Json) => element.desc === 'Remember me',
+    );
+    await expect(
+      call({
+        steps: [
+          { type: 'key', key: 'back' },
+          { type: 'tap_element', index: offScreen.index },
+        ],
+      }),
+    ).rejects.toThrow('steps[1]: the element is off the screen');
+    expect(scripts()).toEqual([]);
+  });
+
   it('needs a screenshot (or width and height) for coordinate taps', async () => {
     const { call, scripts } = inputAgent();
     await expect(call({ steps: [{ type: 'tap', x: 10, y: 10 }] })).rejects.toThrow('Take a screenshot first');
@@ -239,6 +284,16 @@ describe('run_inputs', () => {
       },
       'waits add up to more than 60000 ms',
     ],
+    [
+      'more inputs and waits than the call has time for',
+      {
+        steps: [
+          { type: 'wait', ms: 60_000 },
+          ...Array.from({ length: 41 }, () => ({ type: 'key', key: 'back' })),
+        ],
+      },
+      `the waits plus ${INPUT_ESTIMATE_MS} ms per input`,
+    ],
     ['a fractional wait', { steps: [{ type: 'wait', ms: 0.5 }] }, 'steps.0.ms'],
     ['shell text as a coordinate', { steps: [{ type: 'tap', x: '1; reboot', y: 1 }] }, 'steps.0.x'],
   ])('refuses %s', async (_name, args, message) => {
@@ -266,19 +321,63 @@ describe('run_inputs', () => {
     expect(result.untrusted).toBeUndefined();
   });
 
-  it('fails when the device stops answering mid-sequence, and returns no timings without a clock', async () => {
+  it('returns the steps that ran when the device stops answering mid-sequence', async () => {
+    const keys = [
+      { type: 'key', key: 'back' },
+      { type: 'key', key: 'back' },
+    ];
     const cut = inputAgent([DUMP], (script) => runScript(script).split('\n').slice(0, 2).join('\n'));
-    await expect(
-      cut.call({
-        steps: [
-          { type: 'key', key: 'back' },
-          { type: 'key', key: 'back' },
-        ],
-      }),
-    ).rejects.toThrow('The device ran 1 of 2 steps');
+    expect(await cut.call({ steps: keys })).toMatchObject({
+      steps: [{ index: 0, atMs: 25 }],
+      totalMs: 25,
+      incomplete: {
+        ran: 1,
+        of: 2,
+        reason: 'the device stopped answering',
+        note: expect.stringContaining('may have run'),
+      },
+    });
+    const offline = inputAgent([DUMP], (script) => ({
+      output: runScript(script).split('\n').slice(0, 2).join('\n'),
+      stderr: 'error: device offline\n',
+      exit: 1,
+    }));
+    await callTool(offline.agent.ctx, 'get_ui_tree', {}, true);
+    const result = await offline.call({ steps: keys });
+    expect(result.incomplete).toMatchObject({ ran: 1, of: 2, reason: 'error: device offline' });
+    expect(JSON.stringify(result)).not.toContain('keyevent');
+    expect(offline.agent.ctx.uiDumps.get('emulator-5554')?.at).toBe(-Infinity);
+  });
+
+  it('stops waiting for a sequence that runs out of time, keeping what ran', async () => {
+    const hung = inputAgent([DUMP], (script) => ({
+      output: runScript(script).split('\n').slice(0, 2).join('\n'),
+      hang: true,
+    }));
+    await callTool(hung.agent.ctx, 'get_ui_tree', {}, true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = hung.call({
+      steps: [
+        { type: 'key', key: 'back' },
+        { type: 'wait', ms: 1000 },
+      ],
+    });
+    // The first step's output arrives, then nothing more.
+    await new Promise((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(120_000);
+    const result = await pending;
+    expect(result.incomplete).toMatchObject({ ran: 1, of: 2, reason: expect.stringContaining('timed out') });
+    expect(hung.agent.ctx.uiDumps.get('emulator-5554')?.at).toBe(-Infinity);
+  });
+
+  it('gives no timings without a clock, and no total when nothing finished', async () => {
     const noClock = inputAgent([DUMP], (script) => runScript(script).replace(/ \d+\.\d+$/gm, ' 1793366413'));
     const result = await noClock.call({ steps: [{ type: 'key', key: 'back' }] });
     expect(result).toMatchObject({ totalMs: null, steps: [{ atMs: null, tookMs: null }] });
     expect(result.note).toContain('no timings');
+    const first = inputAgent([DUMP], (script) => runScript(script, { fail: /^input/ }));
+    const failed = await first.call({ steps: [{ type: 'key', key: 'back' }] });
+    expect(failed).toMatchObject({ steps: [], totalMs: null, failed: { index: 0 } });
+    expect(failed.note).toBeUndefined();
   });
 });
