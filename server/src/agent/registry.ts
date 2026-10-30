@@ -12,11 +12,12 @@ import {
   swipeTool,
   tapTool,
 } from './deviceTools.ts';
+import { runInputsTool } from './inputTools.ts';
 import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
 import { clearLocationTool, getLocationTool, setLocationTool } from './locationTools.ts';
 import { revertViewPropertiesTool, setViewPropertyTool } from './viewEditTools.ts';
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
-import { crashesTool, logcatTool } from './logTools.ts';
+import { crashesTool, logcatTool, markTool } from './logTools.ts';
 import { screensTool, summaryTool } from './metricTools.ts';
 import {
   clearNetworkMocksTool,
@@ -50,6 +51,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   startSessionTool,
   stopSessionTool,
   sdkOptionsTool,
+  markTool,
   screenshotTool,
   uiTreeTool,
   inspectScreenTool,
@@ -62,6 +64,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   swipeTool,
   typeTextTool,
   pressKeyTool,
+  runInputsTool,
   launchAppTool,
   stopAppTool,
   setNetworkMockTool,

@@ -29,6 +29,8 @@ import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
 import type { MockOrigin } from './mockRules.ts';
 import { ProfilingSession } from './profilingSession.ts';
 import type { CollectorIntervals } from './profilingSession.ts';
+import { NO_SESSION_MARKERS_MESSAGE } from './runMarkers.ts';
+import type { RunMarker } from './runMarkers.ts';
 
 export const DEFAULT_DEVICE_POLL_MS = 2000;
 /** Consecutive `adb devices` failures before an active session is put into error. */
@@ -157,6 +159,11 @@ export class SessionManager implements SdkLinkTarget {
     return this.session?.snapshot() ?? emptySnapshot();
   }
 
+  /** The newest time of a log line the current (or last) session already dropped; null while none was. */
+  getLogsDroppedThrough(): number | null {
+    return this.session?.logsDroppedThrough() ?? null;
+  }
+
   /** A hello on the session gateway: only the session's device maps its port there. */
   attachSdk(hello: SdkHello, link: SdkLink): Promise<SdkAttachResult> {
     return this.attachSdkOn(this.tunnel.serial, hello, link, true);
@@ -278,6 +285,23 @@ export class SessionManager implements SdkLinkTarget {
     const session = this.session;
     if (!session || session.isStopped) return false;
     return session.clearNetworkMocks(id);
+  }
+
+  /**
+   * Mark `label` now in the running session (RunMarkers.mark), after any start or stop requested before it: a mark
+   * sent right after start_session lands on the new session. Rejects with a PublicError without one.
+   */
+  mark(label: string): Promise<{ marker: RunMarker; replacedTs: number | null }> {
+    return this.enqueue(async () => {
+      const session = this.session;
+      if (!session || session.isStopped) throw new PublicError(NO_SESSION_MARKERS_MESSAGE);
+      return session.mark(label);
+    });
+  }
+
+  /** Markers of the current (or last) session, oldest first. */
+  getMarkers(): RunMarker[] {
+    return this.session?.runMarkers() ?? [];
   }
 
   /** Poll `adb devices -l` every devicePollMs until close(). */

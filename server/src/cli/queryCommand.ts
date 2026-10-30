@@ -16,6 +16,7 @@ export const QUERY_USAGE = `Usage: lionscope query <tool> [--<arg> <value> ...] 
 
 Runs one Lionscope agent tool on the server running on --port and prints its JSON result
 (e.g. \`lionscope query summary --window 5m\`, \`lionscope query logcat --level E --limit 50\`).
+A list or object argument takes JSON (\`--steps '[{"type":"key","key":"back"}]'\`).
 Short names work without the get_ / search_ prefix. The server must already be running.
 
 Options:
@@ -131,11 +132,21 @@ interface PropertySchema {
   anyOf?: PropertySchema[];
 }
 
-/** A flag's value typed by the tool's JSON Schema (numbers, booleans), else the string as given. */
-function coerce(raw: string | true, schema: PropertySchema | undefined): unknown {
+/**
+ * A flag's value typed by the tool's JSON Schema (numbers, booleans, JSON for a list or an object), else the string
+ * as given.
+ */
+function coerce(name: string, raw: string | true, schema: PropertySchema | undefined): unknown {
   const types = schema?.anyOf?.map((option) => option.type) ?? [schema?.type];
   if (raw === true) return true;
   if (types.includes('boolean') && (raw === 'true' || raw === 'false')) return raw === 'true';
+  if ((types.includes('array') || types.includes('object')) && !types.includes('string')) {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch (error) {
+      throw new QueryError(`--${name} is not valid JSON: ${errorMessage(error)}`);
+    }
+  }
   if (
     (types.includes('number') || types.includes('integer')) &&
     raw.trim() !== '' &&
@@ -163,7 +174,7 @@ function toolArguments(tool: AgentTool, args: QueryArgs): Record<string, unknown
   const properties =
     (inputJsonSchema(tool) as { properties?: Record<string, PropertySchema> }).properties ?? {};
   const flags = Object.fromEntries(
-    [...args.flags].map(([name, raw]) => [name, coerce(raw, properties[name])]),
+    [...args.flags].map(([name, raw]) => [name, coerce(name, raw, properties[name])]),
   );
   return { ...base, ...flags };
 }

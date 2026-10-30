@@ -11,7 +11,15 @@ import type { Size } from '../emulator/screenInput.ts';
 import { displaySize, sameSize, SCREENSHOT_SHORT_EDGE } from './display.ts';
 import { inside, joinNotes, KEYBOARD_UNCHECKED, screenInsets } from './insets.ts';
 import type { Insets } from './insets.ts';
-import { decodeScreenshot, pngSize, scalePng, screenDifference } from './png.ts';
+import {
+  BLACK_LEVEL,
+  BLANK_DOMINANT_RATIO,
+  decodeScreenshot,
+  pngSize,
+  scalePng,
+  screenDifference,
+  screenStats,
+} from './png.ts';
 import { packageInput } from './sessionTools.ts';
 import { serialInput } from './statusTools.ts';
 import { defineTool, ToolError } from './tool.ts';
@@ -51,7 +59,7 @@ export const AGENT_KEYCODES = {
   dpad_right: 22,
   dpad_center: 23,
 } as const;
-type AgentKey = keyof typeof AGENT_KEYCODES;
+export type AgentKey = keyof typeof AGENT_KEYCODES;
 
 export const INPUT: ToolAnnotations = {
   readOnlyHint: false,
@@ -90,7 +98,7 @@ export function screencap(ctx: Pick<AgentContext, 'adb'>, serial: string): Promi
   });
 }
 
-const coordinateSpace = {
+export const coordinateSpace = {
   width: z
     .number()
     .int()
@@ -119,7 +127,7 @@ async function currentDisplay(ctx: AgentContext, serial: string, known: Size | u
  * Maps points from screenshot pixels to device pixels (as `input` takes them, in the current rotation). A
  * screenshot taken before the screen rotated is refused rather than mapped onto the wrong spot.
  */
-async function toDevicePoints(
+export async function toDevicePoints(
   ctx: AgentContext,
   serial: string,
   space: Partial<Size>,
@@ -168,7 +176,7 @@ export async function input(ctx: AgentContext, serial: string, command: string):
 export const screenshotTool = defineTool({
   name: 'screenshot',
   title: 'Screenshot',
-  description: `A PNG of the device screen as shown now, scaled to at most ${SCREENSHOT_SHORT_EDGE} px on its short edge, plus its size. tap and swipe take coordinates in this image's pixels (they are mapped to the device). Device control: only available when enabled.`,
+  description: `A PNG of the device screen as shown now, scaled to at most ${SCREENSHOT_SHORT_EDGE} px on its short edge, plus its size. tap and swipe take coordinates in this image's pixels (they are mapped to the device). Also numbers of the full-size capture, to tell across runs whether something rendered without looking: meanLuminance (0 black to 1 white), nonBlackRatio (share of pixels with a channel above ${BLACK_LEVEL}/255, so video black counts as black but dark blue does not), dominantRatio (share of the most common colour) and blank (dominantRatio ≥ ${BLANK_DOMINANT_RATIO}: one colour, black or not, with at most about 2% else, such as status bar icons, a spinner or a small clock; a sparse white page can count too, so check nonBlackRatio for black). Secure windows (FLAG_SECURE, DRM-protected video) are captured black even while they show something. Device control: only available when enabled.`,
   access: 'device',
   input: z.object({ serial: optionalSerial }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -176,7 +184,9 @@ export const screenshotTool = defineTool({
     const serial = targetSerial(ctx, requested);
     const full = await screencap(ctx, serial);
     const device = pngSize(full);
-    const { png, size } = scalePng(full, SCREENSHOT_SHORT_EDGE);
+    const decoded = decodeScreenshot(full);
+    // A capture that failed to decode is decoded (and fails) in scalePng as before, when it has to be scaled.
+    const { png, size } = scalePng(full, SCREENSHOT_SHORT_EDGE, decoded ?? undefined);
     ctx.screenshots.set(serial, { shot: size, device });
     return {
       data: {
@@ -185,6 +195,10 @@ export const screenshotTool = defineTool({
         height: size.height,
         deviceWidth: device.width,
         deviceHeight: device.height,
+        // Of the full-size capture; null when it can't be decoded.
+        ...(decoded
+          ? screenStats(decoded)
+          : { meanLuminance: null, nonBlackRatio: null, dominantRatio: null, blank: null }),
       },
       image: { mimeType: 'image/png', data: png },
     };

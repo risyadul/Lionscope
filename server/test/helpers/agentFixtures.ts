@@ -17,6 +17,7 @@ import { FRAME_STAGES } from '@lionscope/protocol';
 import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
 import { PublicError } from '../../src/errors.ts';
 import { MockRules, NO_SESSION_MOCKS_MESSAGE } from '../../src/session/mockRules.ts';
+import { NO_SESSION_MARKERS_MESSAGE, RunMarkers } from '../../src/session/runMarkers.ts';
 import type { AppCrash } from '../../src/store/crashLog.ts';
 import { emptySnapshot } from '../../src/store/sessionStore.ts';
 import { FakeAdb } from './fakes.ts';
@@ -185,6 +186,10 @@ export interface FakeAgent {
   httpDetails: Map<number, HttpExchangeDetail>;
   /** What getCrashes answers. */
   crashes: AppCrash[];
+  /** The session's markers (a real RunMarkers, timed by `ctx.now`). */
+  markers: RunMarkers;
+  /** What getLogsDroppedThrough answers (null: no line dropped). */
+  logsDroppedThrough: number | null;
 }
 
 /** A context over a fixed snapshot; the clock stands at `now`. */
@@ -201,6 +206,8 @@ export function fakeAgent(
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
     httpDetails: new Map(),
     crashes: [],
+    markers: new RunMarkers(),
+    logsDroppedThrough: null,
     ctx: undefined as unknown as FakeAgent['ctx'],
   };
   const running = () => agent.session.status !== 'idle' && agent.session.status !== 'error';
@@ -209,6 +216,7 @@ export function fakeAgent(
       getDevices: () => DEVICES,
       getSessionState: () => agent.session,
       getSnapshot: () => agent.snapshot,
+      getLogsDroppedThrough: () => agent.logsDroppedThrough,
       refreshDevices: async () => DEVICES,
       listApps: async () => [
         { packageName: PKG, pid: 1234, thirdParty: true },
@@ -242,6 +250,11 @@ export function fakeAgent(
         agent.mocks.clear();
         return true;
       },
+      mark: async (label) => {
+        if (!running()) throw new PublicError(NO_SESSION_MARKERS_MESSAGE);
+        return agent.markers.mark(label, agent.ctx.now());
+      },
+      getMarkers: () => agent.markers.list(),
     },
     emulators: {
       getEmulators: () => EMULATORS,
