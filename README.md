@@ -826,10 +826,12 @@ does to an app in the background, and show that it happened:
   `settings put global always_finish_activities 1` alone changes only the stored value, which the system reads
   at boot. `verified` needs the activity manager's own flag (`dumpsys activity processes`) and, when turning it
   on, that the activities in the background that still had their process were destroyed (`destroyCheck`, null when
-  there were none). If the switch fails, only the stored value is written (`fallback: true`, `verified: false`). It
-  applies to every app on the device until turned off with `enabled: false`; what Lionscope turned on it turns off
-  again when the device's profiling session stops or Lionscope stops (`autoOff`), and `status` lists it per device
-  (`dontKeepActivities`). A value that was already on before is left to you.
+  there were none or it was on already; `destroyed: 0` means not yet: Android does it at its next process-priority
+  update). If it cannot be switched on, the call fails and nothing is changed. It applies to every app on the
+  device until turned off with `enabled: false`. What Lionscope turned on it puts back as it was (the flag and the
+  stored setting) when the device's profiling session stops or Lionscope stops, and again when a device that was
+  gone then comes back (`autoOff`); `status` lists it per device (`dontKeepActivities`). A value that was already
+  on before is left to you.
 - `simulate_process_death { packageName }` presses HOME, waits until the app's activity is stopped (its state
   saved), kills the process with `am kill` (only a background process, unlike `stop_app`'s force-stop, which
   discards the saved state and the task), checks that it is gone, and brings the task back the way Recents does

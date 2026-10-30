@@ -1,9 +1,10 @@
 /**
  * Developer options' "Don't keep activities" on the devices this server switched it on. It is a global setting
- * that outlives the server and a reboot (the activity manager reads it at boot), so what Lionscope turned on is
- * turned off again when the device's profiling session stops and when the server closes.
+ * that outlives the server and a reboot (the activity manager reads it at boot), so what Lionscope turned on is put
+ * back as it was when the device's profiling session stops and when the server closes; a device that was gone then
+ * gets it when it is listed again.
  */
-import type { SessionState } from '@lionscope/protocol';
+import type { DeviceInfo, SessionState } from '@lionscope/protocol';
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { errorMessage, log } from '../log.ts';
@@ -15,6 +16,8 @@ const SHELL_TIMEOUT_MS = 10_000;
 const DUMPSYS_TIMEOUT_MS = 15_000;
 /** A one-shot run of the UI helper (push, app_process, the answer). */
 const HELPER_RUN_TIMEOUT_MS = 20_000;
+/** At server close, putting it back gets this long (the server exits after 10 s whatever is still running). */
+export const CLOSE_RESTORE_MS = 5000;
 
 const STOPPED_SESSION: ReadonlySet<SessionState['status']> = new Set(['idle', 'error']);
 
@@ -32,6 +35,12 @@ export function parseAlwaysFinish(output: string): boolean | null {
   return lines.includes(ALWAYS_FINISH_LINE);
 }
 
+/** The flag the activity manager acts on, and the stored setting (read at boot; never written counts as off). */
+export interface AlwaysFinishState {
+  live: boolean;
+  stored: boolean;
+}
+
 export interface DontKeepActivitiesOptions {
   adb: Adb;
   /** The UI helper, which switches the flag the way Settings does. */
@@ -39,90 +48,170 @@ export interface DontKeepActivitiesOptions {
 }
 
 export class DontKeepActivities {
-  /** Devices where Lionscope turned it on (it was off before) and has not turned it off since. */
-  private readonly turnedOn = new Set<string>();
+  /** Devices where Lionscope switched it on and has not put it back yet, with what it was before. */
+  private readonly owned = new Map<string, AlwaysFinishState>();
+  /** Devices listed as ready in the last device list (a device that comes back is retried). */
+  private ready = new Set<string>();
+  /** A restore in progress per device: a second request waits for it instead of switching again. */
+  private readonly restoring = new Map<string, Promise<boolean>>();
+  private closing = false;
 
   constructor(private readonly options: DontKeepActivitiesOptions) {}
 
-  /** Lionscope turned it on on this device and it has not been turned off since. */
+  /** Lionscope switched it on on this device and has not put it back yet (it may still be on). */
   isOn(serial: string): boolean {
-    return this.turnedOn.has(serial);
+    return this.owned.has(serial);
   }
 
-  /** The activity manager's flag (what it acts on), not the stored setting. */
-  async live(serial: string): Promise<boolean> {
-    const output = await adbShell(
-      this.options.adb,
-      serial,
-      `dumpsys activity processes | grep -e '^${PROCESSES_HEADER}' -e '^${ALWAYS_FINISH_LINE}$' || true`,
-      { timeoutMs: DUMPSYS_TIMEOUT_MS },
-    );
-    const live = parseAlwaysFinish(output);
+  /** The activity manager's flag and the stored setting; throws when the dump is not one. */
+  async state(serial: string): Promise<AlwaysFinishState> {
+    const [processes, stored] = await Promise.all([
+      this.shell(
+        serial,
+        `dumpsys activity processes | grep -e '^${PROCESSES_HEADER}' -e '^${ALWAYS_FINISH_LINE}$' || true`,
+        DUMPSYS_TIMEOUT_MS,
+      ),
+      this.shell(serial, 'settings get global always_finish_activities'),
+    ]);
+    const live = parseAlwaysFinish(processes);
     if (live === null) throw new Error(`dumpsys activity processes gave nothing on ${serial}`);
-    return live;
+    return { live, stored: stored.trim() === '1' };
   }
 
   /**
-   * Switches it. Returns null, or why the activity manager could not be switched: then only the stored setting was
-   * written, which takes effect at the next boot. `wasOn`: it was on before (then Lionscope did not turn it on).
+   * Switches it on through the helper; `before` is the state read just before. Returns null, or why it failed and
+   * whether anything changed anyway (an adb timeout after the device did it). The stored setting alone is never
+   * written: it would only apply after a reboot.
    */
-  async set(serial: string, enabled: boolean, wasOn: boolean): Promise<string | null> {
-    // Marked first: whatever part of the switch happens, it is undone later.
-    if (enabled && !wasOn) this.turnedOn.add(serial);
-    const failure = await this.switch(serial, enabled);
-    if (!enabled) this.turnedOn.delete(serial);
+  async enable(
+    serial: string,
+    before: AlwaysFinishState,
+  ): Promise<{ failure: string; changed: boolean } | null> {
+    // Marked first (unless already marked: the first "before" is what gets put back), so that a switch that
+    // happened despite an error is undone too.
+    const owns = before.live && before.stored ? false : !this.owned.has(serial);
+    if (owns) this.owned.set(serial, before);
+    const failure = await this.helperSwitch(serial, true, HELPER_RUN_TIMEOUT_MS);
+    if (failure === null) return null;
+    const now = await this.state(serial).catch(() => null);
+    const changed = now === null || now.live !== before.live || now.stored !== before.stored;
+    if (owns && !changed) this.owned.delete(serial);
+    return { failure, changed };
+  }
+
+  /**
+   * Switches it off (an explicit request). Returns null, or why the activity manager could not be switched: then the
+   * stored setting is still cleared, and the device stays marked so that it is tried again later.
+   */
+  async disable(serial: string): Promise<string | null> {
+    const failure = await this.helperSwitch(serial, false, HELPER_RUN_TIMEOUT_MS);
+    if (failure === null) {
+      this.owned.delete(serial);
+      return null;
+    }
+    await this.shell(serial, 'settings put global always_finish_activities 0').catch(() => undefined);
     return failure;
   }
 
-  /** Turns it off again if Lionscope turned it on (session stopped). */
-  async restore(serial: string): Promise<void> {
-    if (!this.turnedOn.delete(serial)) return;
-    const failure = await this.switch(serial, false);
-    if (failure === null) log.info(`Turned "Don't keep activities" off again on ${serial}`);
-    else log.warn(`Could not turn "Don't keep activities" off on ${serial} (${failure})`);
+  /**
+   * Puts back what Lionscope changed, as it was before: the flag through the helper, then the stored setting if it
+   * differed. The device stays marked until that worked. True when nothing is left to put back.
+   */
+  restore(serial: string, timeoutMs = HELPER_RUN_TIMEOUT_MS): Promise<boolean> {
+    const running = this.restoring.get(serial);
+    if (running) return running;
+    const restored = this.restoreNow(serial, timeoutMs).finally(() => this.restoring.delete(serial));
+    this.restoring.set(serial, restored);
+    return restored;
+  }
+
+  private async restoreNow(serial: string, timeoutMs: number): Promise<boolean> {
+    const before = this.owned.get(serial);
+    if (!before) return true;
+    const failure =
+      (await this.helperSwitch(serial, before.live, timeoutMs)) ??
+      (before.stored !== before.live
+        ? await this.shell(
+            serial,
+            `settings put global always_finish_activities ${before.stored ? 1 : 0}`,
+          ).then(
+            () => null,
+            (error: unknown) => errorMessage(error),
+          )
+        : null);
+    if (failure !== null) {
+      log.warn(`Could not put "Don't keep activities" back on ${serial} (${failure}); trying again later`);
+      return false;
+    }
+    // Switched again meanwhile (a new enable) only if the mark changed.
+    if (this.owned.get(serial) === before) this.owned.delete(serial);
+    log.info(`Put "Don't keep activities" back as it was on ${serial}`);
+    return true;
   }
 
   /**
-   * A session update: once a device's session has stopped, what Lionscope turned on there is turned off, unless a
+   * A session update: once a device's session has stopped, what Lionscope turned on there is put back, unless a
    * new session started there right away (start_session ends the previous one first).
    */
   sessionChanged(session: SessionState, current: () => SessionState): void {
     const serial = session.serial;
-    if (serial === null || !STOPPED_SESSION.has(session.status) || !this.turnedOn.has(serial)) return;
+    if (serial === null || !STOPPED_SESSION.has(session.status) || !this.owned.has(serial)) return;
     setImmediate(() => {
+      // Closing puts it back itself (the session stops then too).
+      if (this.closing) return;
       const now = current();
       if (now.serial === serial && !STOPPED_SESSION.has(now.status)) return;
       void this.restore(serial);
     });
   }
 
-  /** Turns it off on every device where Lionscope turned it on; before the UI helpers close. */
-  async close(): Promise<void> {
-    await Promise.all([...this.turnedOn].map((serial) => this.restore(serial)));
+  /**
+   * The device list changed: a device that comes back while Lionscope still has to put the setting back (the
+   * restore failed while it was gone) is tried again, unless its session is still running.
+   */
+  setDevices(devices: readonly DeviceInfo[], current: () => SessionState): void {
+    const ready = new Set(
+      devices.filter((device) => device.state === 'device').map((device) => device.serial),
+    );
+    const session = current();
+    for (const serial of ready) {
+      if (this.closing || this.ready.has(serial) || !this.owned.has(serial)) continue;
+      if (session.serial === serial && !STOPPED_SESSION.has(session.status)) continue;
+      void this.restore(serial);
+    }
+    this.ready = ready;
   }
 
-  private async switch(serial: string, enabled: boolean): Promise<string | null> {
+  /**
+   * Puts it back on every device where Lionscope switched it on, within `timeoutMs` (the server's other cleanup
+   * runs meanwhile; the UI helpers close after this).
+   */
+  async close(timeoutMs = CLOSE_RESTORE_MS): Promise<void> {
+    this.closing = true;
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
+    await Promise.race([
+      Promise.all([...this.owned.keys()].map((serial) => this.restore(serial, timeoutMs))),
+      deadline,
+    ]);
+    clearTimeout(timer);
+  }
+
+  /** Null, or why the helper could not switch the flag. */
+  private async helperSwitch(serial: string, enabled: boolean, timeoutMs: number): Promise<string | null> {
     const helpers = this.options.helpers();
-    let failure: string | null = helpers ? null : 'this server has no on-device helper';
-    if (helpers) {
-      try {
-        await helpers.setAlwaysFinish(serial, enabled, HELPER_RUN_TIMEOUT_MS);
-      } catch (error) {
-        failure = error instanceof UiHelperError ? error.message : errorMessage(error);
-      }
-    }
-    if (failure === null) return null;
-    // The stored value at least: Android reads it at the next boot.
+    if (!helpers) return 'this server has no on-device helper';
     try {
-      await adbShell(
-        this.options.adb,
-        serial,
-        `settings put global always_finish_activities ${enabled ? 1 : 0}`,
-        { timeoutMs: SHELL_TIMEOUT_MS },
-      );
+      await helpers.setAlwaysFinish(serial, enabled, timeoutMs);
+      return null;
     } catch (error) {
-      return `${failure}; writing the setting failed too: ${errorMessage(error)}`;
+      return error instanceof UiHelperError ? error.message : errorMessage(error);
     }
-    return failure;
+  }
+
+  private shell(serial: string, command: string, timeoutMs = SHELL_TIMEOUT_MS): Promise<string> {
+    return adbShell(this.options.adb, serial, command, { timeoutMs });
   }
 }

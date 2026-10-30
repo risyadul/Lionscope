@@ -17,7 +17,7 @@ function deviceView(device: DeviceInfo, emulators: readonly EmulatorInfo[], dont
     kind: isEmulator ? 'emulator' : 'physical',
     // Emulators are mirrored over gRPC (when it has an endpoint), other ready devices through scrcpy.
     canMirror: isEmulator ? emulator?.canMirror === true : device.state === 'device',
-    // Turned on by set_dont_keep_activities; Lionscope turns it off again when the session stops or it stops.
+    // Turned on by set_dont_keep_activities and not put back yet (when the session stops, or Lionscope stops).
     dontKeepActivities,
   };
 }

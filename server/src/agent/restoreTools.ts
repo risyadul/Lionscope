@@ -315,27 +315,35 @@ function dontKeepNote(
   enabled: boolean,
   failure: string | null,
   destroyed: { background: number; destroyed: number } | null,
+  wasOn: boolean,
   autoOff: boolean,
 ): string | null {
-  if (failure !== null) {
-    return `Not verified: the activity manager could not be switched (${failure}), so only the stored setting was written, which Android applies at the next reboot.${enabled ? ` ${DONT_KEEP_NOTE}` : ''}`;
+  if (!enabled) {
+    return failure === null
+      ? null
+      : `Not verified: the activity manager could not be switched off (${failure}). The stored setting was cleared, so it is off after the next reboot at the latest; Lionscope tries again when the session stops, the device reconnects or Lionscope stops.`;
   }
-  if (!enabled) return null;
+  const failed =
+    failure === null
+      ? ''
+      : `Not verified: switching it reported an error (${failure}), yet the device's state changed: check activityManager. `;
   const pending =
     destroyed?.destroyed === 0
-      ? `The flag is on, but none of the ${destroyed.background} activities in the background was destroyed within ${DESTROY_CHECK_MS / 1000} s: Android does it at its next process-priority update (leaving a screen brings one); check with get_activity_instance after leaving a screen. `
+      ? `Not verified yet, not failed: the flag is on, but none of the ${destroyed.background} activities in the background has been destroyed within ${DESTROY_CHECK_MS / 1000} s. Android does it at its next process-priority update (leaving a screen brings one); check with get_activity_instance after leaving a screen. `
       : '';
   const owner = autoOff
-    ? 'Lionscope turns it off again when the profiling session on this device stops or Lionscope stops. '
-    : 'It was on already, so Lionscope will not turn it off by itself. ';
-  return pending + owner + DONT_KEEP_NOTE;
+    ? 'Lionscope puts it back as it was when the profiling session on this device stops or Lionscope stops. '
+    : wasOn
+      ? 'It was on already, so Lionscope will not turn it off by itself. '
+      : '';
+  return failed + pending + owner + DONT_KEEP_NOTE;
 }
 
 export const setDontKeepActivitiesTool = defineTool({
   name: 'set_dont_keep_activities',
   title: "Don't keep activities",
   description:
-    "Switches Developer options' \"Don't keep activities\" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch, then the flag alone counts). If the switch fails, only the stored value is written (fallback: true, verified: false: it would apply after a reboot). What Lionscope turned on it turns off again when the device's profiling session stops or Lionscope stops (autoOff; status shows it per device). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.",
+    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch or it was on already). verified: false with destroyCheck.destroyed 0 means "not destroyed yet": Android does it at its next process-priority update. If it cannot be switched on, the call fails and nothing is changed. What Lionscope turned on it puts back as it was when the device\'s profiling session stops or Lionscope stops, and retries when the device reconnects (autoOff; status shows it per device). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
   access: 'device',
   input: z.object({
     enabled: z
@@ -347,32 +355,44 @@ export const setDontKeepActivitiesTool = defineTool({
   async run({ enabled, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
     const dontKeep = ctx.dontKeepActivities;
-    const readLive = async () => {
+    const readState = async () => {
       try {
-        return await dontKeep.live(serial);
+        return await dontKeep.state(serial);
       } catch (error) {
         throw new ToolError(
           `Could not read the activity manager's state on ${serial}: ${errorMessage(error)}`,
         );
       }
     };
-    const wasOn = await readLive();
-    const before = enabled ? await recordStates(ctx, serial) : null;
-    const failure = await dontKeep.set(serial, enabled, wasOn);
-    const live = await readLive();
-    const destroyed = before && failure === null && live ? await destroyCheck(ctx, serial, before) : null;
-    const stored = (await shell(ctx, serial, 'settings get global always_finish_activities')).trim();
-    const note = dontKeepNote(enabled, failure, destroyed, dontKeep.isOn(serial));
+    const before = await readState();
+    // Nothing to watch when it was on already: what it would destroy is gone.
+    const records = enabled && !before.live ? await recordStates(ctx, serial) : null;
+    let failure: string | null;
+    if (enabled) {
+      const outcome = await dontKeep.enable(serial, before);
+      if (outcome && !outcome.changed) {
+        throw new ToolError(
+          `Could not switch "Don't keep activities" on on ${serial} (${outcome.failure}); nothing was changed`,
+        );
+      }
+      failure = outcome?.failure ?? null;
+    } else {
+      failure = await dontKeep.disable(serial);
+    }
+    const after = await readState();
+    const destroyed =
+      records && failure === null && after.live ? await destroyCheck(ctx, serial, records) : null;
+    const note = dontKeepNote(enabled, failure, destroyed, before.live, dontKeep.isOn(serial));
     return {
       data: {
         serial,
         enabled,
-        verified: failure === null && live === enabled && (destroyed === null || destroyed.destroyed > 0),
-        activityManager: live,
+        verified:
+          failure === null && after.live === enabled && (destroyed === null || destroyed.destroyed > 0),
+        activityManager: after.live,
         destroyCheck: destroyed,
-        setting: stored === '1',
+        setting: after.stored,
         autoOff: dontKeep.isOn(serial),
-        ...(failure !== null ? { fallback: true } : {}),
         ...(note !== null ? { note } : {}),
       },
     };

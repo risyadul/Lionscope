@@ -150,7 +150,7 @@ Reproduce the three cases in turn, each time entering the state (type in the for
 2. Activity destroyed: `set_dont_keep_activities --enabled true`, then leave (HOME, or open the next screen) and
    come back (`bring_to_front`, or back from the next screen): `recreated: true`, `processRestarted: false`. Tell
    the user it is on (it affects every app), and `set_dont_keep_activities --enabled false` when you are done
-   (Lionscope also turns it off when the session stops or Lionscope stops).
+   (Lionscope also puts it back when the session stops or Lionscope stops).
 3. Process death: `simulate_process_death --package-name <pkg>` kills the backgrounded process keeping its task and
    reopens it (`oldPid`, `newPid`, `topActivity`; check `killed`, `resumed`, and that `topActivity` is the screen
    you left; `resumed: false` usually means a crash while restoring: `get_crashes`): `recreated: true`,

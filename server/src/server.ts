@@ -121,7 +121,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     route: (serial, hello, link) => manager.attachSdkOn(serial, hello, link),
     sessionPort: () => deviceGateway.address?.port ?? null,
   });
-  // "Don't keep activities" this server turned on: off again when the device's session stops or the server closes.
+  // "Don't keep activities" this server turned on: put back when the device's session stops or the server closes.
   const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
   const manager: SessionManager = new SessionManager({
     adb: options.adb,
@@ -130,6 +130,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       if (message.type === 'devices') {
         emulators.setDevices(message.devices);
         locations.setDevices(message.devices);
+        dontKeepActivities.setDevices(message.devices, () => manager.getSessionState());
       }
       if (message.type === 'session')
         dontKeepActivities.sessionChanged(message.session, () => manager.getSessionState());
@@ -315,14 +316,13 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
-      // First, while the UI helper can still switch it: "Don't keep activities" this server turned on.
-      await dontKeepActivities.close();
       // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, the emulators
       // this server booted, and the real locations of physical devices.
       await Promise.all([
         locations.close(),
         screenGateway.close(),
-        uiHelper.close(),
+        // "Don't keep activities" is put back through the UI helper (at most 5 s), so the helpers close after it.
+        dontKeepActivities.close().finally(() => uiHelper.close()),
         inspectLinks.close(),
         manager.close(),
         emulators.close(),

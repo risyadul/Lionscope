@@ -303,8 +303,9 @@ describe('set_dont_keep_activities', () => {
     });
     expect(JSON.stringify(on)).toContain('enabled: false');
     expect(calls).toEqual([true]);
-    expect(commands(adb).slice(0, 2)).toEqual([
+    expect(commands(adb).slice(0, 3)).toEqual([
       "dumpsys activity processes | grep -e '^ACTIVITY MANAGER RUNNING PROCESSES' -e '^  mAlwaysFinishActivities=true$' || true",
+      'settings get global always_finish_activities',
       'dumpsys activity activities',
     ]);
     expect(await callTool(agent.ctx, 'status', {}, true)).toMatchObject({
@@ -335,10 +336,11 @@ describe('set_dont_keep_activities', () => {
     });
   });
 
-  it('leaves a setting that was already on to the user', async () => {
-    const { agent } = dontKeepAgent({ on: true, background: false });
+  it('leaves a setting that was already on to the user, and watches nothing then', async () => {
+    const { agent, adb } = dontKeepAgent({ on: true });
     const outcome = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
-    expect(outcome).toMatchObject({ result: { verified: true, autoOff: false } });
+    expect(outcome).toMatchObject({ result: { verified: true, destroyCheck: null, autoOff: false } });
+    expect(commands(adb)).not.toContain('dumpsys activity activities');
     expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain(
       'was on already',
     );
@@ -362,34 +364,43 @@ describe('set_dont_keep_activities', () => {
     );
   }, 20_000);
 
-  it('falls back to the stored setting, unverified, when the helper fails or is missing', async () => {
-    const { agent, adb, device } = dontKeepAgent({ fail: true });
-    const outcome = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
-    expect(outcome).toMatchObject({
-      ok: true,
-      result: {
-        enabled: true,
-        verified: false,
-        activityManager: false,
-        destroyCheck: null,
-        setting: true,
-        fallback: true,
-        autoOff: true,
-      },
+  it('fails without changing anything when it cannot be switched on', async () => {
+    const { agent, adb } = dontKeepAgent({ fail: true });
+    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true)).toEqual({
+      ok: false,
+      code: 'failed',
+      error: `Could not switch "Don't keep activities" on on emulator-5554 (${HELPER_REFUSED}); nothing was changed`,
     });
-    expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain(
-      `Not verified: the activity manager could not be switched (${HELPER_REFUSED})`,
-    );
-    expect(commands(adb)).toContain('settings put global always_finish_activities 1');
-    expect(device.stored).toBe('1');
+    expect(commands(adb).some((command) => command.startsWith('settings put'))).toBe(false);
+    expect(agent.ctx.dontKeepActivities.isOn('emulator-5554')).toBe(false);
     delete agent.ctx.uiHelper;
-    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true)).toMatchObject({
-      result: { verified: false, setting: false, fallback: true, autoOff: false },
+    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('this server has no on-device helper'),
     });
     expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, false)).toMatchObject({
       ok: false,
       code: 'forbidden',
     });
+  });
+
+  it('clears the stored setting when it cannot be switched off, unverified, and keeps it marked', async () => {
+    const { agent, device } = dontKeepAgent();
+    await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
+    agent.ctx.uiHelper = {
+      setAlwaysFinish: async () => {
+        throw new UiHelperError(HELPER_REFUSED);
+      },
+    } as unknown as UiHelpers;
+    const off = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true);
+    expect(off).toMatchObject({
+      ok: true,
+      result: { verified: false, activityManager: true, setting: false, autoOff: true },
+    });
+    expect(off.ok && String((off.result as Record<string, unknown>).note)).toContain(
+      'could not be switched off',
+    );
+    expect(device.stored).toBe('0');
   });
 
   it("refuses to guess when the activity manager's dump is empty", async () => {
@@ -652,28 +663,42 @@ describe('bring_to_front', () => {
 });
 
 describe('DontKeepActivities', () => {
-  /** What the device was asked: helper switches and `settings put` values. */
-  function tracked(options: { helperFails?: boolean } = {}) {
+  /** A device with the flag and the stored setting; the helper switches both (as setAlwaysFinish does). */
+  function tracked(
+    options: { live?: boolean; stored?: boolean; helperFails?: () => boolean; hang?: () => boolean } = {},
+  ) {
+    const device = { live: options.live ?? false, stored: options.stored ?? false };
     const switches: boolean[] = [];
     const puts: string[] = [];
     const adb = new FakeAdb((args) => {
-      const put = /^settings put global always_finish_activities ([01])$/.exec(String(args.at(-1)))?.[1];
-      if (put) puts.push(put);
+      const command = String(args.at(-1));
+      if (command.startsWith('dumpsys activity processes')) return processesGrep(device.live);
+      if (command === 'settings get global always_finish_activities') return device.stored ? '1\n' : 'null\n';
+      const put = /^settings put global always_finish_activities ([01])$/.exec(command)?.[1];
+      if (put) {
+        puts.push(put);
+        device.stored = put === '1';
+      }
       return '';
     });
     const helpers = {
       setAlwaysFinish: async (_serial: string, enabled: boolean) => {
         switches.push(enabled);
-        if (options.helperFails) throw new UiHelperError(HELPER_REFUSED);
+        if (options.hang?.()) await new Promise(() => undefined);
+        if (options.helperFails?.()) throw new UiHelperError(HELPER_REFUSED);
+        device.live = enabled;
+        device.stored = enabled;
       },
     } as unknown as UiHelpers;
-    return { state: new DontKeepActivities({ adb, helpers: () => helpers }), switches, puts };
+    return { state: new DontKeepActivities({ adb, helpers: () => helpers }), device, switches, puts };
   }
   const session = (serial: string | null, status: SessionState['status']): SessionState => ({
     ...RUNNING,
     serial,
     status,
   });
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const DEVICE = { serial: 'emulator-5554', state: 'device' as const };
 
   it('reads the flag only from a real processes dump', () => {
     expect(parseAlwaysFinish(processesGrep(true))).toBe(true);
@@ -683,39 +708,81 @@ describe('DontKeepActivities', () => {
     expect(parseAlwaysFinish(`${processesGrep(false)}    mAlwaysFinishActivities=true\n`)).toBe(false);
   });
 
-  it('turns off on close only what it turned on', async () => {
-    const { state, switches } = tracked();
-    expect(await state.set('emulator-5554', true, false)).toBeNull();
-    expect(await state.set('emulator-5556', true, true)).toBeNull();
-    expect(state.isOn('emulator-5554')).toBe(true);
-    expect(state.isOn('emulator-5556')).toBe(false);
-    await state.close();
-    expect(switches).toEqual([true, true, false]);
-    expect(state.isOn('emulator-5554')).toBe(false);
+  it('puts back on close only what it switched on, as it was', async () => {
+    const off = tracked();
+    expect(await off.state.enable('emulator-5554', await off.state.state('emulator-5554'))).toBeNull();
+    expect(off.state.isOn('emulator-5554')).toBe(true);
+    await off.state.close();
+    expect(off.switches).toEqual([true, false]);
+    expect(off.device).toEqual({ live: false, stored: false });
+    expect(off.state.isOn('emulator-5554')).toBe(false);
+    // Already on (flag and setting): not Lionscope's to undo.
+    const on = tracked({ live: true, stored: true });
+    await on.state.enable('emulator-5554', await on.state.state('emulator-5554'));
+    expect(on.state.isOn('emulator-5554')).toBe(false);
+    await on.state.close();
+    expect(on.switches).toEqual([true]);
   });
 
-  it('turns it off when the device session stops, not when a new session replaces it there', async () => {
+  it('puts a stored value written without effect (settings put) back too', async () => {
+    const { state, device, puts } = tracked({ stored: true });
+    const before = await state.state('emulator-5554');
+    expect(before).toEqual({ live: false, stored: true });
+    await state.enable('emulator-5554', before);
+    expect(state.isOn('emulator-5554')).toBe(true);
+    expect(await state.restore('emulator-5554')).toBe(true);
+    expect(device).toEqual({ live: false, stored: true });
+    expect(puts).toEqual(['1']);
+  });
+
+  it('puts it back when the device session stops, not when a new session replaces it there', async () => {
     const { state, switches } = tracked();
-    await state.set('emulator-5554', true, false);
+    await state.enable('emulator-5554', { live: false, stored: false });
     let current = session('emulator-5554', 'waiting_for_process');
     state.sessionChanged(session('emulator-5554', 'idle'), () => current);
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
     expect(switches).toEqual([true]);
     current = session('emulator-5554', 'idle');
     state.sessionChanged(session('emulator-5554', 'idle'), () => current);
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    await tick();
+    await tick();
     expect(switches).toEqual([true, false]);
     expect(state.isOn('emulator-5554')).toBe(false);
   });
 
-  it('writes the stored setting when the helper cannot switch it, and still undoes it', async () => {
-    const { state, puts } = tracked({ helperFails: true });
-    expect(await state.set('emulator-5554', true, false)).toBe(HELPER_REFUSED);
-    expect(puts).toEqual(['1']);
-    await state.restore('emulator-5554');
-    expect(puts).toEqual(['1', '0']);
-    await state.restore('emulator-5554');
-    expect(puts).toEqual(['1', '0']);
+  it('keeps the device marked when putting it back fails, and retries when the device comes back', async () => {
+    let failing = false;
+    const { state, device, switches } = tracked({ helperFails: () => failing });
+    await state.enable('emulator-5554', { live: false, stored: false });
+    failing = true;
+    expect(await state.restore('emulator-5554')).toBe(false);
+    expect(state.isOn('emulator-5554')).toBe(true);
+    const idle = () => session('emulator-5554', 'error');
+    state.setDevices([DEVICE], idle);
+    await tick();
+    await tick();
+    // Listed as before: no retry yet (it only retries a device that comes back).
+    const tries = switches.length;
+    state.setDevices([DEVICE], idle);
+    await tick();
+    expect(switches).toHaveLength(tries);
+    failing = false;
+    state.setDevices([], idle);
+    state.setDevices([DEVICE], idle);
+    await tick();
+    await tick();
+    expect(device.live).toBe(false);
+    expect(state.isOn('emulator-5554')).toBe(false);
+  });
+
+  it('does not let a stuck device hold up closing', async () => {
+    let hang = false;
+    const { state } = tracked({ hang: () => hang });
+    await state.enable('emulator-5554', { live: false, stored: false });
+    hang = true;
+    const started = performance.now();
+    await state.close(100);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(state.isOn('emulator-5554')).toBe(true);
   });
 });

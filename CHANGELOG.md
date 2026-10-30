@@ -14,9 +14,10 @@ All notable changes to Lionscope are documented here. The format is based on
   Developer options' "Don't keep activities", switched the way Settings does (the activity manager's
   `setAlwaysFinish`, from a one-shot run of the UI helper's jar), so it takes effect at once; a plain
   `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
-  back and checks that the activities in the background were destroyed; if the switch fails, only the stored value
-  is written (`fallback`, unverified). What Lionscope turned on it turns off again when the device's profiling
-  session stops or Lionscope stops, and `status` shows it per device (`dontKeepActivities`).
+  back and checks that the activities in the background were destroyed; if it cannot be switched on, nothing is
+  changed. What Lionscope turned on it puts back as it was when the device's profiling session stops or Lionscope
+  stops, retrying when a device that was gone then comes back, and `status` shows it per device
+  (`dontKeepActivities`).
   `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
   `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way
   Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID, the top
