@@ -372,6 +372,8 @@ describe('UiHelpers on a device that goes away or a server that closes', () => {
     await expect(manager.dump(SERIAL, 5000)).rejects.toThrow(HELPER_OLD_API);
     expect(manager.unavailable(SERIAL)).toBe(HELPER_OLD_API);
     expect(adb.pushes).toEqual([]);
+    // type_text asks for it too, from the same reading.
+    expect(await manager.apiLevel(SERIAL, 5000)).toBe(23);
     expect(adb.commands.filter((command) => command.startsWith('getprop'))).toHaveLength(1);
   });
 

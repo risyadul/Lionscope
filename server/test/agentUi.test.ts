@@ -16,11 +16,19 @@ import { decodeEntities, MAX_UI_NODES, parseUiXml, UiXmlError } from '../src/age
 import { fakeAgent } from './helpers/agentFixtures.ts';
 import type { Json } from './helpers/agentFixtures.ts';
 import type { ExecOptions } from '../src/adb/adb.ts';
+import type { UiHelpers } from '../src/agent/uiHelper.ts';
 import { FakeAdb, fixture } from './helpers/fakes.ts';
 
 const DUMP = fixture('ui-dump.xml');
 /** The empty email field's text and id in DUMP. */
 const EMAIL = 'text="" resource-id="com.example.shop:id/email"';
+/** DUMP with the focus in the password field. */
+const PASSWORD_FOCUSED = DUMP.replace('focused="true"', 'focused="false"').replace(
+  'focused="false" scrollable="false" long-clickable="true" password="true"',
+  'focused="true" scrollable="false" long-clickable="true" password="true"',
+);
+const withEmail = (text: string) =>
+  DUMP.replace(EMAIL, `text="${text}" resource-id="com.example.shop:id/email"`);
 const SCREEN = { width: 1080, height: 2400 };
 const tree = () => buildUiTree(parseUiXml(DUMP), SCREEN);
 
@@ -187,9 +195,13 @@ function markers(command: string): string[] {
 
 /**
  * adb that answers `uiautomator dump` with the given dumps in turn (the last one repeats) and `wm size` with
- * `wmSize`; an entry 'hang' makes that dump time out.
+ * `wmSize`; an entry 'hang' makes that dump time out. With `api`, a UI helper that gives that API level (and no
+ * dumps).
  */
-function uiAgent(dumps: readonly string[], wmSize = 'Physical size: 1080x2400') {
+function uiAgent(
+  dumps: readonly string[],
+  { wmSize = 'Physical size: 1080x2400', api = undefined as number | undefined } = {},
+) {
   let dumpIndex = 0;
   const commands: string[] = [];
   const adb = new FakeAdb((args) => {
@@ -218,6 +230,13 @@ function uiAgent(dumps: readonly string[], wmSize = 'Physical size: 1080x2400') 
     return exec(args);
   };
   const agent = fakeAgent({}, { adb });
+  if (api !== undefined) {
+    agent.ctx.uiHelper = {
+      apiLevel: () => Promise.resolve(api),
+      unavailable: () => 'not in this test',
+      isRunning: () => false,
+    } as unknown as UiHelpers;
+  }
   const inputs = () => commands.filter((command) => command.startsWith('input'));
   const call = async (name: string, args: unknown): Promise<Json> => {
     const outcome = await callTool(agent.ctx, name, args, true);
@@ -505,12 +524,128 @@ describe('UI tools', () => {
     expect(result.note).toContain('not the one tapped');
   });
 
-  it('never echoes what was typed into a password field', async () => {
-    const focusedPassword = DUMP.replace('focused="true"', 'focused="false"').replace(
-      'focused="false" scrollable="false" long-clickable="true" password="true"',
-      'focused="true" scrollable="false" long-clickable="true" password="true"',
+  it('appends or replaces with ctrl keys on Android 13 and later', async () => {
+    const appended = uiAgent([withEmail('ab'), withEmail('ab'), withEmail('abcd')], { api: 34 });
+    expect(
+      await appended.call('type_text', { text: 'cd', mode: 'append', field: { id: 'email' } }),
+    ).toMatchObject({ typed: 2, field: { text: 'abcd' }, matches: true });
+    expect(appended.inputs()).toEqual([
+      'input tap 540 315',
+      'input keycombination KEYCODE_CTRL_LEFT KEYCODE_MOVE_END',
+      "input text 'cd'",
+    ]);
+    // End did not take: the text went in where the caret was.
+    const middle = uiAgent([withEmail('ab'), withEmail('ab'), withEmail('acdb')], { api: 34 });
+    expect(
+      await middle.call('type_text', { text: 'cd', mode: 'append', field: { id: 'email' } }),
+    ).toMatchObject({ matches: false });
+    const replaced = uiAgent([withEmail('old'), withEmail('old'), withEmail('new')], { api: 34 });
+    expect(
+      await replaced.call('type_text', { text: 'new', mode: 'replace', field: { id: 'email' } }),
+    ).toMatchObject({ matches: true });
+    expect(replaced.inputs()).toEqual([
+      'input tap 540 315',
+      'input keycombination KEYCODE_CTRL_LEFT KEYCODE_A',
+      'input keyevent 67',
+      "input text 'new'",
+    ]);
+    // Select all did not take: the old text is still there.
+    const kept = uiAgent([withEmail('old'), withEmail('old'), withEmail('oldnew')], { api: 34 });
+    expect(
+      await kept.call('type_text', { text: 'new', mode: 'replace', field: { id: 'email' } }),
+    ).toMatchObject({ matches: false });
+  });
+
+  it('clears a field with an empty replace, and refuses empty text otherwise', async () => {
+    const { call, inputs } = uiAgent([withEmail('old'), withEmail('old'), DUMP], { api: 34 });
+    expect(await call('type_text', { text: '', mode: 'replace', field: { id: 'email' } })).toMatchObject({
+      typed: 0,
+      field: { id: 'email' },
+      matches: true,
+    });
+    expect(inputs()).toEqual([
+      'input tap 540 315',
+      'input keycombination KEYCODE_CTRL_LEFT KEYCODE_A',
+      'input keyevent 67',
+    ]);
+    // An empty field (showing its hint) needs no keys.
+    const empty = uiAgent([DUMP.replace(EMAIL, 'text="Email" resource-id="com.example.shop:id/email"')], {
+      api: 34,
+    });
+    await empty.call('type_text', { text: '', mode: 'replace', field: { id: 'email' } });
+    expect(empty.inputs()).toEqual(['input tap 540 315']);
+    await expect(call('type_text', { text: '' })).rejects.toThrow('only clears a field, with mode replace');
+  });
+
+  it('appends or replaces only in a text field', async () => {
+    const noFocus = DUMP.replace('focused="true"', 'focused="false"');
+    const { call, inputs } = uiAgent([noFocus], { api: 34 });
+    await expect(call('type_text', { text: 'x', mode: 'replace' })).rejects.toThrow('No focused text field');
+    await expect(call('type_text', { text: 'x', mode: 'append', field: { desc: 'Search' } })).rejects.toThrow(
+      'did not take the focus',
     );
-    const { call } = uiAgent([focusedPassword]);
+    // Only the tap on the search button: no key reached the screen.
+    expect(inputs()).toEqual(['input tap 995 140']);
+    // Without field, the focused field.
+    const focused = uiAgent([withEmail('old'), withEmail('new')], { api: 34 });
+    expect(await focused.call('type_text', { text: 'new', mode: 'replace' })).toMatchObject({
+      matches: true,
+    });
+    expect(focused.inputs()).toHaveLength(3);
+  });
+
+  it('sends no key when the tapped field did not take the focus', async () => {
+    // A field that opens a picker: after the tap nothing is focused.
+    const picker = uiAgent([withEmail('Jakarta'), DUMP.replace('focused="true"', 'focused="false"')], {
+      api: 34,
+    });
+    await expect(
+      picker.call('type_text', { text: 'Bandung', mode: 'replace', field: { id: 'email' } }),
+    ).rejects.toThrow('did not take the focus');
+    expect(picker.inputs()).toEqual(['input tap 540 315']);
+    // The focus stayed in another field.
+    const other = uiAgent([withEmail('Jakarta'), PASSWORD_FOCUSED], { api: 34 });
+    await expect(
+      other.call('type_text', { text: 'x', mode: 'append', field: { id: 'email' } }),
+    ).rejects.toThrow('did not take the focus');
+    expect(other.inputs()).toEqual(['input tap 540 315']);
+  });
+
+  it('falls back to End and key-by-key deletes before Android 13', async () => {
+    const appended = uiAgent([withEmail('ab'), withEmail('ab'), withEmail('abcd')], { api: 30 });
+    await appended.call('type_text', { text: 'cd', mode: 'append', field: { id: 'email' } });
+    expect(appended.inputs()).toEqual(['input tap 540 315', 'input keyevent 123', "input text 'cd'"]);
+    // A single-line field: End, then Delete once per character.
+    const replaced = uiAgent([withEmail('ab'), withEmail('ab'), withEmail('x')], { api: 30 });
+    expect(
+      await replaced.call('type_text', { text: 'x', mode: 'replace', field: { id: 'email' } }),
+    ).toMatchObject({ matches: true });
+    expect(replaced.inputs()).toEqual(['input tap 540 315', 'input keyevent 123 67 67', "input text 'x'"]);
+    // Line breaks: the caret may be on any line, so Delete and Forward delete once per character each.
+    const lines = uiAgent([withEmail('a&#10;b'), withEmail('a&#10;b'), DUMP], { api: 30 });
+    await lines.call('type_text', { text: '', mode: 'replace', field: { id: 'email' } });
+    expect(lines.inputs()).toEqual(['input tap 540 315', 'input keyevent 67 67 67 112 112 112']);
+    const long = uiAgent([withEmail('a'.repeat(150)), withEmail('a'.repeat(150)), DUMP], { api: 30 });
+    await long.call('type_text', { text: '', mode: 'replace', field: { id: 'email' } });
+    const deletes = long.inputs().filter((command) => command.startsWith('input keyevent'));
+    expect(deletes.map((command) => command.split(' ').length - 2)).toEqual([100, 51]);
+  });
+
+  it('refuses to replace a password field key by key, before sending any key', async () => {
+    const old = uiAgent([PASSWORD_FOCUSED], { api: 30 });
+    await expect(
+      old.call('type_text', { text: 'hunter3', mode: 'replace', field: { id: 'password' } }),
+    ).rejects.toThrow('before Android 13');
+    expect(old.inputs()).toEqual(['input tap 540 465']);
+    // The version could not be read: no claim about Android 13.
+    const unknown = uiAgent([PASSWORD_FOCUSED]);
+    await expect(
+      unknown.call('type_text', { text: 'hunter3', mode: 'replace', field: { id: 'password' } }),
+    ).rejects.toThrow('Android version could not be read');
+  });
+
+  it('never echoes what was typed into a password field', async () => {
+    const { call } = uiAgent([PASSWORD_FOCUSED]);
     const result = await call('type_text', { text: 'hunter2', field: { id: 'password' } });
     expect(result).toMatchObject({ typed: 7, field: { id: 'password' }, matches: null });
     expect(result.field.flags).toContain('password');

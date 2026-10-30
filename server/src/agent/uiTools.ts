@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { MAX_SCREEN_TEXT_CHARS } from '@lionscope/protocol';
 import type { Size } from '../emulator/screenInput.ts';
 import {
+  AGENT_KEYCODES,
   input,
   INPUT,
   inputTextArgument,
@@ -43,6 +44,13 @@ const LONG_PRESS_MS = 800;
 const FOCUS_SETTLE_MS = 300;
 /** After a tap or typing, before the dump that reads the result back: the app needs a frame or two to show it. */
 const READBACK_SETTLE_MS = 300;
+/** Android 13 (API 33) is the first whose `input keycombination` holds ctrl down for the next key (ctrl+A). */
+const KEY_COMBINATION_MIN_API = 33;
+const KEYCODE_FORWARD_DEL = 112;
+const KEYCODE_MOVE_END = 123;
+/** Key codes per `input keyevent` when a field is cleared key by key: each call has its own timeout. */
+const KEYS_PER_INPUT = 100;
+const API_LEVEL_TIMEOUT_MS = 5000;
 /** After a scroll swipe, before the next dump: lets the fling settle. */
 const SCROLL_SETTLE_MS = 500;
 /** Longest a get_ui_tree / tap_element / type_text call may take, retries included. */
@@ -550,14 +558,18 @@ function fieldText(field: UiElement): string | null {
   return field.text === field.hint ? '' : (field.text ?? '');
 }
 
+type TypeMode = 'cursor' | 'append' | 'replace';
+
 /**
- * Whether the field shows what was typed: it contains it and grew by its length since `before` (or, empty
- * before, holds just it). Null when the dump can't tell, with the reason.
+ * Whether the field shows what was typed: after replace it is just that; otherwise it contains it (at the end,
+ * after append) and grew by its length since `before` (or, empty before, holds just it). Null when the dump
+ * can't tell, with the reason.
  */
 function typedMatches(
   field: UiElement,
   typed: string,
   before: string | null,
+  mode: TypeMode,
 ): { matches: boolean | null; note?: string } {
   const text = fieldText(field);
   if (text === null)
@@ -568,29 +580,114 @@ function typedMatches(
       note: `The UI tree cuts text at ${MAX_UI_TEXT_CHARS} characters: the field's text can't be compared`,
     };
   }
-  if (!text.includes(typed)) return { matches: false };
+  if (mode === 'replace') return { matches: text === typed };
+  if (!(mode === 'append' ? text.endsWith(typed) : text.includes(typed))) return { matches: false };
   // An empty field without a hint attribute in the dump showed its hint as its text before (but unchanged text
   // means nothing arrived).
-  if (before !== null)
-    return { matches: text !== before && (text.length === before.length + typed.length || text === typed) };
+  if (before !== null) {
+    const grown = mode === 'append' ? text === before + typed : text.length === before.length + typed.length;
+    return { matches: text !== before && (grown || text === typed) };
+  }
   return {
     matches: null,
     note: 'The field may have held this text before typing: pass field, so it is compared with the field as it was',
   };
 }
 
+/** The device's API level (the UI helper reads it once per device), null when unknown. */
+async function apiLevel(ctx: AgentContext, serial: string, deadline: number): Promise<number | null> {
+  const timeoutMs = Math.floor(Math.min(API_LEVEL_TIMEOUT_MS, deadline - performance.now()));
+  if (!ctx.uiHelper || timeoutMs <= 0) return null;
+  return ctx.uiHelper.apiLevel(serial, timeoutMs);
+}
+
+/**
+ * The field append or replace works on, from a fresh dump: the focused text field, which must be the tapped one
+ * (a field that opens a picker instead of the keyboard takes no focus). Refused before any key when there is none.
+ */
+async function fieldToEdit(
+  ctx: AgentContext,
+  serial: string,
+  tapped: UiElement | null,
+  deadline: number,
+): Promise<UiElement> {
+  const { tree } = await dumpUi(ctx, serial, { deadline });
+  const focused = tree.elements.find((element) => element.focused && element.editable);
+  if (tapped && !(focused && isTapped(focused, tapped, tree))) {
+    throw new ToolError(
+      'The tapped field did not take the focus (it may open a picker or another screen instead of the keyboard): no key was sent',
+    );
+  }
+  if (!focused) throw new ToolError('No focused text field to append to or replace the text of: pass field');
+  return focused;
+}
+
+/**
+ * Before typing in append or replace mode: moves the caret to the end of the field's text, or deletes it
+ * (nothing for an empty field). Android 13+ gets ctrl+End, or ctrl+A (select all) and Delete. Older versions (and
+ * a device whose version is unknown) have no ctrl: append presses End (the end of the caret's line in a multi-line
+ * field), and replace deletes as many characters as the UI tree shows, key by key: End then Delete in a
+ * single-line field, Delete and Forward delete around the caret when the text has line breaks.
+ */
+async function prepareField(
+  ctx: AgentContext,
+  serial: string,
+  mode: 'append' | 'replace',
+  field: UiElement,
+  deadline: number,
+): Promise<void> {
+  const text = fieldText(field);
+  if (text === '') return;
+  const api = await apiLevel(ctx, serial, deadline);
+  if (api !== null && api >= KEY_COMBINATION_MIN_API) {
+    if (mode === 'append') {
+      await input(ctx, serial, 'keycombination KEYCODE_CTRL_LEFT KEYCODE_MOVE_END');
+    } else {
+      await input(ctx, serial, 'keycombination KEYCODE_CTRL_LEFT KEYCODE_A');
+      await input(ctx, serial, `keyevent ${AGENT_KEYCODES.delete}`);
+    }
+    return;
+  }
+  if (mode === 'append') {
+    await input(ctx, serial, `keyevent ${KEYCODE_MOVE_END}`);
+    return;
+  }
+  if (text === null || text.length >= MAX_UI_TEXT_CHARS) {
+    const why =
+      api === null
+        ? "this device's Android version could not be read, so the text is deleted key by key"
+        : 'before Android 13 the text is deleted key by key';
+    throw new ToolError(
+      `Can't replace the text of a password field, or of one with ${MAX_UI_TEXT_CHARS} characters or more: ${why}, as many characters as the UI tree shows`,
+    );
+  }
+  const keys = text.includes('\n')
+    ? [
+        ...Array<number>(text.length).fill(AGENT_KEYCODES.delete),
+        ...Array<number>(text.length).fill(KEYCODE_FORWARD_DEL),
+      ]
+    : [KEYCODE_MOVE_END, ...Array<number>(text.length).fill(AGENT_KEYCODES.delete)];
+  for (let i = 0; i < keys.length; i += KEYS_PER_INPUT) {
+    await input(ctx, serial, `keyevent ${keys.slice(i, i + KEYS_PER_INPUT).join(' ')}`);
+  }
+}
+
 export const typeTextTool = defineTool({
   name: 'type_text',
   title: 'Type text',
-  description: `Types text into the focused field, as the keyboard would; pass field (text, id, desc or hint, like tap_element; hint keeps matching once the field has text, where get_ui_tree lists hints) to tap the field first. Printable ASCII only (not the sequence %s, which adb input types as a space), up to ${MAX_SCREEN_TEXT_CHARS} characters; use press_key enter to submit. If field matches several elements, nothing is typed and the candidates come back. Then reads the field back from a fresh dump (about ${READBACK_SETTLE_MS} ms later): field is the focused field as it is now (null with a note when there is none); with field given, sameField says whether it is the one tapped (if not, its text is left out). matches says whether the text arrived: the field contains it and grew by its length (null when that can't be told: a password field, whose text is never returned, or no field given and the text found there may have been there before). Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Types text into the focused field, as the keyboard would; pass field (text, id, desc or hint, like tap_element; hint keeps matching once the field has text, where get_ui_tree lists hints) to tap the field first. mode cursor (default) inserts at the caret, which lands where the tap landed; append moves the caret to the end first; replace deletes the field's text first, and replace with text "" just clears the field. append and replace need a focused text field: the one given must take the focus (one that opens a picker instead gets no key), else the focused one is used. Before Android 13, append reaches the end of the caret's line only (multi-line fields), and replace deletes the characters the UI tree shows, so it can't replace a password field's text, and in a multi-line field whose text wraps without line breaks it may leave part of it (matches then says false). Printable ASCII only (not the sequence %s, which adb input types as a space), up to ${MAX_SCREEN_TEXT_CHARS} characters; use press_key enter to submit. If field matches several elements, nothing is typed and the candidates come back. Then reads the field back from a fresh dump (about ${READBACK_SETTLE_MS} ms later): field is the focused field as it is now (null with a note when there is none); with field given, sameField says whether it is the one tapped (if not, its text is left out). matches says whether the text arrived: the field contains it (at the end, for append) and grew by its length, or for replace holds just it (null when that can't be told: a password field, whose text is never returned, or cursor mode without field, where the text found may have been there before). Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     text: z
       .string()
-      .min(1)
       .max(MAX_SCREEN_TEXT_CHARS)
-      .regex(PRINTABLE_ASCII, 'printable ASCII only')
-      .refine((text) => !text.includes('%s'), 'can\'t contain "%s" (adb input types it as a space)'),
+      .refine((text) => text === '' || PRINTABLE_ASCII.test(text), 'printable ASCII only')
+      .refine((text) => !text.includes('%s'), 'can\'t contain "%s" (adb input types it as a space)')
+      .describe('The text to type; "" only with mode replace, to clear the field.'),
+    mode: z
+      .enum(['cursor', 'append', 'replace'])
+      .default('cursor')
+      .describe('cursor: insert at the caret; append: at the end of the text; replace: instead of the text.'),
     field: z
       .object({ ...selectorFields, nth: z.number().int().min(1).max(100).optional() })
       .optional()
@@ -598,7 +695,9 @@ export const typeTextTool = defineTool({
     serial: optionalSerial,
   }),
   annotations: INPUT,
-  async run({ text, field, serial: requested }, ctx) {
+  async run({ text, mode, field, serial: requested }, ctx) {
+    if (text === '' && mode !== 'replace')
+      throw new ToolError('Pass the text to type (an empty text only clears a field, with mode replace)');
     const serial = targetSerial(ctx, requested);
     const deadline = performance.now() + ELEMENT_CALL_MS;
     let tapped: UiElement | null = null;
@@ -611,8 +710,13 @@ export const typeTextTool = defineTool({
       if (tapped?.editable) before = fieldText(tapped);
       await sleep(FOCUS_SETTLE_MS);
     }
+    if (mode !== 'cursor') {
+      const editing = await fieldToEdit(ctx, serial, tapped, deadline);
+      before = fieldText(editing);
+      await prepareField(ctx, serial, mode, editing, deadline);
+    }
     try {
-      await input(ctx, serial, `text ${inputTextArgument(text)}`);
+      if (text !== '') await input(ctx, serial, `text ${inputTextArgument(text)}`);
     } catch {
       // The text may be a password: it must not reach an error or a log line.
       throw new ToolError(`Typing on ${serial} failed`);
@@ -638,7 +742,7 @@ export const typeTextTool = defineTool({
     if (tapped && !isTapped(found, tapped, later)) {
       // Another field than the one tapped: its text could be what was typed, if it is a secret, so it is left out.
       const { text: _text, ...view } = elementView(later, found);
-      const { matches } = typedMatches(found, text, null);
+      const { matches } = typedMatches(found, text, null, mode);
       return {
         data: {
           ...typed,
@@ -654,7 +758,7 @@ export const typeTextTool = defineTool({
         ...typed,
         field: elementView(later, found),
         ...(tapped ? { sameField: true } : {}),
-        ...typedMatches(found, text, before),
+        ...typedMatches(found, text, before, mode),
       },
     };
   },

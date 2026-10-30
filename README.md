@@ -783,9 +783,10 @@ text: "Row 40" }` find elements by visible text or content description, resource
   nothing and returns the candidates; `nth` picks one. `tap_element` reads the element back after the tap
   (`after`, `null` when it moved or is gone; `checked` before and after for a switch, also the only one inside a
   tapped row; `screenChanged`, which content that changes on its own also sets, so `false` is the reliable
-  signal; `readBack: false` skips that dump). `type_text { text, field: { id: "email" } }` taps the
-  field first, then reads the field back (`field`, `sameField`, and `matches`: whether the text arrived). Password
-  fields never return their text.
+  signal; `readBack: false` skips that dump). `type_text { text, field: { id: "email" } }` taps the field first,
+  then reads the field back (`field`, `sameField`, and `matches`: whether the text arrived). Text goes in at the
+  caret (where the tap landed); `mode: "append"` types at the end, `mode: "replace"` instead of the field's text,
+  and `replace` with `text: ""` clears the field. Password fields never return their text.
 - **By coordinates**: `screenshot`, then `tap` / `swipe` in the screenshot's pixels. Use it where the tree
   can't see: Jetpack Compose elements get a resource id only with `Modifier.testTag` plus
   `testTagsAsResourceId = true` (otherwise use their text or content description), and WebView, canvas, game
@@ -800,9 +801,12 @@ and needs the screen to be idle; on a screen that keeps animating it fails (afte
 the screenshot route. Coordinates follow the device's current
 rotation (from `wm size` and the display rotation, never from a dialog's window): a screenshot taken before the
 screen rotated is refused instead of tapping the wrong spot, so take a new one. `type_text` takes printable
-ASCII and can't type the sequence `%s` (adb's own escape for a space). `launch_app` starts the launcher activity
-with `am start -W` and returns Android's launch time. At most two device actions run at once per device; more
-get a busy answer.
+ASCII and can't type the sequence `%s` (adb's own escape for a space). Its `append` and `replace` modes use
+ctrl+End and ctrl+A on Android 13 and later; on older versions `append` presses End (the end of the caret's line in
+a multi-line field) and `replace` deletes the characters the UI tree shows, so it can't clear a password field
+there, and in a multi-line field whose text wraps without line breaks it may leave part of the text. Unless the
+field takes the focus (one that opens a picker doesn't), they send no key. `launch_app` starts the launcher activity with `am start -W` and returns Android's launch time. At most
+two device actions run at once per device; more get a busy answer.
 
 ### From the shell
 
