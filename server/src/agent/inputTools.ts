@@ -131,10 +131,12 @@ function runScript(
 ): Promise<{ output: string; error: string | null }> {
   return new Promise((resolve) => {
     const child = ctx.adb.spawn(['-s', serial, 'shell', script]);
+    // The script reads no input: an open pipe would only be forwarded to the device shell.
+    child.stdin?.end();
     let output = '';
     let stderr = '';
     let ended = !child.stdout;
-    let exitCode: number | null | undefined;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let settled = false;
     const finish = (error: string | null) => {
       if (settled) return;
@@ -144,10 +146,12 @@ function runScript(
       resolve({ output, error });
     };
     const maybeDone = () => {
-      if (!ended || exitCode === undefined) return;
-      finish(
-        exitCode === 0 ? null : stderr.trim().slice(0, MAX_ERROR_CHARS) || `adb exited with ${exitCode}`,
-      );
+      if (!ended || exit === undefined) return;
+      const status =
+        exit.code === null
+          ? `adb was stopped (${exit.signal ?? 'by a signal'})`
+          : `adb exited with ${exit.code}`;
+      finish(exit.code === 0 ? null : stderr.trim().slice(0, MAX_ERROR_CHARS) || status);
     };
     const timer = setTimeout(() => finish(`timed out after ${Math.round(timeoutMs / 1000)} s`), timeoutMs);
     child.stdout?.setEncoding('utf8');
@@ -162,8 +166,8 @@ function runScript(
     child.stderr?.on('data', (text: string) => {
       stderr = (stderr + text).slice(-4096);
     });
-    child.on('exit', (code) => {
-      exitCode = code;
+    child.on('exit', (code, signal) => {
+      exit = { code, signal };
       maybeDone();
     });
     child.on('error', (error) => finish(error.message.slice(0, MAX_ERROR_CHARS)));
@@ -282,7 +286,7 @@ async function planSteps(
 export const runInputsTool = defineTool({
   name: 'run_inputs',
   title: 'Run a timed input sequence',
-  description: `Runs a sequence of steps on the device in one adb shell call, so their spacing is set by wait steps instead of one tool round trip per input (for races that need inputs tens of ms apart). Steps (at most ${MAX_STEPS}; waits at most ${MAX_TOTAL_WAIT_MS / 1000} s in total, and the waits plus ${INPUT_ESTIMATE_MS} ms per input at most ${SEQUENCE_BUDGET_MS / 1000} s): {type: 'tap', x, y} in screenshot pixels like tap (width / height apply to every tap step); {type: 'tap_element', text | id | desc | hint | index, exact, nth} like tap_element; {type: 'key', key} with the keys of press_key; {type: 'wait', ms}. Every tap_element is resolved before anything is sent, from one fresh UI dump, to the center of its element: a selector that matches nothing, or several without nth, fails the call with no input sent. So a tap_element must name an element already on the screen when the call starts: for one that an earlier step opens (a dialog's OK), use a tap with coordinates from a screenshot of that screen, or a separate call; otherwise a match on the current screen is tapped at its old place. Each input costs time itself (about 15-30 ms per tap on an Android 16 emulator, a key more, and more on older Android where \`input\` starts a VM) and a wait takes 5-10 ms more than asked (\`sleep\` is a process), so the actual spacing is the wait plus that: the result gives each step's end (atMs, from the start) and duration (tookMs) measured on the device, and totalMs (the end of the last step that finished). A step that fails stops the sequence (failed says which). If the sequence stops otherwise (adb drops, the time runs out), incomplete says so: the steps listed ran and later ones may have too, so check the screen before running it again. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Runs a sequence of steps on the device in one adb shell call, so their spacing is set by wait steps instead of one tool round trip per input (for races that need inputs tens of ms apart). Steps (at most ${MAX_STEPS}; waits at most ${MAX_TOTAL_WAIT_MS / 1000} s in total, and the waits plus ${INPUT_ESTIMATE_MS} ms per input at most ${SEQUENCE_BUDGET_MS / 1000} s): {type: 'tap', x, y} in screenshot pixels like tap (width / height apply to every tap step); {type: 'tap_element', text | id | desc | hint | index, exact, nth} like tap_element; {type: 'key', key} with the keys of press_key; {type: 'wait', ms}. Every tap_element is resolved before anything is sent, from one fresh UI dump, to the center of its element: a selector that matches nothing, or several without nth, fails the call with no input sent. So a tap_element must name an element already on the screen when the call starts: for one that an earlier step opens (a dialog's OK), use a tap with coordinates from a screenshot of that screen, or a separate call; otherwise a match on the current screen is tapped at its old place. Each input costs time itself (about 15-30 ms per tap on an Android 16 emulator, a key more, and more on older Android where \`input\` starts a VM) and a wait takes 5-10 ms more than asked (\`sleep\` is a process), so the actual spacing is the wait plus that: the result gives each step's end (atMs, from the start) and duration (tookMs) measured on the device, and totalMs (the end of the last step that finished). A step that fails stops the sequence (failed says which). If the sequence stops otherwise (adb drops, the time runs out), incomplete says so: the steps listed ran and later ones may have too, so check the screen before running it again; if every step ran and adb failed only afterwards, warning says so. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     steps: z
@@ -317,7 +321,9 @@ export const runInputsTool = defineTool({
       () => invalidateUi(ctx, serial),
     );
     const { ends, failed } = parseScriptOutput(output, marker, planned.length);
-    const incomplete = failed === null && (error !== null || ends.length < planned.length);
+    const incomplete = failed === null && ends.length < planned.length;
+    // Every step ran, and adb complained after the last one.
+    const warning = failed === null && !incomplete && error !== null ? error : null;
     const clocked = ends.length > 0 && ends.every((end) => end !== null);
     const results = ends.map((end, index) => {
       const step = planned[index];
@@ -359,6 +365,7 @@ export const runInputsTool = defineTool({
               },
             }
           : {}),
+        ...(warning !== null ? { warning: `Every step ran, but adb then reported: ${warning}` } : {}),
         ...(clocked || ends.length === 0
           ? {}
           : { note: 'The device shell has no clock with sub-second resolution: no timings' }),

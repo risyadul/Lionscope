@@ -813,7 +813,7 @@ gives each step's end (`atMs`, from the start) and duration (`tookMs`) as the de
 (`$EPOCHREALTIME`, Android 7.0+) measured them, and `totalMs`, the end of the last step that finished. A step that
 fails stops the sequence and is named in `failed`. If the sequence stops otherwise (adb drops, the time runs out),
 `incomplete` says why and how many steps ran; later ones may have run too, so check the screen before running it
-again.
+again. When adb fails only after every step ran, `warning` says so instead.
 
 The tree comes from Lionscope's UI helper (Android 7.0 and later): a small program the server runs on the device
 over adb that keeps one accessibility (UiAutomation) connection open, reads a screen in a few hundred ms and does

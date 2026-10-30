@@ -49,7 +49,8 @@ function dumpMarkers(command: string): string[] {
 }
 
 /** What `adb shell <script>` does: its output, then its exit code (or stderr and a code, or no end at all). */
-type ScriptRun = string | { output: string; stderr?: string; exit?: number; hang?: true };
+type ScriptRun =
+  string | { output: string; stderr?: string; exit?: number | null; signal?: NodeJS.Signals; hang?: true };
 
 /**
  * adb answering `uiautomator dump` with the given dumps in turn (the last one repeats) and running run_inputs
@@ -60,6 +61,8 @@ function inputAgent(
   run: (script: string) => ScriptRun = (script) => runScript(script),
 ) {
   const commands: string[] = [];
+  /** The `adb shell <script>` children, in order. */
+  const children: FakeChild[] = [];
   let dumpIndex = 0;
   const adb = new FakeAdb((args) => {
     const command = String(args.at(-1));
@@ -85,13 +88,15 @@ function inputAgent(
       output,
       stderr = '',
       exit = 0,
+      signal = null,
       hang = false,
     } = typeof reply === 'string' ? { output: reply } : reply;
     const child = new FakeChild();
+    children.push(child);
     setImmediate(() => {
       child.stdout.write(output);
       child.stderr.write(stderr);
-      if (!hang) child.exit(exit);
+      if (!hang) child.exit(exit, signal);
     });
     return child;
   };
@@ -103,7 +108,7 @@ function inputAgent(
     if (!outcome.ok) throw new Error(outcome.error);
     return outcome.result;
   };
-  return { agent, call, scripts, dumps };
+  return { agent, call, scripts, dumps, children };
 }
 
 describe('run_inputs script', () => {
@@ -161,7 +166,7 @@ describe('run_inputs', () => {
   });
 
   it('runs taps, element taps, keys and waits in one shell call and times each step', async () => {
-    const { call, scripts, dumps, agent } = inputAgent();
+    const { call, scripts, dumps, agent, children } = inputAgent();
     const result = await call({
       steps: [
         { type: 'tap', x: 360, y: 800 },
@@ -195,6 +200,9 @@ describe('run_inputs', () => {
       ],
     });
     expect(result.failed).toBeUndefined();
+    expect(result.incomplete).toBeUndefined();
+    // adb gets no input: its stdin is closed at once.
+    expect(children[0]?.stdin.writableEnded).toBe(true);
     // The screen changed: the next element tool dumps again.
     expect(agent.ctx.uiDumps.get('emulator-5554')?.at).toBe(-Infinity);
   });
@@ -347,6 +355,24 @@ describe('run_inputs', () => {
     expect(result.incomplete).toMatchObject({ ran: 1, of: 2, reason: 'error: device offline' });
     expect(JSON.stringify(result)).not.toContain('keyevent');
     expect(offline.agent.ctx.uiDumps.get('emulator-5554')?.at).toBe(-Infinity);
+    const killed = inputAgent([DUMP], (script) => ({
+      output: runScript(script).split('\n').slice(0, 2).join('\n'),
+      exit: null,
+      signal: 'SIGKILL',
+    }));
+    expect((await killed.call({ steps: keys })).incomplete.reason).toBe('adb was stopped (SIGKILL)');
+  });
+
+  it('warns, without incomplete, when adb fails after every step ran', async () => {
+    const late = inputAgent([DUMP], (script) => ({
+      output: runScript(script),
+      stderr: 'error: closed\n',
+      exit: 1,
+    }));
+    const result = await late.call({ steps: [{ type: 'key', key: 'back' }] });
+    expect(result).toMatchObject({ steps: [{ index: 0 }], totalMs: 25 });
+    expect(result.incomplete).toBeUndefined();
+    expect(result.warning).toBe('Every step ran, but adb then reported: error: closed');
   });
 
   it('stops waiting for a sequence that runs out of time, keeping what ran', async () => {
@@ -368,6 +394,8 @@ describe('run_inputs', () => {
     const result = await pending;
     expect(result.incomplete).toMatchObject({ ran: 1, of: 2, reason: expect.stringContaining('timed out') });
     expect(hung.agent.ctx.uiDumps.get('emulator-5554')?.at).toBe(-Infinity);
+    // The host-side adb is stopped, which also ends the script on the device.
+    expect(hung.children[0]?.killed).toBe(true);
   });
 
   it('gives no timings without a clock, and no total when nothing finished', async () => {
