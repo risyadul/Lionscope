@@ -12,6 +12,7 @@ import {
   swipeTool,
   tapTool,
 } from './deviceTools.ts';
+import { runInputsTool } from './inputTools.ts';
 import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
 import { clearLocationTool, getLocationTool, setLocationTool } from './locationTools.ts';
 import { revertViewPropertiesTool, setViewPropertyTool } from './viewEditTools.ts';
@@ -63,6 +64,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   swipeTool,
   typeTextTool,
   pressKeyTool,
+  runInputsTool,
   launchAppTool,
   stopAppTool,
   setNetworkMockTool,

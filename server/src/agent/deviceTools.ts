@@ -40,7 +40,7 @@ export const AGENT_KEYCODES = {
   dpad_right: 22,
   dpad_center: 23,
 } as const;
-type AgentKey = keyof typeof AGENT_KEYCODES;
+export type AgentKey = keyof typeof AGENT_KEYCODES;
 
 export const INPUT: ToolAnnotations = {
   readOnlyHint: false,
@@ -79,7 +79,7 @@ export function screencap(ctx: Pick<AgentContext, 'adb'>, serial: string): Promi
   });
 }
 
-const coordinateSpace = {
+export const coordinateSpace = {
   width: z
     .number()
     .int()
@@ -108,7 +108,7 @@ async function currentDisplay(ctx: AgentContext, serial: string, known: Size | u
  * Maps points from screenshot pixels to device pixels (as `input` takes them, in the current rotation). A
  * screenshot taken before the screen rotated is refused rather than mapped onto the wrong spot.
  */
-async function toDevicePoints(
+export async function toDevicePoints(
   ctx: AgentContext,
   serial: string,
   space: Partial<Size>,

@@ -114,7 +114,7 @@ export function elementView(tree: UiTree, element: UiElement, withLabel = false)
   };
 }
 
-const selectorFields = {
+export const selectorFields = {
   text: z
     .string()
     .min(1)
@@ -141,7 +141,7 @@ function describeSelector(selector: UiSelector): string {
     .join(', ');
 }
 
-function requireSelector(selector: UiSelector): void {
+export function requireSelector(selector: UiSelector): void {
   if (!hasSelector(selector)) throw new ToolError('Pass text, id, desc or hint to find the element');
 }
 
@@ -233,6 +233,45 @@ type TapOutcome =
       hint: string;
     };
 
+/** The element at `index` of the last get_ui_tree listing: checked before a dump, so a missing listing fails fast. */
+export function listedElement(ctx: AgentContext, serial: string, index: number): UiElement {
+  const listed = ctx.uiDumps.get(serial)?.listing?.elements[index];
+  if (!listed)
+    throw new ToolError('No element with that index: call get_ui_tree first (indexes belong to its listing)');
+  return listed;
+}
+
+/** The listed element in a newer dump, as long as the screen still shows it at that index. */
+export function relistedElement(tree: UiTree, listed: UiElement): UiElement {
+  const element = tree.elements[listed.index];
+  if (!element || elementSignature(element) !== elementSignature(listed)) {
+    throw new ToolError(
+      'The screen changed since get_ui_tree listed that index: list it again, or select by text, id, desc or hint',
+    );
+  }
+  return element;
+}
+
+/**
+ * The element a selector names (the nth match when given), or every match when several do and nth is not given.
+ * Throws when nothing matches.
+ */
+export function selectElement(
+  tree: UiTree,
+  target: UiSelector & { nth?: number | undefined },
+): UiElement | UiElement[] {
+  const matches = distinctTargets(tree, findElements(tree, target));
+  if (matches.length === 0) {
+    throw new ToolError(
+      `Nothing on the screen matches ${describeSelector(target)}; get_ui_tree lists what is there, scroll_to looks further down`,
+    );
+  }
+  if (matches.length > 1 && target.nth === undefined) return matches;
+  const element = matches[(target.nth ?? 1) - 1];
+  if (!element) throw new ToolError(`Only ${matches.length} elements match ${describeSelector(target)}`);
+  return element;
+}
+
 /**
  * Finds one element (by index of the last listing, or a selector) and taps the center of its visible part; with
  * readBack, then reads the screen again and returns that element as it is after the tap. `taken` is the element
@@ -250,41 +289,26 @@ export async function tapElement(
 ): Promise<{ outcome: TapOutcome; taken: UiElement | null }> {
   const deadline = performance.now() + ELEMENT_CALL_MS;
   let tree: UiTree;
-  let element: UiElement | undefined;
+  let element: UiElement;
   if (target.index !== undefined) {
-    const listed = ctx.uiDumps.get(serial)?.listing?.elements[target.index];
-    if (!listed)
-      throw new ToolError(
-        'No element with that index: call get_ui_tree first (indexes belong to its listing)',
-      );
+    const listed = listedElement(ctx, serial, target.index);
     tree = (await dumpUi(ctx, serial, { deadline })).tree;
-    element = tree.elements[target.index];
-    if (!element || elementSignature(element) !== elementSignature(listed)) {
-      throw new ToolError(
-        'The screen changed since get_ui_tree listed that index: list it again, or select by text, id, desc or hint',
-      );
-    }
+    element = relistedElement(tree, listed);
   } else {
     requireSelector(target);
     tree = await recentTree(ctx, serial, deadline);
-    const matches = distinctTargets(tree, findElements(tree, target));
-    if (matches.length === 0) {
-      throw new ToolError(
-        `Nothing on the screen matches ${describeSelector(target)}; get_ui_tree lists what is there, scroll_to looks further down`,
-      );
-    }
-    if (matches.length > 1 && target.nth === undefined) {
+    const selected = selectElement(tree, target);
+    if (Array.isArray(selected)) {
       const outcome: TapOutcome = {
         tapped: false,
         ambiguous: true,
-        matches: matches.length,
-        candidates: matches.slice(0, MAX_CANDIDATES).map((match) => elementView(tree, match, true)),
+        matches: selected.length,
+        candidates: selected.slice(0, MAX_CANDIDATES).map((match) => elementView(tree, match, true)),
         hint: 'Several elements match: pass nth (1 = first listed) or a more specific selector (exact, id).',
       };
       return { outcome, taken: null };
     }
-    element = matches[(target.nth ?? 1) - 1];
-    if (!element) throw new ToolError(`Only ${matches.length} elements match ${describeSelector(target)}`);
+    element = selected;
   }
   const at = tapPoint(element.bounds, tree.screen);
   if (!at) throw new ToolError('The element is off the screen: scroll_to it first');
