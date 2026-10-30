@@ -53,6 +53,18 @@ All notable changes to Lionscope are documented here. The format is based on
   StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
   has not seen a single request.
 
+### Security
+
+- `search_logcat` redacts credentials in log messages before it matches and cuts them: `Authorization`, `Cookie` and
+  hyphenated sensitive header lines as HTTP logging prints them (also OkHttp's `{Authorization=[Bearer …]}`),
+  `Bearer` values, `Basic` / `Token` values that look like credentials, JWTs with or without `Bearer`, JSON values,
+  XML elements and `name=value` pairs of sensitive names (also in bodies logged one line or one 4000-character chunk
+  at a time, and PKCE's `code_verifier`), OAuth `code` values (not status codes like `code=500`), values after
+  `…password:` or `…secret:`, credential-shaped values after `…token:` or `…api-key:` and after a sensitive name at
+  the start of a line (`token: abc123`), and sensitive URL parameters. A query for a credential no longer finds it,
+  and the 500-character cut can no longer split a token. Always on; the dashboard's Logcat panel still shows lines as
+  logged.
+
 ## [0.10.0] - 2026-10-27
 
 ### Added

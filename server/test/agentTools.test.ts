@@ -449,6 +449,43 @@ describe('search_logcat', () => {
   });
 });
 
+describe('search_logcat redaction', () => {
+  /** `{"alg":"none"}.{"sub":"test"}.fake-signature`: obviously not a real token. */
+  const JWT = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.fake-signature';
+  const nearCut = `${'x'.repeat(489)} ${JWT}`;
+  const agent = fakeAgent({
+    logs: [
+      logEntry(T0, { tag: 'OkHttp', message: 'Authorization: Bearer fake-opaque-token' }),
+      logEntry(T0 + 1, { tag: 'OkHttp', message: 'Cookie: sid=fake-sid; theme=dark' }),
+      logEntry(T0 + 2, { tag: 'Auth', message: `refreshed with Bearer fake-opaque-token` }),
+      logEntry(T0 + 3, { tag: 'Auth', message: `id token ${JWT}` }),
+      logEntry(T0 + 4, { tag: 'Shop', message: 'Cart loaded: 3 items' }),
+      logEntry(T0 + 5, { tag: 'Shop', message: nearCut }),
+    ],
+  });
+
+  it('redacts credentials in every returned message, before the 500-character cut', async () => {
+    const messages = (await run(agent, 'search_logcat')).lines.map(
+      (line: { message: string }) => line.message,
+    );
+    expect(messages).toEqual([
+      'Authorization: ‹redacted›',
+      'Cookie: ‹redacted›',
+      'refreshed with Bearer ‹redacted›',
+      'id token ‹redacted›',
+      'Cart loaded: 3 items',
+      `${'x'.repeat(489)} ‹redacted›`,
+    ]);
+    expect(JSON.stringify(messages)).not.toMatch(/fake-opaque|fake-sid|eyJ/);
+  });
+
+  it('matches the redacted text, so a query for a credential finds nothing', async () => {
+    expect((await run(agent, 'search_logcat', { query: 'fake-opaque' })).matched).toBe(0);
+    expect((await run(agent, 'search_logcat', { query: 'eyJhbGci' })).matched).toBe(0);
+    expect((await run(agent, 'search_logcat', { query: 'authorization' })).matched).toBe(1);
+  });
+});
+
 describe('session control', () => {
   it('starts, stops and configures sessions through the session manager', async () => {
     const agent = fakeAgent({}, { session: { ...RUNNING, status: 'idle' } });
