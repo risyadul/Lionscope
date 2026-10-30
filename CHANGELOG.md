@@ -6,6 +6,53 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
+  it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
+- `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)
+  as `get_ui_tree` lists it. Where the dump has hints, it keeps matching once the field has text, unlike `text` (an
+  empty field reports its hint as its text). Where it has none (older Android versions), it matches the text of any
+  editable field instead, so it finds an empty field by its hint but not a filled one.
+- `type_text` `mode`: `cursor` (the default, as before: text goes in at the caret, which lands where the tap
+  landed), `append` (the caret goes to the end of the text first) and `replace` (the field's text is deleted
+  first); `replace` with `text: ""` clears the field. Both need a focused text field, read from a new dump before
+  any key: the one given as `field` must have taken the focus (one that opens a picker instead gets no key), and
+  without `field` the focused one is used. An empty field gets no keys. Android 13+ gets ctrl+End, or ctrl+A and
+  Delete (`input keycombination`). Older versions, or a device whose version can't be read, have no ctrl key from
+  adb: `append` presses End, which reaches the end of the caret's line only in a multi-line field, and `replace`
+  deletes as many characters as the UI tree shows (End then Delete, or Delete and Forward delete around the caret
+  when the text has line breaks), so it refuses a password field, whose text the tree hides. In a multi-line field
+  whose text wraps without line breaks, part of it may stay (the dump does not say a field is multi-line);
+  `matches` then says `false`.
+
+### Changed
+
+- `type_text` reads the field back after typing (from a new dump, about 300 ms later): `field` is the focused field
+  as it is now, and `matches` says whether the text arrived: the field contains it and grew by its length since
+  the tap. It is `null` when that can't be told: a password field (whose text is never returned), or no `field`
+  given and the text found may have been there before. With `field`, `sameField` says whether the focused field is
+  the one tapped (also when the keyboard moved it or it was resized, as long as no other field shares its id or
+  hint); when it is not (a code field that moves the focus on, a missed tap), its text is left out. When the field can't be read, `field` is `null` and a `note` says why;
+  the text is typed all the same.
+- `tap_element` reads the tapped element back after the tap: `after` is the element from a new dump (same place,
+  package and title), or `null` with a `note` when it moved or is gone (another screen opened, the keyboard moved
+  the layout, a list item was removed and the next one took its place). `checked` gives the `before` and `after`
+  state of a switch or checkbox, the tapped one or the only one inside a tapped row (a Preference), and
+  `screenChanged` whether anything on the screen differs. Content that changes on its own (a timer, a carousel, a
+  loading list) sets it too, so `false` is the reliable signal: the tap changed nothing. `element` is still the
+  element as it was before the tap. A toggle with an id whose text shows its state (Follow / Following) is found
+  again when its checked state changed. This adds about 300 ms plus a dump (a few hundred ms with the UI helper, 1
+  to 2 s with `uiautomator`); `readBack: false` skips it.
+- The error for a selector without fields names all of them: `Pass text, id, desc or hint to find the element`.
+
+### Fixed
+
+- `get_stalls` and `get_strictmode` report the current SDK link (`sdk.connected`) and, when an empty result comes from
+  a session whose in-app SDK never linked, say that zero means "not measured"; `get_strictmode` also says so when
+  StrictMode reporting is off. `get_network` names `Lionscope.okHttpInterceptor()` when capture is on but the session
+  has not seen a single request.
+
 ### Security
 
 - `search_logcat` redacts credentials in log messages before it matches and cuts them: `Authorization`, `Cookie` and

@@ -179,7 +179,8 @@ describe('device tools', () => {
     const { agent, adb } = deviceAgent();
     await callTool(agent.ctx, 'type_text', { text: "it's 5 $HOME" }, true);
     await callTool(agent.ctx, 'press_key', { key: 'back' }, true);
-    expect(shellCommands(adb)).toEqual([
+    // type_text also reads the field back with a UI dump.
+    expect(shellCommands(adb).filter((command) => command.includes(' shell input '))).toEqual([
       `-s emulator-5554 shell input text 'it'\\''s%s5%s$HOME'`,
       '-s emulator-5554 shell input keyevent 4',
     ]);
@@ -206,6 +207,36 @@ describe('device tools', () => {
     expect(describeArgs(['-s', 'emulator-5554', 'shell', "input text 'hunter2'"])).toBe(
       '-s emulator-5554 shell input text <redacted>',
     );
+  });
+
+  it('force-stops a package without starting it, and refuses a malformed package name', async () => {
+    const { agent, adb } = deviceAgent((command) =>
+      command.startsWith('pm path') && command.includes(PKG) ? 'package:/data/app/base.apk\n' : '',
+    );
+    expect(await callTool(agent.ctx, 'stop_app', { packageName: PKG }, true)).toMatchObject({
+      ok: true,
+      result: { serial: 'emulator-5554', packageName: PKG, stopped: true },
+    });
+    expect(shellCommands(adb)).toEqual([
+      `-s emulator-5554 shell pm path ${PKG} || true`,
+      `-s emulator-5554 shell am force-stop ${PKG}`,
+    ]);
+    expect(await callTool(agent.ctx, 'stop_app', { packageName: 'com.example.typo' }, true)).toMatchObject({
+      ok: false,
+      error: 'com.example.typo is not installed on emulator-5554',
+    });
+    expect(shellCommands(adb).filter((command) => command.includes('force-stop'))).toHaveLength(1);
+    const { agent: erroring } = deviceAgent((command) =>
+      command.startsWith('pm path') ? 'Error: could not find package: com.example.shop\n' : '',
+    );
+    expect(await callTool(erroring.ctx, 'stop_app', { packageName: PKG }, true)).toMatchObject({ ok: false });
+    expect(
+      await callTool(agent.ctx, 'stop_app', { packageName: 'com.example.shop; reboot' }, true),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(await callTool(agent.ctx, 'stop_app', { packageName: PKG }, false)).toMatchObject({ ok: false });
+    expect(shellCommands(adb)).toHaveLength(3);
   });
 
   it('launches the resolved launcher activity, cold on request, and reports a missing launcher', async () => {

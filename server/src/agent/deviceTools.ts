@@ -310,6 +310,29 @@ export const launchAppTool = defineTool({
   },
 });
 
+export const stopAppTool = defineTool({
+  name: 'stop_app',
+  title: 'Stop an app',
+  description:
+    "Force-stops an app (`am force-stop`): its process is killed and its unsaved state is lost, unlike pressing HOME, which leaves it running in the background. Use it for a clean run, then launch_app. Doesn't start anything; stopping the app being profiled ends its SDK link until it is launched again. Fails if the package isn't installed. Device control.",
+  access: 'device',
+  input: z.object({ packageName: packageInput, serial: optionalSerial }),
+  annotations: INPUT,
+  async run({ packageName, serial: requested }, ctx) {
+    const serial = targetSerial(ctx, requested);
+    const options = { timeoutMs: INPUT_TIMEOUT_MS };
+    // `am force-stop` succeeds for any name; `|| true` because pm path exits 1 for a package that isn't there.
+    const path = await adbShell(ctx.adb, serial, `pm path ${packageName} || true`, options);
+    if (!/^package:/m.test(path)) throw new ToolError(`${packageName} is not installed on ${serial}`);
+    try {
+      await adbShell(ctx.adb, serial, `am force-stop ${packageName}`, options);
+      return { data: { serial, packageName, stopped: true } };
+    } finally {
+      invalidateUi(ctx, serial);
+    }
+  },
+});
+
 const avdInput = z
   .string()
   .refine(isValidAvdName, 'not an AVD name')
