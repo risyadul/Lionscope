@@ -18,9 +18,16 @@ export interface LogcatStreamOptions {
   adb: Adb;
   /** Must already be validated with isValidSerial. */
   serial: string;
-  pid: number;
+  /** Only this process's lines (`--pid`); null: every process. */
+  pid: number | null;
+  /** A logcat buffer (`-b crash`) instead of the default ones. */
+  buffer?: 'crash';
   /** laptop clock − device clock, in ms. */
   clockOffsetMs: number;
+  /** Device epoch ms to start from instead of the last lines (`historyLines`). */
+  since?: number;
+  /** Lines of history to start with when there is no `since` (default LOGCAT_HISTORY_LINES). */
+  historyLines?: number;
   /** Resume point after an unexpected exit; lines already delivered are skipped. */
   resume?: LogcatResumePoint | null;
   onEntry: (entry: LogEntry, deviceTs: number) => void;
@@ -37,14 +44,26 @@ function formatEpoch(ms: number): string {
 }
 
 /**
- * Follow `adb logcat -v epoch --pid=<pid>` and emit parsed entries until stopped. Throws if the
+ * Follow `adb logcat -v epoch [-b <buffer>] [--pid=<pid>]` and emit parsed entries until stopped. Throws if the
  * process cannot be spawned at all.
  */
 export function startLogcatStream(options: LogcatStreamOptions): LogcatStream {
-  const { adb, serial, pid, clockOffsetMs, onEntry, onExit } = options;
+  const { adb, serial, pid, buffer, since, clockOffsetMs, onEntry, onExit } = options;
   const resume = options.resume ?? null;
-  const tail = resume === null ? String(LOGCAT_HISTORY_LINES) : formatEpoch(resume.deviceTs);
-  const child = adb.spawn(['-s', serial, 'logcat', '-v', 'epoch', `--pid=${pid}`, '-T', tail]);
+  let tail = String(options.historyLines ?? LOGCAT_HISTORY_LINES);
+  if (resume !== null) tail = formatEpoch(resume.deviceTs);
+  else if (since !== undefined) tail = formatEpoch(Math.max(0, Math.round(since)));
+  const child = adb.spawn([
+    '-s',
+    serial,
+    'logcat',
+    '-v',
+    'epoch',
+    ...(buffer === undefined ? [] : ['-b', buffer]),
+    ...(pid === null ? [] : [`--pid=${pid}`]),
+    '-T',
+    tail,
+  ]);
   let stopped = false;
   let duplicatesToSkip = resume?.linesAtTs ?? 0;
 

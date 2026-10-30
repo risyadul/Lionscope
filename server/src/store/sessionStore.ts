@@ -43,6 +43,8 @@ interface StreamSpec<S extends SampleStream> {
 }
 
 const MAX_SAMPLES = 5000;
+/** Log lines kept (within the window and 8 MB); a chatty app fills this in well under the window. */
+export const MAX_LOG_ENTRIES = 5000;
 const MAX_SCREEN_SPANS = 2000;
 /**
  * Stalls / StrictMode violations: rare, but each carries a stack of up to MAX_STACK_FRAMES frames. Sized as
@@ -75,7 +77,7 @@ const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
     toMessages: (items) => items.map((sample) => ({ type: 'frames', sample })),
   },
   logs: {
-    maxItems: 5000,
+    maxItems: MAX_LOG_ENTRIES,
     byteLimit: {
       maxBytes: 8 * 1024 * 1024,
       // UTF-16 text plus a rough per-entry overhead.

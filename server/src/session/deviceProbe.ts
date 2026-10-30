@@ -7,9 +7,16 @@ export interface DeviceFacts {
   cores: number;
   /** laptop clock − device clock, in ms. */
   clockOffsetMs: number;
+  /** clockOffsetMs was measured (false: the probe failed and it is a guess of 0). */
+  clockMeasured: boolean;
 }
 
-export const DEFAULT_DEVICE_FACTS: DeviceFacts = { clkTck: 100, cores: 1, clockOffsetMs: 0 };
+export const DEFAULT_DEVICE_FACTS: DeviceFacts = {
+  clkTck: 100,
+  cores: 1,
+  clockOffsetMs: 0,
+  clockMeasured: false,
+};
 const PROBE_TIMEOUT_MS = 3000;
 
 /**
@@ -42,7 +49,9 @@ export async function probeDevice(
     const before = now();
     const deviceMs = parseDeviceEpochMs(await shell.run('date +%s%3N', PROBE_TIMEOUT_MS));
     const after = now();
-    if (deviceMs !== null) facts.clockOffsetMs = Math.round((before + after) / 2 - deviceMs);
+    if (deviceMs === null) return;
+    facts.clockOffsetMs = Math.round((before + after) / 2 - deviceMs);
+    facts.clockMeasured = true;
   });
   return facts;
 }

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '../src/log.ts';
 import { ProfilingSession } from '../src/session/profilingSession.ts';
 import type { CollectorIntervals } from '../src/session/profilingSession.ts';
+import { MAX_LOG_ENTRIES } from '../src/store/sessionStore.ts';
 import { FakeAdb, FakeDevice, fixture, framestats } from './helpers/fakes.ts';
 
 const PKG = 'com.google.android.apps.nexuslauncher';
@@ -24,6 +25,12 @@ function setup(device = new FakeDevice(), intervals?: Partial<CollectorIntervals
   const ofType = <T extends ServerMessage['type']>(type: T) =>
     messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type);
   return { adb, device, session, messages, ofType };
+}
+
+/** A `logcat -b crash -v epoch` line of AndroidRuntime from process (and thread) `pid`. */
+function crashLine(deviceMs: number, pid: number, message: string): string {
+  const ms = String(deviceMs % 1000).padStart(3, '0');
+  return `   ${Math.floor(deviceMs / 1000)}.${ms}  ${pid}  ${pid} E AndroidRuntime: ${message}\n`;
 }
 
 /** A logcat -v epoch line at device epoch ms `deviceMs`. */
@@ -356,6 +363,139 @@ describe('ProfilingSession', () => {
     session.stop();
   });
 
+  it('follows the crash buffer of every process from the session start, across PID changes', async () => {
+    const { adb, device, session } = setup();
+    await session.start();
+    const crashes = adb.crashLogcats[0];
+    expect(crashes?.args.slice(0, 8)).toEqual([
+      '-s',
+      'emulator-5554',
+      'logcat',
+      '-v',
+      'epoch',
+      '-b',
+      'crash',
+      '-T',
+    ]);
+    // From the session's start on the device clock (5 s behind here).
+    expect(Math.abs(Number(crashes?.args[8]) * 1000 - (START + device.clockSkewMs))).toBeLessThan(50);
+
+    // The app dies and comes back: its own logcat is restarted for the new PID, the crash stream is not.
+    device.pid = 2000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(adb.liveLogcats.map((entry) => entry.args[5])).toEqual(['--pid=2000']);
+    expect(adb.crashLogcats).toHaveLength(1);
+    const deviceNow = Date.now();
+    for (const line of [
+      crashLine(deviceNow, 1105, 'FATAL EXCEPTION: main'),
+      crashLine(deviceNow, 1105, `Process: ${PKG}, PID: 1105`),
+      crashLine(deviceNow, 4000, 'FATAL EXCEPTION: main'),
+      crashLine(deviceNow, 1105, 'java.lang.IllegalStateException: cart is empty'),
+      crashLine(deviceNow, 4000, 'Process: com.example.other, PID: 4000'),
+      crashLine(deviceNow, 1105, '\tat com.example.shop.CartActivity.onCreate(CartActivity.kt:42)'),
+      crashLine(deviceNow, 2000, 'FATAL EXCEPTION: main'),
+      crashLine(deviceNow, 2000, `Process: ${PKG}:remote, PID: 2000`),
+      crashLine(deviceNow, 2000, 'java.lang.OutOfMemoryError'),
+    ]) {
+      crashes?.child.stdout.write(line);
+    }
+    await vi.advanceTimersByTimeAsync(250);
+    expect(
+      session.crashes().map((crash) => [crash.pid, crash.process, crash.exception, crash.stack]),
+    ).toEqual([
+      [
+        1105,
+        PKG,
+        'java.lang.IllegalStateException',
+        ['\tat com.example.shop.CartActivity.onCreate(CartActivity.kt:42)'],
+      ],
+      [2000, `${PKG}:remote`, 'java.lang.OutOfMemoryError', []],
+    ]);
+    session.stop();
+    expect(adb.crashLogcats[0]?.child.killed).toBe(true);
+  });
+
+  it('keeps a crash after the log buffer has dropped its lines', async () => {
+    const { adb, session } = setup();
+    await session.start();
+    const deviceNow = Date.now() - 5000;
+    for (const message of ['FATAL EXCEPTION: main', `Process: ${PKG}, PID: 1105`, 'java.lang.Error: boom']) {
+      adb.liveLogcats[0]?.child.stdout.write(crashLine(deviceNow, 1105, message));
+      adb.crashLogcats[0]?.child.stdout.write(crashLine(deviceNow, 1105, message));
+    }
+    for (let i = 0; i < MAX_LOG_ENTRIES + 100; i++) {
+      adb.liveLogcats[0]?.child.stdout.write(
+        logLine(deviceNow + 1, `GET https://api.example.com/v1/items/${i}`, 'OkHttp'),
+      );
+    }
+    await vi.advanceTimersByTimeAsync(250);
+    const logs = session.snapshot().logs;
+    expect(logs).toHaveLength(MAX_LOG_ENTRIES);
+    expect(logs.some((entry) => entry.tag === 'AndroidRuntime')).toBe(false);
+    expect(session.crashes()).toEqual([
+      expect.objectContaining({ exception: 'java.lang.Error', message: 'boom' }),
+    ]);
+    session.stop();
+  });
+
+  it('resumes the crash stream after an exit without recording a crash twice', async () => {
+    const { adb, session, ofType } = setup();
+    await session.start();
+    const ts = Date.now() - 5000;
+    const block = [
+      crashLine(ts, 1105, 'FATAL EXCEPTION: main'),
+      crashLine(ts, 1105, `Process: ${PKG}, PID: 1105`),
+      crashLine(ts, 1105, 'java.lang.IllegalStateException: boom'),
+    ];
+    const first = adb.crashLogcats[0]?.child;
+    for (const line of block) first?.stdout.write(line);
+    await vi.advanceTimersByTimeAsync(0);
+    first?.exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ofType('error').map((message) => message.message)).toEqual([
+      'Crash log stream failed; restarting',
+    ]);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    const second = adb.crashLogcats[1];
+    expect(second?.args.at(-1)).toBe(`${Math.floor(ts / 1000)}.${String(ts % 1000).padStart(3, '0')}`);
+    // `-T <ts>` replays the lines at that timestamp; a whole buffer replayed (a new stream) is caught by CrashLog.
+    for (const line of block) second?.child.stdout.write(line);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(session.crashes()).toHaveLength(1);
+    session.stop();
+  });
+
+  it('starts the crash stream from the buffer end when the device clock is unknown', async () => {
+    const device = new FakeDevice();
+    const original = device.handle.bind(device);
+    device.handle = (command) => (command === 'date +%s%3N' ? 'date: unknown option\n' : original(command));
+    const { adb, session } = setup(device);
+    await session.start();
+    expect(adb.crashLogcats[0]?.args.slice(-2)).toEqual(['-T', '1']);
+    // The one line logcat replays (the end of an older crash) starts no report.
+    adb.crashLogcats[0]?.child.stdout.write(
+      crashLine(Date.now() - 60_000, 1105, '\tat com.example.Old.f(Old.kt:1)'),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(session.crashes()).toEqual([]);
+    session.stop();
+  });
+
+  it('keeps a crash whose lines were still pending when the session stopped', async () => {
+    const { adb, session } = setup();
+    await session.start();
+    const deviceNow = Date.now();
+    for (const message of ['FATAL EXCEPTION: main', `Process: ${PKG}, PID: 1105`, 'java.lang.Error: late']) {
+      adb.crashLogcats[0]?.child.stdout.write(crashLine(deviceNow, 1105, message));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    session.stop();
+    expect(session.crashes()).toEqual([
+      expect.objectContaining({ exception: 'java.lang.Error', message: 'late' }),
+    ]);
+  });
+
   it('drops logcat history older than the buffer window', async () => {
     const { adb, session, ofType } = setup();
     await session.start();
@@ -402,7 +542,8 @@ describe('ProfilingSession', () => {
     const spawn = adb.spawn.bind(adb);
     let failures = 2;
     adb.spawn = (args) => {
-      if (args.includes('logcat') && failures > 0) {
+      // The app's own logcat (the crash stream has its own error and retry).
+      if (args.includes('logcat') && !args.includes('crash') && failures > 0) {
         failures -= 1;
         throw new Error('spawn EAGAIN');
       }

@@ -116,7 +116,10 @@ export function execShellCommand(args: readonly string[]): string | null {
 export class FakeAdb implements Adb {
   readonly path = 'fake-adb';
   readonly shells: FakeShellChild[] = [];
+  /** `logcat` children of an app's process (`--pid`). */
   readonly logcats: { args: readonly string[]; child: FakeChild }[] = [];
+  /** `logcat -b crash` children (a session's crash stream), kept apart from `logcats`. */
+  readonly crashLogcats: { args: readonly string[]; child: FakeChild }[] = [];
   readonly execCalls: (readonly string[])[] = [];
   /** `reverse` / `removeReverse` calls as adb argument lists (kept apart from execCalls). */
   readonly reverseCalls: string[][] = [];
@@ -149,7 +152,7 @@ export class FakeAdb implements Adb {
   spawn(args: readonly string[]): FakeChild {
     if (args.includes('logcat')) {
       const child = new FakeChild();
-      this.logcats.push({ args, child });
+      (args.includes('crash') ? this.crashLogcats : this.logcats).push({ args, child });
       return child;
     }
     const shell = new FakeShellChild((command) => this.shellHandler(command));
