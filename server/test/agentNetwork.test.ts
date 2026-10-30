@@ -109,6 +109,13 @@ describe('network tool definitions', () => {
 });
 
 describe('get_network', () => {
+  it('names the interceptor when capture is on and nothing was ever seen', async () => {
+    const empty = fakeAgent({ http: [] }, { session: V7_SESSION, now: NOW });
+    expect((await run(empty, 'get_network')).note).toContain('Lionscope.okHttpInterceptor()');
+    expect((await run(agent(), 'get_network')).note).toBeUndefined();
+    expect((await run(agent(), 'get_network', { host: 'nowhere.example' })).note).toBeUndefined();
+  });
+
   it('lists the window’s exchanges newest first, with counts per status class', async () => {
     const result = await run(agent(), 'get_network');
     expect(result.untrusted).toBeDefined();

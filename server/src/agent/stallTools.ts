@@ -13,6 +13,7 @@ import {
   summarizeWindow,
 } from '@lionscope/protocol/insights';
 import { defineTool, READ_ONLY, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
+import type { AgentContext } from './tool.ts';
 import {
   culpritView,
   iso,
@@ -34,6 +35,18 @@ const limitInput = z
   .default(10)
   .describe(`Most rows returned (1-${MAX_ROWS}).`);
 
+const NO_SDK_NOTE =
+  'No in-app SDK is connected, and stalls and StrictMode violations come from it: zero here means not measured, not that nothing happened.';
+const STRICTMODE_OFF_NOTE =
+  'StrictMode reporting is off, so zero means not measured: turn it on with set_sdk_options { strictMode: true }.';
+
+/** The SDK link now and, for an empty result of a session whose SDK never linked, why it proves nothing. */
+function sdkView(ctx: AgentContext, empty: boolean) {
+  const connected = ctx.sessions.getSessionState().sdk?.connected === true;
+  const never = !connected && !ctx.sessions.getSdkEverLinked();
+  return { sdk: { connected }, ...(empty && never ? { note: NO_SDK_NOTE } : {}) };
+}
+
 /** The newest stall of each culprit line in the window, for its stack. */
 function newestByCulprit(
   stalls: readonly StallSample[],
@@ -53,7 +66,7 @@ function newestByCulprit(
 export const stallsTool = defineTool({
   name: 'get_stalls',
   title: 'Main-thread stalls',
-  description: `Main-thread blocks the in-app SDK watchdog caught (each at least the stall threshold, default 150 ms) in the window, as the dashboard's Stalls tab ranks them: offenders grouped by culprit line (the innermost app frame, else the innermost library frame), worst total blocked time first, with count, total/max ms and the screens they blocked; origins, the same stalls grouped by where the main-thread work came from (kind rx / coroutine / handler / frame / input / lifecycle / idle / unknown: the RxJava operator and the line that subscribed the chain, the coroutine's dispatcher, continuation and name, the posted Runnable, the Choreographer frame...), worst first; plus the newest stall events with their origin. Stalls with a debugger attached are counted apart (likely breakpoints). Pass includeStacks for each offender's newest stack and each Rx origin's subscribe stack, framework frames collapsed. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Main-thread blocks the in-app SDK watchdog caught (each at least the stall threshold, default 150 ms) in the window, as the dashboard's Stalls tab ranks them: offenders grouped by culprit line (the innermost app frame, else the innermost library frame), worst total blocked time first, with count, total/max ms and the screens they blocked; origins, the same stalls grouped by where the main-thread work came from (kind rx / coroutine / handler / frame / input / lifecycle / idle / unknown: the RxJava operator and the line that subscribed the chain, the coroutine's dispatcher, continuation and name, the posted Runnable, the Choreographer frame...), worst first; plus the newest stall events with their origin. Stalls with a debugger attached are counted apart (likely breakpoints). Pass includeStacks for each offender's newest stack and each Rx origin's subscribe stack, framework frames collapsed. sdk.connected is the SDK link now; an empty result with a note means the SDK never linked, so nothing was measured. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     window: windowInput,
@@ -78,6 +91,7 @@ export const stallsTool = defineTool({
       data: {
         untrusted: UNTRUSTED_NOTE,
         window: windowView(window),
+        ...sdkView(ctx, summary.count === 0 && summary.debuggerCount === 0),
         stallThresholdMs: ctx.sessions.getSessionState().sdk?.options?.stallThresholdMs ?? null,
         count: summary.count,
         blockedMs: round(summary.totalMs, 0),
@@ -122,7 +136,7 @@ export const stallsTool = defineTool({
 export const strictModeTool = defineTool({
   name: 'get_strictmode',
   title: 'StrictMode violations',
-  description: `StrictMode violations (disk/network on the main thread, leaked closeables, …) the in-app SDK reported in the window, grouped by violation class and culprit line, most occurrences first: violation, policy (thread/vm), culprit, occurrences, screens, the newest message and stack (framework frames collapsed). StrictMode reporting is off by default; turn it on with set_sdk_options { strictMode: true }. ${UNTRUSTED_DESCRIPTION}`,
+  description: `StrictMode violations (disk/network on the main thread, leaked closeables, …) the in-app SDK reported in the window, grouped by violation class and culprit line, most occurrences first: violation, policy (thread/vm), culprit, occurrences, screens, the newest message and stack (framework frames collapsed). StrictMode reporting is off by default; turn it on with set_sdk_options { strictMode: true }. sdk.connected is the SDK link now; a note on an empty result says nothing was measured (no SDK linked, or StrictMode off). ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({ window: windowInput, limit: limitInput }),
   annotations: READ_ONLY,
@@ -130,11 +144,18 @@ export const strictModeTool = defineTool({
     const snapshot = ctx.sessions.getSnapshot();
     const window = timeWindow(ctx, snapshot, label);
     const groups = groupStrictMode(snapshot.strictMode ?? [], window.fromTs, window.toTs);
+    const strictModeOn = ctx.sessions.getSessionState().sdk?.options?.strictMode ?? null;
+    const empty = groups.length === 0;
+    const sdk = sdkView(ctx, empty);
     return {
       data: {
         untrusted: UNTRUSTED_NOTE,
         window: windowView(window),
-        strictModeOn: ctx.sessions.getSessionState().sdk?.options?.strictMode ?? null,
+        ...sdk,
+        ...(empty && !sdk.note && ctx.sessions.getSdkEverLinked() && strictModeOn === false
+          ? { note: STRICTMODE_OFF_NOTE }
+          : {}),
+        strictModeOn,
         total: groups.length,
         violations: groups.slice(0, limit).map((group) => ({
           violation: group.violation,

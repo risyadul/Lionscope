@@ -236,6 +236,16 @@ export class ProfilingSession {
     return this.sdk.attach(hello, link, verified, proven);
   }
 
+  /** The app's SDK was linked at some point of this session, though it may have dropped since. */
+  get sdkEverLinked(): boolean {
+    return this.sdk.everLinked;
+  }
+
+  /** HTTP exchanges seen over the whole session, however many are still kept. */
+  get httpExchangesSeen(): number {
+    return this.store.http.totalSeen;
+  }
+
   /** HTTP exchanges kept (status counts them without building a snapshot). */
   get httpExchangeCount(): number {
     return this.store.http.count();
