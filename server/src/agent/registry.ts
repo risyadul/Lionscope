@@ -25,6 +25,7 @@ import {
   setNetworkMockTool,
 } from './networkTools.ts';
 import {
+  bringToFrontTool,
   getActivityInstanceTool,
   setDontKeepActivitiesTool,
   simulateProcessDeathTool,
@@ -72,6 +73,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   getActivityInstanceTool,
   setDontKeepActivitiesTool,
   simulateProcessDeathTool,
+  bringToFrontTool,
   setNetworkMockTool,
   clearNetworkMocksTool,
   setLocationTool,

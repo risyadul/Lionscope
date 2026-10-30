@@ -14,11 +14,15 @@ All notable changes to Lionscope are documented here. The format is based on
   Developer options' "Don't keep activities", switched the way Settings does (the activity manager's
   `setAlwaysFinish`, from a one-shot run of the UI helper's jar), so it takes effect at once; a plain
   `settings put` of `always_finish_activities` waits for a reboot. `verified` reads the activity manager's flag
-  back and checks that the background activities were destroyed; if the switch fails, only the stored value is
-  written (`fallback`, unverified). `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
+  back and checks that the activities in the background were destroyed; if the switch fails, only the stored value
+  is written (`fallback`, unverified). What Lionscope turned on it turns off again when the device's profiling
+  session stops or Lionscope stops, and `status` shows it per device (`dontKeepActivities`).
+  `simulate_process_death`: presses HOME, waits until the app's activity is stopped, kills the process with
   `am kill` (which keeps the task and the saved state, unlike a force-stop), and brings the task back the way
-  Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID and the top
-  activity before and after.
+  Recents does (`startActivityFromRecents`, also through the helper's jar); returns the old and new PID, the top
+  activity before and after, and whether it was resumed (false, e.g., after a crash while restoring).
+  `bring_to_front`: brings an app's task back the same way, without killing it (unlike `launch_app`, which can
+  start the launcher activity on top of the task). The activity record formats of Android 7 to 16 are read.
 - Agent tool `stop_app` (device control): force-stops an app with `am force-stop`, for a clean run without starting
   it again (`launch_app` with `cold` only stops it to start it). Its unsaved state is lost, unlike pressing HOME.
 - `hint` selector for `tap_element`, `type_text`'s `field`, `wait_for` and `scroll_to`: a field's hint (placeholder)

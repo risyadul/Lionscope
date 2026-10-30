@@ -144,14 +144,17 @@ booted, or with the user's OK). There are no power, lock or unlock keys: never t
 
 Reproduce the three cases in turn, each time entering the state (type in the form), leaving, and coming back:
 
-1. Background: `press_key home`, then `launch_app` (or Recents). Nothing is recreated: `get_activity_instance`
-   before and after gives the same `instanceId` (`recreated: false`).
+1. Background: `press_key home`, then `bring_to_front --package-name <pkg>` (the task as Recents brings it back;
+   not `launch_app`, whose `am start -n` can start the launcher activity on top). Nothing is recreated:
+   `get_activity_instance` before and after gives the same `instanceId` (`recreated: false`).
 2. Activity destroyed: `set_dont_keep_activities --enabled true`, then leave (HOME, or open the next screen) and
-   come back: `recreated: true`, `processRestarted: false`. Tell the user it is on (it affects every app), and
-   `set_dont_keep_activities --enabled false` when you are done.
+   come back (`bring_to_front`, or back from the next screen): `recreated: true`, `processRestarted: false`. Tell
+   the user it is on (it affects every app), and `set_dont_keep_activities --enabled false` when you are done
+   (Lionscope also turns it off when the session stops or Lionscope stops).
 3. Process death: `simulate_process_death --package-name <pkg>` kills the backgrounded process keeping its task and
-   reopens it (`oldPid`, `newPid`, `topActivity`; check `killed` and that `topActivity` is the screen you left):
-   `recreated: true`, `processRestarted: true`.
+   reopens it (`oldPid`, `newPid`, `topActivity`; check `killed`, `resumed`, and that `topActivity` is the screen
+   you left; `resumed: false` usually means a crash while restoring: `get_crashes`): `recreated: true`,
+   `processRestarted: true`.
 
 Call `get_activity_instance --package-name <pkg>` right before leaving and right after returning (it compares with
 its previous call), then read the field back (`get_ui_tree`) to see whether the state survived. `stop_app` is not

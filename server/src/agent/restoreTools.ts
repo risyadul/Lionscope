@@ -7,12 +7,13 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { adbShell } from '../adb/adb.ts';
+import { errorMessage } from '../log.ts';
+import { parsePidof } from '../parsers/shellValues.ts';
 import { INPUT, input, optionalSerial, targetSerial } from './deviceTools.ts';
 import { packageInput } from './sessionTools.ts';
 import { defineTool, ToolError } from './tool.ts';
 import type { AgentContext } from './tool.ts';
 import { invalidateUi } from './uiDump.ts';
-import { UiHelperError } from './uiHelper.ts';
 
 const SHELL_TIMEOUT_MS = 10_000;
 /** `dumpsys activity top` waits for every visible app to dump its activity. */
@@ -33,6 +34,18 @@ export const KILL_TIMEOUT_MS = 5000;
 const COMPONENT = /^[A-Za-z][\w.]*\/[\w.$]+$/;
 const HEX = /^[0-9a-f]{1,16}$/;
 
+/**
+ * A record line of `dumpsys activity activities`: `* Hist  #1: ActivityRecord{<hash> u0 <component> t<task>}`, with
+ * ` f}` for a finishing record (` t12 f}` up to Android 11, ` t12 f}}` from 12) and ` isExiting` from Android 12
+ * (ActivityRecord.toString, AOSP 7.0.0_r1 to 16.0.0_r1). Groups: the record, its component, task, flags.
+ */
+const HIST_LINE = /^\s*\* Hist\s+#\d+: (ActivityRecord\{\S+ u\d+ (\S+) t(\d+))((?: f\}| isExiting)*)\}?\s*$/;
+/**
+ * A record's state line (ActivityRecord.dump): `state=STOPPED stopped=true delayedResume=false …` up to Android 13
+ * (AOSP 7.0.0_r1, 9.0.0_r1, 10.0.0_r1, 12.0.0_r1, 13.0.0_r1), `state=STOPPED delayedResume=false …` from 14.
+ */
+const STATE_LINE = /^\s+state=([A-Z_]+) (?:stopped=(?:true|false) )?delayedResume=(?:true|false) /;
+
 /** One activity of `dumpsys activity top`, as the system and the app's own dump report it. */
 export interface TopActivity {
   /** package/class as the system prints it (the class may be relative: `.MainActivity`). */
@@ -46,16 +59,20 @@ export interface TopActivity {
 
 /**
  * The activities `dumpsys activity top` lists (the top activity of each visible task, the focused one last). The
- * app dumps part of each section itself, so only the system's ACTIVITY line starts a section and every value is
- * checked against its format.
+ * app dumps part of each section itself and could print lines that look like the system's: only an ACTIVITY line
+ * right after a TASK line starts a section, and every value is checked against its format. An app that forges a
+ * whole TASK and ACTIVITY pair can still misreport itself; nothing read here reaches a command.
  */
 export function parseTopActivities(dump: string): TopActivity[] {
   const activities: TopActivity[] = [];
   let current: TopActivity | null = null;
   // The activity's own lifecycle line comes first; fragments print theirs later.
   let lifecycleRead = false;
+  let previousLine = '';
   for (const line of dump.split(/\r?\n/)) {
-    const header = /^ {2}ACTIVITY (\S+) [0-9a-f]+ pid=(\d+|\(not running\))/.exec(line);
+    const afterTask = previousLine.startsWith('TASK ');
+    previousLine = line;
+    const header = afterTask ? /^ {2}ACTIVITY (\S+) [0-9a-f]+ pid=(\d+|\(not running\))/.exec(line) : null;
     if (header) {
       const [, component = '', pid = ''] = header;
       current = COMPONENT.test(component)
@@ -113,12 +130,12 @@ export interface ActivityRecordState {
 export function parseTopRecord(dump: string, packageName: string): ActivityRecordState | null {
   let record: ActivityRecordState | null = null;
   for (const line of dump.split(/\r?\n/)) {
-    // A finishing record (a trampoline activity on its way out) ends in ` f}`.
-    const hist = /^\s*\* Hist\s+#\d+: ActivityRecord\{\S+ u\d+ (\S+) t(\d+)( f)?\}/.exec(line);
+    const hist = HIST_LINE.exec(line);
     if (hist) {
       if (record) break;
-      const [, component = '', taskId = '', finishing] = hist;
-      if (!finishing && COMPONENT.test(component) && packageOf(component) === packageName) {
+      const [, , component = '', taskId = '', flags = ''] = hist;
+      // A finishing record (a trampoline activity on its way out) is not what the task shows.
+      if (!flags.includes(' f}') && COMPONENT.test(component) && packageOf(component) === packageName) {
         record = { component: fullComponent(component), taskId: Number(taskId), state: null };
       }
       continue;
@@ -126,7 +143,7 @@ export function parseTopRecord(dump: string, packageName: string): ActivityRecor
     if (!record) continue;
     // The record's fields end where the next task begins.
     if (/^\s*\* Task\{/.test(line)) break;
-    const state = /^\s+state=([A-Z_]+) delayedResume=(?:true|false) /.exec(line)?.[1];
+    const state = STATE_LINE.exec(line)?.[1];
     if (state) record.state = state;
   }
   return record;
@@ -140,10 +157,8 @@ function shell(ctx: AgentContext, serial: string, command: string, timeoutMs = S
 }
 
 /** The main process of the package, or null (`pidof` exits 1 when nothing runs). */
-export async function appPid(ctx: AgentContext, serial: string, packageName: string): Promise<number | null> {
-  const output = await shell(ctx, serial, `pidof ${packageName} || true`);
-  const first = /^\d+/.exec(output.trim())?.[0];
-  return first === undefined ? null : Number(first);
+async function appPid(ctx: AgentContext, serial: string, packageName: string): Promise<number | null> {
+  return parsePidof(await shell(ctx, serial, `pidof ${packageName} || true`));
 }
 
 async function topRecord(ctx: AgentContext, serial: string, packageName: string) {
@@ -168,7 +183,7 @@ export const getActivityInstanceTool = defineTool({
   name: 'get_activity_instance',
   title: 'Activity instance',
   description:
-    "The activity on screen (resumed) and which instance of it this is: instanceId is the Activity object's identity hash (from `dumpsys activity top`), new whenever Android recreates the activity in the same process (configuration change, \"Don't keep activities\") and unchanged when the app only went to the background and came back; pid is the app's process. A hash is unique only within one process, so recreated is also true when the process changed (process death). recreated and processRestarted compare with the previous call for the same device and app (null on the first call; recreated is also null when another activity is on top than last time). Call it before and after a scenario (HOME and back, set_dont_keep_activities, simulate_process_death, a rotation) as proof of what happened. With packageName, that app must be the one on screen. Device control.",
+    "The activity on screen (resumed) and which instance of it this is: instanceId is the Activity object's identity hash (from `dumpsys activity top`), new whenever Android recreates the activity in the same process (configuration change, \"Don't keep activities\") and unchanged when the app only went to the background and came back; pid is the app's process. A hash is unique only within one process, so recreated is also true when the process changed (process death). recreated and processRestarted compare with the previous call for the same device and app (null on the first call; recreated is also null when another activity is on top than last time). Call it before and after a scenario (HOME and back, set_dont_keep_activities, simulate_process_death, a rotation) as proof of what happened. With packageName, that app must be the one on screen; without it, the last resumed activity `dumpsys activity top` lists (with several on screen, e.g., split screen or another display, pass packageName). Device control.",
   access: 'device',
   input: z.object({
     packageName: packageInput.optional().describe('The app that must be on screen; default: whichever is.'),
@@ -226,20 +241,6 @@ export const getActivityInstanceTool = defineTool({
 });
 
 /**
- * The flag the activity manager acts on (`dumpsys activity processes` prints `mAlwaysFinishActivities=true` only
- * while it is on), not the stored setting, which a `settings put` changes without effect until a reboot.
- */
-async function alwaysFinishLive(ctx: AgentContext, serial: string): Promise<boolean> {
-  const count = await shell(
-    ctx,
-    serial,
-    'dumpsys activity processes | grep -c mAlwaysFinishActivities=true || true',
-    DUMPSYS_TIMEOUT_MS,
-  );
-  return Number(count.trim()) > 0;
-}
-
-/**
  * How long the destroy check waits. Android destroys them at its next process-priority update, which came after
  * 1 to 7 s on an idle emulator (once not within 23 s; any activity being stopped brings one at once).
  */
@@ -254,7 +255,7 @@ export function parseRecordStates(dump: string): Map<string, { state: string | n
   let current: { state: string | null; attached: boolean } | null = null;
   let appRead = false;
   for (const line of dump.split(/\r?\n/)) {
-    const hist = /^\s*\* Hist\s+#\d+: (ActivityRecord\{\S+ u\d+ \S+ t\d+)( f)?\}/.exec(line)?.[1];
+    const hist = HIST_LINE.exec(line)?.[1];
     if (hist) {
       current = { state: null, attached: false };
       records.set(hist, current);
@@ -271,7 +272,7 @@ export function parseRecordStates(dump: string): Map<string, { state: string | n
       current.attached = app !== 'null';
       appRead = true;
     }
-    const state = /^\s+state=([A-Z_]+) delayedResume=(?:true|false) /.exec(line)?.[1];
+    const state = STATE_LINE.exec(line)?.[1];
     if (state) current.state = state;
   }
   return records;
@@ -309,11 +310,32 @@ async function destroyCheck(
 const DONT_KEEP_NOTE =
   'A global developer setting for every app on this device: tell the user, and call set_dont_keep_activities { enabled: false } when you are done.';
 
+/** What the result says besides the data: why it is not verified, and what to tell the user. */
+function dontKeepNote(
+  enabled: boolean,
+  failure: string | null,
+  destroyed: { background: number; destroyed: number } | null,
+  autoOff: boolean,
+): string | null {
+  if (failure !== null) {
+    return `Not verified: the activity manager could not be switched (${failure}), so only the stored setting was written, which Android applies at the next reboot.${enabled ? ` ${DONT_KEEP_NOTE}` : ''}`;
+  }
+  if (!enabled) return null;
+  const pending =
+    destroyed?.destroyed === 0
+      ? `The flag is on, but none of the ${destroyed.background} activities in the background was destroyed within ${DESTROY_CHECK_MS / 1000} s: Android does it at its next process-priority update (leaving a screen brings one); check with get_activity_instance after leaving a screen. `
+      : '';
+  const owner = autoOff
+    ? 'Lionscope turns it off again when the profiling session on this device stops or Lionscope stops. '
+    : 'It was on already, so Lionscope will not turn it off by itself. ';
+  return pending + owner + DONT_KEEP_NOTE;
+}
+
 export const setDontKeepActivitiesTool = defineTool({
   name: 'set_dont_keep_activities',
   title: "Don't keep activities",
   description:
-    'Switches Developer options\' "Don\'t keep activities" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch, then the flag alone counts). If the switch fails, only the stored value is written (fallback: true, verified: false, effective after a reboot). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.',
+    "Switches Developer options' \"Don't keep activities\" (always_finish_activities) the way Settings does, so it takes effect at once: with it on, Android destroys every activity as soon as it is no longer visible (HOME, or opening the next screen), and the app must restore it from its saved state when the user comes back. A plain `settings put` changes only the stored value, which the system reads at boot. verified: the activity manager reports the new state (`dumpsys activity processes`) and, when turning it on, activities that were in the background with their process were destroyed (destroyCheck; null when there were none to watch, then the flag alone counts). If the switch fails, only the stored value is written (fallback: true, verified: false: it would apply after a reboot). What Lionscope turned on it turns off again when the device's profiling session stops or Lionscope stops (autoOff; status shows it per device). Use get_activity_instance before and after to see an activity recreated. A global developer setting for every app on the device: tell the user you turned it on, and turn it off (enabled: false) when you are done. Device control.",
   access: 'device',
   input: z.object({
     enabled: z
@@ -324,47 +346,96 @@ export const setDontKeepActivitiesTool = defineTool({
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async run({ enabled, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
-    const before = enabled ? await recordStates(ctx, serial) : null;
-    let failure: string | null = ctx.uiHelper ? null : 'this server has no on-device helper';
-    if (ctx.uiHelper) {
+    const dontKeep = ctx.dontKeepActivities;
+    const readLive = async () => {
       try {
-        await ctx.uiHelper.setAlwaysFinish(serial, enabled, HELPER_RUN_TIMEOUT_MS);
+        return await dontKeep.live(serial);
       } catch (error) {
-        if (!(error instanceof UiHelperError)) throw error;
-        failure = error.message;
+        throw new ToolError(
+          `Could not read the activity manager's state on ${serial}: ${errorMessage(error)}`,
+        );
       }
-    }
-    if (failure !== null) {
-      // The stored value at least: Android reads it at the next boot.
-      await shell(ctx, serial, `settings put global always_finish_activities ${enabled ? 1 : 0}`);
-    }
-    const live = await alwaysFinishLive(ctx, serial);
+    };
+    const wasOn = await readLive();
+    const before = enabled ? await recordStates(ctx, serial) : null;
+    const failure = await dontKeep.set(serial, enabled, wasOn);
+    const live = await readLive();
     const destroyed = before && failure === null && live ? await destroyCheck(ctx, serial, before) : null;
     const stored = (await shell(ctx, serial, 'settings get global always_finish_activities')).trim();
-    const verified = failure === null && live === enabled && (destroyed === null || destroyed.destroyed > 0);
+    const note = dontKeepNote(enabled, failure, destroyed, dontKeep.isOn(serial));
     return {
       data: {
         serial,
         enabled,
-        verified,
+        verified: failure === null && live === enabled && (destroyed === null || destroyed.destroyed > 0),
         activityManager: live,
         destroyCheck: destroyed,
         setting: stored === '1',
-        ...(failure !== null
-          ? {
-              fallback: true,
-              note: `The activity manager could not be switched (${failure}): only the stored setting was written, which Android reads at the next reboot. ${enabled ? DONT_KEEP_NOTE : ''}`.trim(),
-            }
-          : enabled
-            ? {
-                note:
-                  destroyed?.destroyed === 0
-                    ? `The flag is on, but none of the ${destroyed.background} activities in the background was destroyed within ${DESTROY_CHECK_MS / 1000} s: Android does it at its next process-priority update (leaving a screen brings one); check with get_activity_instance after leaving a screen. ${DONT_KEEP_NOTE}`
-                    : DONT_KEEP_NOTE,
-              }
-            : {}),
+        autoOff: dontKeep.isOn(serial),
+        ...(failure !== null ? { fallback: true } : {}),
+        ...(note !== null ? { note } : {}),
       },
     };
+  },
+});
+
+/** How long a reopened app gets to have its top activity resumed (in a new process, from its saved state). */
+const RETURN_TIMEOUT_MS = 15_000;
+
+/** Start results of ActivityManager: 0 to 99 are successes (2 = START_TASK_TO_FRONT), 100+ and negatives not. */
+function startSucceeded(result: number): boolean {
+  return Number.isInteger(result) && result >= 0 && result < 100;
+}
+
+/**
+ * Brings the task back the way Recents does (startActivityFromRecents, through the UI helper) and waits until its
+ * top activity is resumed. The launcher intent would add an activity on top of a task whose root intent differs from
+ * it (one started by `am start -n`, launch_app included). Throws when the system refused.
+ */
+async function bringBack(ctx: AgentContext, serial: string, packageName: string, taskId: number) {
+  if (!ctx.uiHelper) throw new ToolError('this server has no on-device helper');
+  const startResult = await ctx.uiHelper.taskToFront(serial, taskId, HELPER_RUN_TIMEOUT_MS);
+  if (!startSucceeded(startResult))
+    throw new ToolError(`the system refused it (start result ${startResult})`);
+  const resumed = await poll(RETURN_TIMEOUT_MS, async () => {
+    const record = await topRecord(ctx, serial, packageName);
+    return record?.state === 'RESUMED' ? record : null;
+  });
+  return { resumed: resumed !== null, after: resumed ?? (await topRecord(ctx, serial, packageName)) };
+}
+
+/** Said when the app did not come back: the usual reason is a crash while restoring. */
+const NOT_RESUMED_NOTE = `The activity was not resumed within ${RETURN_TIMEOUT_MS / 1000} s: did the app crash while restoring its state? See get_crashes.`;
+
+export const bringToFrontTool = defineTool({
+  name: 'bring_to_front',
+  title: 'Bring an app back',
+  description:
+    "Brings an app's existing task back to the screen the way Recents does: the activity that was on top comes back (recreated from its saved state if it or its process was destroyed meanwhile) and nothing is added to the task. Unlike launch_app (`am start -n`), which can start the launcher activity on top of a task the user opened from the home screen. Use it to return to an app after HOME in restore scenarios. Returns the top activity and whether it was resumed (false: see get_crashes). Device control.",
+  access: 'device',
+  input: z.object({ packageName: packageInput, serial: optionalSerial }),
+  annotations: INPUT,
+  async run({ packageName, serial: requested }, ctx) {
+    const serial = targetSerial(ctx, requested);
+    const before = await topRecord(ctx, serial, packageName);
+    if (!before) throw new ToolError(`${packageName} has no task on ${serial}: open it with launch_app`);
+    try {
+      const { resumed, after } = await bringBack(ctx, serial, packageName, before.taskId);
+      return {
+        data: {
+          serial,
+          packageName,
+          topActivity: after?.component ?? null,
+          resumed,
+          sameTask: after !== null && after.taskId === before.taskId,
+          ...(resumed ? {} : { note: NOT_RESUMED_NOTE }),
+        },
+      };
+    } catch (error) {
+      throw new ToolError(`Could not bring ${packageName} back on ${serial}: ${errorMessage(error)}`);
+    } finally {
+      invalidateUi(ctx, serial);
+    }
   },
 });
 
@@ -372,7 +443,7 @@ export const simulateProcessDeathTool = defineTool({
   name: 'simulate_process_death',
   title: 'Simulate process death',
   description:
-    "Kills an app's process the way Android does to a backgrounded app that needs its memory, keeping its task and saved state: presses HOME if the app is on screen, waits until its activity is stopped (state saved), runs `am kill`, checks the process is gone, then (unless reopen: false) brings the task back like Recents does, so the activity that was on top is recreated from its saved state in a new process. Returns oldPid, newPid, killed, reopened, and topActivity before and after. killed is false when the process survived (`am kill` spares a process with a foreground service or one another visible app uses). Unlike stop_app (a force-stop, which discards the saved state and the task). Killing the app being profiled ends its SDK link until it runs again. Device control.",
+    "Kills an app's process the way Android does to a backgrounded app that needs its memory, keeping its task and saved state: presses HOME if the app is on screen, waits until its activity is stopped (state saved), runs `am kill`, checks the process is gone, then (unless reopen: false) brings the task back like Recents does, so the activity that was on top is recreated from its saved state in a new process. Returns oldPid, newPid, killed, reopened, resumed (false: the activity did not come back, e.g. a crash while restoring; see get_crashes), and topActivity before and after. killed is false when the process survived (`am kill` spares a process with a foreground service or one another visible app uses). Unlike stop_app (a force-stop, which discards the saved state and the task). Killing the app being profiled ends its SDK link until it runs again. Device control.",
   access: 'device',
   input: z.object({
     packageName: packageInput,
@@ -382,8 +453,7 @@ export const simulateProcessDeathTool = defineTool({
   annotations: INPUT,
   async run({ packageName, reopen, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
-    const helper = ctx.uiHelper;
-    if (reopen && !helper) {
+    if (reopen && !ctx.uiHelper) {
       throw new ToolError('This server cannot bring a task back (no on-device helper): pass reopen: false');
     }
     const path = await shell(ctx, serial, `pm path ${packageName} || true`);
@@ -410,7 +480,7 @@ export const simulateProcessDeathTool = defineTool({
           await shell(ctx, serial, `am kill ${packageName}`);
           return (await appPid(ctx, serial, packageName)) === oldPid ? null : true;
         })) ?? false;
-      if (!reopen || !helper) {
+      if (!reopen) {
         return {
           data: {
             serial,
@@ -419,29 +489,22 @@ export const simulateProcessDeathTool = defineTool({
             newPid: null,
             killed,
             reopened: false,
+            resumed: null,
             previousTopActivity: before.component,
             topActivity: null,
             sameTask: null,
           },
         };
       }
-      // Recents' way: the task comes back as it is. The launcher intent would add an activity on top of a task
-      // whose root intent differs from it (one started by `am start -n`, launch_app included).
+      let back: Awaited<ReturnType<typeof bringBack>>;
       try {
-        const result = await helper.taskToFront(serial, stopped.taskId, HELPER_RUN_TIMEOUT_MS);
-        if (!(result >= 0)) throw new UiHelperError(`the start failed (${result})`);
+        back = await bringBack(ctx, serial, packageName, stopped.taskId);
       } catch (error) {
-        if (!(error instanceof UiHelperError)) throw error;
         throw new ToolError(
-          `${packageName} was ${killed ? 'killed' : 'not killed'} (pid ${oldPid}), but its task could not be brought back: ${error.message}; open it from Recents`,
+          `${packageName} was ${killed ? 'killed' : 'not killed'} (pid ${oldPid}), but its task could not be brought back: ${errorMessage(error)}; open it from Recents`,
         );
       }
-      // The activity is started again in a new process: wait until it is resumed.
-      const after =
-        (await poll(BACKGROUND_TIMEOUT_MS, async () => {
-          const record = await topRecord(ctx, serial, packageName);
-          return record?.state === 'RESUMED' ? record : null;
-        })) ?? (await topRecord(ctx, serial, packageName));
+      const { resumed, after } = back;
       return {
         data: {
           serial,
@@ -450,9 +513,11 @@ export const simulateProcessDeathTool = defineTool({
           newPid: await appPid(ctx, serial, packageName),
           killed,
           reopened: true,
+          resumed,
           previousTopActivity: before.component,
           topActivity: after?.component ?? null,
           sameTask: after !== null && after.taskId === before.taskId,
+          ...(resumed ? {} : { note: NOT_RESUMED_NOTE }),
         },
       };
     } finally {

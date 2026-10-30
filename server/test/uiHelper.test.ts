@@ -12,6 +12,7 @@ import {
   HELPER_CLOSED,
   HELPER_CRASHED,
   HELPER_FAILED,
+  HELPER_NO_RUN,
   HELPER_REFUSED,
   HELPER_OLD_API,
   HELPER_OLD_JAR_API,
@@ -493,6 +494,38 @@ describe("the helper's one-shot always-finish run", () => {
         command.endsWith(`${UI_HELPER_MAIN} task-to-front 125 2>/dev/null || true`),
       ),
     ).toBe(true);
+    expect(adb.removals).toHaveLength(1);
+  });
+
+  it("runs one device's one-shot commands in turn, so the last switch wins", async () => {
+    const adb = new FakeHelperAdb({});
+    const base = adb.execHandler;
+    const finished: string[] = [];
+    adb.execHandler = async (args) => {
+      const command = String(args.at(-1));
+      const value = / always-finish ([01]) /.exec(command)?.[1];
+      if (value === undefined) return base(args);
+      // The first switch is slow: run at once, the second would finish first.
+      if (value === '1') await new Promise((resolve) => setTimeout(resolve, 50));
+      finished.push(value);
+      return `OK always-finish ${value}\n`;
+    };
+    const manager = helpers(adb);
+    await Promise.all([
+      manager.setAlwaysFinish(SERIAL, true, 5000),
+      manager.setAlwaysFinish(SERIAL, false, 5000),
+    ]);
+    expect(finished).toEqual(['1', '0']);
+  });
+
+  it('turns an adb failure into a helper error, and still removes the jar', async () => {
+    const adb = new FakeHelperAdb({});
+    const base = adb.execHandler;
+    adb.execHandler = (args) => {
+      if (String(args.at(-1)).includes('app_process')) throw new Error('adb: device offline');
+      return base(args);
+    };
+    await expect(helpers(adb).taskToFront(SERIAL, 12, 5000)).rejects.toThrow(HELPER_NO_RUN);
     expect(adb.removals).toHaveLength(1);
   });
 

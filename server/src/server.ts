@@ -7,6 +7,7 @@ import type { Adb } from './adb/adb.ts';
 import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
 import { dumpUi, parseTopPackage, TOP_ACTIVITY_COMMAND } from './agent/uiDump.ts';
+import { DontKeepActivities } from './agent/dontKeepActivities.ts';
 import { UiHelpers } from './agent/uiHelper.ts';
 import type { AgentBaseContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
@@ -120,6 +121,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     route: (serial, hello, link) => manager.attachSdkOn(serial, hello, link),
     sessionPort: () => deviceGateway.address?.port ?? null,
   });
+  // "Don't keep activities" this server turned on: off again when the device's session stops or the server closes.
+  const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
   const manager: SessionManager = new SessionManager({
     adb: options.adb,
     broadcast: (message) => {
@@ -128,6 +131,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         emulators.setDevices(message.devices);
         locations.setDevices(message.devices);
       }
+      if (message.type === 'session')
+        dontKeepActivities.sessionChanged(message.session, () => manager.getSessionState());
       gateway?.broadcast(message);
     },
     devicePollMs: options.devicePollMs,
@@ -180,6 +185,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     uiDumps: new Map(),
     activityInstances: new Map(),
     uiHelper,
+    dontKeepActivities,
     deviceCalls: new Map(),
   };
   const agentHttp = createAgentHttp({
@@ -309,6 +315,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
+      // First, while the UI helper can still switch it: "Don't keep activities" this server turned on.
+      await dontKeepActivities.close();
       // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, the emulators
       // this server booted, and the real locations of physical devices.
       await Promise.all([

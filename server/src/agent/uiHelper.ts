@@ -63,6 +63,7 @@ export const HELPER_OLD_API = `it needs Android 7.0 (API ${UI_HELPER_MIN_API}) o
 export const UI_HELPER_MIN_JAR_API = 23;
 export const HELPER_OLD_JAR_API = `it needs Android 6.0 (API ${UI_HELPER_MIN_JAR_API}) or later`;
 export const HELPER_REFUSED = 'the system did not accept the request';
+export const HELPER_NO_RUN = 'adb could not run it (device gone, or no answer in time)';
 
 export function resolveUiHelperJar(
   moduleUrl: string = import.meta.url,
@@ -422,17 +423,29 @@ export class UiHelpers {
 
   /**
    * One run of the helper with a one-shot command, answered by `OK <command> <value>` (the value is returned). It
-   * connects no UiAutomation, so it neither waits for nor disturbs a running helper. The jar is pushed under a
-   * fresh name and removed again.
+   * connects no UiAutomation, but runs in turn with the device's other helper requests, so two switches of the same
+   * setting end in the order they were asked for. The jar is pushed under a fresh name and removed again.
    */
-  private async runOnce(
+  private runOnce(
     serial: string,
     command: 'always-finish' | 'task-to-front',
     value: string,
     timeoutMs: number,
   ): Promise<string> {
-    if (this.closed) throw new UiHelperError(HELPER_CLOSED);
+    if (this.closed) return Promise.reject(new UiHelperError(HELPER_CLOSED));
     const deadline = performance.now() + timeoutMs;
+    return this.serialized(serial, () => this.runOnceNow(serial, command, value, deadline));
+  }
+
+  private async runOnceNow(
+    serial: string,
+    command: string,
+    value: string,
+    deadline: number,
+  ): Promise<string> {
+    if (this.closed) throw new UiHelperError(HELPER_CLOSED);
+    const timeoutMs = deadline - performance.now();
+    if (timeoutMs <= 0) throw new UiHelperError(HELPER_TIMEOUT);
     const api = await this.apiLevel(serial, timeoutMs);
     if (api !== null && api < UI_HELPER_MIN_JAR_API) throw new UiHelperError(HELPER_OLD_JAR_API);
     const jar = await readVerifiedHelperJar(
@@ -448,7 +461,10 @@ export class UiHelpers {
         serial,
         `CLASSPATH=${devicePath} app_process / ${UI_HELPER_MAIN} ${command} ${value} 2>/dev/null || true`,
         { timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) },
-      );
+      ).catch((error: unknown) => {
+        log.warn(`UI helper ${command} on ${serial}: ${errorMessage(error)}`);
+        throw new UiHelperError(HELPER_NO_RUN);
+      });
       const prefix = `OK ${command} `;
       const answer = output.split(/\r?\n/).find((line) => line.startsWith(prefix));
       if (answer === undefined) throw new UiHelperError(HELPER_REFUSED);

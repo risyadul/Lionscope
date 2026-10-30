@@ -97,8 +97,22 @@ describe('status and apps', () => {
       deviceControl: true,
     });
     expect(status.devices).toEqual([
-      { serial: 'emulator-5554', model: 'sdk_gphone64', state: 'device', kind: 'emulator', canMirror: true },
-      { serial: 'R58M123ABC', model: null, state: 'unauthorized', kind: 'physical', canMirror: false },
+      {
+        serial: 'emulator-5554',
+        model: 'sdk_gphone64',
+        state: 'device',
+        kind: 'emulator',
+        canMirror: true,
+        dontKeepActivities: false,
+      },
+      {
+        serial: 'R58M123ABC',
+        model: null,
+        state: 'unauthorized',
+        kind: 'physical',
+        canMirror: false,
+        dontKeepActivities: false,
+      },
     ]);
     expect(status.session).toMatchObject({
       status: 'running',

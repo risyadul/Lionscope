@@ -32,7 +32,7 @@ Options:
   --allow-device-control  Offer the device tools (get_ui_tree, inspect_screen, tap_element, wait_for,
                           scroll_to, screenshot, tap, swipe, type_text, press_key, launch_app,
                           stop_app, get_activity_instance, set_dont_keep_activities,
-                          simulate_process_death, set_network_mock, clear_network_mocks, set_location,
+                          simulate_process_death, bring_to_front, set_network_mock, clear_network_mocks, set_location,
                           clear_location, boot_emulator, shutdown_emulator) to this client
   --allow-network-bodies  Let this client read captured HTTP body texts (get_network_request)
   -h, --help              Show this help

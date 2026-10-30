@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { SessionState } from '@lionscope/protocol';
+import { DontKeepActivities, parseAlwaysFinish } from '../src/agent/dontKeepActivities.ts';
 import { callTool } from '../src/agent/registry.ts';
 import {
   fullComponent,
@@ -8,7 +10,7 @@ import {
 } from '../src/agent/restoreTools.ts';
 import type { UiHelpers } from '../src/agent/uiHelper.ts';
 import { HELPER_REFUSED, UiHelperError } from '../src/agent/uiHelper.ts';
-import { fakeAgent, PKG } from './helpers/agentFixtures.ts';
+import { fakeAgent, PKG, RUNNING } from './helpers/agentFixtures.ts';
 import { FakeAdb } from './helpers/fakes.ts';
 
 /** `dumpsys activity top` (API 36): one section per visible task's top activity, the focused one last. */
@@ -58,6 +60,30 @@ function recordsDump(state: string, pid: number | null, taskId = 111): string {
   ].join('\n');
 }
 
+/**
+ * The same records as Android 7 to 13 print them (ActivityRecord.dump/toString, AOSP 7.0.0_r1, 9.0.0_r1,
+ * 10.0.0_r1, 12.0.0_r1, 13.0.0_r1): a `stopped=` field before `delayedResume=`, a hex hash, and a finishing record
+ * ending in ` f}` up to Android 11 (` f}}` from 12).
+ */
+function legacyRecordsDump(state: string, pid: number | null, api: 9 | 13): string {
+  const finishingEnd = api >= 12 ? 'f}}' : 'f}';
+  return [
+    'ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)',
+    'Display #0 (activities from top to bottom):',
+    `  Stack #12: type=standard mode=fullscreen`,
+    `    * TaskRecord{5d2e8a1 #12 A=${PKG} U=0 StackId=12 sz=3}`,
+    `      * Hist #2: ActivityRecord{8f1c2a u0 ${PKG}/.MainActivity t12 ${finishingEnd}`,
+    '          state=PAUSED stopped=false delayedResume=false finishing=true',
+    `      * Hist #1: ActivityRecord{3b4c5d u0 ${PKG}/.checkout.CheckoutActivity t12}`,
+    `          app=${pid === null ? 'null' : `ProcessRecord{2bb47aa ${pid}:${PKG}/u0a151}`}`,
+    `          state=${state} stopped=${state === 'STOPPED'} delayedResume=false finishing=false`,
+    `      * Hist #0: ActivityRecord{6e7f80 u0 ${PKG}/.MainActivity t12 isExiting}`,
+    '          app=ProcessRecord{2bb47aa 9999:com.example.shop/u0a151}',
+    '          state=STOPPED stopped=true delayedResume=false finishing=false',
+    '',
+  ].join('\n');
+}
+
 describe('restore scenario parsers', () => {
   it('reads each top activity, its instance, window and pid from dumpsys activity top', () => {
     expect(parseTopActivities(topDump({ local: 'ac7f4ab', decor: 'c1847fd', pid: 2134 }))).toEqual([
@@ -75,8 +101,16 @@ describe('restore scenario parsers', () => {
       },
     ]);
     expect(parseTopActivities(topDump({ local: 'ac7f4ab', decor: 'c1847fd', pid: null }))[1]?.pid).toBeNull();
-    // Only the system's own ACTIVITY line (two spaces in) starts a section.
+    // Only an ACTIVITY line right after a TASK line starts a section: an app printing one in its own dump does not.
     expect(parseTopActivities('    ACTIVITY com.evil/.Fake 1 pid=1\n')).toEqual([]);
+    const forged = topDump({ local: 'ac7f4ab', decor: 'c1847fd', pid: 2134 }).replace(
+      '    Active Fragments:',
+      '  ACTIVITY com.evil/.Fake 1 pid=1\n    Local Activity 2 State:\n      mResumed=true mStopped=false',
+    );
+    expect(parseTopActivities(forged).map((activity) => activity.component)).toEqual([
+      'com.android.launcher/.Launcher',
+      `${PKG}/.checkout.CheckoutActivity`,
+    ]);
     expect(parseTopActivities('')).toEqual([]);
   });
 
@@ -109,6 +143,19 @@ describe('restore scenario parsers', () => {
       state: 'DESTROYED',
       attached: false,
     });
+    // Android 7 to 13: the `stopped=` field, finishing (` f}` / ` f}}`) and isExiting records.
+    for (const api of [9, 13] as const) {
+      expect(parseTopRecord(legacyRecordsDump('STOPPED', 4321, api), PKG)).toEqual({
+        component: `${PKG}/${PKG}.checkout.CheckoutActivity`,
+        taskId: 12,
+        state: 'STOPPED',
+      });
+      expect([...parseRecordStates(legacyRecordsDump('STOPPING', 4321, api)).values()]).toEqual([
+        { state: 'PAUSED', attached: false },
+        { state: 'STOPPING', attached: true },
+        { state: 'STOPPED', attached: true },
+      ]);
+    }
     expect(fullComponent('com.example.shop/com.example.lib.Screen')).toBe(
       'com.example.shop/com.example.lib.Screen',
     );
@@ -194,20 +241,30 @@ describe('get_activity_instance', () => {
   });
 });
 
+/** `dumpsys activity processes` as the tools filter it on the device: the header, and the flag's line while on. */
+function processesGrep(on: boolean): string {
+  return `ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n${on ? '  mAlwaysFinishActivities=true\n' : ''}`;
+}
+
 describe('set_dont_keep_activities', () => {
   /**
    * A device whose helper switches the flag (unless `fail`); with the flag on, the shop's stopped CheckoutActivity
-   * (in the background with its process) is destroyed, unless `keeps`.
+   * (in the background with its process) is destroyed, unless `keeps`. `api` picks the record format.
    */
-  function dontKeepAgent(options: { fail?: boolean; keeps?: boolean; background?: boolean } = {}) {
-    const device = { live: false, stored: '0', destroyed: false };
+  function dontKeepAgent(
+    options: { fail?: boolean; keeps?: boolean; background?: boolean; on?: boolean; api?: 13 | 36 } = {},
+  ) {
+    const device = { live: options.on ?? false, stored: options.on ? '1' : '0', destroyed: false };
     const calls: boolean[] = [];
     const adb = new FakeAdb((args) => {
       const command = String(args.at(-1));
-      if (command.startsWith('dumpsys activity processes')) return device.live ? '1\n' : '0\n';
+      if (command.startsWith('dumpsys activity processes')) return processesGrep(device.live);
       if (command === 'dumpsys activity activities') {
         if (options.background === false) return 'Display #0 (activities from top to bottom):\n';
-        return device.destroyed ? recordsDump('DESTROYED', null) : recordsDump('STOPPED', 4321);
+        const [state, pid] = device.destroyed ? ['DESTROYED', null] : ['STOPPED', 4321];
+        return options.api === 13
+          ? legacyRecordsDump(String(state), pid as number | null, 13)
+          : recordsDump(String(state), pid as number | null);
       }
       if (command === 'settings get global always_finish_activities') return `${device.stored}\n`;
       const put = /^settings put global always_finish_activities ([01])$/.exec(command)?.[1];
@@ -241,18 +298,51 @@ describe('set_dont_keep_activities', () => {
         // Both stopped activities had their process; the fake destroys CheckoutActivity only.
         destroyCheck: { background: 2, destroyed: 1 },
         setting: true,
+        autoOff: true,
       },
     });
     expect(JSON.stringify(on)).toContain('enabled: false');
     expect(calls).toEqual([true]);
-    expect(commands(adb)[0]).toBe('dumpsys activity activities');
+    expect(commands(adb).slice(0, 2)).toEqual([
+      "dumpsys activity processes | grep -e '^ACTIVITY MANAGER RUNNING PROCESSES' -e '^  mAlwaysFinishActivities=true$' || true",
+      'dumpsys activity activities',
+    ]);
+    expect(await callTool(agent.ctx, 'status', {}, true)).toMatchObject({
+      result: {
+        devices: [{ serial: 'emulator-5554', dontKeepActivities: true }, { dontKeepActivities: false }],
+      },
+    });
     const off = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true);
     expect(off).toMatchObject({
       ok: true,
-      result: { enabled: false, verified: true, activityManager: false, destroyCheck: null, setting: false },
+      result: {
+        enabled: false,
+        verified: true,
+        activityManager: false,
+        destroyCheck: null,
+        setting: false,
+        autoOff: false,
+      },
     });
     expect(off.ok && (off.result as Record<string, unknown>).note).toBeUndefined();
     expect(commands(adb).some((command) => command.startsWith('settings put'))).toBe(false);
+  });
+
+  it('watches the background activities in the record format of Android 13', async () => {
+    const { agent } = dontKeepAgent({ api: 13 });
+    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true)).toMatchObject({
+      result: { verified: true, destroyCheck: { background: 2, destroyed: 1 } },
+    });
+  });
+
+  it('leaves a setting that was already on to the user', async () => {
+    const { agent } = dontKeepAgent({ on: true, background: false });
+    const outcome = await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, true);
+    expect(outcome).toMatchObject({ result: { verified: true, autoOff: false } });
+    expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain(
+      'was on already',
+    );
+    expect(agent.ctx.dontKeepActivities.isOn('emulator-5554')).toBe(false);
   });
 
   it('counts the flag alone when nothing is in the background, and not when nothing gets destroyed', async () => {
@@ -284,21 +374,34 @@ describe('set_dont_keep_activities', () => {
         destroyCheck: null,
         setting: true,
         fallback: true,
+        autoOff: true,
       },
     });
     expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain(
-      `could not be switched (${HELPER_REFUSED})`,
+      `Not verified: the activity manager could not be switched (${HELPER_REFUSED})`,
     );
     expect(commands(adb)).toContain('settings put global always_finish_activities 1');
     expect(device.stored).toBe('1');
     delete agent.ctx.uiHelper;
     expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true)).toMatchObject({
-      result: { verified: false, setting: false, fallback: true },
+      result: { verified: false, setting: false, fallback: true, autoOff: false },
     });
     expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: true }, false)).toMatchObject({
       ok: false,
       code: 'forbidden',
     });
+  });
+
+  it("refuses to guess when the activity manager's dump is empty", async () => {
+    const { agent, adb, calls } = dontKeepAgent();
+    const base = adb.execHandler;
+    adb.execHandler = (args) =>
+      String(args.at(-1)).startsWith('dumpsys activity processes') ? '' : base(args);
+    expect(await callTool(agent.ctx, 'set_dont_keep_activities', { enabled: false }, true)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Could not read the activity manager's state on emulator-5554"),
+    });
+    expect(calls).toEqual([]);
   });
 });
 
@@ -308,7 +411,17 @@ describe('simulate_process_death', () => {
    * unless `survives`, and the helper's task-to-front brings its task back in a new process (pid 4400).
    */
   function deathAgent(
-    options: { survives?: boolean; state?: string; installed?: boolean; reopenFails?: boolean } = {},
+    options: {
+      survives?: boolean;
+      state?: string;
+      installed?: boolean;
+      reopenFails?: boolean;
+      /** What startActivityFromRecents answers (default 2, START_TASK_TO_FRONT). */
+      startResult?: number;
+      /** The reopened activity never gets resumed (it crashes while restoring). */
+      crashes?: boolean;
+      api?: 13 | 36;
+    } = {},
   ) {
     const device = { pid: 4321 as number | null, state: options.state ?? 'RESUMED', polls: 0 };
     const tasksToFront: number[] = [];
@@ -319,7 +432,9 @@ describe('simulate_process_death', () => {
       if (command.startsWith(`dumpsys activity -p ${PKG} activities`)) {
         // Stopping takes a moment after HOME.
         if (device.state === 'PAUSED' && ++device.polls > 1) device.state = 'STOPPED';
-        return recordsDump(device.state, device.pid);
+        return options.api === 13
+          ? legacyRecordsDump(device.state, device.pid, 13)
+          : recordsDump(device.state, device.pid);
       }
       if (command === `pidof ${PKG} || true`) return device.pid === null ? '' : `${device.pid}\n`;
       if (command === 'input keyevent 3') device.state = 'PAUSED';
@@ -334,9 +449,11 @@ describe('simulate_process_death', () => {
       taskToFront: async (_serial: string, taskId: number) => {
         tasksToFront.push(taskId);
         if (options.reopenFails) throw new UiHelperError(HELPER_REFUSED);
+        const result = options.startResult ?? 2;
+        if (result < 0 || result >= 100) return result;
         device.pid ??= 4400;
-        device.state = 'RESUMED';
-        return 2;
+        device.state = options.crashes ? 'DESTROYED' : 'RESUMED';
+        return result;
       },
     } as unknown as UiHelpers;
     return { agent, adb, device, tasksToFront };
@@ -355,6 +472,7 @@ describe('simulate_process_death', () => {
         newPid: 4400,
         killed: true,
         reopened: true,
+        resumed: true,
         previousTopActivity: checkout,
         topActivity: checkout,
         sameTask: true,
@@ -371,6 +489,35 @@ describe('simulate_process_death', () => {
     expect(sent.some((command) => command.startsWith('am start'))).toBe(false);
   });
 
+  it('works with the record format of Android 7 to 13 (a `stopped=` field before `delayedResume=`)', async () => {
+    const { agent, tasksToFront } = deathAgent({ api: 13 });
+    expect(await callTool(agent.ctx, 'simulate_process_death', { packageName: PKG }, true)).toMatchObject({
+      ok: true,
+      result: {
+        oldPid: 4321,
+        newPid: 4400,
+        killed: true,
+        resumed: true,
+        topActivity: checkout,
+        sameTask: true,
+      },
+    });
+    expect(tasksToFront).toEqual([12]);
+  });
+
+  it('says when the activity does not come back, and when the system refuses the start', async () => {
+    const crashing = deathAgent({ crashes: true });
+    const outcome = await callTool(crashing.agent.ctx, 'simulate_process_death', { packageName: PKG }, true);
+    expect(outcome).toMatchObject({ ok: true, result: { killed: true, reopened: true, resumed: false } });
+    expect(outcome.ok && String((outcome.result as Record<string, unknown>).note)).toContain('get_crashes');
+    const refused = deathAgent({ startResult: 102 });
+    expect(await callTool(refused.agent.ctx, 'simulate_process_death', { packageName: PKG }, true)).toEqual({
+      ok: false,
+      code: 'failed',
+      error: `${PKG} was killed (pid 4321), but its task could not be brought back: the system refused it (start result 102); open it from Recents`,
+    });
+  }, 30_000);
+
   it('only kills with reopen: false, and skips HOME for an app already in the background', async () => {
     const { agent, adb, tasksToFront } = deathAgent({ state: 'STOPPED' });
     // Killing alone needs no helper.
@@ -384,6 +531,7 @@ describe('simulate_process_death', () => {
         newPid: null,
         killed: true,
         reopened: false,
+        resumed: null,
         topActivity: null,
         sameTask: null,
       },
@@ -445,5 +593,129 @@ describe('simulate_process_death', () => {
         commands(adb).some((command) => command.startsWith('am kill') || command.startsWith('input')),
       ).toBe(false);
     }
+  });
+});
+
+describe('bring_to_front', () => {
+  function frontAgent(options: { hasTask?: boolean; crashes?: boolean } = {}) {
+    const device = { state: 'STOPPED' };
+    const tasks: number[] = [];
+    const adb = new FakeAdb((args) =>
+      String(args.at(-1)) === `dumpsys activity -p ${PKG} activities` && options.hasTask !== false
+        ? recordsDump(device.state, 4321)
+        : '',
+    );
+    const agent = fakeAgent({}, { adb });
+    agent.ctx.uiHelper = {
+      taskToFront: async (_serial: string, taskId: number) => {
+        tasks.push(taskId);
+        device.state = options.crashes ? 'DESTROYED' : 'RESUMED';
+        return 2;
+      },
+    } as unknown as UiHelpers;
+    return { agent, adb, tasks };
+  }
+
+  it("brings the app's task back the way Recents does, without am start", async () => {
+    const { agent, adb, tasks } = frontAgent();
+    expect(await callTool(agent.ctx, 'bring_to_front', { packageName: PKG }, true)).toEqual({
+      ok: true,
+      result: {
+        serial: 'emulator-5554',
+        packageName: PKG,
+        topActivity: `${PKG}/${PKG}.checkout.CheckoutActivity`,
+        resumed: true,
+        sameTask: true,
+      },
+    });
+    expect(tasks).toEqual([111]);
+    expect(adb.execCalls.some((args) => String(args.at(-1)).startsWith('am start'))).toBe(false);
+  });
+
+  it('needs a task, the helper and device control', async () => {
+    const { agent } = frontAgent({ hasTask: false });
+    expect(await callTool(agent.ctx, 'bring_to_front', { packageName: PKG }, true)).toMatchObject({
+      ok: false,
+      error: `${PKG} has no task on emulator-5554: open it with launch_app`,
+    });
+    const noHelper = frontAgent();
+    delete noHelper.agent.ctx.uiHelper;
+    expect(await callTool(noHelper.agent.ctx, 'bring_to_front', { packageName: PKG }, true)).toMatchObject({
+      ok: false,
+      error: `Could not bring ${PKG} back on emulator-5554: this server has no on-device helper`,
+    });
+    expect(await callTool(agent.ctx, 'bring_to_front', { packageName: PKG }, false)).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+    });
+  });
+});
+
+describe('DontKeepActivities', () => {
+  /** What the device was asked: helper switches and `settings put` values. */
+  function tracked(options: { helperFails?: boolean } = {}) {
+    const switches: boolean[] = [];
+    const puts: string[] = [];
+    const adb = new FakeAdb((args) => {
+      const put = /^settings put global always_finish_activities ([01])$/.exec(String(args.at(-1)))?.[1];
+      if (put) puts.push(put);
+      return '';
+    });
+    const helpers = {
+      setAlwaysFinish: async (_serial: string, enabled: boolean) => {
+        switches.push(enabled);
+        if (options.helperFails) throw new UiHelperError(HELPER_REFUSED);
+      },
+    } as unknown as UiHelpers;
+    return { state: new DontKeepActivities({ adb, helpers: () => helpers }), switches, puts };
+  }
+  const session = (serial: string | null, status: SessionState['status']): SessionState => ({
+    ...RUNNING,
+    serial,
+    status,
+  });
+
+  it('reads the flag only from a real processes dump', () => {
+    expect(parseAlwaysFinish(processesGrep(true))).toBe(true);
+    expect(parseAlwaysFinish(processesGrep(false))).toBe(false);
+    expect(parseAlwaysFinish('')).toBeNull();
+    // Indented differently, the line is not the activity manager's.
+    expect(parseAlwaysFinish(`${processesGrep(false)}    mAlwaysFinishActivities=true\n`)).toBe(false);
+  });
+
+  it('turns off on close only what it turned on', async () => {
+    const { state, switches } = tracked();
+    expect(await state.set('emulator-5554', true, false)).toBeNull();
+    expect(await state.set('emulator-5556', true, true)).toBeNull();
+    expect(state.isOn('emulator-5554')).toBe(true);
+    expect(state.isOn('emulator-5556')).toBe(false);
+    await state.close();
+    expect(switches).toEqual([true, true, false]);
+    expect(state.isOn('emulator-5554')).toBe(false);
+  });
+
+  it('turns it off when the device session stops, not when a new session replaces it there', async () => {
+    const { state, switches } = tracked();
+    await state.set('emulator-5554', true, false);
+    let current = session('emulator-5554', 'waiting_for_process');
+    state.sessionChanged(session('emulator-5554', 'idle'), () => current);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(switches).toEqual([true]);
+    current = session('emulator-5554', 'idle');
+    state.sessionChanged(session('emulator-5554', 'idle'), () => current);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(switches).toEqual([true, false]);
+    expect(state.isOn('emulator-5554')).toBe(false);
+  });
+
+  it('writes the stored setting when the helper cannot switch it, and still undoes it', async () => {
+    const { state, puts } = tracked({ helperFails: true });
+    expect(await state.set('emulator-5554', true, false)).toBe(HELPER_REFUSED);
+    expect(puts).toEqual(['1']);
+    await state.restore('emulator-5554');
+    expect(puts).toEqual(['1', '0']);
+    await state.restore('emulator-5554');
+    expect(puts).toEqual(['1', '0']);
   });
 });
