@@ -6,6 +6,24 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Emulator frame rate cap: a ≤15 / ≤30 / ≤60 fps picker under the mirrored emulator screen, plus **Other…** for
+  a custom whole number from 5 to 60 (30 by default, remembered per browser), sent as `fps` on the screen socket URL and
+  `setFpsCap` on a live socket, where it applies at once without restarting the stream. The dashboard clamps a
+  custom number into 5–60 (and rounds a fraction) with a note; the server takes only whole numbers 5–60: any other
+  `fps` in the URL is refused with HTTP 400, any other `setFpsCap` is ignored like other invalid input. A broken or
+  out-of-range remembered cap falls back to 30. Physical devices (scrcpy) keep their own pacing and show no picker.
+
+### Changed
+
+- Emulator mirroring paces its PNG stream with backpressure on the gRPC stream itself: the stream is paused after
+  every frame and resumed once the cap's interval has passed and the socket has sent everything, reading at most one
+  frame ahead, so the emulator no longer encodes frames that are thrown away. A frame that arrives while the socket
+  is busy waits (the newest replaces it) instead of being dropped, so the settled screen always arrives after a
+  scroll or animation. Measured on a Pixel 9 AVD (API 36) scrolling at 540 px: 30 fps uses ~20 Mbit/s instead of
+  ~41 at 60 fps, and the emulator's CPU drops accordingly.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added

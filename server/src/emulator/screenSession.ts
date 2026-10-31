@@ -1,7 +1,8 @@
-import { SCREEN_BINARY_KIND } from '@lionscope/protocol';
+import { DEFAULT_SCREEN_FPS_CAP, SCREEN_BINARY_KIND } from '@lionscope/protocol';
 import type {
   ScreenClientMessage,
   ScreenErrorCode,
+  ScreenFpsCap,
   ScreenRotation,
   ScreenServerMessage,
   ScreenSize,
@@ -10,7 +11,7 @@ import { errorMessage, log } from '../log.ts';
 import { ClipboardBridge } from './clipboardBridge.ts';
 import { isAuthError } from './emulatorClient.ts';
 import { WheelDrags } from './wheelDrags.ts';
-import type { EmulatorClient, InputStream, ScreenFrame } from './emulatorClient.ts';
+import type { EmulatorClient, FrameStream, InputStream, ScreenFrame } from './emulatorClient.ts';
 import {
   frameBox,
   isQuarterTurn,
@@ -38,6 +39,8 @@ export const SETTLE_INTERVAL_MS = 50;
 export const SCREENSHOT_SKIP_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** …and a socket this far behind (only frames that must go out still queue) is dropped. */
 export const MAX_SCREEN_BUFFERED_BYTES = 16 * 1024 * 1024;
+/** While the socket still has unsent data, the paused stream checks it again this often. */
+export const DRAIN_POLL_MS = 10;
 /** A failed input stream (not a refused token) is reopened no sooner than this. */
 export const INPUT_RETRY_MS = 1000;
 /** On close, how long the client stays open for the finger lift to be delivered. */
@@ -54,13 +57,27 @@ function failureOf(error: unknown): { code: ScreenErrorCode; message: string } {
 }
 
 /**
- * One mirrored screen: a screenshot stream scaled to the size preset, forwarded as binary frames (dropped while
- * the socket has unsent data, never queued), and the socket's input forwarded on one long-lived input stream.
+ * One mirrored screen: a screenshot stream scaled to the size preset, forwarded as binary frames, and the
+ * socket's input forwarded on one long-lived input stream.
+ *
+ * Frames are paced at the fps cap with backpressure on the stream itself: it is paused on every frame and
+ * resumed once the cap's interval has passed and the socket has sent everything, so the emulator encodes no frame
+ * that would only be dropped. A frame that arrives before then waits (the newest replaces it) instead of being
+ * dropped, so the last frame of a change (the settled screen) always reaches the dashboard.
  */
 export class ScreenSession {
   private display: DisplaySize | null = null;
   private size: ScreenSize;
-  private stream: { cancel(): void } | null = null;
+  private stream: FrameStream | null = null;
+  private fpsCap: ScreenFpsCap;
+  /**
+   * The fps cap's cadence (Date.now()): when the last frame was due. A frame that goes out a little late keeps
+   * the cadence, so timer and delivery delays don't pull the rate below the cap.
+   */
+  private frameSlot = -Infinity;
+  /** The newest stream frame not sent yet (the cap's interval or the socket's unsent data holds it). */
+  private pending: ScreenFrame | null = null;
+  private paceTimer: ReturnType<typeof setTimeout> | null = null;
   /** Rotation the current stream's bounding box was computed for. */
   private streamRotation: ScreenRotation = 0;
   /** The last screenInfo sent: the dashboard maps its input to the frame it shows. */
@@ -87,8 +104,10 @@ export class ScreenSession {
     private readonly client: EmulatorClient,
     readonly serial: string,
     size: ScreenSize,
+    fpsCap: ScreenFpsCap = DEFAULT_SCREEN_FPS_CAP,
   ) {
     this.size = size;
+    this.fpsCap = fpsCap;
     this.wheels = new WheelDrags({
       geometry: () => (this.display ? { display: this.display, rotation: this.rotation } : null),
       isTouching: () => this.fingersDown.size > 0,
@@ -154,6 +173,12 @@ export class ScreenSession {
         this.size = message.size;
         this.startStream(this.streamRotation);
         return;
+      case 'setFpsCap':
+        if (message.fps === this.fpsCap) return;
+        this.fpsCap = message.fps;
+        // Re-time a wait that was set for the old cap.
+        this.pace();
+        return;
       case 'screenshot':
         void this.screenshot();
         return;
@@ -191,6 +216,8 @@ export class ScreenSession {
     this.clipboard.close();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
+    this.clearPaceTimer();
+    this.pending = null;
     this.stream?.cancel();
     this.stream = null;
     const input = this.input;
@@ -217,18 +244,65 @@ export class ScreenSession {
     if (!this.display || this.closed) return;
     this.stream?.cancel();
     this.streamRotation = rotation;
-    this.stream = this.client.streamScreenshot(frameBox(this.display, rotation, this.size), {
+    const stream = this.client.streamScreenshot(frameBox(this.display, rotation, this.size), {
       onFrame: (frame) => {
+        if (this.stream !== stream) return;
+        stream.pause();
         this.streamFrames += 1;
         this.lastStreamRotation = frame.rotation;
-        this.deliver(frame, false);
+        this.pending = frame;
+        this.followOrientation(frame);
+        this.pace();
       },
       onEnd: (error) => {
         const { code, message } = failureOf(error);
         this.fail(code, message);
       },
     });
+    this.stream = stream;
+    // A new stream starts flowing: the pace timer, if any, still holds the next frame back to the cap.
+    if (this.paceTimer !== null || this.pending) stream.pause();
     void this.prime();
+  }
+
+  /**
+   * Send the waiting frame, or resume the stream, once the cap's interval has passed and the socket has sent
+   * everything; until then check again (the stream stays paused). Nothing runs while the screen is idle: the
+   * stream is resumed and only a change brings the next frame.
+   */
+  private pace(): void {
+    this.clearPaceTimer();
+    if (this.closed) return;
+    // Date.now() counts whole milliseconds: less than one left is due.
+    const wait = this.frameSlot + this.interval - Date.now();
+    if (wait >= 1) return this.paceLater(wait);
+    if (this.socket.bufferedAmount > 0) return this.paceLater(DRAIN_POLL_MS);
+    const frame = this.pending;
+    if (frame) {
+      this.pending = null;
+      this.deliver(frame);
+      // The stream stays paused until the next slot.
+      if (!this.closed) this.paceLater(this.frameSlot + this.interval - Date.now());
+      return;
+    }
+    this.stream?.resume();
+  }
+
+  private get interval(): number {
+    return 1000 / this.fpsCap;
+  }
+
+  private paceLater(delayMs: number): void {
+    this.paceTimer = setTimeout(() => {
+      this.paceTimer = null;
+      this.pace();
+    }, delayMs);
+  }
+
+  private clearPaceTimer(): void {
+    if (this.paceTimer === null) return;
+    clearTimeout(this.paceTimer);
+    this.paceTimer = null;
   }
 
   /**
@@ -259,7 +333,10 @@ export class ScreenSession {
       if (overtaken) return;
       const settled = expected === undefined || frame.rotation === expected || attempt >= SETTLE_ATTEMPTS;
       if (settled && isQuarterTurn(frame.rotation) === isQuarterTurn(rotation)) {
-        this.deliver(frame, true);
+        // A stream frame still waiting came before this request: older.
+        this.pending = null;
+        this.followOrientation(frame);
+        this.deliver(frame);
         return;
       }
       // Not there yet, or letterboxed into a box of the other orientation: ask again.
@@ -268,15 +345,23 @@ export class ScreenSession {
     }
   }
 
-  /** Send a frame (a stream frame is dropped while the socket has unsent data), screenInfo first if it changed. */
-  private deliver(frame: ScreenFrame, always: boolean): void {
-    const display = this.display;
-    if (!display || this.closed) return;
-    // Frames come rotated: after a quarter turn, restart with a box of the new orientation so the short edge
-    // stays at the preset. This frame (letterboxed into the old box) still goes out.
+  /**
+   * Frames come rotated: after a quarter turn, restart with a box of the new orientation so the short edge stays
+   * at the preset. The frame (letterboxed into the old box) still goes out.
+   */
+  private followOrientation(frame: ScreenFrame): void {
     if (isQuarterTurn(frame.rotation) !== isQuarterTurn(this.streamRotation))
       this.startStream(frame.rotation);
-    if (!always && this.socket.bufferedAmount > 0) return;
+  }
+
+  /** Send a frame, screenInfo first if it changed. */
+  private deliver(frame: ScreenFrame): void {
+    const display = this.display;
+    if (!display || this.closed) return;
+    // Late by less than half an interval: the next slot, else a new cadence from now (never a burst).
+    const now = Date.now();
+    const next = this.frameSlot + this.interval;
+    this.frameSlot = now - next < this.interval / 2 ? next : now;
     const info = {
       type: 'screenInfo',
       serial: this.serial,

@@ -2,11 +2,13 @@ import { writeFileSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Secret } from '../src/emulator/discovery.ts';
 import {
   createEmulatorClientFactory,
   EmulatorRpcError,
+  limitReadAhead,
   loadEmulatorController,
 } from '../src/emulator/emulatorClient.ts';
 import type { EmulatorClient, ScreenFrame } from '../src/emulator/emulatorClient.ts';
@@ -109,6 +111,51 @@ describe('EmulatorController client', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(frames).toHaveLength(2);
     expect(ended).toEqual([]);
+  });
+
+  it('hands over nothing while paused, and the newest frame last once resumed', async () => {
+    const frames: ScreenFrame[] = [];
+    const stream = connect().streamScreenshot(
+      { width: 540, height: 1212 },
+      { onFrame: (frame) => frames.push(frame), onEnd: () => undefined },
+    );
+    await waitUntil(() => frames.length === 1);
+    stream.pause();
+    for (const width of [101, 102, 103]) emulator.pushFrame({ width, height: 200 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(frames).toHaveLength(1);
+    stream.resume();
+    await waitUntil(() => frames.at(-1)?.width === 103);
+    expect(frames[0]?.width).toBe(540);
+    expect(frames.at(-1)?.width).toBe(103);
+    // Paused and resumed after cancel: no effect, no frames.
+    stream.cancel();
+    stream.pause();
+    stream.resume();
+    const delivered = frames.length;
+    await waitUntil(() => emulator.openStreams.length === 0);
+    expect(frames).toHaveLength(delivered);
+  });
+
+  it('limits a paused stream to reading one message ahead (16 by default)', async () => {
+    const readAhead = async (limit: boolean): Promise<number> => {
+      let reads = 0;
+      const stream = new Readable({
+        objectMode: true,
+        read() {
+          reads += 1;
+          setImmediate(() => this.push({ n: reads }));
+        },
+      });
+      if (limit) limitReadAhead(stream);
+      stream.on('data', () => undefined);
+      stream.pause();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      stream.destroy();
+      return reads;
+    };
+    expect(await readAhead(false)).toBe(16);
+    expect(await readAhead(true)).toBe(1);
   });
 
   it('reports the end of a stream: null when the emulator closes it, the error otherwise', async () => {

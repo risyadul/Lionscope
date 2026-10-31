@@ -507,6 +507,16 @@ describe('DeviceScreenSession', () => {
     await device.waitFor(() => videoMessages(socket).length === 3);
   });
 
+  it('ignores setFpsCap: scrcpy keeps its own max_fps, nothing is restarted or written', async () => {
+    const session = await started();
+    const control = device.controlBytes.length;
+    session.handle({ type: 'setFpsCap', fps: 15 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(adb.servers).toHaveLength(1);
+    expect(device.controlBytes.length).toBe(control);
+    expect(socket.closedWith).toBeNull();
+  });
+
   it('answers screenshot with the screencap PNG, one at a time', async () => {
     const session = await started();
     session.handle({ type: 'screenshot' });

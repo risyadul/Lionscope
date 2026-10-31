@@ -182,6 +182,59 @@ describe('screen gateway', () => {
     expect(emulator.openStreams).toHaveLength(1);
   });
 
+  it('paces frames at the fps from the URL, follows setFpsCap, and always sends the last frame', async () => {
+    const client = await connect(`serial=${SERIAL}&fps=15`);
+    await waitUntil(() => client.binaries.length === 1);
+    const arrivals = new Map<string, number>();
+    client.ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) arrivals.set(data.subarray(1).toString(), performance.now());
+    });
+    // The fake emulator writes every frame at once (no flow control), so the burst shows the pacing.
+    const burst = async (name: string): Promise<number> => {
+      for (let i = 1; i <= 5; i += 1) emulator.pushFrame({ bytes: Buffer.from(`${name} ${i}`) });
+      await waitUntil(() => client.binaries.at(-1)?.[1] === `${name} 5`);
+      return (arrivals.get(`${name} 5`) ?? 0) - (arrivals.get(`${name} 1`) ?? 0);
+    };
+    // 4 intervals of 15 fps, less the half interval a late frame may catch up.
+    expect(await burst('slow')).toBeGreaterThan(200);
+    client.send({ type: 'setFpsCap', fps: 60 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await burst('fast')).toBeLessThan(200);
+    expect(client.closeCode).toBeNull();
+  });
+
+  it('takes a custom cap (45) from the URL and setFpsCap, switches preset <-> custom live, ignores invalid caps', async () => {
+    const client = await connect(`serial=${SERIAL}&fps=45`);
+    await waitUntil(() => client.binaries.length === 1);
+    const arrivals = new Map<string, number>();
+    client.ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) arrivals.set(data.subarray(1).toString(), performance.now());
+    });
+    const burst = async (name: string): Promise<number> => {
+      for (let i = 1; i <= 5; i += 1) emulator.pushFrame({ bytes: Buffer.from(`${name} ${i}`) });
+      await waitUntil(() => client.binaries.at(-1)?.[1] === `${name} 5`);
+      return (arrivals.get(`${name} 5`) ?? 0) - (arrivals.get(`${name} 1`) ?? 0);
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+    // 4 intervals of 45 fps (~89 ms), less the half interval a late frame may catch up; well under 15 fps's ~267.
+    const custom = await burst('custom');
+    expect(custom).toBeGreaterThan(70);
+    expect(custom).toBeLessThan(200);
+    // Out of range or not a whole number: ignored like any invalid message, the socket and the cap stay.
+    for (const fps of [4, 61, 0, 12.5, '15']) client.send({ type: 'setFpsCap', fps });
+    await settle();
+    expect(await burst('still-custom')).toBeLessThan(200);
+    // Custom -> preset -> custom on the same socket and stream.
+    client.send({ type: 'setFpsCap', fps: 15 });
+    await settle();
+    expect(await burst('preset')).toBeGreaterThan(200);
+    client.send({ type: 'setFpsCap', fps: 45 });
+    await settle();
+    expect(await burst('custom-again')).toBeLessThan(200);
+    expect(emulator.openStreams).toHaveLength(1);
+    expect(client.closeCode).toBeNull();
+  });
+
   it('injects touch and key input in native display coordinates, and wheel as a touch drag', async () => {
     const client = await connect();
     await waitUntil(() => client.binaries.length === 1);
@@ -390,7 +443,7 @@ describe('screen gateway', () => {
     }
   });
 
-  it('checks Host and Origin like the main socket, and refuses unknown sizes', async () => {
+  it('checks Host and Origin like the main socket, and refuses unknown sizes and fps caps', async () => {
     const pathname = `${SCREEN_WS_PATH}?serial=${SERIAL}`;
     const good = { Host: `localhost:${port}`, Origin: `http://localhost:${port}` };
     expect(await handshakeStatus(port, good, pathname)).toBe(101);
@@ -398,6 +451,11 @@ describe('screen gateway', () => {
     expect(await handshakeStatus(port, { Host: `localhost:${port}` }, pathname)).toBe(403);
     expect(await handshakeStatus(port, { ...good, Host: `evil.example:${port}` }, pathname)).toBe(403);
     expect(await handshakeStatus(port, good, `${pathname}&size=1080`)).toBe(400);
+    // fps: a plain decimal whole number from 5 to 60; anything else is refused, never clamped.
+    for (const fps of ['5', '45', '60'])
+      expect(await handshakeStatus(port, good, `${pathname}&fps=${fps}`)).toBe(101);
+    for (const fps of ['4', '61', '120', '0', '-5', '45.5', '45.0', '045', '+45', '1e1', '%2045', '', 'abc'])
+      expect(await handshakeStatus(port, good, `${pathname}&fps=${fps}`)).toBe(400);
     expect((await rawRequest(port, SCREEN_WS_PATH)).status).toBe(426);
     await waitUntil(() => emulator.openStreams.length === 0);
   });

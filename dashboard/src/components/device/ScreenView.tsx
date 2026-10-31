@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { ScreenErrorCode, ScreenNavButton, ScreenSize } from '@lionscope/protocol/wire';
+import type { ScreenErrorCode, ScreenFpsCap, ScreenNavButton, ScreenSize } from '@lionscope/protocol/wire';
 import { DEFAULT_SCREEN_SIZE, SCREEN_SIZES } from '@lionscope/protocol/wire';
 import { useElementSize } from '../../hooks/useElementSize.ts';
 import { useStoredState } from '../../hooks/useStoredState.ts';
 import { pasteShortcut } from '../../lib/clipboard.ts';
+import { parseStoredFpsCap } from '../../lib/fpsCap.ts';
 import { LAYOUT_KEYS } from '../../lib/layoutPrefs.ts';
 import { fitDeviceGlass, mirrorPoint, type FramePoint } from '../../lib/screenInput.ts';
 import type { ScreenConnectionState, ScreenError } from '../../lib/screenSocket.ts';
@@ -26,6 +27,7 @@ import { useInspectorContext } from '../inspector/InspectorContext.tsx';
 import { useLocationContext } from '../location/LocationContext.tsx';
 import { LocationPanel } from '../location/LocationPanel.tsx';
 import { ClipboardToast } from './ClipboardToast.tsx';
+import { FpsCapPicker } from './FpsCapPicker.tsx';
 import { useClipboardShare } from './useClipboardShare.ts';
 import { useScreenInput } from './useScreenInput.ts';
 import { useScreenStream, type ScreenStreamEvents } from './useScreenStream.ts';
@@ -38,6 +40,9 @@ function parseScreenSize(raw: string | null): ScreenSize {
 }
 
 const SIZE_OPTIONS = SCREEN_SIZES.map((size) => ({ value: size, label: String(size), title: `${size} px` }));
+
+/** How long the frame rate cap's note (a custom cap rounded or clamped) stays. */
+const FPS_NOTE_MS = 5000;
 
 const NAV_BUTTONS: readonly { button: ScreenNavButton; label: string; icon: ReactNode }[] = [
   { button: 'back', label: 'Back', icon: <BackIcon /> },
@@ -185,6 +190,13 @@ type Props = {
 /** The live emulator or device screen in a device frame, with its controls. */
 export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Props) {
   const [size, setSize] = useStoredState<ScreenSize>(LAYOUT_KEYS.screenSize, parseScreenSize);
+  const [fpsCap, setFpsCap] = useStoredState<ScreenFpsCap>(LAYOUT_KEYS.screenFpsCap, parseStoredFpsCap);
+  const [fpsNote, setFpsNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (fpsNote === null) return;
+    const timer = setTimeout(() => setFpsNote(null), FPS_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [fpsNote]);
   // Destructured: the stream object carries the canvas ref, which render must not read through.
   const streamEvents = useRef<ScreenStreamEvents>({});
   const { state, info, fps, canvasRef, send, retry, videoError, inputDenied, dismissInputDenied } =
@@ -192,6 +204,7 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       serial,
       name,
       size,
+      fpsCap: kind === 'emulator' ? fpsCap : undefined,
       isEnabled: isVisible,
       events: streamEvents,
     });
@@ -385,6 +398,7 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
 
       <InputDeniedBanner label={label} message={inputDenied} onDismiss={dismissInputDenied} />
       <div className="device-nav" role="group" aria-label="Navigation buttons">
+        {kind === 'emulator' && <FpsCapPicker value={fpsCap} onChange={setFpsCap} onNote={setFpsNote} />}
         <span className="device-fps mono" title="Frames per second" data-live={isLive || undefined}>
           {isLive ? fps : '–'}
           <span className="device-fps-unit"> fps</span>
@@ -419,6 +433,11 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       <p className="device-paste-note" role="status">
         {pasteNote}
       </p>
+      {kind === 'emulator' && (
+        <p className="device-fps-note" role="status">
+          {fpsNote}
+        </p>
+      )}
       <ClipboardToast toast={clipboard.toast} noun={kind} onCopy={clipboard.copyManually} />
     </div>
   );

@@ -3,7 +3,9 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { RawData, WebSocket } from 'ws';
 import {
+  DEFAULT_SCREEN_FPS_CAP,
   DEFAULT_SCREEN_SIZE,
+  isValidScreenFpsCap,
   isValidSerial,
   MAX_SCREEN_SOCKET_FRAME_BYTES,
   MAX_SCREEN_INPUT_PER_SECOND,
@@ -15,6 +17,7 @@ import type {
   DeviceInfo,
   ScreenClientMessage,
   ScreenErrorCode,
+  ScreenFpsCap,
   ScreenServerMessage,
   ScreenSize,
 } from '@lionscope/protocol';
@@ -124,6 +127,14 @@ function sizeOf(raw: string | null): ScreenSize | null {
   return SCREEN_SIZES.find((size) => String(size) === raw) ?? null;
 }
 
+/** `fps` absent: the default cap. Otherwise a plain decimal whole number in range, or null (refused, not clamped). */
+function fpsCapOf(raw: string | null): ScreenFpsCap | null {
+  if (raw === null) return DEFAULT_SCREEN_FPS_CAP;
+  if (!/^[1-9][0-9]?$/.test(raw)) return null;
+  const fps = Number(raw);
+  return isValidScreenFpsCap(fps) ? fps : null;
+}
+
 function sendError(
   ws: WebSocket,
   code: Extract<ScreenServerMessage, { type: 'screenError' }>['code'],
@@ -133,7 +144,11 @@ function sendError(
   ws.close(1000, code);
 }
 
-/** `/ws/screen?serial=…&size=…`: mirrors one running emulator or physical device per socket. */
+/**
+ * `/ws/screen?serial=…&size=…&fps=…`: mirrors one running emulator or physical device per socket (`fps`, a whole
+ * number 5–60, caps an emulator's frame rate; physical devices ignore it). An unknown size or an fps that is not
+ * a whole number in range is refused with 400; an invalid `setFpsCap` on a live socket is ignored.
+ */
 export function createScreenGateway(options: ScreenGatewayOptions): ScreenGateway {
   const { server, emulators } = options;
   const jarPath = options.devices?.jarPath ?? resolveScrcpyJar();
@@ -155,12 +170,13 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
       return rejectUpgrade(socket, 403, 'Forbidden');
     }
     const size = sizeOf(url.searchParams.get('size'));
-    if (size === null) return rejectUpgrade(socket, 400, 'Bad Request');
+    const fpsCap = fpsCapOf(url.searchParams.get('fps'));
+    if (size === null || fpsCap === null) return rejectUpgrade(socket, 400, 'Bad Request');
     const serial = url.searchParams.get('serial') ?? '';
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size));
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size, fpsCap));
   });
 
-  const onConnection = (ws: WebSocket, serial: string, size: ScreenSize): void => {
+  const onConnection = (ws: WebSocket, serial: string, size: ScreenSize, fpsCap: ScreenFpsCap): void => {
     ws.on('error', (error) => log.warn('Screen socket error:', error.message));
     if (sockets.size >= MAX_SCREEN_SOCKETS) {
       return sendError(ws, 'busy', `At most ${MAX_SCREEN_SOCKETS} screens can be mirrored at once`);
@@ -171,7 +187,7 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     let session: MirrorSession;
     if (backend.kind === 'emulator') {
       if (!options.createClient) return sendError(ws, 'unavailable', 'Emulator mirroring is not available');
-      session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size);
+      session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size, fpsCap);
     } else {
       const { adb } = backend.mirroring;
       session = new DeviceScreenSession({

@@ -210,6 +210,83 @@
   color: var(--ink-muted);
 }
 
+/* Emulator frame rate cap: the readout's counterpart on the left of the nav row. */
+.device-fps-cap {
+  position: absolute;
+  top: 50%;
+  left: var(--space-2);
+  transform: translateY(-50%);
+}
+
+.device-fps-cap select {
+  height: 24px;
+  padding: 0 18px 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.device-fps-cap select:hover {
+  border-color: var(--rule-strong);
+  color: var(--ink);
+}
+
+.device-fps-cap select:focus-visible {
+  border-color: var(--focus);
+  outline-offset: 0;
+}
+
+.device-fps-cap .select-chevron {
+  right: 5px;
+}
+
+/* "Custom…": a number field in the select's place, about as wide. */
+.device-fps-cap--custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.device-fps-cap--custom input {
+  width: 4ch;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-meta);
+  text-align: right;
+}
+
+.device-fps-cap--custom input:focus-visible {
+  border-color: var(--focus);
+  outline-offset: 0;
+}
+
+.device-fps-cap--custom input[aria-invalid] {
+  border-color: var(--jank);
+}
+
+/* The nav keys take the middle 164 px: at the narrowest columns the cap gives up some padding to stay clear. */
+@container device-screen (max-width: 316px) {
+  .device-fps-cap {
+    left: 2px;
+  }
+
+  .device-fps-cap select {
+    padding: 0 14px 0 3px;
+  }
+
+  .device-fps-cap .select-chevron {
+    right: 2px;
+  }
+}
+
 /* The toolbar is one row of up to 8 tools (power, rotate x2, clipboard, location, screenshot, inspect, shut down) and
    the frame-size control: about 386 px at full size. Below that the column (296 px at the narrowest, also in the phone
    drawer) tightens in two steps; the fps readout lives under the screen, so it never competes for this row. */
@@ -503,7 +580,8 @@
 }
 
 /* Paste truncation note; empty (and collapsed) the rest of the time. */
-.device-paste-note {
+.device-paste-note,
+.device-fps-note {
   flex: none;
   margin: 0;
   padding: 0 var(--space-3);
@@ -512,7 +590,8 @@
   text-align: center;
 }
 
-.device-paste-note:empty {
+.device-paste-note:empty,
+.device-fps-note:empty {
   display: none;
 }
 
