@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { ScreenClientMessage, ScreenSize } from '@lionscope/protocol/wire';
+import type { ScreenClientMessage, ScreenFpsCap, ScreenSize } from '@lionscope/protocol/wire';
 import { downloadBlob, screenshotFileName } from '../../lib/download.ts';
 import { createFpsMeter, createFrameDecoder } from '../../lib/frameQueue.ts';
 import {
@@ -33,6 +33,8 @@ interface Input {
   /** Screenshot file name prefix. */
   name: string;
   size: ScreenSize;
+  /** Emulators: the most frames per second the server streams; undefined for physical devices (scrcpy paces). */
+  fpsCap?: ScreenFpsCap;
   /** False while the panel is collapsed or the tab is hidden: no socket, no decoding. */
   isEnabled: boolean;
   events?: RefObject<ScreenStreamEvents>;
@@ -71,10 +73,11 @@ function drawFrame(
  * One screen socket per visible panel: PNG frames (emulators) and H.264 video (physical devices) go straight
  * to the canvas, screenshots to a download.
  */
-export function useScreenStream({ serial, name, size, isEnabled, events }: Input): ScreenStream {
+export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events }: Input): ScreenStream {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const connectionRef = useRef<ScreenConnection | null>(null);
   const sizeRef = useRef(size);
+  const fpsCapRef = useRef(fpsCap);
   const nameRef = useRef(name);
   const [state, setState] = useState<ScreenConnectionState>(CONNECTING);
   const [info, setInfo] = useState<ScreenInfo | null>(null);
@@ -93,6 +96,13 @@ export function useScreenStream({ serial, name, size, isEnabled, events }: Input
     sizeRef.current = size;
     connectionRef.current?.send({ type: 'setSize', size });
   }, [size]);
+
+  // Likewise the fps cap; the server applies it to the running stream.
+  useEffect(() => {
+    if (fpsCapRef.current === fpsCap) return;
+    fpsCapRef.current = fpsCap;
+    if (fpsCap !== undefined) connectionRef.current?.send({ type: 'setFpsCap', fps: fpsCap });
+  }, [fpsCap]);
 
   useEffect(() => {
     if (!isEnabled) return;
@@ -132,7 +142,7 @@ export function useScreenStream({ serial, name, size, isEnabled, events }: Input
       return video;
     };
     const connection = createScreenConnection({
-      url: () => screenUrl(window.location, serial, sizeRef.current),
+      url: () => screenUrl(window.location, serial, sizeRef.current, fpsCapRef.current),
       onBinary: (msg) => {
         if (msg.kind === 'frame') decoder.push(msg.png);
         else if (msg.kind === 'video') videoPipeline()?.push(msg.packet);

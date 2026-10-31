@@ -137,7 +137,7 @@ describe('DevicePanel states', () => {
 });
 
 describe('ScreenView stream', () => {
-  it('streams only while visible, at 540 px by default, and draws decoded frames', async () => {
+  it('streams only while visible, at 540 px and 30 fps by default, and draws decoded frames', async () => {
     const view = renderPanel({ serial: 'emulator-5554', emulator: RUNNING }, { isVisible: false });
     expect(FakeScreenSocket.instances).toHaveLength(0);
     view.rerender(
@@ -150,7 +150,7 @@ describe('ScreenView stream', () => {
       />,
     );
     const socket = FakeScreenSocket.latest();
-    expect(socket.url).toMatch(/\/ws\/screen\?serial=emulator-5554&size=540$/);
+    expect(socket.url).toMatch(/\/ws\/screen\?serial=emulator-5554&size=540&fps=30$/);
     expect(screen.getByText('Connecting to the screen…')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true);
 
@@ -409,6 +409,155 @@ describe('ScreenView review fixes', () => {
     renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
     expect(FakeScreenSocket.latest().url).toContain('size=720');
     expect(screen.getByRole('radio', { name: '720' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('caps the emulator at 30 fps by default; a cap picked goes to the live stream and is remembered', async () => {
+    const view = renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    const socket = await goLive();
+    expect(socket.url).toContain('fps=30');
+    const cap = screen.getByRole('combobox', { name: 'Frame rate cap' });
+    expect((cap as HTMLSelectElement).value).toBe('30');
+    expect([...(cap as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      '15',
+      '30',
+      '60',
+      'custom',
+    ]);
+    fireEvent.change(cap, { target: { value: '60' } });
+    expect(socket.messages()).toEqual([{ type: 'setFpsCap', fps: 60 }]);
+    expect(window.localStorage.getItem(LAYOUT_KEYS.screenFpsCap)).toBe('60');
+
+    view.unmount();
+    renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    expect(FakeScreenSocket.latest().url).toContain('fps=60');
+    expect((screen.getByRole('combobox', { name: 'Frame rate cap' }) as HTMLSelectElement).value).toBe('60');
+  });
+
+  it('takes a custom cap from the field (Enter or leaving it), live on the same socket, and remembers it', async () => {
+    const view = renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    const socket = await goLive();
+    const select = () => screen.getByRole('combobox', { name: 'Frame rate cap' }) as HTMLSelectElement;
+    fireEvent.change(select(), { target: { value: 'custom' } });
+    const field = screen.getByRole('textbox', { name: 'Custom frame rate cap' }) as HTMLInputElement;
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe('30');
+    expect(screen.queryByRole('combobox', { name: 'Frame rate cap' })).toBeNull();
+    fireEvent.change(field, { target: { value: '45' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(socket.messages()).toEqual([{ type: 'setFpsCap', fps: 45 }]);
+    expect(window.localStorage.getItem(LAYOUT_KEYS.screenFpsCap)).toBe('45');
+    // Back to the select, which now lists the custom cap among the presets.
+    expect(document.activeElement).toBe(select());
+    expect(select().value).toBe('45');
+    expect([...select().options].map((option) => option.value)).toEqual(['15', '30', '45', '60', 'custom']);
+    expect([...select().options].map((option) => option.text)).toEqual([
+      '≤15 fps',
+      '≤30 fps',
+      '≤45 fps',
+      '≤60 fps',
+      'Other…',
+    ]);
+
+    // Custom -> preset -> custom, all on the socket that is already open; the last custom cap stays one choice away.
+    fireEvent.change(select(), { target: { value: '60' } });
+    expect([...select().options].map((option) => option.value)).toEqual(['15', '30', '45', '60', 'custom']);
+    fireEvent.change(select(), { target: { value: '45' } });
+    fireEvent.change(select(), { target: { value: '60' } });
+    fireEvent.change(select(), { target: { value: 'custom' } });
+    const again = screen.getByRole('textbox', { name: 'Custom frame rate cap' });
+    fireEvent.change(again, { target: { value: '20' } });
+    fireEvent.blur(again);
+    expect(socket.messages()).toEqual([
+      { type: 'setFpsCap', fps: 45 },
+      { type: 'setFpsCap', fps: 60 },
+      { type: 'setFpsCap', fps: 45 },
+      { type: 'setFpsCap', fps: 60 },
+      { type: 'setFpsCap', fps: 20 },
+    ]);
+    expect(FakeScreenSocket.instances).toHaveLength(1);
+    expect([...select().options].map((option) => option.value)).toEqual(['15', '20', '30', '60', 'custom']);
+
+    view.unmount();
+    renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    expect(FakeScreenSocket.latest().url).toContain('fps=20');
+    expect(select().value).toBe('20');
+  });
+
+  it('clamps and rounds a custom cap into 5–60 with a note, refuses text, and Esc cancels', async () => {
+    renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+    const socket = await goLive();
+    const select = () => screen.getByRole('combobox', { name: 'Frame rate cap' }) as HTMLSelectElement;
+    const custom = (text: string, key: 'Enter' | 'Escape' = 'Enter') => {
+      fireEvent.change(select(), { target: { value: 'custom' } });
+      const field = screen.getByRole('textbox', { name: 'Custom frame rate cap' });
+      fireEvent.change(field, { target: { value: text } });
+      fireEvent.keyDown(field, { key });
+    };
+
+    custom('120');
+    expect(select().value).toBe('60');
+    expect(screen.getByText('Set to 60 fps: the cap is 5–60 fps')).toBeTruthy();
+    custom('2');
+    expect(select().value).toBe('5');
+    expect(screen.getByText('Set to 5 fps: the cap is 5–60 fps')).toBeTruthy();
+    custom('44.6');
+    expect(select().value).toBe('45');
+    expect(screen.getByText('Rounded to 45 fps')).toBeTruthy();
+    expect(socket.messages()).toEqual([
+      { type: 'setFpsCap', fps: 60 },
+      { type: 'setFpsCap', fps: 5 },
+      { type: 'setFpsCap', fps: 45 },
+    ]);
+
+    // Not a number: Enter keeps the field open and marks it, nothing is sent; Esc cancels and keeps 45.
+    custom('fast');
+    const field = screen.getByRole('textbox', { name: 'Custom frame rate cap' });
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByText('Enter a whole number from 5–60 fps')).toBeTruthy();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(select().value).toBe('45');
+    expect(screen.queryByText('Enter a whole number from 5–60 fps')).toBeNull();
+    // Leaving a field with text in it also keeps the cap it had.
+    fireEvent.change(select(), { target: { value: 'custom' } });
+    const left = screen.getByRole('textbox', { name: 'Custom frame rate cap' });
+    fireEvent.change(left, { target: { value: '' } });
+    fireEvent.blur(left);
+    expect(select().value).toBe('45');
+    // Esc with a valid number cancels too.
+    custom('50', 'Escape');
+    expect(select().value).toBe('45');
+    expect(socket.messages()).toHaveLength(3);
+    expect(window.localStorage.getItem(LAYOUT_KEYS.screenFpsCap)).toBe('45');
+  });
+
+  it('falls back to 30 fps for a stored cap that is missing, broken or out of range, and keeps a valid one', () => {
+    const urlFor = (stored: string | null) => {
+      cleanup();
+      window.localStorage.clear();
+      if (stored !== null) window.localStorage.setItem(LAYOUT_KEYS.screenFpsCap, stored);
+      renderPanel({ serial: 'emulator-5554', emulator: RUNNING });
+      const fps = new URL(FakeScreenSocket.latest().url).searchParams.get('fps');
+      expect((screen.getByRole('combobox', { name: 'Frame rate cap' }) as HTMLSelectElement).value).toBe(fps);
+      return fps;
+    };
+    expect(urlFor(null)).toBe('30');
+    for (const broken of [
+      '',
+      'abc',
+      '120',
+      '4',
+      '0',
+      '-30',
+      '45.5',
+      ' 45',
+      '045',
+      '1e1',
+      'null',
+      '{"fps":45}',
+    ])
+      expect(urlFor(broken)).toBe('30');
+    // Presets stored by the earlier picker, and custom caps.
+    for (const kept of ['15', '30', '60', '5', '45']) expect(urlFor(kept)).toBe(kept);
   });
 
   it('pointercancel and lostpointercapture release their touch ids', async () => {

@@ -28,6 +28,12 @@ describe('screenUrl', () => {
     expect(screenUrl({ protocol: 'https:', host: 'example.test' }, '192.168.1.5:5555', 360)).toBe(
       'wss://example.test/ws/screen?serial=192.168.1.5%3A5555&size=360',
     );
+    expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 60)).toBe(
+      'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=60',
+    );
+    expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 45)).toBe(
+      'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=45',
+    );
   });
 });
 
@@ -202,6 +208,23 @@ describe('createScreenConnection', () => {
     second.open();
     expect(second.url).toContain('size=360');
     expect(second.sent).toEqual([]);
+  });
+
+  it('holds an fps cap picked while connecting next to the size, the newest of each', () => {
+    const connection = connect();
+    const first = FakeScreenSocket.latest();
+    expect(connection.send({ type: 'setFpsCap', fps: 15 })).toBe(true);
+    expect(connection.send({ type: 'setSize', size: 720 })).toBe(true);
+    expect(connection.send({ type: 'setFpsCap', fps: 60 })).toBe(true);
+    expect(first.sent).toEqual([]);
+    first.open();
+    expect(first.messages()).toEqual([
+      { type: 'setFpsCap', fps: 60 },
+      { type: 'setSize', size: 720 },
+    ]);
+    // Once open it goes straight out.
+    expect(connection.send({ type: 'setFpsCap', fps: 30 })).toBe(true);
+    expect(first.messages().at(-1)).toEqual({ type: 'setFpsCap', fps: 30 });
   });
 
   it('forwards video and h264 screenInfo, and goes live only when the first frame is decoded', () => {
