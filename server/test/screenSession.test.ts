@@ -10,6 +10,7 @@ import {
 import type { ScreenFrame } from '../src/emulator/emulatorClient.ts';
 import {
   AUTH_MESSAGE,
+  DRAIN_POLL_MS,
   ENDED_MESSAGE,
   INPUT_RETRY_MS,
   LIFT_GRACE_MS,
@@ -23,19 +24,28 @@ import { FakeEmulatorClient, FakeScreenSocket, frame } from './helpers/fakeEmula
 const SERIAL = 'emulator-5554';
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function started(size: 360 | 540 | 720 = 540) {
+async function started(size: 360 | 540 | 720 = 540, fpsCap?: number) {
   const client = new FakeEmulatorClient();
   const socket = new FakeScreenSocket();
-  const session = new ScreenSession(socket, client, SERIAL, size);
+  const session = new ScreenSession(socket, client, SERIAL, size, fpsCap);
   await session.start();
   return { client, socket, session };
 }
 
+/** The default cap's frame interval (30 fps). */
+const INTERVAL_30 = 1000 / 30;
+
 describe('ScreenSession frames', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('streams into the preset box and sends screenInfo before the first frame', async () => {
+    vi.useFakeTimers();
     const { client, socket } = await started(540);
     expect(client.stream?.box).toEqual({ width: 540, height: 1212 });
     client.stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    vi.advanceTimersByTime(INTERVAL_30);
     client.stream?.handlers.onFrame(frame(540, 1212, 0, 'b'));
     expect(socket.kinds).toEqual([
       'screenInfo',
@@ -62,29 +72,36 @@ describe('ScreenSession frames', () => {
     expect(client.inputs).toHaveLength(0);
   });
 
-  it('drops frames while the socket has unsent data, and never queues them', async () => {
+  it('holds the newest frame while the socket has unsent data, never queueing the ones it replaced', async () => {
+    vi.useFakeTimers();
     const { client, socket } = await started();
     client.stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
     socket.bufferedAmount = 1;
-    client.stream?.handlers.onFrame(frame(540, 1212, 0, 'dropped'));
-    socket.bufferedAmount = 0;
+    client.stream?.handlers.onFrame(frame(540, 1212, 0, 'replaced'));
     client.stream?.handlers.onFrame(frame(540, 1212, 0, 'c'));
+    vi.advanceTimersByTime(10 * INTERVAL_30);
+    expect(socket.binaries.map(([, payload]) => payload)).toEqual(['a']);
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(DRAIN_POLL_MS);
     expect(socket.binaries.map(([, payload]) => payload)).toEqual(['a', 'c']);
   });
 
-  it('sends screenInfo again before the first frame after a change, even when the change itself was dropped', async () => {
+  it('sends screenInfo again before the first frame after a change, even when the change itself was replaced', async () => {
+    vi.useFakeTimers();
     const { client, socket } = await started();
     const stream = client.stream;
     stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
     socket.bufferedAmount = 1;
-    stream?.handlers.onFrame(frame(1212, 540, 90, 'dropped'));
-    socket.bufferedAmount = 0;
+    stream?.handlers.onFrame(frame(1212, 540, 90, 'replaced'));
     client.stream?.handlers.onFrame(frame(1212, 540, 90, 'b'));
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(INTERVAL_30);
     expect(socket.kinds).toEqual(['screenInfo', '1:a', 'screenInfo', '1:b']);
     expect(socket.texts[1]).toMatchObject({ rotation: 90, frameWidth: 1212, frameHeight: 540 });
   });
 
   it('restarts the stream with a landscape box after a quarter turn, but not after a half turn', async () => {
+    vi.useFakeTimers();
     const { client, socket } = await started(540);
     const portrait = client.stream;
     // Letterboxed into the portrait box: still shown, then the stream restarts.
@@ -138,6 +155,215 @@ describe('ScreenSession frames', () => {
     const otherSocket = new FakeScreenSocket();
     await new ScreenSession(otherSocket, other, SERIAL, 540).start();
     expect(otherSocket.texts[0]).toMatchObject({ code: 'ended' });
+  });
+});
+
+describe('ScreenSession fps cap', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const payloads = (socket: FakeScreenSocket) => socket.binaries.map(([, payload]) => payload);
+
+  /** The emulator streaming a frame every `everyMs` (a scroll) while the stream is not paused, for `forMs`. */
+  function animate(client: FakeEmulatorClient, forMs: number, everyMs = 4): number {
+    let sent = 0;
+    for (let t = 0; t < forMs; t += everyMs) {
+      const stream = client.stream;
+      if (stream && !stream.paused) {
+        stream.handlers.onFrame(frame(540, 1212, 0, `f${t}`));
+        sent += 1;
+      }
+      vi.advanceTimersByTime(everyMs);
+    }
+    return sent;
+  }
+
+  it('defaults to 30 fps: pauses the stream on every frame and resumes it once the interval has passed', async () => {
+    vi.useFakeTimers();
+    const { client, socket } = await started();
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    expect(payloads(socket)).toEqual(['a']);
+    expect(stream?.paused).toBe(true);
+    vi.advanceTimersByTime(INTERVAL_30 - 2);
+    expect(stream?.paused).toBe(true);
+    vi.advanceTimersByTime(2);
+    expect(stream?.paused).toBe(false);
+    // Idle: nothing is scheduled until the next change.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('streams at most the cap while the screen keeps changing, and the emulator is asked for no more', async () => {
+    vi.useFakeTimers();
+    const capped = await started(540);
+    const offered = animate(capped.client, 1000);
+    expect(capped.socket.binaries.length).toBeGreaterThanOrEqual(29);
+    expect(capped.socket.binaries.length).toBeLessThanOrEqual(31);
+    // A paused stream gets no frames: the emulator encoded only those that went out.
+    expect(offered).toBe(capped.socket.binaries.length);
+
+    const fast = await started(540, 60);
+    animate(fast.client, 1000);
+    expect(fast.socket.binaries.length).toBeGreaterThanOrEqual(59);
+    expect(fast.socket.binaries.length).toBeLessThanOrEqual(61);
+  });
+
+  it('applies setFpsCap to the running stream, also to a frame already waiting', async () => {
+    vi.useFakeTimers();
+    const { client, socket, session } = await started();
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'b'));
+    session.handle({ type: 'setFpsCap', fps: 60 });
+    vi.advanceTimersByTime(Math.ceil(1000 / 60));
+    expect(payloads(socket)).toEqual(['a', 'b']);
+    // Same stream: the cap needs no restart.
+    expect(client.streams).toHaveLength(1);
+
+    // Down to 15 right after 'b' went out: the stream stays paused past 30 fps's interval, 'c' waits for 15's.
+    session.handle({ type: 'setFpsCap', fps: 15 });
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'c'));
+    vi.advanceTimersByTime(50);
+    expect(stream?.paused).toBe(true);
+    expect(payloads(socket)).toEqual(['a', 'b']);
+    vi.advanceTimersByTime(20);
+    expect(payloads(socket)).toEqual(['a', 'b', 'c']);
+    const before = socket.binaries.length;
+    animate(client, 1000);
+    expect(socket.binaries.length - before).toBeLessThanOrEqual(16);
+  });
+
+  it('paces a custom cap (45) like a preset: at most the cap, nothing encoded beyond it', async () => {
+    vi.useFakeTimers();
+    const { client, socket } = await started(540, 45);
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    expect(stream?.paused).toBe(true);
+    // 1000 / 45 = 22.2 ms; Date.now() counts whole milliseconds, so it is due at 22.
+    vi.advanceTimersByTime(21);
+    expect(stream?.paused).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(stream?.paused).toBe(false);
+    const before = socket.binaries.length;
+    const offered = animate(client, 1000);
+    const sent = socket.binaries.length - before;
+    expect(sent).toBeGreaterThanOrEqual(44);
+    expect(sent).toBeLessThanOrEqual(46);
+    expect(offered).toBe(sent);
+    for (const fps of [5, 60]) {
+      const edge = await started(540, fps);
+      animate(edge.client, 1000);
+      expect(edge.socket.binaries.length).toBeGreaterThanOrEqual(fps - 1);
+      expect(edge.socket.binaries.length).toBeLessThanOrEqual(fps + 1);
+    }
+  });
+
+  it('switches preset -> custom -> preset on the running stream', async () => {
+    vi.useFakeTimers();
+    const { client, socket, session } = await started();
+    const rate = () => {
+      const before = socket.binaries.length;
+      animate(client, 1000);
+      return socket.binaries.length - before;
+    };
+    expect(rate()).toBeGreaterThanOrEqual(29);
+    session.handle({ type: 'setFpsCap', fps: 45 });
+    const custom = rate();
+    expect(custom).toBeGreaterThanOrEqual(44);
+    expect(custom).toBeLessThanOrEqual(46);
+    session.handle({ type: 'setFpsCap', fps: 60 });
+    expect(rate()).toBeGreaterThanOrEqual(59);
+    session.handle({ type: 'setFpsCap', fps: 45 });
+    expect(rate()).toBeLessThanOrEqual(46);
+    session.handle({ type: 'setFpsCap', fps: 15 });
+    expect(rate()).toBeLessThanOrEqual(16);
+    expect(client.streams).toHaveLength(1);
+  });
+
+  it('holds a custom cap back on unsent socket data and still sends the settled frame', async () => {
+    vi.useFakeTimers();
+    const { client, socket } = await started(540, 45);
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'scroll-1'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'scroll-2'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'settled'));
+    socket.bufferedAmount = 100_000;
+    vi.advanceTimersByTime(20 * (1000 / 45));
+    expect(payloads(socket)).toEqual(['scroll-1']);
+    expect(stream?.paused).toBe(true);
+    expect(stream?.resumes).toBe(0);
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(DRAIN_POLL_MS);
+    expect(payloads(socket)).toEqual(['scroll-1', 'settled']);
+    vi.advanceTimersByTime(1000 / 45);
+    expect(stream?.paused).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps the stream paused while the socket has unsent data, and resumes it once drained', async () => {
+    vi.useFakeTimers();
+    const { client, socket } = await started();
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    socket.bufferedAmount = 100_000;
+    vi.advanceTimersByTime(20 * INTERVAL_30);
+    expect(stream?.paused).toBe(true);
+    expect(stream?.resumes).toBe(0);
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(DRAIN_POLL_MS);
+    expect(stream?.paused).toBe(false);
+    expect(stream?.resumes).toBe(1);
+  });
+
+  it('always sends the last frame of a change (the settled screen), never stopping on a frame in between', async () => {
+    vi.useFakeTimers();
+    const { client, socket } = await started();
+    const stream = client.stream;
+    // Frames read ahead come in a burst before the stream pauses: only the newest of them is kept.
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'scroll-1'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'scroll-2'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'settled'));
+    expect(payloads(socket)).toEqual(['scroll-1']);
+    vi.advanceTimersByTime(INTERVAL_30);
+    expect(payloads(socket)).toEqual(['scroll-1', 'settled']);
+    vi.advanceTimersByTime(INTERVAL_30);
+    expect(stream?.paused).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps the cap across a stream restart', async () => {
+    vi.useFakeTimers();
+    const { client, socket, session } = await started();
+    client.stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    session.handle({ type: 'setSize', size: 720 });
+    const restarted = client.stream;
+    expect(client.streams).toHaveLength(2);
+    // The new stream waits for the cap like the old one would have.
+    expect(restarted?.paused).toBe(true);
+    vi.advanceTimersByTime(INTERVAL_30);
+    expect(restarted?.paused).toBe(false);
+    restarted?.handlers.onFrame(frame(720, 1616, 0, 'b'));
+    expect(payloads(socket)).toEqual(['a', 'b']);
+    // A late frame from the cancelled stream is ignored.
+    client.streams[0]?.handlers.onFrame(frame(540, 1212, 0, 'late'));
+    vi.advanceTimersByTime(INTERVAL_30);
+    expect(payloads(socket)).toEqual(['a', 'b']);
+  });
+
+  it('clears its timer and drops a waiting frame when it closes', async () => {
+    vi.useFakeTimers();
+    const { client, socket, session } = await started();
+    const stream = client.stream;
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'a'));
+    stream?.handlers.onFrame(frame(540, 1212, 0, 'waiting'));
+    expect(vi.getTimerCount()).toBe(1);
+    session.close();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(stream?.cancelled).toBe(true);
+    vi.advanceTimersByTime(10 * INTERVAL_30);
+    expect(payloads(socket)).toEqual(['a']);
+    expect(stream?.resumes).toBe(0);
   });
 });
 

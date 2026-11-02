@@ -5,6 +5,7 @@
 import type {
   ScreenClientMessage,
   ScreenErrorCode,
+  ScreenFpsCap,
   ScreenServerMessage,
   ScreenSize,
 } from '@lionscope/protocol/wire';
@@ -23,9 +24,11 @@ export function screenUrl(
   location: Pick<Location, 'protocol' | 'host'>,
   serial: string,
   size: ScreenSize,
+  fpsCap?: ScreenFpsCap,
 ): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const query = new URLSearchParams({ serial, size: String(size) });
+  if (fpsCap !== undefined) query.set('fps', String(fpsCap));
   return `${scheme}://${location.host}${SCREEN_WS_PATH}?${query.toString()}`;
 }
 
@@ -112,7 +115,7 @@ export interface ScreenSocketLike extends SocketLike {
 }
 
 export interface ScreenConnectionOptions {
-  /** Read on every (re)connect, so a size picked meanwhile is used. */
+  /** Read on every (re)connect, so a size or fps cap picked meanwhile is used. */
   url: () => string;
   onBinary: (msg: ScreenBinary) => void;
   onInfo: (info: ScreenInfo) => void;
@@ -130,7 +133,8 @@ export interface ScreenConnectionOptions {
 export interface ScreenConnection {
   /**
    * Sends when open; returns false (dropped) otherwise or when the message is over the size limit. A
-   * `setSize` sent before the socket opens is held and sent on open (a reconnect takes the size from `url`).
+   * `setSize` or `setFpsCap` sent before the socket opens is held (the newest of each) and sent on open; a
+   * reconnect takes them from `url`.
    */
   send(msg: ScreenClientMessage): boolean;
   /** The first picture of this socket is on screen (decoded video); a no-op once live. */
@@ -140,6 +144,13 @@ export interface ScreenConnection {
 
 const OPEN = 1;
 const encoder = new TextEncoder();
+
+/** Stream settings: held until the socket opens (the URL it was opened with may predate them). */
+type HeldSetting = Extract<ScreenClientMessage, { type: 'setSize' | 'setFpsCap' }>;
+
+function isHeldSetting(msg: ScreenClientMessage): msg is HeldSetting {
+  return msg.type === 'setSize' || msg.type === 'setFpsCap';
+}
 
 export function createScreenConnection(options: ScreenConnectionOptions): ScreenConnection {
   const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url));
@@ -151,7 +162,7 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
   let isLive = false;
   let isClosed = false;
   let isFailed = false;
-  let heldSize: ScreenClientMessage | null = null;
+  const held = new Map<HeldSetting['type'], HeldSetting>();
 
   const report = (status: ScreenStatus) => options.onState({ status, attempt, error });
 
@@ -167,15 +178,15 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
     retryTimer = null;
     if (isClosed) return;
     isLive = false;
-    heldSize = null;
+    held.clear();
     report(attempt === 0 ? 'connecting' : 'reconnecting');
     const ws = createSocket(options.url());
     ws.binaryType = 'arraybuffer';
     socket = ws;
     ws.onopen = () => {
       if (socket !== ws) return;
-      if (heldSize !== null) ws.send(JSON.stringify(heldSize));
-      heldSize = null;
+      for (const msg of held.values()) ws.send(JSON.stringify(msg));
+      held.clear();
       options.onOpen?.();
     };
     ws.onmessage = (event) => {
@@ -228,8 +239,8 @@ export function createScreenConnection(options: ScreenConnectionOptions): Screen
   return {
     send(msg) {
       if (isClosed || isFailed) return false;
-      if (msg.type === 'setSize' && socket?.readyState !== OPEN) {
-        heldSize = msg;
+      if (isHeldSetting(msg) && socket?.readyState !== OPEN) {
+        held.set(msg.type, msg);
         return true;
       }
       if (!socket || socket.readyState !== OPEN) return false;

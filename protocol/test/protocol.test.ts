@@ -30,6 +30,10 @@ import {
   parseClientMessage,
   parseDeviceMessage,
   parseScreenClientMessage,
+  isValidScreenFpsCap,
+  MAX_SCREEN_FPS_CAP,
+  MIN_SCREEN_FPS_CAP,
+  SCREEN_FPS_CAPS,
   SCREEN_SIZES,
   STALL_THRESHOLDS_MS,
 } from '../src/index.ts';
@@ -289,6 +293,15 @@ describe('emulator messages', () => {
   });
 });
 
+describe('isValidScreenFpsCap', () => {
+  it('takes whole numbers from 5 to 60 (presets and custom caps alike), and nothing else', () => {
+    expect([MIN_SCREEN_FPS_CAP, MAX_SCREEN_FPS_CAP]).toEqual([5, 60]);
+    for (const fps of [5, 6, 15, 30, 45, 59, 60]) expect(isValidScreenFpsCap(fps)).toBe(true);
+    for (const fps of [0, 4, 61, -5, 4.99, 45.5, 60.0001, NaN, Infinity, '45', null, undefined])
+      expect(isValidScreenFpsCap(fps)).toBe(false);
+  });
+});
+
 describe('parseScreenClientMessage', () => {
   const parse = (value: object) => parseScreenClientMessage(JSON.stringify(value));
   const point = (id: number, extra: object = {}) => ({ id, x: 0.5, y: 0.25, pressure: 1, ...extra });
@@ -305,6 +318,10 @@ describe('parseScreenClientMessage', () => {
       { type: 'screenshot' },
       { type: 'keyFrame' },
       ...SCREEN_SIZES.map((size) => ({ type: 'setSize', size })),
+      ...[...SCREEN_FPS_CAPS, MIN_SCREEN_FPS_CAP, 45, MAX_SCREEN_FPS_CAP].map((fps) => ({
+        type: 'setFpsCap',
+        fps,
+      })),
     ];
     for (const message of messages) expect(parse(message)).toEqual({ ok: true, value: message });
   });
@@ -368,6 +385,10 @@ describe('parseScreenClientMessage', () => {
     expect(parse({ type: 'rotate', direction: 'up' }).ok).toBe(false);
     expect(parse({ type: 'setSize', size: 1080 }).ok).toBe(false);
     expect(parse({ type: 'setSize', size: '540' }).ok).toBe(false);
+    for (const fps of [0, 4, 61, 120, -30, '30', '45', 30.5, 45.01, Infinity, NaN, null, true])
+      expect(parse({ type: 'setFpsCap', fps }).ok).toBe(false);
+    expect(parse({ type: 'setFpsCap' }).ok).toBe(false);
+    expect(parse({ type: 'setFpsCap', fps: 30, size: 540 }).ok).toBe(false);
     expect(parse({ type: 'screenshot', full: true }).ok).toBe(false);
     expect(parse({ type: 'keyFrame', now: true }).ok).toBe(false);
     expect(parse({ type: 'startSession' }).ok).toBe(false);

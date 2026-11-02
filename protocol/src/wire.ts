@@ -455,13 +455,39 @@ export interface EmulatorInfo {
   renderer: EmulatorRenderer;
 }
 
-/** Screen mirror WebSocket on the dashboard HTTP server: `/ws/screen?serial=<serial>&size=<SCREEN_SIZES>`. */
+/**
+ * Screen mirror WebSocket on the dashboard HTTP server:
+ * `/ws/screen?serial=<serial>&size=<SCREEN_SIZES>&fps=<5–60>` (`size` and `fps` optional; `fps` is a whole number
+ * in decimal, anything else is refused with HTTP 400).
+ */
 export const SCREEN_WS_PATH = '/ws/screen';
 
 /** Frame size presets: pixels along the screen's SHORT edge (aspect ratio kept, also in landscape). */
 export const SCREEN_SIZES = [360, 540, 720] as const;
 export type ScreenSize = (typeof SCREEN_SIZES)[number];
 export const DEFAULT_SCREEN_SIZE: ScreenSize = 540;
+
+/**
+ * Emulator frame rate cap (0.12.0), frames per second: any whole number from MIN_SCREEN_FPS_CAP to
+ * MAX_SCREEN_FPS_CAP (the emulator never streams faster than 60). Frames the cap skips are never encoded by the
+ * emulator; the last frame of a change always arrives. Physical devices (scrcpy) ignore the cap.
+ */
+export type ScreenFpsCap = number;
+export const MIN_SCREEN_FPS_CAP = 5;
+export const MAX_SCREEN_FPS_CAP = 60;
+/** The dashboard's presets; any other cap in range is a custom one. */
+export const SCREEN_FPS_CAPS: readonly ScreenFpsCap[] = [15, 30, 60];
+export const DEFAULT_SCREEN_FPS_CAP: ScreenFpsCap = 30;
+
+/** A whole number of frames per second in range. The server refuses anything else (it does not clamp). */
+export function isValidScreenFpsCap(value: unknown): value is ScreenFpsCap {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_SCREEN_FPS_CAP &&
+    value <= MAX_SCREEN_FPS_CAP
+  );
+}
 
 /** The emulator accepts up to 10 concurrent touch points. */
 export const MAX_TOUCH_POINTS = 10;
@@ -578,6 +604,11 @@ export type ScreenClientMessage =
   /** Rotate the virtual device a quarter turn. */
   | { type: 'rotate'; direction: 'left' | 'right' }
   | { type: 'setSize'; size: ScreenSize }
+  /**
+   * Emulators: the most frames per second to stream from now on (0.12.0), a whole number 5–60; a message with
+   * any other value is ignored like every invalid message. Ignored for physical devices.
+   */
+  | { type: 'setFpsCap'; fps: ScreenFpsCap }
   /** Answered with one SCREEN_BINARY_KIND.screenshot message (full resolution, as shown). */
   | { type: 'screenshot' }
   /**

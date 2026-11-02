@@ -159,6 +159,11 @@ describe('physical device stream', () => {
     expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('has no frame rate cap: scrcpy paces a phone itself', () => {
+    renderPhone();
+    expect(screen.queryByRole('combobox', { name: 'Frame rate cap' })).toBeNull();
+  });
+
   it('counts decoded frames for the fps readout', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     renderPhone();

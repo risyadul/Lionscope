@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import type { ScreenRotation } from '@lionscope/protocol';
@@ -37,6 +38,17 @@ export interface FrameStreamHandlers {
   onEnd(error: EmulatorRpcError | null): void;
 }
 
+/**
+ * A running screenshot stream. While paused at most one more frame is read (limitReadAhead), so gRPC flow control
+ * holds the emulator in its write and it encodes no further frames; on resume it sends the screen as it is by then
+ * (it counts the changes it missed). A frame read ahead behind another is skipped for the newest one.
+ */
+export interface FrameStream {
+  pause(): void;
+  resume(): void;
+  cancel(): void;
+}
+
 export interface ClipboardStreamHandlers {
   onText(text: string): void;
   /** The stream ended without cancel(): null when the emulator closed it, else the error. */
@@ -61,7 +73,7 @@ export interface EmulatorClient {
   /** One PNG, rotated like the screen: full resolution, or scaled into `box` (both sides set). */
   getScreenshot(box?: Size): Promise<ScreenFrame>;
   /** PNG frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
-  streamScreenshot(box: Size, handlers: FrameStreamHandlers): { cancel(): void };
+  streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream;
   /** One long-lived input stream; `onEnd` fires when it fails or ends (also after end()). */
   openInput(onEnd: (error: EmulatorRpcError | null) => void): InputStream;
   /** Physical model ROTATION z, in degrees. */
@@ -148,6 +160,23 @@ export function loadEmulatorController(protoPath: string): ControllerConstructor
   return node as ControllerConstructor;
 }
 
+/**
+ * grpc-js streams are object-mode Readables (highWaterMark 16): paused, they still read up to 16 messages ahead, and
+ * the emulator keeps encoding frames into that buffer. Reading one ahead at most keeps gRPC flow control on the
+ * emulator (emulator 36.6 at a 30 fps cap: 29 instead of 58 encoded frames per second). Node has no public setter
+ * for a stream's highWaterMark; without the internal state this is a no-op (frames still pace, at a higher cost).
+ */
+export function limitReadAhead(stream: Readable): void {
+  const state: unknown = Reflect.get(stream, '_readableState');
+  if (
+    typeof state === 'object' &&
+    state !== null &&
+    typeof Reflect.get(state, 'highWaterMark') === 'number'
+  ) {
+    Reflect.set(state, 'highWaterMark', 1);
+  }
+}
+
 const MAX_DETAILS_CHARS = 200;
 
 function rpcError(method: string, error: grpc.ServiceError): EmulatorRpcError {
@@ -213,6 +242,7 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
           { format: 'PNG', width: box.width, height: box.height },
           metadata(),
         );
+        limitReadAhead(stream);
         let cancelled = false;
         let ended = false;
         const end = (error: EmulatorRpcError | null): void => {
@@ -221,13 +251,21 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
           handlers.onEnd(error);
         };
         stream.on('data', (image: RawImage) => {
-          // The first image of a stream can be empty (0×0).
+          // A newer image already read behind this one (read ahead while paused) makes it stale. The first image
+          // of a stream can be empty (0×0).
+          if (cancelled || stream.readableLength > 0) return;
           const frame = toFrame(image);
-          if (frame && !cancelled) handlers.onFrame(frame);
+          if (frame) handlers.onFrame(frame);
         });
         stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamScreenshot', error)));
         stream.on('end', () => end(null));
         return {
+          pause() {
+            if (!cancelled) stream.pause();
+          },
+          resume() {
+            if (!cancelled) stream.resume();
+          },
           cancel() {
             cancelled = true;
             stream.cancel();

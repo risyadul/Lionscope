@@ -179,6 +179,9 @@ export class DeviceScreenSession {
         this.size = message.size;
         void this.restart();
         return;
+      case 'setFpsCap':
+        // Emulators only: scrcpy keeps its own max_fps.
+        return;
       case 'screenshot':
         void this.screenshot();
         return;

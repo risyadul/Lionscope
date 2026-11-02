@@ -2,6 +2,7 @@ import type {
   ClipboardStreamHandlers,
   EmulatorClient,
   EmulatorRpcError,
+  FrameStream,
   FrameStreamHandlers,
   GpsPoint,
   InputStream,
@@ -17,7 +18,14 @@ export class FakeEmulatorClient implements EmulatorClient {
   rotationZ = 0;
   screenshot: ScreenFrame | Error = { width: 1080, height: 2424, rotation: 0, png: Buffer.from('full') };
   shutdownResult: Error | 'hang' | null = null;
-  readonly streams: { box: Size; handlers: FrameStreamHandlers; cancelled: boolean }[] = [];
+  /** Screenshot streams as opened; `paused` follows pause()/resume(), `resumes` counts the resumes. */
+  readonly streams: {
+    box: Size;
+    handlers: FrameStreamHandlers;
+    cancelled: boolean;
+    paused: boolean;
+    resumes: number;
+  }[] = [];
   /**
    * Input streams as opened. Like grpc-js, a stream starts on a later tick: closing the client before then
    * cancels it (its events are lost, `cancelled`). After end() the emulator answers (`onEnd(null)`) on a later
@@ -74,10 +82,17 @@ export class FakeEmulatorClient implements EmulatorClient {
     return this.screenshot;
   }
 
-  streamScreenshot(box: Size, handlers: FrameStreamHandlers): { cancel(): void } {
-    const stream = { box, handlers, cancelled: false };
+  streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream {
+    const stream = { box, handlers, cancelled: false, paused: false, resumes: 0 };
     this.streams.push(stream);
     return {
+      pause: () => {
+        stream.paused = true;
+      },
+      resume: () => {
+        if (stream.paused) stream.resumes += 1;
+        stream.paused = false;
+      },
       cancel: () => {
         stream.cancelled = true;
       },

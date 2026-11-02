@@ -58,6 +58,8 @@ import {
   MIN_DEVICE_PROTOCOL_VERSION,
   normalizeViewValue,
   PACKAGE_NAME_PATTERN,
+  MAX_SCREEN_FPS_CAP,
+  MIN_SCREEN_FPS_CAP,
   SCREEN_SIZES,
   SERIAL_PATTERN,
   STALL_THRESHOLDS_MS,
@@ -401,6 +403,12 @@ export const screenClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('nav'), button: z.enum(['back', 'home', 'recents', 'power']) }).strict(),
   z.object({ type: z.literal('rotate'), direction: z.enum(['left', 'right']) }).strict(),
   z.object({ type: z.literal('setSize'), size: z.literal(SCREEN_SIZES) }).strict(),
+  z
+    .object({
+      type: z.literal('setFpsCap'),
+      fps: z.number().int().min(MIN_SCREEN_FPS_CAP).max(MAX_SCREEN_FPS_CAP),
+    })
+    .strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
   z.object({ type: z.literal('keyFrame') }).strict(),
   z.object({ type: z.literal('clipboardSync'), enabled: z.boolean() }).strict(),

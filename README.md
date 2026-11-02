@@ -394,8 +394,12 @@ GPU (`-no-window -gpu host`), as a **Quick boot** (loads the Quick Boot snapshot
 emulator window: click and drag to touch, Alt+drag to pinch (two fingers mirrored around the centre), scroll
 with the wheel, type when the screen has focus (Esc is Back), and use the toolbar for
 Back, Home, Recents, Power, rotation, a full-resolution screenshot and the frame size (360, 540 or 720 px along
-the short edge). Mirroring works with or without a profiling session, and only streams while the column is
-open and the tab is visible.
+the short edge). Under the screen, next to Back/Home/Recents, the frame rate cap (≤15, ≤30 or ≤60 fps, or
+**Other…** for a custom whole number from 5 to 60; 30 by default, remembered per browser) sets how many frames per
+second the emulator streams at most, and applies to the running stream at once. A custom number outside 5–60 is
+clamped into it, and a fraction rounded, with a note saying so; text that is not a number keeps the cap you had.
+Mirroring works with or without a profiling session, and only streams while the column is open and the tab is
+visible.
 
 **Share clipboard** (toolbar, on by default) keeps the clipboards in step: text you copy on your computer is put
 on Android's clipboard when you click or focus the screen, so Android's own long-press **Paste** has it, and
@@ -414,8 +418,12 @@ you started yourself never is.
 Lionscope talks to the emulator's own gRPC endpoint, found through the emulator's discovery file
 (`avd/running/pid_<pid>.ini`, which holds its port and access token). Frames are captured by the emulator on
 the host side and sent as PNG only when the screen changes, so Android inside the emulator does no extra work
-and the app's measurements are not affected. On an M-series Mac at 540 px that is about 58 fps, ~140 KB per
-frame and ~55 ms from input to frame.
+and the app's measurements are not affected; an idle screen sends nothing. While the screen changes, the frame
+rate cap holds the emulator's stream back between frames (and while the browser is still receiving the last
+one), so the emulator doesn't encode frames that would only be dropped, and the last frame of every change (the
+settled screen) always arrives. On an M-series Mac at 540 px, a scrolling list streams at the cap; 30 fps sends
+about half the data of 60 fps (~20 vs ~41 Mbit/s) and costs the emulator noticeably less CPU. Pick 60 for smooth
+animations, 15 to save the most.
 
 If an emulator renders in software (SwiftShader, e.g. `-no-window` without `-gpu host`), the dashboard warns:
 frame times are then not representative of a device.
