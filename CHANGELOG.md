@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-02
+
 ### Added
 
 - Emulator frame rate cap: a ≤15 / ≤30 / ≤60 fps picker under the mirrored emulator screen, plus **Other…** for
@@ -47,6 +49,23 @@ All notable changes to Lionscope are documented here. The format is based on
   ~41 at 60 fps, and the emulator's CPU drops accordingly.
 - Device and dashboard protocol 10. Older SDKs keep working (no saved-state reports); a 0.12.0 SDK on an older
   server does not measure.
+
+### Fixed
+
+- Android SDK: on a link without the link proof (the link key could not be handed to the app over adb, `status`
+  `sdk.network` `unverified`; or the app holds a different key), the SDK dropped every message of device protocol v7
+  and later, not only the network ones. A live edit it refused as `unauthenticated` was never answered, so the
+  server waited for it to time out, and saved-state reports never arrived. Messages of v7 and later now need the
+  link proof unless their type is listed as safe without it (`viewPropertyResult`, `savedState`, `liveActivities`);
+  HTTP capture, mocks and every type not listed still stay off such a link. The SDK logs a debug line (no payload)
+  the first time a link holds a message back, and its count when the link ends.
+- Profiling on Android 6.0-7.1 (API 23-25): the server finds the app's processes with `ps` where toybox's `pidof`
+  (API 23) ignores its argument and prints every PID, and keeps the valid rows of toolbox's bare `ps` when `ps -A`
+  exits 1 (API 24-25), so `list_apps` no longer fails there. Logcat without `-v epoch` and `--pid` (API < 24) is
+  followed as `-v threadtime`, dated with the device's clock and zone and filtered by PID on the server; a `since`
+  or `resume` point in another year than the device's present one (New Year's Eve) replays the whole retained
+  buffer instead of the last 2000 lines, so no line of the gap is lost. The device shell of API < 24 (a PTY that
+  echoes) is framed with per-session markers, so its echo and prompt never end up in a command's output.
 
 ## [0.11.0] - 2026-10-31
 
@@ -672,7 +691,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.11.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.12.0...HEAD
+[0.12.0]: https://github.com/risyadul/Lionscope/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/risyadul/Lionscope/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/risyadul/Lionscope/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/risyadul/Lionscope/compare/0.5.1...0.9.0
