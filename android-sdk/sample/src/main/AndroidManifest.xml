@@ -27,6 +27,10 @@
             android:name=".ComposeShopActivity"
             android:exported="true"
             android:theme="@style/Theme.LionscopeSample.Compose" />
+        <!-- Exported for `adb shell am start` with size extras (see SavedStateActivity). -->
+        <activity
+            android:name=".SavedStateActivity"
+            android:exported="true" />
         <activity
             android:name=".NetworkActivity"
             android:exported="false"

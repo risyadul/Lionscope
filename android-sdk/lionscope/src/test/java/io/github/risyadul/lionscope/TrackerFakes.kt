@@ -46,6 +46,11 @@ internal class FakeLink : LinkPort {
     /** Network lines arrive from OkHttp's threads too. */
     val v7Lines = CopyOnWriteArrayList<String>()
     val v8Lines = ArrayList<String>()
+    /** Each v8 item as the real link would queue it, for [DeviceLink.encode] (the link proof gate). */
+    val v8Items = ArrayList<DeviceLink.V2Item>()
+    val v10Lines = ArrayList<String>()
+    /** Each v10 item as the real link would queue it, for [DeviceLink.encode] (the link proof gate). */
+    val v10Items = ArrayList<DeviceLink.V2Item>()
     var failure: Throwable? = null
     /** Thrown by [sendV7] (a link that fails while the interceptor records). */
     var v7Failure: Throwable? = null
@@ -122,7 +127,16 @@ internal class FakeLink : LinkPort {
 
     /** Encodes right away, as the link thread would; dropped below v8 like the real link. */
     override fun sendV8(sizeHint: Int, encode: () -> String?) {
-        if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V8) encode()?.let { v8Lines += it }
+        if ((negotiatedVersion ?: 0) < DEVICE_PROTOCOL_V8) return
+        v8Items += DeviceLink.V2Item(sizeHint, DEVICE_PROTOCOL_V8, encode)
+        encode()?.let { v8Lines += it }
+    }
+
+    /** Encodes right away, as the link thread would; dropped below v10 like the real link. */
+    override fun sendV10(sizeHint: Int, encode: () -> String?) {
+        if ((negotiatedVersion ?: 0) < DEVICE_PROTOCOL_V10) return
+        v10Items += DeviceLink.V2Item(sizeHint, DEVICE_PROTOCOL_V10, encode)
+        encode()?.let { v10Lines += it }
     }
 
     fun inspect(requestId: Int) {

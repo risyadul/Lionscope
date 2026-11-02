@@ -21,6 +21,7 @@ import {
   DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_V9,
+  DEVICE_PROTOCOL_V10,
   isValidPackageName,
 } from '@lionscope/protocol/wire';
 import { isReady } from './devices.ts';
@@ -176,6 +177,11 @@ export function stallsEmptyState(input: StallsEmptyInput): StallsEmpty | null {
   if (sdk.protocolVersion === undefined) return { kind: 'old-server' };
   if (!isStallCapable(sdk)) return { kind: 'old-sdk', sdkVersion: sdk.sdkVersion };
   return { kind: 'waiting', thresholdMs: input.thresholdMs };
+}
+
+/** The live SDK link speaks protocol v10 (saved-state reports, the savedStateTracking option). */
+export function isSavedStateCapable(sdk: SdkStatus | undefined): boolean {
+  return sdk?.connected === true && (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V10;
 }
 
 /** The live SDK link speaks protocol v3 (inflation timing, view trees, the inflateTracking option). */

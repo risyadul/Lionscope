@@ -405,6 +405,9 @@ describe('SDK review round 1', () => {
     fireEvent.keyDown(screensTab, { key: 'ArrowLeft' });
     expect(inspectorTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(inspectorTab, { key: 'ArrowLeft' });
+    const stateTab = screen.getByRole('tab', { name: /State/ });
+    expect(stateTab.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(stateTab, { key: 'ArrowLeft' });
     expect(networkTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(networkTab, { key: 'ArrowLeft' });
     expect(layoutsTab.getAttribute('aria-selected')).toBe('true');

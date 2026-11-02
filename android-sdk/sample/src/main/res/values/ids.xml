@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SavedStateActivity builds its views in code: a fragment container needs a stable id. -->
+    <item name="saved_state_pager" type="id" />
+    <item name="saved_state_child_container" type="id" />
+</resources>

@@ -10,6 +10,8 @@ plugins {
 // Compose compatibility checks: `-PsampleComposeBom=2024.06.00 -PsampleNavigationCompose=2.7.7` (defaults: the catalog).
 val composeBom = providers.gradleProperty("sampleComposeBom").getOrElse(libs.versions.composeBom.get())
 val navigationCompose = providers.gradleProperty("sampleNavigationCompose").getOrElse(libs.versions.navigationCompose.get())
+// Saved-state attribution checks against another androidx.fragment: `-PsampleFragment=1.6.2` (default: the catalog).
+val sampleFragment = providers.gradleProperty("sampleFragment").orNull
 
 android {
     namespace = "io.github.risyadul.lionscope.sample"
@@ -56,6 +58,7 @@ dependencies {
     implementation(libs.kotlin.stdlib.app)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.fragment.ktx)
+    sampleFragment?.let { implementation("androidx.fragment:fragment:$it") }
     implementation(libs.androidx.recyclerview)
     implementation(libs.androidx.viewpager)
     implementation(libs.androidx.asynclayoutinflater)

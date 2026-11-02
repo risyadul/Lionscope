@@ -184,7 +184,13 @@ export const SDK_V2: SdkStatus = {
   apiLevel: 34,
   framesActive: true,
   protocolVersion: 2,
-  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true, rxTracking: true },
+  options: {
+    stallThresholdMs: 150,
+    strictMode: false,
+    inflateTracking: true,
+    rxTracking: true,
+    savedStateTracking: true,
+  },
 };
 
 /** A live protocol-v3 SDK link on Android 14 with the default options. */
@@ -192,7 +198,13 @@ export const SDK_V3: SdkStatus = {
   ...SDK_V2,
   sdkVersion: '0.4.0',
   protocolVersion: 3,
-  options: { stallThresholdMs: 150, strictMode: false, inflateTracking: true, rxTracking: true },
+  options: {
+    stallThresholdMs: 150,
+    strictMode: false,
+    inflateTracking: true,
+    rxTracking: true,
+    savedStateTracking: true,
+  },
 };
 
 export function inflate(ts: number, overrides: Partial<InflateSample> = {}): InflateSample {

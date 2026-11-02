@@ -3,6 +3,7 @@ import {
   DEFAULT_SDK_OPTIONS,
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V9,
+  DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V5,
   DEVICE_PROTOCOL_VERSION,
@@ -297,9 +298,13 @@ describe('device gateway', () => {
     v2.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V2 });
     await v2.waitFor((message) => message.type === 'config');
     // Key order of the options object must not leak into the line.
-    target.links
-      .at(-1)
-      ?.sendConfig({ strictMode: true, inflateTracking: false, stallThresholdMs: 1000, rxTracking: false });
+    target.links.at(-1)?.sendConfig({
+      strictMode: true,
+      inflateTracking: false,
+      stallThresholdMs: 1000,
+      rxTracking: false,
+      savedStateTracking: false,
+    });
     await v2.waitFor((message) => message.type === 'config' && message.strictMode);
     const lines = [...client.rawLines, ...refused.rawLines, ...v2.rawLines];
     expect(lines).toEqual([
@@ -332,6 +337,7 @@ describe('device gateway', () => {
       strictMode: true,
       inflateTracking: true,
       rxTracking: false,
+      savedStateTracking: false,
     });
     await client.waitFor((message) => message.type === 'config' && message.strictMode);
     expect(client.received.at(-1)).toEqual({
@@ -358,6 +364,7 @@ describe('device gateway', () => {
       strictMode: true,
       inflateTracking: true,
       rxTracking: false,
+      savedStateTracking: false,
     });
     await client.waitFor((message) => message.type === 'config' && message.strictMode);
     const golden = readFileSync(
@@ -368,6 +375,32 @@ describe('device gateway', () => {
       .filter((line) => line.startsWith('{"type":"config"'));
     expect(client.rawLines.filter((line) => line.startsWith('{"type":"config"'))).toEqual([
       '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true}',
+      golden.find((line) => line.includes('rxTracking') && !line.includes('savedStateTracking')),
+    ]);
+  });
+
+  it('adds savedStateTracking (last) to config on a v10 link, as in the golden gateway line', async () => {
+    const port = await start();
+    target.configOnAttach = true;
+    const client = await open(port);
+    client.send({ ...HELLO, protocolVersion: DEVICE_PROTOCOL_V10 });
+    await client.waitFor((message) => message.type === 'config');
+    target.links[0]?.sendConfig({
+      stallThresholdMs: 250,
+      strictMode: true,
+      inflateTracking: true,
+      rxTracking: false,
+      savedStateTracking: false,
+    });
+    await client.waitFor((message) => message.type === 'config' && message.strictMode);
+    const golden = readFileSync(
+      new URL('../../protocol/fixtures/gateway-messages.ndjson', import.meta.url),
+      'utf8',
+    )
+      .split('\n')
+      .filter((line) => line.includes('"savedStateTracking"'));
+    expect(client.rawLines.filter((line) => line.startsWith('{"type":"config"'))).toEqual([
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true,"savedStateTracking":true}',
       golden.at(-1),
     ]);
   });
@@ -381,6 +414,7 @@ describe('device gateway', () => {
       strictMode: true,
       inflateTracking: true,
       rxTracking: false,
+      savedStateTracking: false,
     });
     client.send(HEARTBEAT);
     await waitUntil(() => target.messages.length === 1);
@@ -780,7 +814,11 @@ describe('device gateway: checking a hello before the welcome', () => {
       return client.rawLines;
     };
     // Below v9, without rxTracking.
-    const { rxTracking: _rxTracking, ...v8Options } = DEFAULT_SDK_OPTIONS;
+    const {
+      rxTracking: _rxTracking,
+      savedStateTracking: _savedStateTracking,
+      ...v8Options
+    } = DEFAULT_SDK_OPTIONS;
     const config = JSON.stringify({ type: 'config', ...v8Options });
     expect(await welcome(DEVICE_PROTOCOL_V5, undefined)).toEqual([
       '{"type":"welcome","protocolVersion":5,"mode":"session"}',

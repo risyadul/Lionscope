@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -122,7 +122,13 @@ export interface LogEntry {
   message: string;
 }
 
-export type TimelineEventKind = 'process_start' | 'process_restart' | 'process_died';
+/**
+ * `transaction_too_large` (0.12.0): a binder call of the app failed as too large (TransactionFailure), from logcat, with
+ * or without the SDK. `saved_state` (0.12.0): the SDK measured an Activity saved state of LARGE_SAVED_STATE_BYTES or
+ * more (SavedStateSample); `detail` names it.
+ */
+export type TimelineEventKind =
+  'process_start' | 'process_restart' | 'process_died' | 'transaction_too_large' | 'saved_state';
 
 export interface TimelineEvent {
   ts: number;
@@ -176,6 +182,11 @@ export interface SdkOptions {
    * servers (read as true); the SDK runs them only on a v9 session link with RxJava 2 in the app.
    */
   rxTracking: boolean;
+  /**
+   * 0.12.0. Saved-state profiling (on by default; device protocol 10): the SDK measures each Activity's complete saved
+   * state (SavedStateSample). Absent on older servers (read as true); runs only on a v10 session link.
+   */
+  savedStateTracking: boolean;
 }
 
 export const STALL_THRESHOLDS_MS = [100, 150, 250, 500, 1000] as const;
@@ -184,6 +195,7 @@ export const DEFAULT_SDK_OPTIONS: SdkOptions = {
   strictMode: false,
   inflateTracking: true,
   rxTracking: true,
+  savedStateTracking: true,
 };
 
 export interface SessionState {
@@ -390,6 +402,128 @@ export interface ViewTreeSample {
   topClasses: { className: string; count: number }[];
 }
 
+// ---------------------------------------------------------------------------
+// Saved state (0.12.0): TransactionTooLargeException from logcat, and the SDK's saved-state attribution
+// ---------------------------------------------------------------------------
+
+/**
+ * A binder call of the app that failed because its data was too large (TransactionTooLargeException), read from logcat
+ * without the SDK: JavaBinder's `!!! FAILED BINDER TRANSACTION !!! (parcel size = N)` line of the app's process, and/or
+ * an app crash caused by `android.os.TransactionTooLargeException` (Android 7+ crashes when an Activity's saved state
+ * does not fit `activityStopped`; older versions only log). One failure joins the two (same PID within
+ * TRANSACTION_FAILURE_JOIN_MS). Laptop clock.
+ */
+export interface TransactionFailure {
+  /** Server-assigned, increasing; a later `transactionFailure` with the same id replaces it (the crash joined). */
+  id: number;
+  ts: number;
+  pid: number;
+  /** Bytes of the failed parcel (`parcel size = N`, or `data parcel size N bytes`); null when neither was logged. */
+  parcelBytes: number | null;
+  /** The JavaBinder line was seen. */
+  binderLine: boolean;
+  /** The app crashed with it (the crash is in get_crashes). */
+  crashed: boolean;
+  /** The failed call from the crash stack, e.g. `IActivityManager.activityStopped` (an Activity's saved state); null if unknown. */
+  transaction: string | null;
+  /** Top screen (SDK) when it failed, null when unknown. */
+  screen: string | null;
+  /**
+   * The SDK's newest saved-state report of this process within TRANSACTION_FAILURE_JOIN_MS of the failure (measured
+   * just before the system sent it, so it explains it), null without the SDK or when none came.
+   */
+  savedState: { ts: number; activity: string; totalBytes: number; instanceId: number | null } | null;
+  /**
+   * The whole report `savedState` summarises (its keys), kept with the failure for the session, apart from the
+   * windowed `savedStates` stream; null without one, or once MAX_FAILURE_REPORT_BYTES (all failures' reports
+   * together) dropped it, oldest failure first (the summary stays).
+   */
+  report: SavedStateSample | null;
+}
+
+/** A failure and its crash (and an SDK saved-state report) are joined when this close. */
+export const TRANSACTION_FAILURE_JOIN_MS = 3000;
+/** The reports kept with the session's failures (TransactionFailure.report) take at most this many bytes as JSON. */
+export const MAX_FAILURE_REPORT_BYTES = 1024 * 1024;
+/** Saved states from this size on get a timeline marker (and the SDK's per-key breakdown). */
+export const LARGE_SAVED_STATE_BYTES = 64 * 1024;
+
+/** What a SavedStateEntry is: a nested Bundle, a Fragment's saved state, or a plain value. */
+export type SavedStateEntryKind = 'bundle' | 'fragment' | 'value';
+
+/** One key of a saved state and the bytes it takes when parceled (key and value, nested content included). */
+export interface SavedStateEntry {
+  /** Keys from the Activity's bundle down, at most MAX_SAVED_STATE_DEPTH (`fragment_<who>` for a Fragment's state). */
+  path: string[];
+  bytes: number;
+  kind: SavedStateEntryKind;
+  /** The Fragment class whose state holds it (or that it is, kind `fragment`), when the SDK could tell. */
+  fragment: string | null;
+  /** The value's class (`byte[]`, `android.os.Bundle`); never the value. */
+  valueClass: string | null;
+}
+
+export const MAX_SAVED_STATE_ENTRIES = 30;
+/**
+ * Path keys per entry at most: fragment 1.4 nests a child fragment's key 9 deep (1.5+: 7). 30 entries of 12 keys of
+ * 120 characters stay under MAX_DEVICE_LINE_BYTES.
+ */
+export const MAX_SAVED_STATE_DEPTH = 12;
+
+/**
+ * An Activity's saved state as the SDK measured it once the save was complete (device protocol 10): the size of the
+ * bundle the system sends to system_server when the Activity stops, and above LARGE_SAVED_STATE_BYTES its largest keys
+ * (recursive, into nested and child Fragments). Laptop clock.
+ */
+export interface SavedStateSample {
+  ts: number;
+  /** Fully-qualified Activity class. */
+  activity: string;
+  /** The app process (SDK hello) the report came from; with `instanceId`, its SavedStateInstance. */
+  pid: number;
+  /**
+   * The SDK's number for the Activity object that saved (SavedStateInstance.id), null from a pre-release v10 SDK
+   * that did not send one.
+   */
+  instanceId: number | null;
+  /** The Activity's screen name (alias or simple class name). */
+  screen: string | null;
+  /** `post_save`: onActivityPostSaveInstanceState (API 29+); `posted`: a main-thread post after the save (API 23-28). */
+  hook: 'post_save' | 'posted';
+  totalBytes: number;
+  /** Main-thread time of the total's Parcel write, and of the breakdown (null: below LARGE_SAVED_STATE_BYTES). */
+  measureMs: number;
+  breakdownMs: number | null;
+  /** Largest first, at most MAX_SAVED_STATE_ENTRIES; empty below LARGE_SAVED_STATE_BYTES. */
+  entries: SavedStateEntry[];
+  /** More keys than listed, or deeper than MAX_SAVED_STATE_DEPTH. */
+  truncated: boolean;
+}
+
+/**
+ * One Activity object of the app as the SDK numbers them (device protocol 10 `liveActivities`): its `id` counts up
+ * per process from 1, so `(pid, id)` is the key. `prevId` links it to the instance it replaced in a configuration
+ * change (rotation), whose saves it continues. `live` while the SDK lists it; `closed` once a list of its process left
+ * it out (finished, or destroyed while the link was down: `closedAt` is when the server learned it); `process_ended`
+ * once its process is gone or replaced. Laptop clock.
+ */
+export interface SavedStateInstance {
+  pid: number;
+  id: number;
+  /** Fully-qualified Activity class. */
+  activity: string;
+  prevId: number | null;
+  /** When the server first learned of it. */
+  firstSeen: number;
+  state: 'live' | 'closed' | 'process_ended';
+  closedAt: number | null;
+}
+
+/** A `liveActivities` list holds at most this many instances (the newest); more are flagged `truncated`. */
+export const MAX_LIVE_ACTIVITIES = 64;
+/** Saved-state instances a session keeps: beyond this, the longest-closed go (live ones never). */
+export const MAX_SAVED_STATE_INSTANCES = 500;
+
 export interface Snapshot {
   cpu: CpuSample[];
   memory: MemorySample[];
@@ -407,6 +541,11 @@ export interface Snapshot {
   viewTrees?: ViewTreeSample[];
   /** 0.7.0: the session's HTTP exchanges (summaries, oldest first); details come with `getHttpExchange`. */
   http?: HttpExchange[];
+  /** 0.12.0: SDK saved-state reports in the window, and the session's TransactionTooLarge failures (kept all session). */
+  savedStates?: SavedStateSample[];
+  transactionFailures?: TransactionFailure[];
+  /** 0.12.0: the SDK's Activity instances (live, and closed ones in the window), oldest first. */
+  savedStateInstances?: SavedStateInstance[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,6 +1361,15 @@ export type ServerMessage =
   | { type: 'strictmode'; sample: StrictModeSample }
   | { type: 'inflate'; sample: InflateSample }
   | { type: 'viewtree'; sample: ViewTreeSample }
+  /** 0.12.0. A saved-state report of the SDK. */
+  | { type: 'savedState'; sample: SavedStateSample }
+  /** 0.12.0. A TransactionTooLarge failure, new or updated (upsert by `failure.id`). */
+  | { type: 'transactionFailure'; failure: TransactionFailure }
+  /**
+   * 0.12.0. An Activity instance of the SDK, new or changed (upsert by `pid` and `id`). Closed ones leave by the
+   * window like other samples (by `closedAt`); snapshots hold the authoritative list.
+   */
+  | { type: 'savedStateInstance'; instance: SavedStateInstance }
   /** 0.5.0. A new Inspector snapshot (answer to `inspect`, from any client); replaces the previous one. */
   | { type: 'inspection'; snapshot: InspectorSnapshot }
   /** 0.5.0. The current Inspector selection changed (null = cleared); sent on connect too. */
@@ -1306,6 +1454,8 @@ export type ClientMessage =
       inflateTracking?: boolean;
       /** 0.9.0 (dashboard protocol 8). */
       rxTracking?: boolean;
+      /** 0.12.0 (dashboard protocol 10). */
+      savedStateTracking?: boolean;
     }
   /**
    * 0.5.0. Capture an Inspector snapshot of `serial`'s screen: from the SDK when the session's app on that device is
@@ -1387,7 +1537,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 9;
+export const DEVICE_PROTOCOL_VERSION = 10;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1412,6 +1562,11 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * neither side sends any of it.
  * v9 (0.9.0): stall origins. `stall` may carry `outerFrames`, `rx` and `coroutine` (all optional), and `config`
  * carries `rxTracking` (appended last, v9 links only). Below v9 neither side sends them.
+ * v10 (0.12.0): saved state. SDK → server `savedState` (session links only) with `instanceId`, and `liveActivities`
+ * (session links only: the Activity objects alive in the app, each numbered and linked to the one a configuration
+ * change replaced), and `config` carries `savedStateTracking` (appended last, v10 links only). Below v10 neither side
+ * sends them. Pre-release v10 builds send `savedState` without `instanceId` and no `liveActivities`: both are
+ * optional to the server.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -1421,6 +1576,7 @@ export const DEVICE_PROTOCOL_V6 = 6;
 export const DEVICE_PROTOCOL_V7 = 7;
 export const DEVICE_PROTOCOL_V8 = 8;
 export const DEVICE_PROTOCOL_V9 = 9;
+export const DEVICE_PROTOCOL_V10 = 10;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -1627,6 +1783,33 @@ export type DeviceMessage =
       durationMs: number;
       error: { kind: 'timeout' | 'connection' | 'canceled' | 'io'; message: string | null } | null;
     }
+  /** v10. An Activity's complete saved state, measured after its save (SavedStateSample, device clock). */
+  | {
+      type: 'savedState';
+      ts: number;
+      activity: string;
+      /** The Activity object (liveActivities `id`); absent from pre-release v10 SDKs. */
+      instanceId?: number;
+      screen: string | null;
+      hook: 'post_save' | 'posted';
+      totalBytes: number;
+      measureMs: number;
+      breakdownMs: number | null;
+      entries: SavedStateEntry[];
+      truncated: boolean;
+    }
+  /**
+   * v10. Every Activity object alive in the app (device clock), sent whole (idempotent) when one is created or
+   * destroyed (at most four a second, the last change always sent), and after each welcome: `id` ascending, the newest
+   * MAX_LIVE_ACTIVITIES; `truncated` when there were more. `prevId` (always written): the instance a configuration
+   * change replaced with this one, else null.
+   */
+  | {
+      type: 'liveActivities';
+      ts: number;
+      activities: { id: number; activity: string; prevId: number | null }[];
+      truncated: boolean;
+    }
   /** v7. The mock rule set `rev` (with `count` rules) is now the active one. */
   | { type: 'mocksApplied'; rev: number; count: number }
   /**
@@ -1682,8 +1865,10 @@ export type GatewayMessage =
       stallThresholdMs: number;
       strictMode: boolean;
       inflateTracking: boolean;
-      /** v9 links only, last. */
+      /** v9 links only. */
       rxTracking?: boolean;
+      /** v10 links only, last. */
+      savedStateTracking?: boolean;
     }
   /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
   | { type: 'inspect'; requestId: number }

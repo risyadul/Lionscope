@@ -16,6 +16,7 @@ const SERVER: SdkOptions = {
   strictMode: false,
   inflateTracking: true,
   rxTracking: true,
+  savedStateTracking: true,
 };
 const at = (sessionSeq: number, errorSeq = 0, now = 1000) => ({ sessionSeq, errorSeq, now });
 

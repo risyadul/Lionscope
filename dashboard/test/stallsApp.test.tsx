@@ -300,7 +300,10 @@ const reply = (
   type: 'session',
   session: session({
     startedAt: now - 60_000,
-    sdk: { ...SDK_V2, options: { inflateTracking: true, rxTracking: true, ...options } },
+    sdk: {
+      ...SDK_V2,
+      options: { inflateTracking: true, rxTracking: true, savedStateTracking: true, ...options },
+    },
   }),
 });
 const optionRequests = (sent: ClientMessage[]) => sent.filter((m) => m.type === 'setSdkOptions');

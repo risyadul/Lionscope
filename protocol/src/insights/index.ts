@@ -8,5 +8,6 @@ export * from './layouts.ts';
 export * from './logs.ts';
 export * from './network.ts';
 export * from './origins.ts';
+export * from './savedstates.ts';
 export * from './screens.ts';
 export * from './stalls.ts';

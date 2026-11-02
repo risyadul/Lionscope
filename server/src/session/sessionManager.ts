@@ -9,6 +9,7 @@ import type {
   ServerMessage,
   SessionState,
   Snapshot,
+  TransactionFailure,
 } from '@lionscope/protocol';
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
@@ -248,6 +249,11 @@ export class SessionManager implements SdkLinkTarget {
   /** Crashes of the current (or last) session, oldest first. */
   getCrashes(): AppCrash[] {
     return this.session?.crashes() ?? [];
+  }
+
+  /** TransactionTooLarge failures of the current (or last) session, oldest first. */
+  getTransactionFailures(): TransactionFailure[] {
+    return this.session?.transactionFailures() ?? [];
   }
 
   /** HTTP exchanges kept by the current (or last) session. */

@@ -32,6 +32,8 @@ internal object DeviceMessages {
     private const val MAX_INSPECTOR_DISPLAY_PX = 20_000
     private const val MAX_WINDOW_TYPE = 10_000
     private const val MAX_CAPTURE_MS = 60_000.0
+    /** v10 saved-state keys (app-defined Bundle keys) at most. */
+    private const val MAX_SAVED_STATE_KEY_LENGTH = 120
     /** `<n>px` layout sizes: at most 6 digits on the wire. */
     private const val MAX_LAYOUT_PX = 999_999
     /** v8 text sizes as read (sp): the server's MAX_VIEW_TEXT_SIZE_SP. */
@@ -251,6 +253,100 @@ internal object DeviceMessages {
                 .endObject()
         }
         return json.endArray().endObject().toString()
+    }
+
+    /**
+     * v10. One Activity's saved state, measured once the save completed ([hook]): [totalBytes] as the system will parcel
+     * it, and (above the breakdown threshold) its largest keys at most [MAX_SAVED_STATE_ENTRIES], paths at most
+     * [MAX_SAVED_STATE_DEPTH] keys. Keys, classes and sizes only; never values.
+     */
+    fun savedState(
+        ts: Long,
+        activity: String,
+        instanceId: Int?,
+        screen: String?,
+        hook: SavedStateHook,
+        totalBytes: Int,
+        measureMs: Double,
+        breakdownMs: Double?,
+        entries: List<SavedStateEntry>,
+        truncated: Boolean,
+        maxLineBytes: Int = MAX_DEVICE_LINE_BYTES,
+    ): String {
+        // Largest first: while the line is too long, the smallest entries go (and the report says it was cut).
+        var kept = entries.take(MAX_SAVED_STATE_ENTRIES)
+        while (true) {
+            val cut = truncated || kept.size < entries.size
+            val line = savedStateLine(ts, activity, instanceId, screen, hook, totalBytes, measureMs, breakdownMs, kept, cut)
+            if (kept.isEmpty() || StackFrames.utf8Length(line) <= maxLineBytes) return line
+            kept = kept.take(kept.size / 2)
+        }
+    }
+
+    private fun savedStateLine(
+        ts: Long,
+        activity: String,
+        instanceId: Int?,
+        screen: String?,
+        hook: SavedStateHook,
+        totalBytes: Int,
+        measureMs: Double,
+        breakdownMs: Double?,
+        entries: List<SavedStateEntry>,
+        truncated: Boolean,
+    ): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("savedState")
+            .name("ts").value(ts)
+            .name("activity").value(WireText.required(activity, MAX_V3_TEXT_LENGTH))
+        // Always given by this SDK; null only reproduces a pre-release v10 line (golden fixture).
+        if (instanceId != null) json.name("instanceId").value(instanceId)
+        json.name("screen").value(WireText.clean(screen, MAX_V3_TEXT_LENGTH))
+            .name("hook").value(hook.wire)
+            .name("totalBytes").value(totalBytes.coerceIn(0, Int.MAX_VALUE))
+            .name("measureMs").value(clampMs(measureMs, MAX_CAPTURE_MS))
+            .name("breakdownMs").nullableValue(breakdownMs?.let { clampMs(it, MAX_CAPTURE_MS) })
+            .name("entries").beginArray()
+        for (entry in entries) {
+            json.beginObject().name("path").beginArray()
+            // Keys are app-chosen strings (a URL as a key carries its query): redacted before they are cut.
+            for (key in entry.path.take(MAX_SAVED_STATE_DEPTH)) {
+                json.value(WireText.required(HttpRedaction.redactFreeText(key), MAX_SAVED_STATE_KEY_LENGTH))
+            }
+            json.endArray()
+                .name("bytes").value(entry.bytes.coerceIn(0, Int.MAX_VALUE))
+                .name("kind").value(entry.kind.wire)
+                .name("fragment").value(WireText.clean(entry.fragment, MAX_V3_TEXT_LENGTH))
+                .name("valueClass").value(WireText.clean(entry.valueClass, MAX_V3_TEXT_LENGTH))
+                .endObject()
+        }
+        return json.endArray()
+            .name("truncated").value(truncated)
+            .endObject().toString()
+    }
+
+    /**
+     * v10. Every Activity object alive in the app ([ActivityInstances]): `id` ascending, `prevId` always written
+     * (null: none). The newest MAX_LIVE_ACTIVITIES at most, names of at most 200 characters, so the line stays far
+     * below MAX_DEVICE_LINE_BYTES.
+     */
+    fun liveActivities(ts: Long, activities: List<LiveActivity>, truncated: Boolean): String {
+        val json = JsonWriter().beginObject()
+            .name("type").value("liveActivities")
+            .name("ts").value(ts)
+            .name("activities").beginArray()
+        for (entry in activities.sortedBy { it.id }.takeLast(MAX_LIVE_ACTIVITIES)) {
+            json.beginObject()
+                .name("id").value(entry.id)
+                .name("activity").value(WireText.required(entry.activity, MAX_V3_TEXT_LENGTH))
+                .name("prevId")
+            val prevId = entry.prevId
+            if (prevId == null) json.nullValue() else json.value(prevId)
+            json.endObject()
+        }
+        return json.endArray()
+            .name("truncated").value(truncated || activities.size > MAX_LIVE_ACTIVITIES)
+            .endObject().toString()
     }
 
     /**

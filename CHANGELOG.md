@@ -14,6 +14,28 @@ All notable changes to Lionscope are documented here. The format is based on
   custom number into 5–60 (and rounds a fraction) with a note; the server takes only whole numbers 5–60: any other
   `fps` in the URL is refused with HTTP 400, any other `setFpsCap` is ignored like other invalid input. A broken or
   out-of-range remembered cap falls back to 30. Physical devices (scrcpy) keep their own pacing and show no picker.
+- TransactionTooLarge failures without the SDK: the server reads JavaBinder's `!!! FAILED BINDER TRANSACTION !!!`
+  line of the app's process and the crash caused by `TransactionTooLargeException` from logcat, joins a line and its
+  crash within 3 s, and shows each failure as a **TOO LARGE n KB** timeline marker and in the new **State** tab.
+  `get_crashes` adds `transactionTooLarge` (parcel size, failed call) to such a crash.
+- Saved-state profiler (SDK 0.12.0+, device protocol v10): each Activity's saved state is measured once the save is
+  complete (API 29+ `onActivityPostSaveInstanceState`, API 23-28 a post from `onActivitySaveInstanceState`), so keys
+  added after `super.onSaveInstanceState()` and all Fragment state count. From 64 KB the report lists the largest
+  keys down through nested and child fragments (at most 30, 12 levels), each Fragment's state named by its class,
+  and its own main-thread cost. Sizes, keys and class names only, never values; the app's bundle is not changed.
+  Shown in the State tab (largest first, with keys) and as **STATE n KB** markers from 64 KB. A failure is joined
+  with the newest report of the same process at or before it (a late report replaces an older one). Keys are
+  redacted like captured HTTP text on the device and the server (URL query values, sensitive `name=value` pairs).
+- Agent tool `get_saved_state` (read): TransactionTooLarge failures (without the SDK too) and the largest
+  saved-state reports with their Fragments and keys; filters by time, marker and size.
+- SDK option `savedStateTracking` (on by default; `set_sdk_options`, the State tab's **Saved-state tracking**
+  switch): turns the measurement off and back on.
+- Saved states per Activity: the SDK numbers each Activity object (`savedState.instanceId`) and sends the live ones
+  (`liveActivities`, at most 4 a second, after each connect too); an Activity recreated by a configuration change
+  continues the one it replaced. The State tab lists **Live** Activities with their trend (`125 → 163 KB · 3 saves`,
+  largest or latest first) and their saves, finished ones under **Closed**; reports of a pre-release SDK under
+  **Unattributed**. `get_saved_state` adds `instances` (per Activity: saves, first and last size, state), `pid` and
+  `sdkInstanceId` to each report, and keeps each failure's whole `report` all session (1 MB in all).
 
 ### Changed
 
@@ -23,6 +45,8 @@ All notable changes to Lionscope are documented here. The format is based on
   is busy waits (the newest replaces it) instead of being dropped, so the settled screen always arrives after a
   scroll or animation. Measured on a Pixel 9 AVD (API 36) scrolling at 540 px: 30 fps uses ~20 Mbit/s instead of
   ~41 at 60 fps, and the emulator's CPU drops accordingly.
+- Device and dashboard protocol 10. Older SDKs keep working (no saved-state reports); a 0.12.0 SDK on an older
+  server does not measure.
 
 ## [0.11.0] - 2026-10-31
 

@@ -51,6 +51,12 @@ export function changedFields(patch: Partial<SdkOptions>, current: SdkOptions): 
   if (patch.rxTracking !== undefined && patch.rxTracking !== (current.rxTracking ?? true)) {
     changed.rxTracking = patch.rxTracking;
   }
+  if (
+    patch.savedStateTracking !== undefined &&
+    patch.savedStateTracking !== (current.savedStateTracking ?? true)
+  ) {
+    changed.savedStateTracking = patch.savedStateTracking;
+  }
   return Object.keys(changed).length === 0 ? null : changed;
 }
 

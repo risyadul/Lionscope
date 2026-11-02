@@ -5,6 +5,7 @@ import type {
   InflateSample,
   LogEntry,
   MemorySample,
+  SavedStateSample,
   ScreenRef,
   ScreenSpan,
   ServerMessage,
@@ -15,6 +16,8 @@ import type {
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { NetworkStore } from './networkStore.ts';
+import { SavedStateInstances } from './savedStateInstances.ts';
+import { TransactionFailures } from './transactionFailures.ts';
 import { TimeWindowBuffer } from './timeWindowBuffer.ts';
 import type { ByteLimit } from './timeWindowBuffer.ts';
 
@@ -30,6 +33,7 @@ export interface StreamItems {
   strictMode: StrictModeSample;
   inflates: InflateSample;
   viewTrees: ViewTreeSample;
+  savedStates: SavedStateSample;
 }
 export type SampleStream = keyof StreamItems;
 
@@ -58,6 +62,8 @@ export const MAX_EVENT_STREAM_BYTES = 2 * 1024 * 1024;
 export const MAX_LAYOUT_STREAM_BYTES = 1024 * 1024;
 /** Inflations arrive at 10-30 lines/s, so a 10 min window needs more than MAX_EVENTS (rows are ~200 B). */
 const MAX_INFLATES = 5000;
+/** Saved-state reports come once per Activity save; each lists up to 30 keys. */
+const MAX_SAVED_STATES = 500;
 const eventLimit = {
   maxBytes: MAX_EVENT_STREAM_BYTES,
   sizeOf: (item: object) => Buffer.byteLength(JSON.stringify(item)),
@@ -111,6 +117,11 @@ const STREAMS: { [S in SampleStream]: StreamSpec<S> } = {
     byteLimit: layoutLimit,
     toMessages: (items) => items.map((sample) => ({ type: 'viewtree', sample })),
   },
+  savedStates: {
+    maxItems: MAX_SAVED_STATES,
+    byteLimit: layoutLimit,
+    toMessages: (items) => items.map((sample) => ({ type: 'savedState', sample })),
+  },
 };
 
 export const SAMPLE_STREAMS = Object.keys(STREAMS) as SampleStream[];
@@ -131,7 +142,7 @@ type Arrays = { [S in SampleStream]: StreamItems[S][] };
 
 export function emptySnapshot(): Required<Snapshot> {
   const streams = Object.fromEntries(SAMPLE_STREAMS.map((stream) => [stream, []])) as unknown as Arrays;
-  return { ...streams, screens: [], http: [] };
+  return { ...streams, screens: [], http: [], transactionFailures: [], savedStateInstances: [] };
 }
 
 export interface SessionStoreOptions {
@@ -148,6 +159,10 @@ export interface SessionStoreOptions {
 export class SessionStore {
   /** The session's HTTP exchanges (in the snapshot as `http` summaries). */
   readonly http: NetworkStore;
+  /** The session's TransactionTooLarge failures (kept all session, in the snapshot as `transactionFailures`). */
+  readonly transactions: TransactionFailures;
+  /** The SDK's Activity instances (`liveActivities`; in the snapshot as `savedStateInstances`). */
+  readonly instances: SavedStateInstances;
   private readonly buffers: Buffers;
   private readonly screens: TimeWindowBuffer<ScreenEntry>;
 
@@ -165,6 +180,7 @@ export class SessionStore {
       strictMode: buffer('strictMode'),
       inflates: buffer('inflates'),
       viewTrees: buffer('viewTrees'),
+      savedStates: buffer('savedStates'),
     };
     this.screens = new TimeWindowBuffer(options.windowMs, MAX_SCREEN_SPANS);
     this.http = new NetworkStore({
@@ -172,6 +188,25 @@ export class SessionStore {
       emit: options.emit,
       now: options.now,
       topScreenAt: (ts) => this.topScreenAt(ts),
+    });
+    this.instances = new SavedStateInstances({
+      windowMs: options.windowMs,
+      emit: options.emit,
+      now: options.now,
+    });
+    this.transactions = new TransactionFailures({
+      emit: options.emit,
+      topScreenAt: (ts) => this.topScreenAt(ts),
+      onNew: (failure) =>
+        this.append('events', {
+          ts: failure.ts,
+          kind: 'transaction_too_large',
+          pid: failure.pid,
+          detail:
+            failure.parcelBytes === null
+              ? 'TransactionTooLargeException'
+              : `parcel size ${failure.parcelBytes} bytes`,
+        }),
     });
   }
 
@@ -239,7 +274,13 @@ export class SessionStore {
       .toArray()
       .map((entry) => entry.span)
       .filter((span) => (span.end ?? Infinity) >= cutoff);
-    return { ...streams, screens, http: this.http.summaries() };
+    return {
+      ...streams,
+      screens,
+      http: this.http.summaries(),
+      transactionFailures: this.transactions.list(),
+      savedStateInstances: this.instances.list(),
+    };
   }
 
   /** Returns the span it closed, or null when none was open. */

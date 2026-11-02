@@ -12,6 +12,7 @@ import type {
   Snapshot,
   TimelineEvent,
   TimelineEventKind,
+  TransactionFailure,
 } from '@lionscope/protocol';
 import type { Adb } from '../adb/adb.ts';
 import { ShellSession } from '../adb/shellSession.ts';
@@ -149,7 +150,10 @@ export class ProfilingSession {
       maxPending: 5000,
       windowMs,
       now: this.now,
-      flush: (entries) => this.store.append('logs', ...entries),
+      flush: (entries) => {
+        this.store.append('logs', ...entries);
+        this.store.transactions.addLogs(entries);
+      },
     });
     this.crashLog = new CrashLog(this.packageName);
     this.crashLines = new LogBatcher({
@@ -157,7 +161,10 @@ export class ProfilingSession {
       // Crashes are kept for the whole session, however old.
       windowMs: Infinity,
       now: this.now,
-      flush: (entries) => this.crashLog.add(entries),
+      flush: (entries) => {
+        this.crashLog.add(entries);
+        this.store.transactions.addCrashes(this.crashLog.list());
+      },
     });
     this.mocks = new MockRules({ now: this.now, emit: this.emit });
     this.sdk = new SdkBridge({
@@ -284,6 +291,11 @@ export class ProfilingSession {
     return this.crashLog.list();
   }
 
+  /** The session's TransactionTooLarge failures, oldest first (kept apart from the log buffer, like crashes). */
+  transactionFailures(): TransactionFailure[] {
+    return this.store.transactions.list();
+  }
+
   /** HTTP exchanges kept (status counts them without building a snapshot). */
   get httpExchangeCount(): number {
     return this.store.http.count();
@@ -335,6 +347,8 @@ export class ProfilingSession {
     if (this.stopped) return;
     this.stopped = true;
     this.sdk.stop();
+    // The SDK's Activity instances stay as the stop left them (V8).
+    this.store.instances.freeze();
     this.mocks.end();
     this.scheduler.stop();
     if (this.flushTimer) clearInterval(this.flushTimer);
@@ -431,6 +445,8 @@ export class ProfilingSession {
     if (this.pidObserved && pid === this.appPid && !reused) return;
     const previous = this.appPid;
     const firstObservation = !this.pidObserved;
+    // The old process's Activities ended with it (a new one, or one that got the same PID).
+    if (previous !== null) this.store.instances.endProcess(previous, this.now());
     this.pidObserved = true;
     this.appPid = pid;
     this.appPidStartTime = null;

@@ -9,6 +9,7 @@ import { DevicePanel } from './components/device/DevicePanel.tsx';
 import { LogcatDrawer } from './components/layout/LogcatDrawer.tsx';
 import { LogcatPanel } from './components/logcat/LogcatPanel.tsx';
 import { ScreenPanel } from './components/screens/ScreenPanel.tsx';
+import { SavedStatePanel } from './components/savedState/SavedStatePanel.tsx';
 import { SidePanel, type SideTab } from './components/side/SidePanel.tsx';
 import { InspectorContext } from './components/inspector/InspectorContext.tsx';
 import { LocationContext } from './components/location/LocationContext.tsx';
@@ -53,6 +54,7 @@ import {
   captureView,
   hasSeries,
   isLayoutCapable,
+  isSavedStateCapable,
   isNetworkCapable,
   isRxCapable,
   isSessionActive,
@@ -239,8 +241,8 @@ export function App() {
   }, [changeView]);
 
   const sdk = state.session.sdk;
-  // Servers older than 0.4.0 send options without `inflateTracking`, older than 0.9.0 without `rxTracking`:
-  // the defaults read both as on.
+  // Servers older than 0.4.0 send options without `inflateTracking`, older than 0.9.0 without `rxTracking`, older
+  // than 0.12.0 without `savedStateTracking`: the defaults read them as on.
   const serverOptions = sdk?.options;
   const sdkOptions = useMemo<SdkOptions>(
     () => (serverOptions === undefined ? DEFAULT_SDK_OPTIONS : { ...DEFAULT_SDK_OPTIONS, ...serverOptions }),
@@ -348,6 +350,11 @@ export function App() {
     isSessionActive: isActive,
   });
   const mocksState = mocksIndicator(state.networkMocks, isActive, networkLinkState(sdk));
+  const savedStatesInWindow = useMemo(
+    () => state.savedStates.filter((sample) => sample.ts >= startTs && sample.ts <= endTs),
+    [state.savedStates, startTs, endTs],
+  );
+  const stateTabCount = savedStatesInWindow.length + state.transactionFailures.length;
   const networkTabCount = useMemo(
     () => exchangesInWindow(series.http, startTs, endTs, endTs).length,
     [series.http, startTs, endTs],
@@ -536,6 +543,7 @@ export function App() {
                   stallCount={stallTabCount}
                   layoutCount={layoutTabCount}
                   networkCount={networkTabCount}
+                  stateCount={stateTabCount}
                   inspectorCount={inspector.snapshot?.nodes.length ?? 0}
                   screens={
                     <ScreenPanel
@@ -565,6 +573,22 @@ export function App() {
                     />
                   }
                   inspector={<InspectorPanel />}
+                  state={
+                    <SavedStatePanel
+                      savedStates={savedStatesInWindow}
+                      failures={state.transactionFailures}
+                      instances={state.savedStateInstances}
+                      fromTs={startTs}
+                      toTs={endTs}
+                      isMeasuring={isActive && isSavedStateCapable(sdk) && sdkOptions.savedStateTracking}
+                      tracking={isActive && isSavedStateCapable(sdk) ? sdkOptions.savedStateTracking : null}
+                      onTrackingChange={
+                        optionsBlocker === null && isSavedStateCapable(sdk)
+                          ? (savedStateTracking) => changeOptions({ savedStateTracking })
+                          : undefined
+                      }
+                    />
+                  }
                   network={
                     // Off screen (another tab, the Inspector view) it holds its last render: no work per clock tick.
                     <Frozen isFrozen={viewMode !== 'profile' || sideTab !== 'network'}>

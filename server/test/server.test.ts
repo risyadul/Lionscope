@@ -409,6 +409,7 @@ describe('Lionscope server', () => {
         strictMode: true,
         inflateTracking: true,
         rxTracking: true,
+        savedStateTracking: true,
       });
       expect(theirs.session).toEqual(mine.session);
       expect(running.session).toMatchObject({ serial: 'emulator-5554', packageName: PKG, pid: 1105 });

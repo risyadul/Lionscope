@@ -3,9 +3,10 @@ name: lionscope
 description: >-
   Profile and inspect an Android app with Lionscope: CPU, memory, frames and jank per screen, main-thread stalls
   with the line that blocked and where the work came from (RxJava, coroutine, Handler, click), layout inflation,
-  logcat, the Layout Inspector (XML layout sources, Compose call sites, live View edits) and the app's HTTP
-  requests with mock responses. Use it when the user asks why an Android screen is slow, janky or frozen, what
-  blocks the main thread, which layout is expensive, what a view on screen is or where it comes from, what
+  logcat, saved-state size and TransactionTooLargeException, the Layout Inspector (XML layout sources, Compose call
+  sites, live View edits) and the app's HTTP requests with mock responses. Use it when the user asks why an Android
+  screen is slow, janky or frozen, what blocks the main thread, which layout is expensive, why the app crashes with
+  TransactionTooLargeException, what a view on screen is or where it comes from, what
   requests the app makes, or wants to test an error or slow-network state, or to operate an emulator or device.
 license: Apache-2.0
 compatibility: Needs Node.js 22.12+, adb (Android SDK platform-tools) and an Android 7.0+ device or emulator.
@@ -91,6 +92,23 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.11.0")
 2. `search_logcat --since <iso>` around a crash's time for what led up to it. The log buffer keeps the newest
    5000 lines only (well under a minute in an app that logs its HTTP traffic): its `retained` field says how far
    back it reaches, so an empty result before `retained.oldest` means "dropped", not "nothing logged".
+
+### "TransactionTooLargeException" / "why is the saved state so big?"
+
+1. `get_saved_state`: `transactionFailures` are the app's failed binder calls from logcat (works without the SDK):
+   `parcelBytes`, the failed call (`activityStopped` = an Activity's saved state sent when it went to the
+   background), whether it crashed, and `savedState`, the SDK's measurement of that moment when it has one.
+2. With the SDK (0.12.0+): `savedStates` lists the largest reports; `fragments` names the Fragment classes by bytes
+   (a parent's bytes include its child fragments'), `top` the largest keys with their path from the Activity's bundle
+   (`fragment_<who>` › `savedInstanceState` › key on androidx.fragment 1.6+). Point at the deepest big entry: that is
+   what to stop saving (a list or cache in `onSaveInstanceState`, large Fragment `arguments`, a
+   `FragmentStatePagerAdapter` keeping every page's state).
+   `instances` lists each Activity object (live first): `saves`, `firstBytes` → `lastBytes` in the range, so a live
+   Activity whose state keeps growing stands out; `sdkInstanceIds` is the SDK's per-process counter (a rotation
+   continues the chain under a new id). It is not `get_activity_instance`'s `instanceId` (a dumpsys hash). Each
+   failure keeps its whole `report` (top keys) for the session, after `savedStates` has moved on.
+3. To reproduce: open the screen, then `press_key --key home` (device control); the report comes as the Activity stops.
+   `stop_app` instead loses the state without saving it.
 
 ### "What is this view?" / the element the user picked
 

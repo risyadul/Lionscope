@@ -16,4 +16,5 @@ enum class Screen(var value: String) {
     PAGE_3("legacy_page_3"),
     DETAIL("detail_page"),
     NETWORK("network_demo"),
+    SAVED_STATE("saved_state_demo"),
 }
