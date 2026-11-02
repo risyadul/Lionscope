@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -26,6 +27,7 @@ internal class DeviceLink(
     private val heartbeatIntervalMs: Long = HEARTBEAT_INTERVAL_MS,
     private val linkKey: () -> ByteArray? = { LinkKey.current },
     private val newNonce: () -> String = LinkProof::newNonce,
+    private val withheld: WithheldMessages = WithheldMessages(),
 ) : LinkPort {
     /** True while a socket is open; items sent while disconnected are discarded (not counted as drops). */
     @Volatile
@@ -100,9 +102,9 @@ internal class DeviceLink(
     }
 
     override fun sendV7(sizeHint: Int, encode: () -> String?) {
-        if (isConnected && isServerVerified && speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) {
-            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V7, encode))
-        }
+        if (!isConnected || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V7)) return
+        // Checked again when written (encode): the item may end up on a later connection without the proof.
+        if (isServerVerified) queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V7, encode)) else withheld.add(connection)
     }
 
     override fun sendV8(sizeHint: Int, encode: () -> String?) {
@@ -181,6 +183,7 @@ internal class DeviceLink(
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
             queue.clear()
+            withheld.startConnection()
             isConnected = true
             GatewayReader(socket.getInputStream(), onMessage = session::onMessage, onClosed = session::close).start()
             pump(session, BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8), WRITE_BUFFER))
@@ -195,6 +198,7 @@ internal class DeviceLink(
             isServerVerified = false
             if (session.welcomed) setWelcomed(false)
             if (isSession) setSession(false)
+            withheld.endConnection(connection)
         }
         val reason = session.byeReason
         return if (reason != null) LinkState.bye(reason) else LinkState.DISCONNECTED
@@ -209,10 +213,11 @@ internal class DeviceLink(
         out.flush()
         val batch = ArrayList<Any>(DRAIN_BATCH)
         var nextHeartbeat = clock() + heartbeatIntervalMs
+        val onWithheld = { withheld.add(connection) }
         while (!session.closed) {
             queue.drainTo(batch, DRAIN_BATCH, (nextHeartbeat - clock()).coerceAtLeast(0))
             if (session.closed) return
-            for (item in batch) encode(item, negotiatedVersion, isServerVerified)?.let { out.writeLine(it) }
+            for (item in batch) encode(item, negotiatedVersion, isServerVerified, onWithheld)?.let { out.writeLine(it) }
             batch.clear()
             val now = clock()
             if (now >= nextHeartbeat) {
@@ -360,7 +365,7 @@ internal class DeviceLink(
 
     /**
      * A message of v2 or later ([minVersion]), encoded on the link thread only if the connection it ends up on
-     * negotiated at least [minVersion].
+     * negotiated at least [minVersion] (and, from v7 on, has the link proof or encodes an [UnprovenType]: [encode]).
      */
     internal class V2Item(val sizeHint: Int, val minVersion: Int = DEVICE_PROTOCOL_V2, val encode: () -> String?)
 
@@ -384,24 +389,38 @@ internal class DeviceLink(
         /**
          * The line to write for a queued [item], or null. A v2 item can have been queued for an earlier connection
          * (the offer raced a reconnect); on a connection negotiated below its version, or not welcomed yet, it is
-         * dropped here, and a v7 (network) item unless the connection is [networkAuthenticated]. A failing v2 encoder
-         * drops that one message, never the connection.
+         * dropped here. An item of v7 or later needs a [networkAuthenticated] connection (the link proof) unless its
+         * line is of a type in [UnprovenType]: anything else is withheld ([onWithheld], never with its payload),
+         * whichever send call queued it, so a type nobody classified stays off a link without the proof. A failing
+         * v2 encoder drops that one message, never the connection.
          */
-        fun encode(item: Any, negotiatedVersion: Int?, networkAuthenticated: Boolean = false): String? = when (item) {
+        fun encode(
+            item: Any,
+            negotiatedVersion: Int?,
+            networkAuthenticated: Boolean = false,
+            onWithheld: () -> Unit = {},
+        ): String? = when (item) {
             // A destination queued before `welcome` is offered again once the version is agreed (see onWelcome).
             is ScreenEvent -> if (item.screen?.kind == ScreenKind.DESTINATION && negotiatedVersion == null) {
                 null
             } else {
                 DeviceMessages.screen(item.ts, item.screen, negotiatedVersion)
             }
-            is V2Item -> if (speaks(negotiatedVersion, item.minVersion) &&
-                (item.minVersion < DEVICE_PROTOCOL_V7 || networkAuthenticated)
-            ) {
-                encodeContained(item)
-            } else {
-                null
+            is V2Item -> when {
+                !speaks(negotiatedVersion, item.minVersion) -> null
+                item.minVersion < DEVICE_PROTOCOL_V7 || networkAuthenticated -> encodeContained(item)
+                else -> encodeUnproven(item, onWithheld)
             }
             else -> item.toString()
+        }
+
+        /** [item] (v7 or later) on a connection without the link proof: only a line of an [UnprovenType] goes out. */
+        private fun encodeUnproven(item: V2Item, onWithheld: () -> Unit): String? {
+            // v7 is the network inspector's version: none of it goes out unproven, so it is not even encoded.
+            val line = if (item.minVersion == DEVICE_PROTOCOL_V7) null else encodeContained(item) ?: return null
+            if (line != null && UnprovenType.allows(line)) return line
+            onWithheld()
+            return null
         }
 
         private fun encodeContained(item: V2Item): String? = try {
@@ -410,6 +429,68 @@ internal class DeviceLink(
             if (isFatal(t)) throw t
             null
         }
+    }
+}
+
+/**
+ * Message types of device protocol v8 or later that may be written on a link without the link proof
+ * ([LinkPort.isServerVerified]: no key reached the app, or the welcome's proof did not match it). Every other line of
+ * v7 or later needs the proof, whichever send call queued it ([DeviceLink.encode]): network capture never goes out
+ * unproven, and neither does a type nobody has listed here (fail-closed). A type belongs here only if its line
+ * carries nothing of the app's network traffic and nothing more than the profiling messages below v7 (stalls,
+ * layouts, Inspector snapshots) already send on any link, and if sending it changes nothing in the app.
+ */
+internal enum class UnprovenType(val wire: String) {
+    /**
+     * The answer to a live edit: `requestId`, `ok`, `error`, `liveEdits` (DeviceMessages.viewPropertyResult). Without
+     * the proof every edit is refused `unauthenticated` before any view is touched (ViewEditRequests.answer); the
+     * answer tells the server so, instead of leaving it to wait for the edit to time out.
+     */
+    VIEW_PROPERTY_RESULT("viewPropertyResult"),
+    ;
+
+    companion object {
+        private const val TYPE_PREFIX = "{\"type\":\""
+        private val wires = values().map { it.wire }.toSet()
+
+        /** Whether [line], as DeviceMessages encodes it (`type` first), is of a listed type. */
+        fun allows(line: String): Boolean {
+            if (!line.startsWith(TYPE_PREFIX)) return false
+            val end = line.indexOf('"', TYPE_PREFIX.length)
+            return end > 0 && line.substring(TYPE_PREFIX.length, end) in wires
+        }
+    }
+}
+
+/**
+ * Counts the messages held back for want of the link proof (see [DeviceLink.encode]), apart from the queue's
+ * overflow drops that the heartbeat reports. Logs at most two debug lines per connection (the first one held back and
+ * that connection's count when it ends), never a payload: a link without the proof can hold back one per request.
+ */
+internal class WithheldMessages(private val log: (String) -> Unit = { Log.d(LOG_TAG, it) }) {
+    private val total = AtomicLong()
+    private val onConnection = AtomicLong()
+
+    /** Every message held back since this process started. */
+    val count: Long
+        get() = total.get()
+
+    fun startConnection() {
+        onConnection.set(0)
+    }
+
+    /** One message held back on welcomed connection number [connection]. Any thread. */
+    fun add(connection: Int) {
+        val all = total.incrementAndGet()
+        if (onConnection.incrementAndGet() == 1L) {
+            log("Link $connection has no link proof: holding back messages that need it ($all so far)")
+        }
+    }
+
+    /** Link thread, when connection number [connection] has ended. */
+    fun endConnection(connection: Int) {
+        val held = onConnection.getAndSet(0)
+        if (held > 0) log("Link $connection held back $held messages without the link proof (${total.get()} in all)")
     }
 }
 

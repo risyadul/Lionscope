@@ -6,6 +6,16 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Android SDK: on a link without the link proof (the link key could not be handed to the app over adb, `status`
+  `sdk.network` `unverified`; or the app holds a different key), the SDK dropped every message of device protocol v7
+  and later, not only the network ones. A live edit it refused as `unauthenticated` was never answered, so the
+  server waited for it to time out. Messages of v7 and later now need the link proof unless their type is listed as
+  safe without it (only `viewPropertyResult` so far); HTTP capture, mocks and every type not listed still stay off
+  such a link. The SDK logs a debug line (no payload) the first time a link holds a message back, and its count
+  when the link ends.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added
