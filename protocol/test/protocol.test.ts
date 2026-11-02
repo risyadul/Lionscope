@@ -6,6 +6,8 @@ import {
   DEVICE_PROTOCOL_V2,
   DEVICE_PROTOCOL_V3,
   DEVICE_PROTOCOL_V4,
+  DEVICE_PROTOCOL_V9,
+  DEVICE_PROTOCOL_V10,
   isValidAvdName,
   isValidPackageName,
   isValidProcessName,
@@ -15,6 +17,7 @@ import {
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_INSPECTOR_NODES,
   MAX_INSPECTOR_WINDOWS,
+  MAX_LIVE_ACTIVITIES,
   MAX_SCREEN_CLIENT_MESSAGE_BYTES,
   MAX_SCREEN_CLIPBOARD_BYTES,
   MAX_SCREEN_KEY_CHARS,
@@ -522,6 +525,8 @@ describe('parseDeviceMessage', () => {
         'httpResponse',
         'mocksApplied',
         'viewPropertyResult',
+        'savedState',
+        'liveActivities',
       ]),
     );
   });
@@ -1145,5 +1150,111 @@ describe('parseDeviceMessage', () => {
     const multiByte = padded('é'.repeat(MAX_DEVICE_LINE_BYTES / 2));
     expect(multiByte.length).toBeLessThan(MAX_DEVICE_LINE_BYTES);
     expect(errorOf(multiByte)).toBe('message too large');
+  });
+});
+
+describe('parseDeviceMessage: v10 savedState', () => {
+  const golden = readFileSync(new URL('../fixtures/device-messages.ndjson', import.meta.url), 'utf8')
+    .split('\n')
+    .find((line) => line.startsWith('{"type":"savedState"'));
+  const withInstance = GOLDEN_LINES.find(
+    (line) => line.startsWith('{"type":"savedState"') && line.includes('"instanceId"'),
+  );
+  const message = JSON.parse(golden ?? '{}') as Record<string, unknown>;
+  const entry = (message.entries as Record<string, unknown>[])[0] ?? {};
+
+  it('parses the golden report on a v10 link, and leaves it unnegotiated below', () => {
+    expect(parseDeviceMessage(golden ?? '', DEVICE_PROTOCOL_V10)).toMatchObject({
+      ok: true,
+      value: { type: 'savedState', totalBytes: 540_152, hook: 'post_save' },
+    });
+    expect(parseDeviceMessage(golden ?? '', DEVICE_PROTOCOL_V9)).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'savedState', since: DEVICE_PROTOCOL_V10 },
+    });
+  });
+
+  it('takes a report with or without instanceId (pre-release v10 SDKs send none)', () => {
+    expect(golden).not.toContain('"instanceId"');
+    const parsed = parseDeviceMessage(golden ?? '', DEVICE_PROTOCOL_V10);
+    expect(parsed.ok && parsed.value.type === 'savedState' && parsed.value.instanceId).toBe(undefined);
+    expect(parseDeviceMessage(withInstance ?? '', DEVICE_PROTOCOL_V10)).toMatchObject({
+      ok: true,
+      value: { type: 'savedState', instanceId: 2 },
+    });
+  });
+
+  it('drops an invalid report as a diagnostic, not the link', () => {
+    const invalid = [
+      { ...message, totalBytes: -1 },
+      { ...message, hook: 'pre_save' },
+      { ...message, entries: [{ ...entry, path: [] }] },
+      { ...message, entries: [{ ...entry, path: Array.from({ length: 13 }, (_, i) => `k${i}`) }] },
+      { ...message, entries: [{ ...entry, path: ['bad\u202ekey'] }] },
+      { ...message, entries: Array.from({ length: 31 }, () => entry) },
+      { ...message, instanceId: 0 },
+      { ...message, instanceId: 1.5 },
+      { ...message, instanceId: null },
+    ];
+    for (const value of invalid) {
+      expect(parseDeviceMessage(JSON.stringify(value), DEVICE_PROTOCOL_V10)).toMatchObject({
+        ok: false,
+        invalidDiagnostic: 'savedState',
+      });
+    }
+  });
+});
+
+describe('parseDeviceMessage: v10 liveActivities', () => {
+  const goldens = GOLDEN_LINES.filter((line) => line.startsWith('{"type":"liveActivities"'));
+  const golden = JSON.parse(goldens[0] ?? '{}') as { activities: Record<string, unknown>[] };
+  const entry = (id: number) => ({ id, activity: 'com.example.MainActivity', prevId: null });
+  const line = (value: object) => JSON.stringify({ ...golden, ...value });
+
+  it('parses the golden lists (a chained instance, a truncated list) on a v10 link only', () => {
+    expect(goldens).toHaveLength(2);
+    expect(parseDeviceMessage(goldens[0] ?? '', DEVICE_PROTOCOL_V10)).toMatchObject({
+      ok: true,
+      value: {
+        type: 'liveActivities',
+        activities: [
+          { id: 1, prevId: null },
+          { id: 3, prevId: 2 },
+        ],
+      },
+    });
+    expect(parseDeviceMessage(goldens[1] ?? '', DEVICE_PROTOCOL_V10)).toMatchObject({
+      ok: true,
+      value: { type: 'liveActivities', truncated: true },
+    });
+    expect(parseDeviceMessage(goldens[0] ?? '', DEVICE_PROTOCOL_V9)).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'liveActivities', since: DEVICE_PROTOCOL_V10 },
+    });
+  });
+
+  it('takes an empty list and the full cap', () => {
+    expect(parseDeviceMessage(line({ activities: [] }), DEVICE_PROTOCOL_V10).ok).toBe(true);
+    const full = Array.from({ length: MAX_LIVE_ACTIVITIES }, (_, i) => entry(i + 1));
+    expect(parseDeviceMessage(line({ activities: full }), DEVICE_PROTOCOL_V10).ok).toBe(true);
+  });
+
+  it('drops an invalid list as a diagnostic, not the link', () => {
+    const { prevId: _absent, ...withoutPrevId } = entry(2);
+    const invalid = [
+      { activities: [entry(1), entry(1)] },
+      { activities: Array.from({ length: MAX_LIVE_ACTIVITIES + 1 }, (_, i) => entry(i + 1)) },
+      { activities: [withoutPrevId] },
+      { activities: [{ ...entry(1), id: 0 }] },
+      { activities: [{ ...entry(1), prevId: 0 }] },
+      { activities: [{ ...entry(1), activity: '' }] },
+      { truncated: 'no' },
+    ];
+    for (const value of invalid) {
+      expect(parseDeviceMessage(line(value), DEVICE_PROTOCOL_V10)).toMatchObject({
+        ok: false,
+        invalidDiagnostic: 'liveActivities',
+      });
+    }
   });
 });

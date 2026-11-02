@@ -1,0 +1,18 @@
+         1793466519.960  3299  3299 E JavaBinder: !!! FAILED BINDER TRANSACTION !!!  (parcel size = 583524)
+         1793466519.962  3299  3299 E AndroidRuntime: FATAL EXCEPTION: main
+         1793466519.962  3299  3299 E AndroidRuntime: Process: io.github.risyadul.lionscope.sample, PID: 3299
+         1793466519.962  3299  3299 E AndroidRuntime: java.lang.RuntimeException: android.os.TransactionTooLargeException: data parcel size 583524 bytes
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.app.servertransaction.PendingTransactionActions$StopInfo.run(PendingTransactionActions.java:160)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.os.Handler.handleCallback(Handler.java:873)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:99)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:193)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:6669)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:493)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:858)
+         1793466519.962  3299  3299 E AndroidRuntime: Caused by: android.os.TransactionTooLargeException: data parcel size 583524 bytes
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.os.BinderProxy.transactNative(Native Method)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.os.BinderProxy.transact(Binder.java:1127)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.app.IActivityManager$Stub$Proxy.activityStopped(IActivityManager.java:4027)
+         1793466519.962  3299  3299 E AndroidRuntime: 	at android.app.servertransaction.PendingTransactionActions$StopInfo.run(PendingTransactionActions.java:144)
+         1793466519.962  3299  3299 E AndroidRuntime: 	... 7 more

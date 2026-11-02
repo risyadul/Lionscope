@@ -45,7 +45,7 @@ describe('ShellSession', () => {
   });
 
   function nonceOf(child: FakeChild): string {
-    const match = /printf '\\n__LS_([0-9a-f]{16})_%s__\\n' \d+\n/.exec(child.input);
+    const match = /printf '\\n__LS_([0-9a-f]{16})_%s__\\n' \d+\n$/m.exec(child.input);
     if (!match?.[1]) throw new Error(`no marker command in ${JSON.stringify(child.input)}`);
     return match[1];
   }
@@ -55,10 +55,14 @@ describe('ShellSession', () => {
     const session = new ShellSession(() => child);
     const result = session.run('cmd');
     await Promise.resolve();
-    expect(child.input).toMatch(/^exec 2>&1\ncmd\nprintf '\\n__LS_[0-9a-f]{16}_%s__\\n' 1\n$/);
+    expect(child.input).toMatch(
+      /^exec 2>&1\nprintf '\\n__LSB_[0-9a-f]{16}_%s__\\n' 1; cmd; printf '\\n__LS_[0-9a-f]{16}_%s__\\n' 1\n$/,
+    );
+    const begin = `\n__LSB_${nonceOf(child)}_1__\n`;
     const marker = `\n__LS_${nonceOf(child)}_1__\n`;
     const chunks = [
-      'line one\nline',
+      begin.slice(0, 5),
+      `${begin.slice(5)}line one\nline`,
       ' two\n',
       marker.slice(0, 7),
       marker.slice(7, 20),
@@ -78,6 +82,7 @@ describe('ShellSession', () => {
     void sessionB.run('one').catch(() => undefined);
     await Promise.resolve();
     expect(nonceOf(a)).not.toBe(nonceOf(b));
+    a.stdout.write(`\n__LSB_${nonceOf(a)}_1__\n`);
     a.stdout.write('x\n__LS_DONE_1__\n');
     a.stdout.write(`y\n__LS_${nonceOf(b)}_1__\n`);
     a.stdout.write(`z\n__LS_${nonceOf(a)}_7__\n`);
@@ -100,6 +105,35 @@ describe('ShellSession', () => {
     await expect(session.run('a')).resolves.toBe('a-out\r\n');
     await expect(session.run('b')).resolves.toBe('b-out\r\n');
     expect(children).toHaveLength(1);
+    session.close();
+  });
+
+  it('drops the echo and prompt a PTY shell (API 23) prints around a command', async () => {
+    const children: FakeShellChild[] = [];
+    const session = new ShellSession(() => {
+      const child = new FakeShellChild((command) => `${command}-out\n`);
+      child.crlf = true;
+      child.ptyNoise = true;
+      children.push(child);
+      return child;
+    });
+    await expect(session.run('a')).resolves.toBe('a-out\r\n');
+    await expect(session.run('b')).resolves.toBe('b-out\r\n');
+    expect(children).toHaveLength(1);
+    session.close();
+  });
+
+  it('does not take a marker inside the echoed command line for the real one', async () => {
+    const child = new FakeChild();
+    const session = new ShellSession(() => child);
+    const result = session.run('pidof com.example');
+    await Promise.resolve();
+    const nonce = nonceOf(child);
+    const echo = child.input.split('\n')[1] ?? '';
+    child.stdout.write(`root@generic_arm64:/ # ${echo}\r\r\n`);
+    child.stdout.write(`\r\n__LSB_${nonce}_1__\r\n2455\r\n\r\n__LS_${nonce}_1__\r\n`);
+    child.stdout.write('root@generic_arm64:/ # ');
+    await expect(result).resolves.toBe('2455\r\n');
     session.close();
   });
 

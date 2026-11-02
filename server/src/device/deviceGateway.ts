@@ -7,6 +7,7 @@ import {
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_V9,
+  DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
@@ -273,7 +274,10 @@ function carriesProof(protocolVersion: number, mode: SdkLinkMode, proof: string 
 /** A mock rule set waits for 'drain' (only the latest one) while the socket buffers more than this. */
 export const MAX_PENDING_MOCK_BYTES = 1024 * 1024;
 
-/** `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` (last) on v9 links only. */
+/**
+ * `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` on v9 links, then `savedStateTracking` (last)
+ * on v10 links only.
+ */
 export function configMessage(options: SdkOptions, protocolVersion: number): GatewayMessage {
   const config = {
     type: 'config',
@@ -281,7 +285,11 @@ export function configMessage(options: SdkOptions, protocolVersion: number): Gat
     strictMode: options.strictMode,
     inflateTracking: options.inflateTracking,
   } as const;
-  return protocolVersion >= DEVICE_PROTOCOL_V9 ? { ...config, rxTracking: options.rxTracking } : config;
+  if (protocolVersion < DEVICE_PROTOCOL_V9) return config;
+  const v9 = { ...config, rxTracking: options.rxTracking };
+  return protocolVersion >= DEVICE_PROTOCOL_V10
+    ? { ...v9, savedStateTracking: options.savedStateTracking }
+    : v9;
 }
 
 /** `Name: value` lines joined by `\n` (names are tokens, values hold no CR / LF): the SDK splits them back. */

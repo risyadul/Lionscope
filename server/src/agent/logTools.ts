@@ -7,6 +7,7 @@ import { MAX_RUN_MARKERS, MARKER_LABEL } from '../session/runMarkers.ts';
 import type { RunMarker } from '../session/runMarkers.ts';
 import { FRAME_LINE, MAX_CRASHES, MORE_FRAMES } from '../store/crashLog.ts';
 import type { AppCrash } from '../store/crashLog.ts';
+import { crashFacts } from '../store/transactionFailures.ts';
 import { MAX_LOG_ENTRIES } from '../store/sessionStore.ts';
 import { defineTool, READ_ONLY, ToolError, UNTRUSTED_DESCRIPTION, UNTRUSTED_NOTE } from './tool.ts';
 import type { AgentContext } from './tool.ts';
@@ -63,7 +64,7 @@ function markerTs(ctx: AgentContext, label: string): number {
   throw new ToolError(`No marker "${label}" in this session (${listing})`);
 }
 
-const rangeInput = {
+export const rangeInput = {
   since: z
     .union([z.number().int().positive(), z.string().max(40)])
     .optional()
@@ -73,7 +74,7 @@ const rangeInput = {
 };
 
 /** [from, until) of the since / sinceMarker / untilMarker filters (session clock, epoch ms). */
-function timeRange(
+export function timeRange(
   ctx: AgentContext,
   range: { since?: number | string; sinceMarker?: string; untilMarker?: string },
 ): { from: number; until: number } {
@@ -94,7 +95,7 @@ function timeRange(
 }
 
 /** The resolved range as times (null: open). */
-function rangeView({ from, until }: { from: number; until: number }) {
+export function rangeView({ from, until }: { from: number; until: number }) {
   return {
     from: Number.isFinite(from) ? iso(from) : null,
     until: Number.isFinite(until) ? iso(until) : null,
@@ -208,10 +209,16 @@ function crashStack(crash: AppCrash): string[] {
   return lines;
 }
 
+/** `transactionTooLarge` for a crash caused by TransactionTooLargeException, else nothing. */
+function transactionTooLarge(crash: AppCrash) {
+  const facts = crashFacts(crash);
+  return facts === null ? {} : { transactionTooLarge: facts };
+}
+
 export const crashesTool = defineTool({
   name: 'get_crashes',
   title: 'Crashes',
-  description: `The profiled app's crashes since the session started, read from logcat's crash buffer and kept apart from the log buffer (search_logcat loses them once newer lines push them out): uncaught Java/Kotlin exceptions (AndroidRuntime FATAL EXCEPTION) and native crashes (fatal signals as crash_dump reports them), of the package's process and its package:* processes (also :remote ones, also processes that crashed before Lionscope saw their PID), the last ${MAX_CRASHES}. Use it to tell whether the app crashed (get_summary's processRestarts also counts force-stops). since: milliseconds ago or an ISO time; sinceMarker / untilMarker: a label set with mark (crashes from it on / before it); range gives the resolved {from, until}. Returns the newest crashes, oldest first, each {time, kind (java/native), pid, tid, thread, process, exception (class or signal), message (a native crash's abort message or signal line), stack (with a native crash's Cause line)}; the stack keeps every Caused by line and the first ${FRAMES_PER_CAUSE} frames of each exception (of the backtrace for a native crash). total counts every crash kept since then. Credentials are redacted like in search_logcat. ${UNTRUSTED_DESCRIPTION}`,
+  description: `The profiled app's crashes since the session started, read from logcat's crash buffer and kept apart from the log buffer (search_logcat loses them once newer lines push them out): uncaught Java/Kotlin exceptions (AndroidRuntime FATAL EXCEPTION) and native crashes (fatal signals as crash_dump reports them), of the package's process and its package:* processes (also :remote ones, also processes that crashed before Lionscope saw their PID), the last ${MAX_CRASHES}. Use it to tell whether the app crashed (get_summary's processRestarts also counts force-stops). since: milliseconds ago or an ISO time; sinceMarker / untilMarker: a label set with mark (crashes from it on / before it); range gives the resolved {from, until}. Returns the newest crashes, oldest first, each {time, kind (java/native), pid, tid, thread, process, exception (class or signal), message (a native crash's abort message or signal line), stack (with a native crash's Cause line), and for a crash caused by TransactionTooLargeException transactionTooLarge {parcelBytes, transaction: the failed binder call, e.g. IActivityManager / IActivityClientController.activityStopped = an Activity's saved state; get_saved_state has the details}}; the stack keeps every Caused by line and the first ${FRAMES_PER_CAUSE} frames of each exception (of the backtrace for a native crash). total counts every crash kept since then. Credentials are redacted like in search_logcat. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     ...rangeInput,
@@ -244,6 +251,8 @@ export const crashesTool = defineTool({
           exception: crash.exception,
           message: crash.message,
           stack: crashStack(crash),
+          // 0.12.0: a crash caused by TransactionTooLargeException (see get_saved_state).
+          ...transactionTooLarge(crash),
         })),
       },
     };

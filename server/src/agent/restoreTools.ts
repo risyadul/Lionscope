@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { adbShell } from '../adb/adb.ts';
 import { errorMessage } from '../log.ts';
-import { parsePidof } from '../parsers/shellValues.ts';
+import { AppPidResolver } from '../session/appPids.ts';
 import { INPUT, input, optionalSerial, targetSerial } from './deviceTools.ts';
 import { packageInput } from './sessionTools.ts';
 import { defineTool, ToolError } from './tool.ts';
@@ -158,7 +158,11 @@ function shell(ctx: AgentContext, serial: string, command: string, timeoutMs = S
 
 /** The main process of the package, or null (`pidof` exits 1 when nothing runs). */
 async function appPid(ctx: AgentContext, serial: string, packageName: string): Promise<number | null> {
-  return parsePidof(await shell(ctx, serial, `pidof ${packageName} || true`));
+  const pids = await new AppPidResolver(
+    (command) => shell(ctx, serial, `${command} || true`),
+    packageName,
+  ).resolve();
+  return pids[0] ?? null;
 }
 
 async function topRecord(ctx: AgentContext, serial: string, packageName: string) {

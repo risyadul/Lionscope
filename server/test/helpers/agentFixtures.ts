@@ -11,6 +11,7 @@ import type {
   StackFrame,
   StallSample,
   StrictModeSample,
+  TransactionFailure,
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
@@ -187,6 +188,8 @@ export interface FakeAgent {
   httpDetails: Map<number, HttpExchangeDetail>;
   /** What getCrashes answers. */
   crashes: AppCrash[];
+  /** What getTransactionFailures answers. */
+  transactionFailures: TransactionFailure[];
   /** The session's markers (a real RunMarkers, timed by `ctx.now`). */
   markers: RunMarkers;
   /** What getLogsDroppedThrough answers (null: no line dropped). */
@@ -207,6 +210,7 @@ export function fakeAgent(
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
     httpDetails: new Map(),
     crashes: [],
+    transactionFailures: [],
     markers: new RunMarkers(),
     logsDroppedThrough: null,
     ctx: undefined as unknown as FakeAgent['ctx'],
@@ -240,6 +244,7 @@ export function fakeAgent(
       getHttpExchangesSeen: () => agent.snapshot.http.length,
       getSdkEverLinked: () => agent.sdkEverLinked || agent.session.sdk?.connected === true,
       getCrashes: () => agent.crashes,
+      getTransactionFailures: () => agent.transactionFailures,
       getNetworkMocks: () => agent.mocks.state,
       setNetworkMock: (input, origin) => {
         if (!running()) throw new PublicError(NO_SESSION_MOCKS_MESSAGE);

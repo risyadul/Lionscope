@@ -1,5 +1,14 @@
 import type { ShellSession } from '../adb/shellSession.ts';
-import { parseCpuList, parseDeviceEpochMs, parsePositiveInt } from '../parsers/shellValues.ts';
+import type { LegacyLogClock } from '../parsers/logcat.ts';
+import {
+  parseCpuList,
+  parseDeviceEpochMs,
+  parseLegacyLogClock,
+  parsePositiveInt,
+} from '../parsers/shellValues.ts';
+
+/** First API level whose logcat has `-v epoch` and `--pid`. */
+export const LOGCAT_EPOCH_API = 24;
 
 export interface DeviceFacts {
   clkTck: number;
@@ -9,6 +18,11 @@ export interface DeviceFacts {
   clockOffsetMs: number;
   /** clockOffsetMs was measured (false: the probe failed and it is a guess of 0). */
   clockMeasured: boolean;
+  /**
+   * The device's logcat predates `-v epoch` / `--pid` (API < 24): its lines come as `-v threadtime` and are
+   * dated with this clock. Null: the modern dialect.
+   */
+  legacyLogClock: LegacyLogClock | null;
 }
 
 export const DEFAULT_DEVICE_FACTS: DeviceFacts = {
@@ -16,6 +30,7 @@ export const DEFAULT_DEVICE_FACTS: DeviceFacts = {
   cores: 1,
   clockOffsetMs: 0,
   clockMeasured: false,
+  legacyLogClock: null,
 };
 const PROBE_TIMEOUT_MS = 3000;
 
@@ -52,6 +67,15 @@ export async function probeDevice(
     if (deviceMs === null) return;
     facts.clockOffsetMs = Math.round((before + after) / 2 - deviceMs);
     facts.clockMeasured = true;
+  });
+  await attempt(async () => {
+    const apiLevel = parsePositiveInt(await shell.run('getprop ro.build.version.sdk', PROBE_TIMEOUT_MS));
+    if (apiLevel === null || apiLevel >= LOGCAT_EPOCH_API) return;
+    // Legacy logcat even when its clock can't be read: lines dated as UTC are better than none.
+    const probeMs = now() - facts.clockOffsetMs;
+    facts.legacyLogClock = { utcOffsetMs: 0, probeMs };
+    const clock = parseLegacyLogClock(await shell.run('date "+%s %Y-%m-%d %H:%M:%S"', PROBE_TIMEOUT_MS));
+    if (clock) facts.legacyLogClock = clock;
   });
   return facts;
 }

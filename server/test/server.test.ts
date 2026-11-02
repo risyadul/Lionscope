@@ -25,6 +25,7 @@ import {
   NO_SESSION_MESSAGE,
 } from '../src/http/wsGateway.ts';
 import { NO_EMULATOR_MESSAGE } from '../src/emulator/emulatorManager.ts';
+import { PS_NAMES_COMMAND } from '../src/session/appPids.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
@@ -60,7 +61,7 @@ describe('Lionscope server', () => {
           if (failPm) throw new Error('adb -s emulator-5554 shell pm list packages failed: /secret/path/adb');
           return 'package:com.example.app\npackage:' + PKG;
         }
-        if (args.at(-1) === 'ps -A -o PID,NAME') return `  1105 ${PKG}\n`;
+        if (args.at(-1) === PS_NAMES_COMMAND) return `  1105 ${PKG}\n`;
         return '';
       },
       (command) => device.handle(command),
@@ -409,6 +410,7 @@ describe('Lionscope server', () => {
         strictMode: true,
         inflateTracking: true,
         rxTracking: true,
+        savedStateTracking: true,
       });
       expect(theirs.session).toEqual(mine.session);
       expect(running.session).toMatchObject({ serial: 'emulator-5554', packageName: PKG, pid: 1105 });

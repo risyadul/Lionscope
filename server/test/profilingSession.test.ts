@@ -1,6 +1,7 @@
 import type { ServerMessage } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '../src/log.ts';
+import { PS_COMMAND } from '../src/session/appPids.ts';
 import { ProfilingSession } from '../src/session/profilingSession.ts';
 import type { CollectorIntervals } from '../src/session/profilingSession.ts';
 import { MAX_LOG_ENTRIES } from '../src/store/sessionStore.ts';
@@ -76,10 +77,11 @@ describe('ProfilingSession', () => {
     await vi.advanceTimersByTimeAsync(3100);
     expect(adb.shells).toHaveLength(3);
     const [cpuShell, framesShell, memoryShell] = adb.shells;
-    expect(cpuShell?.commands.slice(0, 5)).toEqual([
+    expect(cpuShell?.commands.slice(0, 6)).toEqual([
       'getconf CLK_TCK',
       'cat /sys/devices/system/cpu/possible',
       'date +%s%3N',
+      'getprop ro.build.version.sdk',
       `pidof ${PKG}`,
       'cat /proc/uptime /proc/1105/stat',
     ]);
@@ -653,6 +655,158 @@ describe('ProfilingSession', () => {
     await session.start();
     await vi.advanceTimersByTimeAsync(100);
     expect(ofType('memory')[0]?.sample.totalPssKb).toBeGreaterThan(0);
+    session.stop();
+  });
+});
+
+describe('ProfilingSession on API 23', () => {
+  function legacySetup() {
+    const device = new FakeDevice();
+    device.legacy = true;
+    device.pid = 2455;
+    const made = setup(device);
+    made.adb.pty = true;
+    return made;
+  }
+
+  it('finds the app by its exact name in ps although pidof prints every PID, and stays on ps', async () => {
+    const { adb, session } = legacySetup();
+    await session.start();
+    expect(session.state).toMatchObject({ status: 'running', pid: 2455 });
+    await vi.advanceTimersByTimeAsync(2100);
+    const commands = adb.shells[0]?.commands ?? [];
+    expect(commands.filter((command) => command.startsWith('pidof'))).toEqual([`pidof ${PKG}`]);
+    expect(commands.filter((command) => command === PS_COMMAND).length).toBeGreaterThanOrEqual(3);
+    expect(commands).toContain('cat /proc/uptime /proc/2455/stat');
+    session.stop();
+  });
+
+  it('keeps waiting for the process while ps does not list the app, and picks it up when it starts', async () => {
+    const { device, session, ofType } = legacySetup();
+    device.pid = null;
+    await session.start();
+    expect(session.state).toMatchObject({ status: 'waiting_for_process', pid: null });
+    device.pid = 2455;
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(session.state).toMatchObject({ status: 'running', pid: 2455 });
+    expect(ofType('event').map((message) => message.event.kind)).toEqual(['process_start']);
+    session.stop();
+  });
+
+  it('measures the clock and the zone offset behind the PTY noise', async () => {
+    const { adb, session } = legacySetup();
+    await session.start();
+    expect(adb.shells[0]?.commands).toEqual(
+      expect.arrayContaining(['getprop ro.build.version.sdk', 'date "+%s %Y-%m-%d %H:%M:%S"', 'date +%s%3N']),
+    );
+    session.stop();
+  });
+
+  it('follows logcat as threadtime, filters it by PID itself and does not restart it in a loop', async () => {
+    const { adb, session, device } = legacySetup();
+    await session.start();
+    expect(adb.liveLogcats.map((entry) => entry.args)).toEqual([
+      ['-s', 'emulator-5554', 'logcat', '-v', 'threadtime', '-T', '2000'],
+    ]);
+    expect(adb.crashLogcats.map((entry) => entry.args.slice(0, 8))).toEqual([
+      ['-s', 'emulator-5554', 'logcat', '-v', 'threadtime', '-b', 'crash', '-T'],
+    ]);
+    const crashStart = adb.crashLogcats[0]?.args.at(-1) ?? '';
+    expect(crashStart).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+    const iso = new Date(START + device.clockSkewMs + device.utcOffsetMs).toISOString();
+    const [startDay, startClock] = [iso.slice(5, 10), iso.slice(11, 23)];
+    expect(crashStart.startsWith(startDay)).toBe(true);
+    expect(
+      Math.abs(Date.parse(`1970-01-01T${crashStart.slice(6)}Z`) - Date.parse(`1970-01-01T${startClock}Z`)),
+    ).toBeLessThan(1000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(adb.logcats).toHaveLength(1);
+    expect(adb.crashLogcats).toHaveLength(1);
+
+    const stamp = (ms: number): string => {
+      const local = new Date(ms + device.clockSkewMs + device.utcOffsetMs).toISOString();
+      return `${local.slice(5, 10)} ${local.slice(11, 23)}`;
+    };
+    const logcat = adb.liveLogcats[0]?.child;
+    const now = Date.now();
+    logcat?.stdout.write('--------- beginning of main\r\n');
+    logcat?.stdout.write(`${stamp(now)}  2455  2455 I App: mine\r\n`);
+    logcat?.stdout.write(`${stamp(now)}  1977  2387 D Other: not mine\r\n`);
+    await vi.advanceTimersByTimeAsync(300);
+    const messages = session.snapshot().logs.map((entry) => entry.message);
+    expect(messages).toEqual(['mine']);
+    expect(session.snapshot().logs[0]?.ts).toBeGreaterThan(now - 1000);
+    expect(session.snapshot().logs[0]?.ts).toBeLessThanOrEqual(now + 1000);
+    session.stop();
+  });
+
+  it('reads the JavaBinder transaction line of the app from the legacy stream', async () => {
+    const { adb, session, device } = legacySetup();
+    await session.start();
+    const local = new Date(Date.now() + device.clockSkewMs + device.utcOffsetMs).toISOString();
+    const stamp = `${local.slice(5, 10)} ${local.slice(11, 23)}`;
+    adb.liveLogcats[0]?.child.stdout.write(
+      `${stamp}  2455  2455 E JavaBinder: !!! FAILED BINDER TRANSACTION !!!  (parcel size = 566092)\r\n`,
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    expect(session.snapshot().logs.map((entry) => [entry.tag, entry.message])).toEqual([
+      ['JavaBinder', '!!! FAILED BINDER TRANSACTION !!!  (parcel size = 566092)'],
+    ]);
+    session.stop();
+  });
+
+  it('resumes a legacy logcat after an unexpected exit without duplicating lines', async () => {
+    const { adb, session, device } = legacySetup();
+    await session.start();
+    const stamp = (): string => {
+      const local = new Date(Date.now() + device.clockSkewMs + device.utcOffsetMs).toISOString();
+      return `${local.slice(5, 10)} ${local.slice(11, 23)}`;
+    };
+    const first = adb.liveLogcats[0]?.child;
+    const line = `${stamp()}  2455  2455 I App: once\n`;
+    first?.stdout.write(line);
+    await vi.advanceTimersByTimeAsync(300);
+    first?.exit(0);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(adb.logcats).toHaveLength(2);
+    adb.liveLogcats[0]?.child.stdout.write(line);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(session.snapshot().logs.map((entry) => entry.message)).toEqual(['once']);
+    session.stop();
+  });
+});
+
+describe('ProfilingSession on modern APIs', () => {
+  it('keeps pidof and the epoch logcat as they were', async () => {
+    const { adb, session } = setup();
+    await session.start();
+    await vi.advanceTimersByTimeAsync(2100);
+    const commands = adb.shells[0]?.commands ?? [];
+    expect(commands).not.toContain(PS_COMMAND);
+    expect(commands).not.toContain('date "+%s %Y-%m-%d %H:%M:%S"');
+    expect(adb.liveLogcats[0]?.args).toEqual([
+      '-s',
+      'emulator-5554',
+      'logcat',
+      '-v',
+      'epoch',
+      '--pid=1105',
+      '-T',
+      '200',
+    ]);
+    expect(adb.crashLogcats[0]?.args.slice(0, 5)).toEqual(['-s', 'emulator-5554', 'logcat', '-v', 'epoch']);
+    expect(adb.crashLogcats[0]?.args).toContain('crash');
+    session.stop();
+  });
+
+  it('uses the epoch logcat when the SDK level is unknown', async () => {
+    const device = new FakeDevice();
+    const handle = device.handle.bind(device);
+    device.handle = (command) =>
+      command === 'getprop ro.build.version.sdk' ? 'getprop: not found\n' : handle(command);
+    const { adb, session } = setup(device);
+    await session.start();
+    expect(adb.liveLogcats[0]?.args).toContain('epoch');
     session.stop();
   });
 });

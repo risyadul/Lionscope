@@ -7,10 +7,18 @@ const EVENT_LABELS: Record<TimelineEvent['kind'], string> = {
   process_start: 'START',
   process_restart: 'RESTART',
   process_died: 'DIED',
+  transaction_too_large: 'TOO LARGE',
+  saved_state: 'STATE',
 };
+
+/** `parcel size 583524 bytes` / `orders 440060 bytes` (0.12.0 events): the size, else null. */
+const DETAIL_BYTES = /(\d+) bytes$/;
 
 export function eventLabel(event: TimelineEvent): string {
   const name = EVENT_LABELS[event.kind];
+  const bytes = event.detail === undefined ? undefined : DETAIL_BYTES.exec(event.detail)?.[1];
+  // A size says more than the PID for these: `TOO LARGE 570 KB`, `STATE 430 KB`.
+  if (bytes !== undefined) return `${name} ${Math.round(Number(bytes) / 1024)} KB`;
   return event.pid === null ? name : `${name} ${event.pid}`;
 }
 

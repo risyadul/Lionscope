@@ -127,7 +127,7 @@ class DeviceLinkTest {
                 assertEquals(hello, input.readLine())
                 // A newer server: unknown types before and after welcome, extra welcome fields, higher version.
                 client.reply("{\"type\":\"configure\",\"protocolVersion\":9,\"sampleRate\":10}")
-                client.reply("{\"type\":\"welcome\",\"serverVersion\":\"9.0.0\",\"protocolVersion\":9,\"extra\":[1,2]}")
+                client.reply("{\"type\":\"welcome\",\"serverVersion\":\"99.0.0\",\"protocolVersion\":99,\"extra\":[1,2]}")
                 waitFor { link.isWelcomed }
                 // Never above what this SDK speaks.
                 assertEquals(DEVICE_PROTOCOL_VERSION, link.negotiatedVersion)

@@ -3,6 +3,7 @@ import type { ServerMessage } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InspectLinks } from '../src/device/inspectLinks.ts';
 import type { InspectLinkListener } from '../src/device/inspectLinks.ts';
+import { PS_COMMAND } from '../src/session/appPids.ts';
 import type { SdkHello } from '../src/device/sdkLink.ts';
 import { DEVICE_GONE_LISTINGS, SessionManager } from '../src/session/sessionManager.ts';
 import { execShellCommand, FakeAdb, FakeDevice, fixture } from './helpers/fakes.ts';
@@ -147,6 +148,28 @@ describe('SessionManager routing of SDK hellos', () => {
     expect(manager.getSessionState().sdk?.connected).toBe(false);
     expect((await attach(HELLO, SERIAL)).result).toMatchObject({ ok: true, mode: 'session' });
     expect(manager.getSessionState().sdk?.connected).toBe(true);
+    await manager.close();
+  });
+
+  it('checks the PID against the exact process name in ps on API 23, where pidof prints every PID', async () => {
+    const { adb, manager, start, attach, pidofs } = setup();
+    const answer = adb.execHandler;
+    adb.execHandler = (args) => {
+      const command = execShellCommand(args);
+      if (command?.startsWith('pidof ')) return fixture('pidof-api23.txt');
+      if (command === PS_COMMAND) {
+        return `${fixture('ps-api23.txt')}u0_a55    1105  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}\n`;
+      }
+      return answer(args);
+    };
+    await start();
+    // Any PID that merely exists on the device used to pass: 1 is in pidof's list.
+    expect((await attach({ ...HELLO, pid: 1 })).result).toEqual({ ok: false, reason: 'no_session' });
+    expect((await attach({ ...HELLO, pid: 2455 })).result).toEqual({ ok: false, reason: 'no_session' });
+    expect(manager.getSessionState().sdk?.connected).toBe(false);
+    expect((await attach(HELLO)).result).toMatchObject({ ok: true, mode: 'session' });
+    expect(manager.getSessionState().sdk?.connected).toBe(true);
+    expect(pidofs().length).toBeGreaterThanOrEqual(3);
     await manager.close();
   });
 

@@ -61,4 +61,5 @@
     <string name="card_label_3">Uptime</string>
     <string name="card_action_details">Details</string>
     <string name="card_action_share">Share</string>
+    <string name="saved_state_page_format">Saved-state page %1$d: a nested child fragment keeps a large filler payload in its saved state.</string>
 </resources>

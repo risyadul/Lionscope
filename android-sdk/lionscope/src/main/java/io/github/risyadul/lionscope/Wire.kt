@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 9
+internal const val DEVICE_PROTOCOL_VERSION = 10
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -38,6 +38,26 @@ internal const val LINK_NONCE_BYTES = 16
 internal const val DEVICE_PROTOCOL_V8 = 8
 /** First version with stall origins: `stall.outerFrames` / `rx` / `coroutine` and `config.rxTracking`. */
 internal const val DEVICE_PROTOCOL_V9 = 9
+/**
+ * First version with saved-state reports (`savedState` with its `instanceId`, and `liveActivities`, session links only)
+ * and `config.savedStateTracking`.
+ */
+internal const val DEVICE_PROTOCOL_V10 = 10
+/** Which lifecycle point saw the complete bundle: `onActivityPostSaveInstanceState` (API 29+), or a main-thread post. */
+internal enum class SavedStateHook(val wire: String) {
+    POST_SAVE("post_save"),
+    POSTED("posted"),
+}
+
+/** A `liveActivities` list names at most this many Activity objects (the newest); more are flagged `truncated`. */
+internal const val MAX_LIVE_ACTIVITIES = 64
+/** `liveActivities` lists go out at most this often (the last change is always sent, this much later at most). */
+internal const val LIVE_ACTIVITIES_MIN_INTERVAL_MS = 250L
+
+/** `savedState.entries` lists at most this many keys, largest first. */
+internal const val MAX_SAVED_STATE_ENTRIES = 30
+/** `savedState` entry paths are at most this deep (keys from the Activity's bundle down). */
+internal const val MAX_SAVED_STATE_DEPTH = 12
 internal const val DEVICE_LINK_PORT = 8700
 internal const val MAX_DEVICE_LINE_BYTES = 64 * 1024
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link; every other line keeps [MAX_DEVICE_LINE_BYTES]. */
@@ -101,13 +121,15 @@ internal class SdkFrame(
 
 /**
  * Per-session options pushed by the server in `config`; [DEFAULT] until the first one arrives. [inflateTracking] is
- * v3 (a v2 server never sends it: on), [rxTracking] v9 (only used on v9 links, where the server sends it).
+ * v3 (a v2 server never sends it: on), [rxTracking] v9 (only used on v9 links, where the server sends it),
+ * [savedStateTracking] v10 (likewise).
  */
 internal data class SdkOptions(
     val stallThresholdMs: Long,
     val strictMode: Boolean,
     val inflateTracking: Boolean = true,
     val rxTracking: Boolean = true,
+    val savedStateTracking: Boolean = true,
 ) {
     companion object {
         val DEFAULT = SdkOptions(stallThresholdMs = 150, strictMode = false, inflateTracking = true, rxTracking = true)

@@ -33,6 +33,7 @@ class DeviceMessagesTest {
             setOf(
                 "hello", "screen", "frames", "heartbeat", "stall", "strictmode", "inflate", "viewtree",
                 "inspectBegin", "inspectNodes", "inspectError", "httpRequest", "httpResponse", "mocksApplied", "viewPropertyResult",
+                "savedState", "liveActivities",
             ),
             types,
         )
@@ -62,9 +63,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionNine() {
-        assertEquals(9, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V9, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionTen() {
+        assertEquals(10, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V10, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -672,6 +673,33 @@ class DeviceMessagesTest {
                 error = (message["error"] as String?)?.let { wire -> EditError.values().single { it.wire == wire } },
                 liveEdits = message.num("liveEdits").toInt(),
             ),
+        )
+        "savedState" -> DeviceMessages.savedState(
+            ts = message.num("ts").toLong(),
+            activity = message["activity"] as String,
+            instanceId = (message["instanceId"] as Double?)?.toInt(),
+            screen = message["screen"] as String?,
+            hook = SavedStateHook.values().first { it.wire == message["hook"] },
+            totalBytes = message.num("totalBytes").toInt(),
+            measureMs = message.num("measureMs"),
+            breakdownMs = (message["breakdownMs"] as Number?)?.toDouble(),
+            entries = (message["entries"] as List<*>).map { it as Map<*, *> }.map { entry ->
+                SavedStateEntry(
+                    path = (entry["path"] as List<*>).map { it as String },
+                    bytes = entry.num("bytes").toInt(),
+                    kind = SavedStateKind.values().first { it.wire == entry["kind"] },
+                    fragment = entry["fragment"] as String?,
+                    valueClass = entry["valueClass"] as String?,
+                )
+            },
+            truncated = message["truncated"] as Boolean,
+        )
+        "liveActivities" -> DeviceMessages.liveActivities(
+            ts = message.num("ts").toLong(),
+            activities = (message["activities"] as List<*>).map { it as Map<*, *> }.map { entry ->
+                LiveActivity(entry.num("id").toInt(), entry.str("activity"), (entry["prevId"] as Double?)?.toInt())
+            },
+            truncated = message["truncated"] as Boolean,
         )
         else -> error("Unknown type in golden line: $message")
     }

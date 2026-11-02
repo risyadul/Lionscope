@@ -134,12 +134,21 @@ internal object LionscopeRuntime {
             Log.w(LOG_TAG, "Lionscope diagnostics disabled: $t")
             null
         }
+        // Idle until a v10 session asks for it; measures each Activity's complete saved state.
+        val savedState = try {
+            SavedStateProfiler(deviceLink, main)
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            Log.w(LOG_TAG, "Lionscope saved-state profiler disabled: $t")
+            null
+        }
         screenTracker = screens
         mainScheduler = main
         app.registerActivityLifecycleCallbacks(screens)
         frames?.let(app::registerActivityLifecycleCallbacks)
         diagnostics?.let(app::registerActivityLifecycleCallbacks)
         layouts?.let(app::registerActivityLifecycleCallbacks)
+        savedState?.let(app::registerActivityLifecycleCallbacks)
         NetworkCapture.shared.attach(deviceLink)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.
         deviceLink.start()

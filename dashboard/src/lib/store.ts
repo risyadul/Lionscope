@@ -18,6 +18,8 @@ import type {
   LogEntry,
   MemorySample,
   NetworkMocksState,
+  SavedStateInstance,
+  SavedStateSample,
   ScreenSpan,
   ServerMessage,
   SessionState,
@@ -25,10 +27,12 @@ import type {
   StallSample,
   StrictModeSample,
   TimelineEvent,
+  TransactionFailure,
   ViewEditError,
   ViewTreeSample,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
+import { pruneSavedStateInstances } from '@lionscope/protocol/insights';
 
 export const DEFAULT_BUFFER_WINDOW_MS = 10 * 60_000;
 export const MAX_LOGS = 5000;
@@ -103,6 +107,15 @@ export interface DashboardState {
   inflates: InflateSample[];
   /** One view-tree snapshot per screen visit (0.4.0), ascending by `ts`. */
   viewTrees: ViewTreeSample[];
+  /** SDK saved-state reports (0.12.0), ascending by `ts`. */
+  savedStates: SavedStateSample[];
+  /** The session's TransactionTooLarge failures (0.12.0), by id (a later report of an id replaces it); kept all session. */
+  transactionFailures: TransactionFailure[];
+  /**
+   * The SDK's Activity instances (0.12.0), upserted by `pid` and `id`; closed ones leave like the server's (by
+   * `closedAt` against the window, then the cap).
+   */
+  savedStateInstances: SavedStateInstance[];
   /** The latest Layout Inspector snapshot (0.5.0), from any client; null until one is taken. */
   inspection: InspectorSnapshot | null;
   /** The element picked in the Inspector (by the user or an AI agent), for `inspection` only. */
@@ -165,6 +178,9 @@ export const MAX_STRICT_MODE = 2000;
 /** Inflations are coalesced per (layout, screen, second), so a busy list fills this faster than stalls do. */
 export const MAX_INFLATES = 5000;
 export const MAX_VIEW_TREES = 500;
+/** Mirrors the server's caps: saved-state reports in the window, failures per session. */
+export const MAX_SAVED_STATES = 500;
+export const MAX_TRANSACTION_FAILURES = 50;
 /** Mirrors the server's exchange cap (the oldest go first). */
 export const MAX_HTTP = 5000;
 /** More than the edits one client can have in flight (the socket allows 20 messages a second). */
@@ -202,6 +218,9 @@ export function createInitialState(): DashboardState {
     strictMode: [],
     inflates: [],
     viewTrees: [],
+    savedStates: [],
+    transactionFailures: [],
+    savedStateInstances: [],
     inspection: null,
     inspectorSelection: null,
     http: [],
@@ -429,6 +448,8 @@ function pruneAll(state: DashboardState): DashboardState {
   const strictMode = pruneBefore(state.strictMode, cutoff);
   const inflates = pruneBefore(state.inflates, cutoff);
   const viewTrees = pruneBefore(state.viewTrees, cutoff);
+  const savedStates = pruneBefore(state.savedStates, cutoff);
+  const savedStateInstances = pruneInstances(state.savedStateInstances, state.latestTs, state.bufferWindowMs);
   const http = pruneExchangesBefore(state.http, cutoff);
   if (
     cpu === state.cpu &&
@@ -442,6 +463,8 @@ function pruneAll(state: DashboardState): DashboardState {
     strictMode === state.strictMode &&
     inflates === state.inflates &&
     viewTrees === state.viewTrees &&
+    savedStates === state.savedStates &&
+    savedStateInstances === state.savedStateInstances &&
     http === state.http
   ) {
     return state;
@@ -459,8 +482,20 @@ function pruneAll(state: DashboardState): DashboardState {
     strictMode,
     inflates,
     viewTrees,
+    savedStates,
+    savedStateInstances,
     http,
   };
+}
+
+/** The same array when nothing goes. */
+function pruneInstances(
+  instances: SavedStateInstance[],
+  latestTs: number,
+  windowMs: number,
+): SavedStateInstance[] {
+  const kept = pruneSavedStateInstances(instances, latestTs, windowMs);
+  return kept.length === instances.length ? instances : kept;
 }
 
 function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): DashboardState {
@@ -476,6 +511,13 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
   // Older servers omit the 0.4.0 streams.
   const inflates = capTail(byTs((snapshot.inflates ?? []).filter((i) => i.ts <= horizon)), MAX_INFLATES);
   const viewTrees = capTail(byTs((snapshot.viewTrees ?? []).filter((v) => v.ts <= horizon)), MAX_VIEW_TREES);
+  // Older servers omit the 0.12.0 streams.
+  const savedStates = capTail(
+    byTs((snapshot.savedStates ?? []).filter((s) => s.ts <= horizon)),
+    MAX_SAVED_STATES,
+  );
+  const transactionFailures = [...(snapshot.transactionFailures ?? [])].sort((a, b) => a.id - b.id);
+  const savedStateInstances = [...(snapshot.savedStateInstances ?? [])];
   // Older servers omit the 0.7.0 stream. A detail answer for an exchange the new list doesn't hold is dropped.
   const http = normalizeExchanges((snapshot.http ?? []).filter((e) => e.ts <= horizon));
   const detailId = state.httpDetail?.id;
@@ -493,6 +535,9 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
     strictMode,
     inflates,
     viewTrees,
+    savedStates,
+    transactionFailures,
+    savedStateInstances,
     http,
     httpDetail,
     nextLogSeq: state.nextLogSeq + logs.length,
@@ -507,6 +552,7 @@ function applySnapshot(state: DashboardState, snapshot: Snapshot, now: number): 
         strictMode,
         inflates,
         viewTrees,
+        savedStates,
         http,
       ),
       maxSpanTs(screens),
@@ -540,6 +586,7 @@ function resetTimeline(state: DashboardState, ts: number): DashboardState {
     strictMode: [],
     inflates: [],
     viewTrees: [],
+    savedStates: [],
     http: [],
     httpDetail: null,
     latestTs: ts,
@@ -606,6 +653,33 @@ function applyViewTree(state: DashboardState, sample: ViewTreeSample, now: numbe
   if (sample.ts > now + FUTURE_SLACK_MS) return state;
   const viewTrees = insertByTs(state.viewTrees, sample, MAX_VIEW_TREES, false);
   return pruneAll({ ...state, viewTrees, latestTs: advance(state, sample.ts) });
+}
+
+function applySavedState(state: DashboardState, sample: SavedStateSample, now: number): DashboardState {
+  if (sample.ts > now + FUTURE_SLACK_MS) return state;
+  const savedStates = insertByTs(state.savedStates, sample, MAX_SAVED_STATES, false);
+  return pruneAll({ ...state, savedStates, latestTs: advance(state, sample.ts) });
+}
+
+/** A failure is new or replaces the one with its id (its crash joined it); the oldest go past the cap. */
+function applyTransactionFailure(state: DashboardState, failure: TransactionFailure): DashboardState {
+  const others = state.transactionFailures.filter((known) => known.id !== failure.id);
+  const transactionFailures = [...others, failure]
+    .sort((a, b) => a.id - b.id)
+    .slice(-MAX_TRANSACTION_FAILURES);
+  return { ...state, transactionFailures };
+}
+
+/** An instance is new or replaces the one with its process and number. */
+function applySavedStateInstance(state: DashboardState, instance: SavedStateInstance): DashboardState {
+  const index = state.savedStateInstances.findIndex(
+    (known) => known.pid === instance.pid && known.id === instance.id,
+  );
+  const savedStateInstances =
+    index < 0
+      ? [...state.savedStateInstances, instance]
+      : state.savedStateInstances.map((known, i) => (i === index ? instance : known));
+  return pruneAll({ ...state, savedStateInstances });
 }
 
 /** Exchanges start in the past (the server clamps them into the session): bogus futures are dropped like stalls. */
@@ -684,6 +758,12 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
       return applyInflate(state, msg.sample, now);
     case 'viewtree':
       return applyViewTree(state, msg.sample, now);
+    case 'savedState':
+      return applySavedState(state, msg.sample, now);
+    case 'transactionFailure':
+      return applyTransactionFailure(state, msg.failure);
+    case 'savedStateInstance':
+      return applySavedStateInstance(state, msg.instance);
     case 'inspection': {
       // A selection belongs to the snapshot it was made on.
       const keep = state.inspectorSelection?.snapshotId === msg.snapshot.id;

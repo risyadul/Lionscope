@@ -74,7 +74,10 @@ internal interface LinkPort {
     /** [sendV2] for v4 messages: dropped unless the connection negotiated v4. */
     fun sendV4(sizeHint: Int, encode: () -> String?)
 
-    /** [sendV2] for v7 (network) messages: dropped unless the connection [isServerVerified]. */
+    /**
+     * [sendV2] for v7 (network) messages: dropped unless the connection [isServerVerified], checked again when it is
+     * written.
+     */
     fun sendV7(sizeHint: Int, encode: () -> String?)
 
     /**
@@ -83,6 +86,12 @@ internal interface LinkPort {
      * bookkeeping.
      */
     fun addMocksListener(listener: (GatewayMessage) -> Unit)
-    /** [sendV2] for v8 messages: dropped unless the connection negotiated v8. */
+    /**
+     * [sendV2] for v8 messages: dropped unless the connection negotiated v8. On a connection that is not
+     * [isServerVerified], only a line of an [UnprovenType] is written; any other is held back.
+     */
     fun sendV8(sizeHint: Int, encode: () -> String?)
+
+    /** [sendV2] for v10 messages: dropped unless the connection negotiated v10. */
+    fun sendV10(sizeHint: Int, encode: () -> String?)
 }

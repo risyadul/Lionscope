@@ -386,6 +386,83 @@ indicator stays; click it to go back to the Mocks list. To try it, the sample ap
 demo** calls a small local API: `node android-sdk/sample/sample-api.mjs`, reached from an emulator at
 `http://10.0.2.2:8745`.
 
+### Saved state: what makes it too large
+
+When an Activity goes to the background, Android sends its saved state (`onSaveInstanceState`, including every
+Fragment's state and arguments) to the system in one binder call. Above about 500 KB-1 MB that call fails, and
+since Android 7 the app crashes with `TransactionTooLargeException` while the user is not even looking at it.
+
+**Without the SDK**, the server reads these failures from logcat: JavaBinder's `!!! FAILED BINDER TRANSACTION !!!
+(parcel size = N)` line of the app's process and the crash caused by the exception (`data parcel size N bytes`,
+the failed call such as `IActivityManager.activityStopped`, or `IActivityClientController.activityStopped` from
+Android 12). A line and its crash within 3 s are one failure. Each failure is a **TOO LARGE n KB** marker on the
+timeline and a row in the **State** tab, `get_crashes` adds `transactionTooLarge` (parcel size, failed call) to such
+a crash, and `get_saved_state` lists them (the screen on top, when the SDK names screens).
+
+**With the SDK (0.12.0+)**, every Activity's saved state is measured once the save is complete, i.e. what the system
+is about to send: its size as the system parcels it and, from 64 KB, the largest keys down through nested and child
+fragments, each Fragment's state named by its class (`OrderListFragment (fragment_b2…)`). The State tab lists the
+reports of the selected window, largest first; a report opens to its keys, indented by depth, with each key's share of
+the total (a key includes everything nested in it). States of 64 KB or more are also **STATE n KB** markers on the
+timeline. A failure is joined with the newest report of the same process at or before it within 3 s (the nearest one
+after it when there is none before); the SDK and logcat are separate streams, so a report that arrives late replaces
+an older one. `get_saved_state` answers both "what failed" and "which fragment made it big".
+
+- **When it measures.** `ActivityLifecycleCallbacks.onActivitySaveInstanceState` is too early: it runs inside the
+  Activity's `super.onSaveInstanceState()`, before `ComponentActivity` saves the Fragment state and before keys the
+  app puts after `super` (measured there, the sample's 440 KB state reads 1.5 KB). On API 29+ the SDK measures in
+  `onActivityPostSaveInstanceState`. On API 23-28 it posts the measurement from `onActivitySaveInstanceState` to the
+  main thread: it runs after the save returned and before the system reports the stop (that report is posted to the
+  same queue later; checked on API 23, 28 and 31 by the order of the measurement and JavaBinder's line; on API 23-27
+  the save comes before `onStop`, and the measurement after it). Both see keys added after `super` and an Activity
+  that goes to the background without being destroyed.
+- **The app's bundle is never changed.** The total is one `Parcel` write of the bundle; the breakdown writes copies
+  (`Bundle(Bundle)`) key by key. Values are never read into the report: only keys, value class names and sizes.
+  Keys are strings the app chooses, so they are redacted like captured HTTP text, on the device and again on the
+  server: a URL's query values and userinfo, sensitive `name=value` pairs and `Bearer …` credentials become
+  `‹redacted›`; a plain key name such as `token` or `password` stays.
+- **Fragments.** With androidx.fragment 1.5+ each Fragment's state is a `fragment_<who>` Bundle; with 1.4 the SDK
+  opens androidx's own state records by reflection (tested with 1.4.1 and 1.6.2). Without androidx.fragment, or if
+  a future version renames those fields, the record is listed by its size and class without the Fragments in it.
+  Each Fragment instance is listed once, also one nested in a Fragment of its own class.
+- **Per Activity, live and trend.** The SDK numbers each Activity object of the process (1, 2, 3…) and tells the
+  server which ones are alive whenever one is created or destroyed (at most four times a second, the last change
+  always sent) and after each (re)connect. The State tab lists the **Live** Activities, each with its last save, its
+  number (`#2`) and how its saves grew in the window (`125 → 163 KB · 3 saves`, or `not saved yet`), largest or latest
+  first; a row opens to its saves, newest first, each with its keys. An Activity recreated by a configuration change
+  (rotation) continues the row of the one it replaced (`#2 ← #1`). Finished ones and those of an ended process fold
+  into **Closed**. A TransactionTooLarge failure keeps its saved-state report, keys included, for the whole session
+  (up to 1 MB of reports together, the oldest go first). Limits: an Activity recreated any other way ("Don't keep
+  activities", process death) is a new row; after the link was down, a finished Activity closes when the SDK
+  reconnects, not when it finished; a PID that a new process reuses within the window could be mistaken for the old
+  one. Reports from a pre-release 0.12.0 SDK carry no number and are listed apart (**Unattributed**).
+
+Main-thread cost. Each report carries two **separate** timings: `measureMs`, the one `Parcel` write that gives the
+total, and `breakdownMs`, the key-by-key breakdown that follows it (from 64 KB only; it does not include
+`measureMs`). What the save costs is their sum for that report; its percentiles below are of the per-report sums,
+not sums of percentiles. The measurement runs on the main thread after the save and before the system reports the
+stop (`activityStopped`), so it delays that report by this much; the latency of the binder call itself was not
+measured. Saving happens once each time an Activity goes to the background, never per frame.
+
+Sample state (443 KB: 3 ViewPager pages, each with a nested child fragment, plus 120 KB put after `super`), debug
+build, androidx.fragment 1.6.2, API 31 emulator (Pixel 4a), 130 saves of which the first 10 are left out as warm-up:
+
+| Run                                          | `measureMs` p50 / p95 | `breakdownMs` p50 / p95 | Per-save total p50 / p95 / max | p95 of the total per 40 saves |
+| -------------------------------------------- | --------------------- | ----------------------- | ------------------------------ | ----------------------------- |
+| Run 1 (renderer and host load not recorded)  | 0.68 / 6.16 ms        | 1.10 / 4.86 ms          | 1.86 / 14.98 / 49.89 ms        | 25.28, 3.76, 15.22 ms         |
+| Run 2 (software renderer, host load avg ~37) | 1.07 / 12.08 ms       | 2.39 / 43.23 ms         | 4.77 / 83.02 / 166.53 ms       | 49.33, 52.47, 83.02 ms        |
+
+These are local results, not a budget or a guarantee. The median is a few milliseconds; the tail moves a lot between
+runs and between batches of the same run (the p95 of 40 saves ranged from 3.8 to 25 ms in run 1), and it was far
+higher in run 2, on a loaded host with software rendering. What causes the spikes (GC, JIT, host scheduling) was
+not isolated. An earlier 20-save run gave a p95 `measureMs` of 9.88 ms on the API 31 emulator and 0.47 ms on an
+API 28 one (total p95 not computed then); 20 saves are too few for a stable tail. A 13 KB state costs about 0.3 ms
+(the total only, no breakdown).
+
+Turn it off with the **Saved-state tracking** switch in the State tab (`set_sdk_options` `savedStateTracking:
+false`) and nothing is measured; switch it on again the same way. It is also idle outside a profiling session and on
+servers older than 0.12.0.
+
 ### Operating the emulator from the dashboard
 
 The device picker lists every AVD, also the ones that are off. **Boot** starts one without a window on the host
@@ -508,7 +585,7 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.11.0"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.12.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
@@ -575,7 +652,7 @@ Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`
 same API (its interceptor only passes requests on):
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.11.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.12.0"
 ```
 
 ### Cost when no dashboard is connected
@@ -593,6 +670,8 @@ releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.11.0"
   activity is started; StrictMode is off until you enable it, and its reporter thread stays idle (no work)
   after the first enable.
 - `Lionscope.okHttpInterceptor()` outside a profiling session is one volatile read and `chain.proceed`.
+- Saved-state measurement runs only during a profiling session with a 0.12.0+ server (see
+  [Saved state](#saved-state-what-makes-it-too-large)); otherwise a lifecycle callback returns at once.
 - The RxJava hooks are installed only during a profiling session (see [RxJava tracking](#finding-the-line-that-blocks-the-main-thread));
   a process that never had one has none. The Looper's message logging is not used (a `Printer` would cost about
   3 µs per main-thread message and 17 µs per coroutine dispatch).
@@ -622,8 +701,8 @@ Three ways in, one set of tools:
 
 | Tools                      | What they do                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_location` (the location Lionscope set on a device, an emulator's GPS fix), `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls` (by culprit line and by origin: the Rx chain's subscribe site, the coroutine, the posted Runnable), `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat` (the newest 5000 lines, credentials redacted; from a time or between `mark` markers), `get_crashes` (the session's Java and native crashes from logcat's crash buffer, kept after their lines leave the log buffer)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking, RxJava tracking), `mark` (names a moment of the session, e.g. the start of a test run, for `sinceMarker` / `untilMarker` in `search_logcat` and `get_crashes`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Read (always)              | `status` (devices, emulators, session, SDK link), `list_apps`, `get_location` (the location Lionscope set on a device, an emulator's GPS fix), `get_summary` (CPU, memory, FPS, jank, stalls, top screens and layouts of the last 1/5/10 min), `get_screens`, `get_stalls` (by culprit line and by origin: the Rx chain's subscribe site, the coroutine, the posted Runnable), `get_strictmode`, `get_layouts`, `get_view_tree`, `search_logcat` (the newest 5000 lines, credentials redacted; from a time or between `mark` markers), `get_crashes` (the session's Java and native crashes from logcat's crash buffer, kept after their lines leave the log buffer; a TransactionTooLargeException's parcel size and failed call), `get_saved_state` (TransactionTooLarge failures from logcat, without the SDK too; with it each Activity's saved-state size and its largest keys and Fragments)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Session (always)           | `start_session`, `stop_session`, `set_sdk_options` (stall threshold, StrictMode, inflation tracking, RxJava tracking, saved-state tracking), `mark` (names a moment of the session, e.g. the start of a test run, for `sinceMarker` / `untilMarker` in `search_logcat` and `get_crashes`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Inspector (always)         | `get_inspector_selection` (the element you selected in the dashboard's Layout Inspector: its attributes, a view's XML layout and line or a composable's Kotlin call site, owning Fragment, Activity and destination, ancestors and children, and a crop of the screenshot; structure only for a node the agent selected), `select_inspector_node` (highlights a node in the dashboard, marked AI)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Network (always)           | `get_network` (the app's HTTP requests in the last 1/5/10 min: method, URL, status, timings, sizes, mocked; filter by method, status class, host, text), `get_network_request` (one request's headers and timings; its bodies only with `--allow-network-bodies`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Device (opt-in, see below) | `get_ui_tree` (the screen's elements: text, description, id, bounds, flags), `inspect_screen` (a Layout Inspector snapshot, shown in the dashboard too), `set_view_property` / `revert_view_properties` (change a View of the snapshot live, temporarily: visibility, alpha, padding, margins, size, translation, elevation, colors, TextView text and size; SDK 0.9.0+, during a session), `tap_element`, `wait_for`, `scroll_to` (find elements by text, id, description or hint), `screenshot` (720 px short edge, with the screen's mean luminance, non-black share and a `blank` flag for a one-colour screen), `tap`, `swipe`, `type_text`, `press_key` (navigation and editing keys; never power, sleep or lock), `run_inputs` (a timed sequence of taps, element taps, keys and waits in one adb call), `launch_app`, `stop_app` (force-stop an app; its unsaved state is lost), `get_activity_instance` (the activity on screen and whether it was recreated or its process restarted since the last call), `set_dont_keep_activities` (Developer options' "Don't keep activities", effective at once), `simulate_process_death` (kill a backgrounded app keeping its task, then reopen it), `bring_to_front` (an app's task back as Recents does it), `boot_emulator`, `shutdown_emulator`, `set_network_mock`, `clear_network_mocks` (mock responses or failures, see [Network](#network-requests-and-mocks)), `set_location`, `clear_location` (move the device, see [Location](#changing-the-devices-location)) |
@@ -1015,6 +1094,8 @@ their stack.
   the `adb reverse` mapping, another app on the device listening on `127.0.0.1:8700` could act as the server and
   receive that stream, including view trees if it asks for them: don't keep untrusted apps on a device you
   inspect with Lionscope.
+- During a profiling session the SDK sends each Activity's saved-state size and, from 64 KB, the keys of its largest
+  entries, the class names of their values and of the Fragments they belong to: never the values themselves.
 - With `Lionscope.okHttpInterceptor()` in the app, the SDK also sends, during a profiling session only, each HTTP
   request's method, URL, headers, timings and up to 64 KB of each text body, after redacting credential-looking
   values (see [Network](#network-requests-and-mocks)). The server checks every field's size and redacts again.
@@ -1097,6 +1178,14 @@ their stack.
   devices are measured correctly. Some OEM builds (e.g. HyperOS on Xiaomi, Android 15) set vendor flag bits on
   normal frames and swap the `FrameInterval` / `FrameStartTime` header labels; the parser handles both.
 
+- **Saved state is measured, not predicted.** The limit is the binder buffer shared by the whole process (1 MB),
+  so a failure can come below the measured size when other calls are in flight, and the parcel size in the failure
+  is a little larger than the report (the call's own fields). The breakdown lists at most 30 keys of 1 KB or more,
+  12 levels deep. Fragment classes come from androidx.fragment's state; a state that another library parcels
+  as its own type is listed as one value. The SDK's posted measurement before API 29 was checked on API 23 and 28
+  (not 24-27): it runs after the save and before the stop is reported. On API 23 the server's profiling session does
+  not reach the app's process yet (it waits for a process ID and reads no logcat), so failures there are neither read
+  from logcat nor joined with the SDK's reports, which still arrive.
 - **Network capture needs OkHttp.** Only requests made through an `OkHttpClient` with `Lionscope.okHttpInterceptor()`
   are seen (Retrofit, Ktor's OkHttp engine, Coil/Glide's OkHttp integrations); `HttpURLConnection`, Ktor's CIO
   engine, WebView, gRPC's own transports and native code are not. OkHttp 4.x and 5.x are supported (tested with
@@ -1143,7 +1232,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.11.0`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.12.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License

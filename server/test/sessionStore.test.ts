@@ -139,8 +139,11 @@ describe('SessionStore', () => {
       strictMode: [],
       inflates: [],
       viewTrees: [],
+      savedStates: [],
       screens: [],
       http: [],
+      transactionFailures: [],
+      savedStateInstances: [],
     });
     expect(setup().store.snapshot()).toEqual(emptySnapshot());
     expect(SAMPLE_STREAMS).toContain('breakdown');

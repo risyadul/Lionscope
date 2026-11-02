@@ -12,6 +12,7 @@ import type {
   Snapshot,
   TimelineEvent,
   TimelineEventKind,
+  TransactionFailure,
 } from '@lionscope/protocol';
 import type { Adb } from '../adb/adb.ts';
 import { ShellSession } from '../adb/shellSession.ts';
@@ -26,11 +27,12 @@ import { FrameAggregator } from '../metrics/frames.ts';
 import { FRAMESTATS_HISTORY_ROWS, parseFramestats } from '../parsers/gfxinfo.ts';
 import { parseMeminfo } from '../parsers/meminfo.ts';
 import { parseProcStat } from '../parsers/procStat.ts';
-import { parsePidList, parsePidof, parseUptime } from '../parsers/shellValues.ts';
+import { parseUptime } from '../parsers/shellValues.ts';
 import { CrashLog } from '../store/crashLog.ts';
 import type { AppCrash } from '../store/crashLog.ts';
 import { SessionStore } from '../store/sessionStore.ts';
 import { CollectorErrorReporter } from './collectorErrors.ts';
+import { AppPidResolver } from './appPids.ts';
 import { CollectorScheduler } from './collectorScheduler.ts';
 import { DEFAULT_DEVICE_FACTS, probeDevice } from './deviceProbe.ts';
 import { LogBatcher, startLogcatStream } from './logcatStream.ts';
@@ -87,6 +89,7 @@ export class ProfilingSession {
   private readonly intervals: CollectorIntervals;
   private readonly shells: Record<'cpu' | 'frames' | 'memory', ShellSession>;
   private readonly scheduler: CollectorScheduler;
+  private readonly appPids: AppPidResolver;
   private readonly onReady: (() => void) | undefined;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -143,13 +146,20 @@ export class ProfilingSession {
       frames: new ShellSession(spawnShell),
       memory: new ShellSession(spawnShell),
     };
+    this.appPids = new AppPidResolver(
+      (command) => this.shells.cpu.run(command, TIMEOUTS.cpu),
+      this.packageName,
+    );
     const windowMs = options.bufferWindowMs ?? BUFFER_WINDOW_MS;
     this.store = new SessionStore({ windowMs, emit: this.emit, now: this.now });
     this.logs = new LogBatcher({
       maxPending: 5000,
       windowMs,
       now: this.now,
-      flush: (entries) => this.store.append('logs', ...entries),
+      flush: (entries) => {
+        this.store.append('logs', ...entries);
+        this.store.transactions.addLogs(entries);
+      },
     });
     this.crashLog = new CrashLog(this.packageName);
     this.crashLines = new LogBatcher({
@@ -157,7 +167,10 @@ export class ProfilingSession {
       // Crashes are kept for the whole session, however old.
       windowMs: Infinity,
       now: this.now,
-      flush: (entries) => this.crashLog.add(entries),
+      flush: (entries) => {
+        this.crashLog.add(entries);
+        this.store.transactions.addCrashes(this.crashLog.list());
+      },
     });
     this.mocks = new MockRules({ now: this.now, emit: this.emit });
     this.sdk = new SdkBridge({
@@ -284,22 +297,27 @@ export class ProfilingSession {
     return this.crashLog.list();
   }
 
+  /** The session's TransactionTooLarge failures, oldest first (kept apart from the log buffer, like crashes). */
+  transactionFailures(): TransactionFailure[] {
+    return this.store.transactions.list();
+  }
+
   /** HTTP exchanges kept (status counts them without building a snapshot). */
   get httpExchangeCount(): number {
     return this.store.http.count();
   }
 
   /**
-   * `pidof` the app now (concurrent callers share one call) and apply the result; resolves with every PID
-   * of the app. A no-op ([]) before the session is ready.
+   * Look the app's PIDs up now (concurrent callers share one lookup, see AppPidResolver) and apply the first;
+   * resolves with every PID of the app. A no-op ([]) before the session is ready.
    */
   refreshPid(): Promise<number[]> {
     if (!this.isReady) return Promise.resolve([]);
-    this.pidRefresh ??= this.shells.cpu
-      .run(`pidof ${this.packageName}`, TIMEOUTS.cpu)
-      .then((output) => {
-        if (!this.stopped) this.updatePid(parsePidof(output), false);
-        return parsePidList(output);
+    this.pidRefresh ??= this.appPids
+      .resolve()
+      .then((pids) => {
+        if (!this.stopped) this.updatePid(pids[0] ?? null, false);
+        return pids;
       })
       .finally(() => {
         this.pidRefresh = null;
@@ -335,6 +353,8 @@ export class ProfilingSession {
     if (this.stopped) return;
     this.stopped = true;
     this.sdk.stop();
+    // The SDK's Activity instances stay as the stop left them (V8).
+    this.store.instances.freeze();
     this.mocks.end();
     this.scheduler.stop();
     if (this.flushTimer) clearInterval(this.flushTimer);
@@ -431,6 +451,8 @@ export class ProfilingSession {
     if (this.pidObserved && pid === this.appPid && !reused) return;
     const previous = this.appPid;
     const firstObservation = !this.pidObserved;
+    // The old process's Activities ended with it (a new one, or one that got the same PID).
+    if (previous !== null) this.store.instances.endProcess(previous, this.now());
     this.pidObserved = true;
     this.appPid = pid;
     this.appPidStartTime = null;
@@ -462,6 +484,7 @@ export class ProfilingSession {
         adb: this.adb,
         serial: this.serial,
         pid,
+        legacyClock: this.device.legacyLogClock,
         clockOffsetMs: this.device.clockOffsetMs,
         resume: this.logs.resume,
         onEntry: (entry, deviceTs) => this.logs.add(entry, deviceTs),
@@ -494,6 +517,7 @@ export class ProfilingSession {
         serial: this.serial,
         pid: null,
         buffer: 'crash',
+        legacyClock: this.device.legacyLogClock,
         clockOffsetMs: this.device.clockOffsetMs,
         // Without a measured clock the session's start on the device clock is unknown: start from the buffer's last
         // line instead, which CrashLog passes over (a report is only read from its first line on).

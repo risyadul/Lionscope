@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { parseDevices } from '../src/parsers/devices.ts';
 import { FRAMESTATS_HISTORY_ROWS, parseFramestats } from '../src/parsers/gfxinfo.ts';
-import { MAX_LOG_MESSAGE_CHARS, parseLogcatLine } from '../src/parsers/logcat.ts';
+import { MAX_LOG_MESSAGE_CHARS, parseLogcatLine, parseThreadtimeLine } from '../src/parsers/logcat.ts';
+import type { LegacyLogClock } from '../src/parsers/logcat.ts';
 import { parseMeminfo } from '../src/parsers/meminfo.ts';
 import { buildAppList, parsePackageList } from '../src/parsers/packages.ts';
 import { parseProcStat } from '../src/parsers/procStat.ts';
-import { parsePs } from '../src/parsers/ps.ts';
+import { parsePs, parsePsPids } from '../src/parsers/ps.ts';
 import {
+  isImplausibleAppPidList,
   parseCpuList,
   parseDeviceEpochMs,
+  parseLegacyLogClock,
+  parsePidList,
   parsePidof,
   parsePositiveInt,
   parseUptime,
@@ -349,6 +353,28 @@ describe('parsePs / packages', () => {
     expect(parsePs('  1 init\n  2 init\n').get('init')).toBe(1);
   });
 
+  it('maps process names to pids in the full table of toolbox ps (API 23), the NAME last', () => {
+    const toolbox = fixture('ps-api23.txt');
+    const pids = parsePs(toolbox);
+    expect(pids.get('io.github.risyadul.lionscope.sample')).toBe(2455);
+    expect(pids.get('/init')).toBe(1);
+    expect(pids.has('NAME')).toBe(false);
+    expect(pids.has('USER')).toBe(false);
+  });
+
+  it('keeps the first PID of a name and compares names as a whole in both ps formats', () => {
+    const toolbox = [
+      'USER      PID   PPID  VSIZE  RSS   WCHAN              PC  NAME',
+      'u0_a1     500   1     1      1     SyS_epoll_ 00 S com.app:remote',
+      'u0_a1     501   1     1      1     SyS_epoll_ 00 S com.app',
+      'u10_a1    900   1     1      1     SyS_epoll_ 00 S com.app',
+      'u0_a1     502   1     1      1     SyS_epoll_ 00 S com.app.debug',
+    ].join('\r\n');
+    expect(parsePs(toolbox).get('com.app')).toBe(501);
+    expect(parsePs('PID NAME\n 7 com.app:remote\n 8 com.app.debug\n').get('com.app')).toBeUndefined();
+    expect(parsePs('usage: ps [-o COL,COL...]\nps: bad option -- A\n').size).toBe(0);
+  });
+
   it('parses package lists and filters invalid names', () => {
     const all = parsePackageList(fixture('pm-list-packages.txt'));
     expect(all).toContain('com.google.android.apps.nexuslauncher');
@@ -401,6 +427,36 @@ describe('shell values', () => {
     expect(parseDeviceEpochMs('date: bad format')).toBeNull();
   });
 
+  it('reads the seconds of the clock of API 23 (toolbox prints `<seconds>3N`) as 10 digits, not 11', () => {
+    expect(parseDeviceEpochMs('17934733453N\r\n')).toBe(1793473345500);
+    expect(parseDeviceEpochMs('1793473345N')).toBe(1793473345500);
+    expect(parseDeviceEpochMs('1793473345')).toBe(1793473345500);
+    expect(parseDeviceEpochMs('179347334534N')).toBeNull();
+  });
+
+  it('flags a pidof list that ignored its name (API 23) and keeps real ones', () => {
+    const everything = parsePidList(fixture('pidof-api23.txt'));
+    expect(everything.length).toBeGreaterThan(100);
+    expect(isImplausibleAppPidList(everything)).toBe(true);
+    expect(isImplausibleAppPidList([1])).toBe(true);
+    expect(isImplausibleAppPidList(Array.from({ length: 17 }, (_, i) => 2000 + i))).toBe(true);
+    expect(isImplausibleAppPidList([])).toBe(false);
+    expect(isImplausibleAppPidList([1105])).toBe(false);
+    expect(isImplausibleAppPidList([1105, 2201])).toBe(false);
+  });
+
+  it('parses the device clock of `date "+%s %Y-%m-%d %H:%M:%S"` into a zone offset', () => {
+    expect(parseLegacyLogClock('1793474375 2026-11-01 02:19:35\r\n')).toEqual({
+      utcOffsetMs: 7 * 3_600_000,
+      probeMs: 1793474375000,
+    });
+    expect(parseLegacyLogClock('1793474375 2026-10-31 19:19:35')?.utcOffsetMs).toBe(0);
+    expect(parseLegacyLogClock('1793474375 2026-10-31 15:19:35')?.utcOffsetMs).toBe(-4 * 3_600_000);
+    expect(parseLegacyLogClock('1793474375 2026-11-01 00:49:35')?.utcOffsetMs).toBe(5.5 * 3_600_000);
+    expect(parseLegacyLogClock('date: bad format')).toBeNull();
+    expect(parseLegacyLogClock('')).toBeNull();
+  });
+
   it('counts CPUs in kernel CPU lists', () => {
     expect(parseCpuList('0-3\n')).toBe(4);
     expect(parseCpuList('0')).toBe(1);
@@ -408,5 +464,105 @@ describe('shell values', () => {
     expect(parseCpuList('3-1')).toBeNull();
     expect(parseCpuList('cat: no such file')).toBeNull();
     expect(parseCpuList('')).toBeNull();
+  });
+});
+
+describe('parsePsPids', () => {
+  const NAME = 'io.github.risyadul.lionscope.sample';
+
+  it('lists no PID for an app that is not in the toolbox ps of API 23', () => {
+    expect(parsePsPids(fixture('ps-api23.txt'), 'com.does.not.exist')).toEqual([]);
+    expect(parsePsPids('', NAME)).toEqual([]);
+  });
+
+  it('finds the app by its exact NAME in the last column of the toolbox ps of API 23', () => {
+    const ps = fixture('ps-api23.txt');
+    expect(parsePsPids(fixture('ps-grep-api23.txt'), NAME)).toEqual([2455]);
+    expect(parsePsPids(ps, NAME)).toEqual([2455]);
+    expect(parsePsPids(ps, 'system_server')).toEqual([1227]);
+    expect(parsePsPids(ps, 'zygote64')).toEqual([897]);
+    expect(parsePsPids(ps, 'init')).toEqual([]); // the NAME there is `/init`
+    expect(parsePsPids(ps, '/init')).toEqual([1]);
+  });
+
+  it('does not take a longer name, a prefix or another process of the package for the app', () => {
+    const ps = [
+      'USER      PID   PPID  VSIZE  RSS   WCHAN              PC  NAME',
+      `u0_a55    2455  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${NAME}`,
+      `u0_a55    2460  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${NAME}:service`,
+      `u0_a55    2470  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${NAME}.debug`,
+      `u0_a56    2480  897   1245156 114040 SyS_epoll_ 7b974f3a34 S x.${NAME}`,
+      '',
+    ].join('\r\n');
+    expect(parsePsPids(ps, NAME)).toEqual([2455]);
+    expect(parsePsPids(ps, `${NAME}:service`)).toEqual([2460]);
+  });
+
+  it('reads the `PID NAME` format of `ps -A -o PID,NAME` and drops duplicates of both listings', () => {
+    expect(parsePsPids(fixture('ps.txt'), '[kthreadd]')).toEqual([2]);
+    expect(parsePsPids(`  2455 ${NAME}\n  2455 ${NAME}\n  2456 ${NAME}\n`, NAME)).toEqual([2455, 2456]);
+  });
+
+  it('ignores the usage and error lines of the ps flavour that does not know `-A`', () => {
+    const output = `${fixture('ps-grep-api23.txt')}bad pid '-A'\n`;
+    expect(parsePsPids(output, NAME)).toEqual([2455]);
+  });
+});
+
+describe('parseThreadtimeLine', () => {
+  const clock: LegacyLogClock = { utcOffsetMs: 7 * 3_600_000, probeMs: 1793474375000 };
+
+  it('parses the lines of `logcat -v threadtime` of API 23 and skips its separators', () => {
+    const lines = fixture('logcat-threadtime-api23.txt').split('\n');
+    const entries = lines.map((line) => parseThreadtimeLine(line, clock)).filter((entry) => entry !== null);
+    expect(entries).toHaveLength(15);
+    expect(entries[0]).toEqual({
+      // 11-01 02:19:31.425 at UTC+7
+      deviceTs: Date.UTC(2026, 9, 31, 19, 19, 31, 425),
+      pid: 2059,
+      tid: 2059,
+      level: 'D',
+      tag: 'AndroidRuntime',
+      message: 'CheckJNI is OFF',
+    });
+    expect(entries[2]).toMatchObject({ tag: 'ICU', level: 'D' }); // the tag is padded: `ICU     : `
+    expect(entries.at(-1)).toMatchObject({ pid: 1212, tid: 1284, tag: 'ConnectivityService' });
+    expect(parseThreadtimeLine('--------- beginning of system', clock)).toBeNull();
+    expect(parseThreadtimeLine('Invalid parameter epoch to -v', clock)).toBeNull();
+    expect(parseThreadtimeLine('', clock)).toBeNull();
+  });
+
+  it('reads the JavaBinder transaction line of API 23', () => {
+    const line =
+      '11-01 02:07:38.244  2557  2557 E JavaBinder: !!! FAILED BINDER TRANSACTION !!!  (parcel size = 566092)';
+    expect(parseThreadtimeLine(line, clock)).toMatchObject({
+      pid: 2557,
+      level: 'E',
+      tag: 'JavaBinder',
+      message: '!!! FAILED BINDER TRANSACTION !!!  (parcel size = 566092)',
+    });
+  });
+
+  it('takes the year from the device and the neighbouring year around New Year', () => {
+    const newYearsEve: LegacyLogClock = { utcOffsetMs: 0, probeMs: Date.UTC(2026, 11, 31, 23, 59, 50) };
+    expect(parseThreadtimeLine('12-31 23:59:49.000  1  1 I T: a', newYearsEve)?.deviceTs).toBe(
+      Date.UTC(2026, 11, 31, 23, 59, 49),
+    );
+    expect(parseThreadtimeLine('01-01 00:00:03.000  1  1 I T: after midnight', newYearsEve)?.deviceTs).toBe(
+      Date.UTC(2027, 0, 1, 0, 0, 3),
+    );
+    const justAfter: LegacyLogClock = { utcOffsetMs: 0, probeMs: Date.UTC(2027, 0, 1, 0, 0, 10) };
+    expect(parseThreadtimeLine('12-31 23:59:58.000  1  1 I T: before midnight', justAfter)?.deviceTs).toBe(
+      Date.UTC(2026, 11, 31, 23, 59, 58),
+    );
+  });
+
+  it('truncates a long message like the epoch parser', () => {
+    const long = parseThreadtimeLine(
+      `11-01 02:19:31.425  1  2 A Tag: ${'x'.repeat(MAX_LOG_MESSAGE_CHARS + 50)}`,
+      clock,
+    );
+    expect(long?.level).toBe('F');
+    expect(long?.message).toHaveLength(MAX_LOG_MESSAGE_CHARS);
   });
 });

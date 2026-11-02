@@ -9,6 +9,7 @@ import type {
   ServerMessage,
   SessionState,
   Snapshot,
+  TransactionFailure,
 } from '@lionscope/protocol';
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
@@ -22,9 +23,9 @@ import { errorMessage, log } from '../log.ts';
 import { parseDevices } from '../parsers/devices.ts';
 import { buildAppList, parsePackageList } from '../parsers/packages.ts';
 import { parsePs } from '../parsers/ps.ts';
-import { parsePidList } from '../parsers/shellValues.ts';
 import type { AppCrash } from '../store/crashLog.ts';
 import { emptySnapshot } from '../store/sessionStore.ts';
+import { AppPidResolver, PS_COMMAND, PS_NAMES_COMMAND } from './appPids.ts';
 import { EMPTY_MOCKS, NO_SESSION_MOCKS_MESSAGE } from './mockRules.ts';
 import type { MockOrigin } from './mockRules.ts';
 import { ProfilingSession } from './profilingSession.ts';
@@ -188,10 +189,10 @@ export class SessionManager implements SdkLinkTarget {
     let pids: number[];
     try {
       // The same check for every package (not the session's own pidof): its timing must not tell them apart.
-      const output = await adbShell(this.adb, serial, `pidof ${packageName}`, {
-        timeoutMs: PIDOF_TIMEOUT_MS,
-      });
-      pids = parsePidList(output);
+      pids = await new AppPidResolver(
+        (command) => adbShell(this.adb, serial, command, { timeoutMs: PIDOF_TIMEOUT_MS }),
+        packageName,
+      ).resolve();
     } catch (error) {
       this.refuse(serial, packageName, `its pid check failed: ${errorMessage(error)}`);
       return NO_SESSION;
@@ -248,6 +249,11 @@ export class SessionManager implements SdkLinkTarget {
   /** Crashes of the current (or last) session, oldest first. */
   getCrashes(): AppCrash[] {
     return this.session?.crashes() ?? [];
+  }
+
+  /** TransactionTooLarge failures of the current (or last) session, oldest first. */
+  getTransactionFailures(): TransactionFailure[] {
+    return this.session?.transactionFailures() ?? [];
   }
 
   /** HTTP exchanges kept by the current (or last) session. */
@@ -516,9 +522,17 @@ export class SessionManager implements SdkLinkTarget {
     const [all, thirdParty, ps] = await Promise.all([
       adbShell(this.adb, serial, 'pm list packages', options),
       adbShell(this.adb, serial, 'pm list packages -3', options),
-      adbShell(this.adb, serial, 'ps -A -o PID,NAME', options),
+      adbShell(this.adb, serial, PS_NAMES_COMMAND, options),
     ]);
-    return buildAppList(parsePackageList(all), parsePackageList(thirdParty), parsePs(ps));
+    let pids = parsePs(ps);
+    if (pids.size === 0) {
+      try {
+        pids = parsePs(await adbShell(this.adb, serial, PS_COMMAND, options));
+      } catch (error) {
+        log.warn(`Running processes of ${serial} unavailable: ${errorMessage(error)}`);
+      }
+    }
+    return buildAppList(parsePackageList(all), parsePackageList(thirdParty), pids);
   }
 
   /** `listingRecovered`: adb listings failed before this one. */

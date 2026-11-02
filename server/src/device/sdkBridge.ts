@@ -1,4 +1,10 @@
-import { DEFAULT_SDK_OPTIONS, DEVICE_PROTOCOL_V7, HTTP_EXCHANGES_PER_SECOND } from '@lionscope/protocol';
+import {
+  DEFAULT_SDK_OPTIONS,
+  DEVICE_PROTOCOL_V7,
+  HTTP_EXCHANGES_PER_SECOND,
+  LARGE_SAVED_STATE_BYTES,
+} from '@lionscope/protocol';
+import { redactFreeText } from '@lionscope/protocol/insights';
 import type {
   DeviceMessageType,
   SdkFrame,
@@ -47,7 +53,7 @@ export const INVALID_DIAGNOSTIC_MESSAGE = 'SDK sent an invalid diagnostic; ignor
 /** Option changes are pushed to the SDK this long after the last one (a dashboard may send several at once). */
 export const CONFIG_DEBOUNCE_MS = 150;
 export const SDK_EVENT_CLOCK_MESSAGE =
-  'SDK events (stalls, StrictMode, layouts) dropped: the device clock does not match the laptop clock';
+  'SDK events (stalls, StrictMode, layouts, saved states) dropped: the device clock does not match the laptop clock';
 
 export const DISCONNECTED_SDK: SdkStatus = {
   connected: false,
@@ -95,6 +101,8 @@ interface LinkEntry {
   hello: SdkHello;
   link: SdkLink;
   held: SdkLinkMessage[];
+  /** The newest `liveActivities` while pending: kept apart from `held` (a whole list, never cut by its cap). */
+  heldLive: Extract<SdkLinkMessage, { type: 'liveActivities' }> | null;
   network: SdkNetworkState;
 }
 
@@ -153,13 +161,15 @@ export class SdkBridge {
       strictMode: changes.strictMode ?? previous.strictMode,
       inflateTracking: changes.inflateTracking ?? previous.inflateTracking,
       rxTracking: changes.rxTracking ?? previous.rxTracking,
+      savedStateTracking: changes.savedStateTracking ?? previous.savedStateTracking ?? true,
     };
     this.update({ options });
     if (
       options.stallThresholdMs === previous.stallThresholdMs &&
       options.strictMode === previous.strictMode &&
       options.inflateTracking === previous.inflateTracking &&
-      options.rxTracking === previous.rxTracking
+      options.rxTracking === previous.rxTracking &&
+      options.savedStateTracking === previous.savedStateTracking
     ) {
       return;
     }
@@ -173,7 +183,7 @@ export class SdkBridge {
    */
   attach(hello: SdkHello, link: SdkLink, verified = false, proven = false): SdkLinkHandler {
     const network = networkStateOf(link.protocolVersion, proven);
-    const entry: LinkEntry = { hello, link, held: [], network };
+    const entry: LinkEntry = { hello, link, held: [], heldLive: null, network };
     this.pending.add(entry);
     // Options are not sensitive: a link gets them right after its welcome, before its PID is verified.
     link.sendConfig(this.sdkOptions);
@@ -183,7 +193,9 @@ export class SdkBridge {
       onMessage: (message) => {
         if (this.stopped) return;
         if (this.active === entry) this.onMessage(message);
-        else if (this.pending.has(entry) && entry.held.length < MAX_HELD_MESSAGES) entry.held.push(message);
+        else if (!this.pending.has(entry)) return;
+        else if (message.type === 'liveActivities') entry.heldLive = message;
+        else if (entry.held.length < MAX_HELD_MESSAGES) entry.held.push(message);
       },
       onInvalidDiagnostic: () => {
         if (this.active === entry && !this.stopped) {
@@ -268,7 +280,12 @@ export class SdkBridge {
       network: entry.network,
     });
     this.options.onLiveLink?.(entry.link, entry.network);
+    // Another process's Activities are gone (the app restarted): this one's list follows.
+    this.options.store.instances.endOtherProcesses(entry.hello.pid, this.options.now());
     for (const message of entry.held.splice(0)) this.onMessage(message);
+    const live = entry.heldLive;
+    entry.heldLive = null;
+    if (live) this.onMessage(live);
   }
 
   private onClockSkew(rejected: number, worstSkewMs: number): void {
@@ -389,6 +406,50 @@ export class SdkBridge {
         if (this.current.network !== 'active') return this.dropUnproven(message.type);
         this.options.onMocksApplied?.(message.rev);
         return;
+      case 'liveActivities': {
+        // A state, not an event: never dropped for the clock, placed within the session.
+        const pid = this.active?.hello.pid;
+        if (pid === undefined) return;
+        const at = this.sessionTime(message.ts);
+        this.options.store.instances.reconcile(pid, at, message.activities, message.truncated);
+        return;
+      }
+      case 'savedState': {
+        const ts = this.eventTime('savedState', message.ts, 0);
+        const pid = this.active?.hello.pid;
+        if (ts === null || pid === undefined) return;
+        const { activity, hook, totalBytes, measureMs, breakdownMs, truncated } = message;
+        const instanceId = message.instanceId ?? null;
+        // Keys are app-chosen strings (a URL as a key carries its query): redacted again, whatever the SDK did.
+        const entries = message.entries.map((entry) => ({ ...entry, path: entry.path.map(redactFreeText) }));
+        const sample = {
+          ts,
+          activity,
+          pid,
+          instanceId,
+          screen: message.screen,
+          hook,
+          totalBytes,
+          measureMs,
+          breakdownMs,
+          entries,
+          truncated,
+        };
+        const { store } = this.options;
+        if (instanceId !== null) store.instances.noteReport(pid, instanceId, activity, ts);
+        store.append('savedStates', sample);
+        if (totalBytes >= LARGE_SAVED_STATE_BYTES) {
+          store.append('events', {
+            ts,
+            kind: 'saved_state',
+            pid,
+            source: 'sdk',
+            detail: `${message.screen ?? activity.slice(activity.lastIndexOf('.') + 1)} ${totalBytes} bytes`,
+          });
+        }
+        store.transactions.addSavedState(pid, sample);
+        return;
+      }
       case 'viewtree': {
         const ts = this.eventTime('viewtree', message.ts, 0);
         if (ts === null) return;

@@ -1,0 +1,17 @@
+--------- beginning of main
+11-01 02:19:31.425  2059  2059 D AndroidRuntime: CheckJNI is OFF
+11-01 02:19:31.425  2059  2059 E cutils-trace: Error opening trace file: No such file or directory (2)
+11-01 02:19:31.429  2059  2059 D ICU     : No timezone override file found: /data/misc/zoneinfo/current/icu/icu_tzdata.dat
+11-01 02:19:31.444  2059  2059 E memtrack: Couldn't load memtrack module (No such file or directory)
+11-01 02:19:31.444  2059  2059 E android.os.Debug: failed to load memtrack module: -2
+11-01 02:19:31.444  2059  2059 I Radio-JNI: register_android_hardware_Radio DONE
+11-01 02:19:31.447  2059  2059 D AndroidRuntime: Calling main entry com.android.commands.wm.Wm
+11-01 02:19:31.448  2059  2059 D AndroidRuntime: Shutting down VM
+11-01 02:19:34.390  1824  1833 W CursorWrapperInner: Cursor finalized without prior close()
+11-01 02:19:35.683  1824  2056 I GlobalDismissManager: no sender configured
+11-01 02:19:35.683  1824  2056 D AlertService: Beginning updateAlertNotification
+11-01 02:19:35.685  1824  2056 D AlertService: No fired or scheduled alerts
+11-01 02:19:35.688  1824  2056 D AlertService: Scheduling next alarm with AlarmScheduler. sEventReminderReceived: null
+11-01 02:19:35.690  1824  2056 D AlarmScheduler: No events found starting within 1 week.
+--------- beginning of system
+11-01 02:19:37.481  1212  1284 D ConnectivityService: handlePromptUnvalidated 100

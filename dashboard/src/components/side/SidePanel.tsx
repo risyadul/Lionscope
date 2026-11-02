@@ -2,13 +2,14 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'inspector';
+export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'state' | 'inspector';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'screens', label: 'Screens' },
   { id: 'stalls', label: 'Stalls' },
   { id: 'layouts', label: 'Layouts' },
   { id: 'network', label: 'Network' },
+  { id: 'state', label: 'State' },
   { id: 'inspector', label: 'Inspector' },
 ];
 
@@ -23,12 +24,15 @@ type Props = {
   layoutCount: number;
   /** HTTP exchanges in the visible window, shown on its tab. */
   networkCount: number;
+  /** Saved-state reports in the window plus TransactionTooLarge failures, shown on its tab. */
+  stateCount: number;
   /** Views in the latest Inspector snapshot, shown on its tab. */
   inspectorCount: number;
   screens: ReactNode;
   stalls: ReactNode;
   layouts: ReactNode;
   network: ReactNode;
+  state: ReactNode;
   inspector: ReactNode;
   /** Only this tab, under a heading instead of the tab list (the Inspector view); the others stay mounted. */
   lockedTab?: SideTab;
@@ -42,11 +46,13 @@ export function SidePanel({
   stallCount,
   layoutCount,
   networkCount,
+  stateCount,
   inspectorCount,
   screens,
   stalls,
   layouts,
   network,
+  state,
   inspector,
   lockedTab,
 }: Props) {
@@ -55,9 +61,10 @@ export function SidePanel({
     stalls: stallCount,
     layouts: layoutCount,
     network: networkCount,
+    state: stateCount,
     inspector: inspectorCount,
   };
-  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, inspector };
+  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, inspector };
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -98,7 +105,7 @@ export function SidePanel({
   }
 
   return (
-    <aside className="side" aria-label="Screens, stalls, layouts, network and inspector">
+    <aside className="side" aria-label="Screens, stalls, layouts, network, state and inspector">
       <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button

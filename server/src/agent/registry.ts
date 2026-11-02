@@ -31,6 +31,7 @@ import {
   setDontKeepActivitiesTool,
   simulateProcessDeathTool,
 } from './restoreTools.ts';
+import { savedStateTool } from './savedStateTools.ts';
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
@@ -51,6 +52,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   selectInspectorNodeTool,
   logcatTool,
   crashesTool,
+  savedStateTool,
   networkTool,
   networkRequestTool,
   getLocationTool,

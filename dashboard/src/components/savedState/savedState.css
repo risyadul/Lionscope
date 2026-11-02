@@ -1,0 +1,364 @@
+/* State tab (0.12.0): TransactionTooLarge failures, then saved states per Activity (live, then closed: each with how
+   its saves grew, and its saves with their keys), or with an older SDK the reports largest first.
+   `.btn`, `.overline` and `.segmented` come from the shared styles.
+   A row that opens wears the disclosure triangle of the Inspector tree and the shared hover wash; a row with nothing to
+   open has neither, so the two never look alike. The size sits in the right column, so a row without one leaves no
+   hole before its name. */
+
+.state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.state-head {
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.state-head p {
+  margin: 0;
+}
+
+.state-body {
+  container: saved-states / inline-size;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow: auto;
+}
+
+.state-muted {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.state-section {
+  margin: var(--space-3) 0 var(--space-2);
+}
+
+.state-empty {
+  margin: 0;
+}
+
+.state-failures,
+.state-reports,
+.state-saves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.state-failure {
+  display: grid;
+  grid-template-areas: 'twist what time size';
+  grid-template-columns: 12px minmax(0, 1fr) auto 4.5em;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--critical, var(--event));
+}
+
+.state-failure > .state-twist {
+  grid-area: twist;
+}
+
+.state-failure-size {
+  grid-area: size;
+}
+
+/* The exception name is one long word: it may break anywhere rather than run under the clock. */
+.state-failure-what {
+  grid-area: what;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.state-failure-time {
+  grid-area: time;
+}
+
+.state-failure-size,
+.state-report-size {
+  font-weight: 600;
+  text-align: right;
+}
+
+.state-report {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+}
+
+/* Nothing to open: no frame, so it reads as a note under the rows that hold saves. */
+.state-chain[data-saved='false'] {
+  border-color: transparent;
+  background: transparent;
+}
+
+.state-chain[data-saved='false'] .state-chain-label {
+  color: var(--ink-2);
+}
+
+.state-saves {
+  margin-top: var(--space-1);
+}
+
+/* A failure that kept its report opens like one. */
+.state-failure-head {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The disclosure triangle (same glyph and turn as the Inspector tree); an empty one keeps the column. */
+.state-twist {
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 1em;
+  color: var(--ink-muted);
+}
+
+.state-twist svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+[aria-expanded='true'] > .state-twist svg {
+  transform: rotate(90deg);
+}
+
+button.state-report-head:hover,
+.state-failure-head:hover {
+  background: var(--hover-wash);
+}
+
+button.state-report-head:active,
+.state-failure-head:active {
+  background: var(--active-wash);
+}
+
+.state-report-head[aria-expanded='true'] {
+  border-bottom: 1px solid var(--rule);
+}
+
+.state-groups-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.state-group {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+  font-weight: 600;
+}
+
+.state-group-toggle {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.state-group-toggle:hover {
+  color: var(--ink);
+}
+
+.state-stale {
+  margin: 0 0 var(--space-1);
+}
+
+.state-order {
+  flex: none;
+}
+
+/* Name, then `#id`: the name gives way, the number never (like a Fragment's instance number below). */
+.state-chain-name {
+  display: flex;
+  gap: 0.4em;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.state-chain-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-chain-id {
+  flex: none;
+}
+
+.state-report-head {
+  display: grid;
+  grid-template-areas: 'twist name meta size';
+  grid-template-columns: 12px minmax(0, 1fr) auto 4.5em;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* Only a row that opens shows the hand; a row without a save is plain text. */
+button.state-report-head {
+  cursor: pointer;
+}
+
+.state-report-head > .state-twist {
+  grid-area: twist;
+}
+
+.state-report-size {
+  grid-area: size;
+}
+
+.state-report-name {
+  grid-area: name;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-report-meta {
+  grid-area: meta;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A narrow panel: the summary goes under the name; the size stays at the right edge. */
+@container saved-states (max-width: 520px) {
+  .state-failure {
+    grid-template-areas:
+      'twist what size'
+      '. time .';
+    grid-template-columns: 12px minmax(0, 1fr) 4.5em;
+  }
+
+  .state-report-head {
+    grid-template-areas:
+      'twist name size'
+      '. meta .';
+    grid-template-columns: 12px minmax(0, 1fr) 4.5em;
+  }
+}
+
+/* The FQCN wraps inside the card; `title` holds it whole. */
+.state-report-activity {
+  overflow-wrap: anywhere;
+}
+
+.state-report-body {
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.state-report-body p {
+  margin: var(--space-1) 0;
+}
+
+.state-entries {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-meta);
+}
+
+.state-entries th {
+  color: var(--ink-2);
+  font-weight: 500;
+  text-align: left;
+}
+
+.state-entries td,
+.state-entries th {
+  padding: 2px var(--space-1);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+/* Size and share: right-aligned numbers. */
+.state-entries td:not(.state-entry-key),
+.state-entries th:not(:first-child) {
+  text-align: right;
+}
+
+.state-entry-key {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+/* Name, instance number, then key or class: the last gives way first, the number never. */
+.state-entry-label {
+  display: flex;
+  gap: 0.4em;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.state-entry-name,
+.state-entry-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-entry-name {
+  flex: 0 1 auto;
+}
+
+.state-entry-instance {
+  flex: none;
+}
+
+/* Zero basis: it only takes the room left over, so the name never shrinks while the detail still shows. */
+.state-entry-detail {
+  flex: 1 1 0;
+}
+
+.state-entries tr[data-kind='fragment'] :is(.state-entry-name, .state-entry-instance) {
+  font-weight: 600;
+}
+
+/* A stand-in's "not listed" never gives way: its key does. */
+.state-entry-note {
+  flex: none;
+  white-space: nowrap;
+}
+
+.state-entry-unlisted {
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.state-more {
+  margin-top: var(--space-2);
+}

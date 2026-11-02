@@ -15,6 +15,7 @@ import {
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_V8,
+  DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -40,6 +41,9 @@ import {
   MAX_ORIGIN_TEXT_LENGTH,
   MAX_OUTER_FRAMES,
   MAX_RX_SITE_FRAMES,
+  MAX_LIVE_ACTIVITIES,
+  MAX_SAVED_STATE_DEPTH,
+  MAX_SAVED_STATE_ENTRIES,
   MAX_DEVICE_LINE_BYTES,
   MAX_DEVICE_PROTOCOL_VERSION,
   MAX_EDIT_TEXT_CHARS,
@@ -73,6 +77,7 @@ import {
   type InspectorNode,
   type InspectorWindow,
   type NetworkMockInput,
+  type SavedStateEntry,
   type ScreenClientMessage,
   type StallRx,
   type ViewProperty,
@@ -222,6 +227,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       strictMode: z.boolean().optional(),
       inflateTracking: z.boolean().optional(),
       rxTracking: z.boolean().optional(),
+      savedStateTracking: z.boolean().optional(),
     })
     .strict()
     .refine(
@@ -229,7 +235,8 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
         message.stallThresholdMs !== undefined ||
         message.strictMode !== undefined ||
         message.inflateTracking !== undefined ||
-        message.rxTracking !== undefined,
+        message.rxTracking !== undefined ||
+        message.savedStateTracking !== undefined,
       'no SDK option given',
     ),
   z.object({ type: z.literal('inspect'), serial: serialSchema }).strict(),
@@ -625,6 +632,24 @@ const inspectorNodeSchema = z
   })
   .strip() satisfies z.ZodType<InspectorNode>;
 
+/** Bounds of the 0.12.0 `savedState` message: sizes up to 2^31 (Java's int), app-defined keys up to 120 characters. */
+export const MAX_SAVED_STATE_BYTES = MAX_JAVA_INT;
+const MAX_SAVED_STATE_KEY_LENGTH = 120;
+const MAX_SAVED_STATE_MS = 60_000;
+
+/** The SDK's per-process number of an Activity object (`savedState.instanceId`, `liveActivities` ids). */
+const activityInstanceId = z.number().int().min(1).max(MAX_JAVA_INT);
+
+const savedStateEntrySchema = z
+  .object({
+    path: z.array(textOf(MAX_SAVED_STATE_KEY_LENGTH)).min(1).max(MAX_SAVED_STATE_DEPTH),
+    bytes: z.number().int().min(0).max(MAX_SAVED_STATE_BYTES),
+    kind: z.enum(['bundle', 'fragment', 'value']),
+    fragment: layoutText.nullable(),
+    valueClass: layoutText.nullable(),
+  })
+  .strip() satisfies z.ZodType<SavedStateEntry>;
+
 const httpHeadersSchema = z
   .array(httpHeaderSchema)
   .max(MAX_HTTP_HEADERS)
@@ -831,6 +856,39 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
     .strip(),
   z
     .object({
+      type: z.literal('savedState'),
+      ts: epochMs,
+      activity: layoutText,
+      instanceId: activityInstanceId.optional(),
+      screen: layoutText.nullable(),
+      hook: z.enum(['post_save', 'posted']),
+      totalBytes: z.number().int().min(0).max(MAX_SAVED_STATE_BYTES),
+      measureMs: z.number().nonnegative().max(MAX_SAVED_STATE_MS),
+      breakdownMs: z.number().nonnegative().max(MAX_SAVED_STATE_MS).nullable(),
+      entries: z.array(savedStateEntrySchema).max(MAX_SAVED_STATE_ENTRIES),
+      truncated: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('liveActivities'),
+      ts: epochMs,
+      activities: z
+        .array(
+          z
+            .object({ id: activityInstanceId, activity: layoutText, prevId: activityInstanceId.nullable() })
+            .strip(),
+        )
+        .max(MAX_LIVE_ACTIVITIES)
+        .refine(
+          (activities) => new Set(activities.map((entry) => entry.id)).size === activities.length,
+          'duplicate instance id',
+        ),
+      truncated: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
       type: z.literal('viewPropertyResult'),
       requestId,
       ok: z.boolean(),
@@ -853,7 +911,7 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
- * Diagnostics (v2, v3 `inflate` / `viewtree`), the v4 Inspector answers and the v7 network messages: a line of these
+ * Diagnostics (v2, v3 `inflate` / `viewtree`, v10 `savedState` / `liveActivities`), the v4 Inspector answers and the v7 network messages: a line of these
  * types that fails validation is dropped by the caller (`invalidDiagnostic`), not fatal to the link like a bad v1
  * message (an invalid Inspector answer fails its request instead).
  */
@@ -869,6 +927,8 @@ const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'httpResponse',
   'mocksApplied',
   'viewPropertyResult',
+  'savedState',
+  'liveActivities',
 ]);
 
 /**
@@ -891,6 +951,8 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   httpResponse: DEVICE_PROTOCOL_V7,
   mocksApplied: DEVICE_PROTOCOL_V7,
   viewPropertyResult: DEVICE_PROTOCOL_V8,
+  savedState: DEVICE_PROTOCOL_V10,
+  liveActivities: DEVICE_PROTOCOL_V10,
 };
 
 /**
