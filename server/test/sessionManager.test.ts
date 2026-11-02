@@ -1,6 +1,7 @@
 import type { ServerMessage } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublicError } from '../src/errors.ts';
+import { PS_COMMAND, PS_NAMES_COMMAND } from '../src/session/appPids.ts';
 import {
   ADB_UNAVAILABLE_MESSAGE,
   DEVICE_GONE_LISTINGS,
@@ -31,7 +32,7 @@ const EMPTY_SNAPSHOT = {
 };
 const DEVICES = fixture('adb-devices.txt');
 
-function setup() {
+function setup(psReplies: Record<string, string | Error> = {}) {
   const device = new FakeDevice();
   let devicesOutput = DEVICES;
   let devicesError: Error | null = null;
@@ -44,7 +45,10 @@ function setup() {
       const command = args.at(-1);
       if (command === 'pm list packages') return fixture('pm-list-packages.txt');
       if (command === 'pm list packages -3') return fixture('pm-list-packages-3.txt');
-      if (command === 'ps -A -o PID,NAME') return fixture('ps.txt');
+      const psReply = command === undefined ? undefined : psReplies[command];
+      if (psReply instanceof Error) throw psReply;
+      if (psReply !== undefined) return psReply;
+      if (command === PS_NAMES_COMMAND) return fixture('ps.txt');
       return '';
     },
     (command) => device.handle(command),
@@ -170,6 +174,113 @@ describe('SessionManager', () => {
       ['-s', 'emulator-5554', 'shell'],
       ['-s', 'emulator-5554', 'shell'],
     ]);
+  });
+
+  describe('running PIDs on toolbox (API 23-25)', () => {
+    const SHOP = 'com.example.shop';
+    const TOOLBOX_PS = [
+      fixture('ps-api23.txt'),
+      `u0_a57    2455  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${SHOP}`,
+      `u0_a56    3001  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}:remote`,
+      `u0_a56    3002  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}.debug`,
+      `u10_a56   3003  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}`,
+      `u0_a56    3004  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}`,
+      '',
+    ].join('\n');
+    const UNSUPPORTED = 'ps: bad option -- A\nusage: ps [-o COL,COL...]\n';
+
+    it('reads them from the full ps table when `ps -A -o PID,NAME` prints no process', async () => {
+      const { manager, adb } = setup({
+        [PS_NAMES_COMMAND]: UNSUPPORTED,
+        [PS_COMMAND]: TOOLBOX_PS,
+      });
+      const apps = await manager.listApps('emulator-5554');
+      expect(apps.find((app) => app.packageName === SHOP)?.pid).toBe(2455);
+      expect(apps.find((app) => app.packageName === PKG)?.pid).toBe(3003);
+      expect(apps.find((app) => app.packageName === 'com.google.android.gms')?.pid).toBeNull();
+      expect(apps.find((app) => app.packageName === 'com.google.android.gms')?.pid).toBeNull();
+      expect(adb.execCalls.filter((args) => args.at(-1) === PS_COMMAND)).toHaveLength(1);
+    });
+
+    it('never matches pkg:remote, pkg.debug or a prefix of the name to the package', async () => {
+      const { manager } = setup({
+        [PS_NAMES_COMMAND]: '',
+        [PS_COMMAND]: [
+          'USER      PID   PPID  VSIZE  RSS   WCHAN              PC  NAME',
+          `u0_a56    3001  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}:remote`,
+          `u0_a56    3002  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG}.debug`,
+          `u0_a56    3005  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${PKG.slice(0, -4)}`,
+          '',
+        ].join('\n'),
+      });
+      const apps = await manager.listApps('emulator-5554');
+      expect(apps.find((app) => app.packageName === PKG)?.pid).toBeNull();
+    });
+
+    it('keeps the listing, every app stopped, when the fallback cannot run', async () => {
+      const { manager } = setup({
+        [PS_NAMES_COMMAND]: '',
+        [PS_COMMAND]: new Error('adb shell timed out'),
+      });
+      const apps = await manager.listApps('emulator-5554');
+      expect(apps.length).toBeGreaterThan(50);
+      expect(apps.every((app) => app.pid === null)).toBe(true);
+    });
+
+    describe('on toolbox that exits 1 on `ps -A` (API 24-25), where adb rejects a non-zero remote exit', () => {
+      const BAD_PID = "bad pid '-A'\n";
+
+      /** What createAdb does: a non-zero exit rejects and its stdout is lost; a trailing `|| true` makes it 0. */
+      function toolboxExec(command: string): string {
+        const segments = command.split(';').map((segment) => segment.trim());
+        let stdout = '';
+        let status = 0;
+        for (const segment of segments) {
+          const [program = '', ...alternatives] = segment.split('||').map((part) => part.trim());
+          if (program === 'ps') {
+            stdout += TOOLBOX_PS;
+            status = 0;
+          } else if (program === 'ps -A' || program === 'ps -A -o PID,NAME') {
+            stdout += BAD_PID;
+            status = 1;
+          } else {
+            throw new Error(`unexpected command ${segment}`);
+          }
+          if (status !== 0 && alternatives.includes('true')) status = 0;
+        }
+        if (status !== 0)
+          throw new Error(`adb -s emulator-5554 shell ${command} failed: exit code ${status}`);
+        return stdout;
+      }
+
+      it('lists the running PIDs from the valid rows of the bare `ps`', async () => {
+        const { manager, adb } = setup();
+        const answer = adb.execHandler;
+        adb.execHandler = (args) => {
+          const command = args.at(-1) ?? '';
+          return /^ps\b/.test(command) ? toolboxExec(command) : answer(args);
+        };
+        const apps = await manager.listApps('emulator-5554');
+        expect(apps.find((app) => app.packageName === SHOP)?.pid).toBe(2455);
+        expect(apps.find((app) => app.packageName === PKG)?.pid).toBe(3003);
+        expect(apps.find((app) => app.packageName === 'com.google.android.gms')?.pid).toBeNull();
+        expect(adb.execCalls.filter((args) => args.at(-1) === PS_COMMAND)).toHaveLength(1);
+      });
+
+      it('still rejects the listing when adb itself fails on the primary command', async () => {
+        const { manager, adb } = setup();
+        const answer = adb.execHandler;
+        adb.execHandler = (args) =>
+          args.at(-1) === PS_NAMES_COMMAND ? Promise.reject(new Error('adb: device offline')) : answer(args);
+        await expect(manager.listApps('emulator-5554')).rejects.toThrow('device offline');
+      });
+    });
+
+    it('does not run the fallback where `ps -A -o PID,NAME` works', async () => {
+      const { manager, adb } = setup();
+      await manager.listApps('emulator-5554');
+      expect(adb.execCalls.filter((args) => args.at(-1) === PS_COMMAND)).toHaveLength(0);
+    });
   });
 
   it('coalesces concurrent listApps for the same serial', async () => {

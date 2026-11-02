@@ -1,10 +1,23 @@
 import { createInterface } from 'node:readline';
 import type { LogEntry } from '@lionscope/protocol';
 import type { Adb } from '../adb/adb.ts';
-import { parseLogcatLine } from '../parsers/logcat.ts';
+import { parseLogcatLine, parseThreadtimeLine } from '../parsers/logcat.ts';
+import type { LegacyLogClock } from '../parsers/logcat.ts';
 
 /** Lines of history requested when following a new process. */
 export const LOGCAT_HISTORY_LINES = 200;
+/**
+ * Legacy logcat can't filter by PID, so a line-count start without a point in time (a new stream) replays more
+ * lines of every process than the modern 200.
+ */
+export const LEGACY_LOGCAT_HISTORY_LINES = 2000;
+/**
+ * A `-T` count past the size of any logcat ring buffer: the whole retained range (API 23 logcat reads a count
+ * as an unsigned 32-bit number, and the ring holds far fewer lines). For a `since` or `resume` point `-T` cannot
+ * express because the device's year changed since: everything retained is replayed, and the lines before the
+ * point are dropped here, so a gap longer than any fixed count still arrives.
+ */
+export const LEGACY_LOGCAT_RETAINED_LINES = 2_147_483_647;
 const STDERR_TAIL_CHARS = 1024;
 
 export interface LogcatResumePoint {
@@ -18,8 +31,15 @@ export interface LogcatStreamOptions {
   adb: Adb;
   /** Must already be validated with isValidSerial. */
   serial: string;
-  /** Only this process's lines (`--pid`); null: every process. */
+  /** Only this process's lines (`--pid`, or a filter on the PID column with legacyClock); null: every process. */
   pid: number | null;
+  /**
+   * The device's logcat has no `-v epoch` and no `--pid` (API < 24): follow `-v threadtime` instead, dated
+   * with this clock. `since` and `resume` start at the device's local `-T 'MM-DD HH:mm:ss.SSS'` (lines before
+   * them are still dropped here; a point in another year than the device's present one replays the whole
+   * retained range instead); `historyLines` is a line count, for a start that has no point in time.
+   */
+  legacyClock?: LegacyLogClock | null;
   /** A logcat buffer (`-b crash`) instead of the default ones. */
   buffer?: 'crash';
   /** laptop clock − device clock, in ms. */
@@ -44,23 +64,48 @@ function formatEpoch(ms: number): string {
 }
 
 /**
- * Follow `adb logcat -v epoch [-b <buffer>] [--pid=<pid>]` and emit parsed entries until stopped. Throws if the
- * process cannot be spawned at all.
+ * `-T` value of a point in time for `-v threadtime` (device local time, no year). Null when the point lies in
+ * another year than the device's present one: logcat reads the missing year as the current one, so the point
+ * would land in the future and stream nothing.
+ */
+export function formatLegacyTimestamp(
+  deviceTs: number,
+  clock: LegacyLogClock,
+  deviceNowMs: number,
+): string | null {
+  const local = new Date(Math.max(0, Math.round(deviceTs)) + clock.utcOffsetMs);
+  const present = new Date(deviceNowMs + clock.utcOffsetMs);
+  if (Number.isNaN(local.getTime()) || local.getUTCFullYear() !== present.getUTCFullYear()) return null;
+  const iso = local.toISOString();
+  return `${iso.slice(5, 10)} ${iso.slice(11, 23)}`;
+}
+
+/**
+ * Follow `adb logcat -v epoch [-b <buffer>] [--pid=<pid>]` (`-v threadtime`, no `--pid` and a local-time `-T` on
+ * API < 24) and emit parsed entries until stopped. Throws if the process cannot be spawned at all.
  */
 export function startLogcatStream(options: LogcatStreamOptions): LogcatStream {
   const { adb, serial, pid, buffer, since, clockOffsetMs, onEntry, onExit } = options;
   const resume = options.resume ?? null;
+  const legacyClock = options.legacyClock ?? null;
   let tail = String(options.historyLines ?? LOGCAT_HISTORY_LINES);
-  if (resume !== null) tail = formatEpoch(resume.deviceTs);
+  if (legacyClock !== null) {
+    const startMs = resume !== null ? resume.deviceTs : since;
+    const stamp =
+      startMs === undefined ? null : formatLegacyTimestamp(startMs, legacyClock, Date.now() - clockOffsetMs);
+    if (stamp !== null) tail = stamp;
+    else if (startMs !== undefined) tail = String(LEGACY_LOGCAT_RETAINED_LINES);
+    else tail = String(options.historyLines ?? LEGACY_LOGCAT_HISTORY_LINES);
+  } else if (resume !== null) tail = formatEpoch(resume.deviceTs);
   else if (since !== undefined) tail = formatEpoch(Math.max(0, Math.round(since)));
   const child = adb.spawn([
     '-s',
     serial,
     'logcat',
     '-v',
-    'epoch',
+    legacyClock === null ? 'epoch' : 'threadtime',
     ...(buffer === undefined ? [] : ['-b', buffer]),
-    ...(pid === null ? [] : [`--pid=${pid}`]),
+    ...(pid === null || legacyClock !== null ? [] : [`--pid=${pid}`]),
     '-T',
     tail,
   ]);
@@ -71,8 +116,12 @@ export function startLogcatStream(options: LogcatStreamOptions): LogcatStream {
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on('line', (line) => {
       if (stopped) return;
-      const parsed = parseLogcatLine(line);
+      const parsed = legacyClock === null ? parseLogcatLine(line) : parseThreadtimeLine(line, legacyClock);
       if (!parsed) return;
+      if (legacyClock !== null) {
+        if (pid !== null && parsed.pid !== pid) return;
+        if (since !== undefined && parsed.deviceTs < since) return;
+      }
       if (resume !== null) {
         if (parsed.deviceTs < resume.deviceTs) return;
         if (parsed.deviceTs === resume.deviceTs && duplicatesToSkip > 0) {

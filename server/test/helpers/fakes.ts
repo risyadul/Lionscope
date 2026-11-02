@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import type { Adb } from '../../src/adb/adb.ts';
+import { PS_COMMAND } from '../../src/session/appPids.ts';
 
 export function fixture(name: string): string {
   return readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
@@ -44,11 +45,13 @@ export class FakeChild extends EventEmitter {
 export type ShellReply = string | { output: string; delayMs: number } | 'hang';
 export type ShellHandler = (command: string) => ShellReply;
 
-const MARKER_LINE = /^printf '\\n__LS_([0-9a-f]{16})_%s__\\n' (\d+)$/;
+const FRAMED_LINE =
+  /^printf '\\n__LSB_([0-9a-f]{16})_%s__\\n' (\d+); (.*); printf '\\n__LS_[0-9a-f]{16}_%s__\\n' \d+$/;
 
 /**
- * A fake `adb shell` that understands ShellSession's framing: every command line is answered via
- * `handler`, and the following printf line emits the end marker once the answer was written.
+ * A fake `adb shell` that understands ShellSession's framing: every framed command line is answered
+ * via `handler` between the begin and the end marker. With `ptyNoise` it behaves like an API 23 PTY
+ * shell: the line is echoed back and a prompt is printed before the begin marker.
  */
 export class FakeShellChild extends FakeChild {
   readonly commands: string[] = [];
@@ -56,6 +59,8 @@ export class FakeShellChild extends FakeChild {
   private chain: Promise<void> = Promise.resolve();
   /** Emulate a PTY shell (API < 24), which turns every `\n` into `\r\n`. */
   crlf = false;
+  /** Emulate the echo and prompt of a PTY shell (API 23) around every command. */
+  ptyNoise = false;
 
   constructor(private readonly handler: ShellHandler) {
     super();
@@ -78,16 +83,15 @@ export class FakeShellChild extends FakeChild {
   }
 
   private onLine(line: string): void {
-    if (line === 'exec 2>&1') return;
-    const marker = MARKER_LINE.exec(line);
-    if (marker) {
-      this.chain = this.chain.then(() => {
-        if (!this.exited) this.write(`\n__LS_${marker[1]}_${marker[2]}__\n`);
-      });
+    if (line === 'exec 2>&1') {
+      if (this.ptyNoise) this.write(`${line}\nroot@generic_arm64:/ # `);
       return;
     }
-    this.commands.push(line);
-    const reply = this.handler(line);
+    const framed = FRAMED_LINE.exec(line);
+    if (!framed?.[1] || !framed[2] || framed[3] === undefined) return;
+    const [, nonce, id, command] = framed;
+    this.commands.push(command);
+    const reply = this.handler(command);
     this.chain = this.chain.then(
       () =>
         new Promise<void>((resolve) => {
@@ -95,7 +99,11 @@ export class FakeShellChild extends FakeChild {
           const output = typeof reply === 'string' ? reply : reply.output;
           const delayMs = typeof reply === 'string' ? 0 : reply.delayMs;
           const write = () => {
-            if (!this.exited) this.write(output);
+            if (!this.exited) {
+              if (this.ptyNoise) this.write(`${line}\n`);
+              this.write(`\n__LSB_${nonce}_${id}__\n${output}\n__LS_${nonce}_${id}__\n`);
+              if (this.ptyNoise) this.write('root@generic_arm64:/ # ');
+            }
             resolve();
           };
           if (delayMs > 0) setTimeout(write, delayMs);
@@ -121,6 +129,8 @@ export class FakeAdb implements Adb {
   /** `logcat -b crash` children (a session's crash stream), kept apart from `logcats`. */
   readonly crashLogcats: { args: readonly string[]; child: FakeChild }[] = [];
   readonly execCalls: (readonly string[])[] = [];
+  /** Spawn PTY shells like API 23 does (echo, prompt, CRLF). */
+  pty = false;
   /** `reverse` / `removeReverse` calls as adb argument lists (kept apart from execCalls). */
   readonly reverseCalls: string[][] = [];
   /** Throw (or reject) here to make a reverse call fail. */
@@ -156,6 +166,8 @@ export class FakeAdb implements Adb {
       return child;
     }
     const shell = new FakeShellChild((command) => this.shellHandler(command));
+    shell.crlf = this.pty;
+    shell.ptyNoise = this.pty;
     this.shells.push(shell);
     return shell;
   }
@@ -223,6 +235,15 @@ export class FakeDevice {
   meminfoReply: (() => ShellReply) | null = null;
   nextVsync = 1_000_000_000;
   framesPerPoll = 3;
+  /**
+   * Behave like API 23: toybox `pidof` ignores its name and prints every PID, `date +%s%3N` prints
+   * `<seconds>3N`, the SDK level is 23 (and its logcat predates `-v epoch`).
+   */
+  legacy = false;
+  /** The package `ps` lists under `pid` when `legacy`. */
+  legacyPackage = 'com.google.android.apps.nexuslauncher';
+  /** Zone of the device clock when `legacy`: local time = UTC + this. */
+  utcOffsetMs = 7 * 3_600_000;
   readonly commands: string[] = [];
   private readonly bootedAt = Date.now() - 100_000;
 
@@ -235,8 +256,27 @@ export class FakeDevice {
     this.commands.push(command);
     if (command === 'getconf CLK_TCK') return '100\n';
     if (command === 'cat /sys/devices/system/cpu/possible') return '0-3\n';
-    if (command === 'date +%s%3N') return `${Date.now() + this.clockSkewMs}\n`;
-    if (command.startsWith('pidof ')) return this.pid === null ? '' : `${this.pid}\n`;
+    if (command === 'getprop ro.build.version.sdk') return this.legacy ? '23\n' : '34\n';
+    if (command === 'date +%s%3N') {
+      const deviceMs = Date.now() + this.clockSkewMs;
+      return this.legacy ? `${Math.floor(deviceMs / 1000)}3N\n` : `${deviceMs}\n`;
+    }
+    if (command === 'date "+%s %Y-%m-%d %H:%M:%S"') {
+      const seconds = Math.floor((Date.now() + this.clockSkewMs) / 1000);
+      const local = new Date(seconds * 1000 + this.utcOffsetMs).toISOString();
+      return `${seconds} ${local.slice(0, 10)} ${local.slice(11, 19)}\n`;
+    }
+    if (command.startsWith('pidof ')) {
+      if (this.legacy) return fixture('pidof-api23.txt');
+      return this.pid === null ? '' : `${this.pid}\n`;
+    }
+    if (command === PS_COMMAND) {
+      const app =
+        this.pid === null
+          ? ''
+          : `u0_a55    ${this.pid}  897   1245156 114040 SyS_epoll_ 7b974f3a34 S ${this.legacyPackage}\n`;
+      return `${fixture('ps-api23.txt')}${app}USER      PID   PPID  VSIZE  RSS   WCHAN              PC  NAME\n`;
+    }
     const stat = /^cat \/proc\/uptime \/proc\/(\d+)\/stat$/.exec(command);
     if (stat) {
       if (Number(stat[1]) !== this.pid) return `${this.uptimeLine}cat: /proc/${stat[1]}/stat: No such file\n`;

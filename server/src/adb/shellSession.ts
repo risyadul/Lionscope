@@ -15,17 +15,19 @@ interface PendingCommand {
   reject: (error: Error) => void;
 }
 
-/** Longest possible marker (`\r\n__LS_<16 hex>_<id>__\r\n`) — bounds how far back a search must start. */
+/** Longest possible marker (`\r\n__LSB_<16 hex>_<id>__\r\n`) — bounds how far back a search must start. */
 const MARKER_SEARCH_OVERLAP = 64;
 
 /**
  * A persistent `adb -s <serial> shell` process that runs one command at a time (FIFO).
  *
- * Each command is followed by `printf` of an end marker made of a random per-session nonce and the
- * command id; output is everything before the marker. The literal marker never appears in the
- * command text (printf builds it from `%s`), so an echoing shell cannot confuse the framing, and
- * the nonce keeps command output from forging it. `\r\n` line endings (PTY shells on API < 24)
- * are accepted around the marker. stderr is merged into stdout on the device side.
+ * Each command is written as one line, `printf <begin marker>; <command>; printf <end marker>`, the
+ * markers made of a random per-session nonce and the command id; output is what lies between them.
+ * The literal markers never appear in the command text (printf builds them from `%s`), so an echoing
+ * shell cannot confuse the framing, and the nonce keeps command output from forging them. Shells on
+ * API < 24 run on a PTY: the echo of the line, its prompt and `\r\n` line endings all precede the
+ * begin marker or follow the end marker, and are dropped with them. stderr is merged into stdout on
+ * the device side.
  * On timeout or process exit the in-flight and queued commands are rejected and the process is
  * respawned lazily on the next `run`.
  */
@@ -38,7 +40,10 @@ export class ShellSession {
   private nextId = 1;
   private closed = false;
   private readonly nonce = randomBytes(8).toString('hex');
-  private markerPattern: RegExp | null = null;
+  private beginPattern: RegExp | null = null;
+  private endPattern: RegExp | null = null;
+  /** The begin marker was seen and cut from the buffer; the buffer is the command's output so far. */
+  private begun = false;
   private searchFrom = 0;
 
   constructor(private readonly spawnShell: () => ChildProcessLike) {}
@@ -75,9 +80,13 @@ export class ShellSession {
     this.current = next;
     this.buffer = '';
     this.searchFrom = 0;
-    this.markerPattern = new RegExp(`\\r?\\n__LS_${this.nonce}_${next.id}__\\r?\\n`, 'g');
+    this.begun = false;
+    this.beginPattern = new RegExp(`\\r?\\n__LSB_${this.nonce}_${next.id}__\\r?\\n`, 'g');
+    this.endPattern = new RegExp(`\\r?\\n__LS_${this.nonce}_${next.id}__\\r?\\n`, 'g');
     this.timer = setTimeout(() => this.onTimeout(next), next.timeoutMs);
-    child.stdin?.write(`${next.command}\nprintf '\\n__LS_${this.nonce}_%s__\\n' ${next.id}\n`);
+    const begin = `printf '\\n__LSB_${this.nonce}_%s__\\n' ${next.id}`;
+    const end = `printf '\\n__LS_${this.nonce}_%s__\\n' ${next.id}`;
+    child.stdin?.write(`${begin}; ${next.command}; ${end}\n`);
   }
 
   private ensureChild(): ChildProcessLike | null {
@@ -118,23 +127,38 @@ export class ShellSession {
 
   private onData(chunk: string): void {
     const current = this.current;
-    const pattern = this.markerPattern;
-    if (!current || !pattern) return;
+    if (!current || !this.beginPattern || !this.endPattern) return;
     this.buffer += chunk;
-    pattern.lastIndex = this.searchFrom;
-    const match = pattern.exec(this.buffer);
-    if (!match) {
-      this.searchFrom = Math.max(0, this.buffer.length - MARKER_SEARCH_OVERLAP);
-      if (this.buffer.length > MAX_PENDING_OUTPUT_CHARS) {
-        this.abortCurrent(new Error(`output of "${current.command}" exceeded limit`));
+    if (!this.begun) {
+      this.beginPattern.lastIndex = this.searchFrom;
+      const begin = this.beginPattern.exec(this.buffer);
+      if (!begin) {
+        this.searchFrom = Math.max(0, this.buffer.length - MARKER_SEARCH_OVERLAP);
+        this.abortIfOverLimit(current);
+        return;
       }
+      this.buffer = this.buffer.slice(begin.index + begin[0].length);
+      this.begun = true;
+      this.searchFrom = 0;
+    }
+    this.endPattern.lastIndex = this.searchFrom;
+    const end = this.endPattern.exec(this.buffer);
+    if (!end) {
+      this.searchFrom = Math.max(0, this.buffer.length - MARKER_SEARCH_OVERLAP);
+      this.abortIfOverLimit(current);
       return;
     }
-    const output = this.buffer.slice(0, match.index);
-    this.buffer = this.buffer.slice(match.index + match[0].length);
+    const output = this.buffer.slice(0, end.index);
+    this.buffer = this.buffer.slice(end.index + end[0].length);
     this.finishCurrent();
     current.resolve(output);
     this.pump();
+  }
+
+  private abortIfOverLimit(current: PendingCommand): void {
+    if (this.buffer.length > MAX_PENDING_OUTPUT_CHARS) {
+      this.abortCurrent(new Error(`output of "${current.command}" exceeded limit`));
+    }
   }
 
   private onTimeout(command: PendingCommand): void {
@@ -157,7 +181,8 @@ export class ShellSession {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.current = null;
-    this.markerPattern = null;
+    this.beginPattern = null;
+    this.endPattern = null;
   }
 
   private failAll(error: Error): void {
