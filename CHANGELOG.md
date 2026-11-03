@@ -6,6 +6,18 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- The README is now an overview (what Lionscope is, requirements, quick start, adding the SDK). The rest moved to
+  pages under `docs/` with its text unchanged (only links, heading levels and one cross-reference adjusted): the
+  dashboard tour and one page per feature, the SDK, AI agents, architecture, security model, known limitations,
+  configuration and development, indexed in `docs/README.md`. Each moved README section keeps its heading with a
+  link, so old links such as `#use-with-ai-agents` still land.
+- The dashboard's Device view links to `docs/agents.md` for setting up other AI clients, and the State tab's
+  Saved-state tracking tooltip points to the docs, instead of the README.
+- CI runs `npm run docs:check`: relative links, images and anchors in the README and `docs/`, and Lionscope GitHub
+  URLs in the sources, must resolve.
+
 ## [0.12.0] - 2026-11-02
 
 ### Added
