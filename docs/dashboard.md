@@ -60,3 +60,17 @@ chain and from a coroutine) from the Device column, with the offenders grouped *
 from, how often and for how long. **By line** ranks the lines that blocked instead. Each stall is listed with its
 duration, its line and its origin; with StrictMode on, disk and network violations join the list with their
 stacks.</sub>
+
+<!-- docs:added -->
+
+## Each part in detail
+
+- [Finding the line that blocks the main thread](features/stalls.md)
+- [Layouts: what inflating XML costs](features/layouts.md)
+- [Layout Inspector: pick a view, see where it came from](features/layout-inspector.md), and editing views live
+- [Network: requests and mocks](features/network.md)
+- [Saved state: what makes it too large](features/saved-state.md)
+- [Operating the emulator or a physical device from the dashboard](features/device.md)
+- [Changing the device's location](features/location.md)
+
+<!-- /docs:added -->

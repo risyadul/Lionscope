@@ -39,6 +39,23 @@ It works in two modes:
 charts, SDK FrameMetrics in the Rendering lane, logcat below the timeline, and the Screens tab ranking the
 screens by jank.</sub>
 
+<!-- docs:added -->
+
+## What the dashboard shows
+
+One page: the device, the charts on one time axis, logcat and, with the SDK, the Screens, Stalls, Layouts and
+Network tabs. See [What the dashboard shows](docs/dashboard.md), and each part in detail:
+
+- [Finding the line that blocks the main thread](docs/features/stalls.md)
+- [Layouts: what inflating XML costs](docs/features/layouts.md)
+- [Layout Inspector: pick a view, see where it came from](docs/features/layout-inspector.md), and editing views live
+- [Network: requests and mocks](docs/features/network.md)
+- [Saved state: what makes it too large](docs/features/saved-state.md)
+- [Operating the emulator or a physical device from the dashboard](docs/features/device.md)
+- [Changing the device's location](docs/features/location.md)
+
+<!-- /docs:added -->
+
 ## Requirements
 
 - Node.js ≥ 22.12
@@ -88,6 +105,42 @@ debuggable build and in the app's main process. When a session starts, the serve
 `adb reverse tcp:8700 tcp:<gateway port>` for the selected device itself and removes it when the session stops.
 If an app removes androidx.startup's `InitializationProvider`, call `Lionscope.install(context)` from
 `Application.onCreate`.
+
+<!-- docs:added -->
+
+Apps that call the SDK's API (`Lionscope.install()`, `Lionscope.trackNavigation()`,
+`Lionscope.okHttpInterceptor()`, …) also need the `lionscope-noop` artifact in release builds. That, screen names,
+Navigation Compose, the Network interceptor and what the SDK costs when no dashboard is connected are in
+[The SDK](docs/sdk.md).
+
+## Use with AI agents
+
+AI coding agents (Claude Code, Cursor, VS Code, Codex, …) get the dashboard's data as tools, over MCP
+(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Tools that operate the device stay off unless
+you add `--allow-device-control`. Setup for each client, the tools, the agent skill and the safety notes
+are in [Use with AI agents](docs/agents.md).
+
+## Architecture
+
+The server, the dashboard, the SDK and how they connect: [Architecture](docs/architecture.md).
+
+## Security model
+
+What the server accepts, from where, and what reaches an agent: [Security model](docs/security.md).
+
+## Known limitations
+
+See [Known limitations](docs/limitations.md).
+
+## Configuration
+
+Flags and environment variables: [Configuration](docs/configuration.md).
+
+## Development
+
+Building and testing from source: [Development](docs/development.md).
+
+<!-- /docs:added -->
 
 ## License
 

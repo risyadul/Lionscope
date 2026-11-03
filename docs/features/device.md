@@ -1,3 +1,11 @@
+<!-- docs:added -->
+
+# Operating a device
+
+Emulators and USB devices from the dashboard's Device column.
+
+<!-- /docs:added -->
+
 ## Operating the emulator from the dashboard
 
 The device picker lists every AVD, also the ones that are off. **Boot** starts one without a window on the host

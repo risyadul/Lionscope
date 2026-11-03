@@ -1,3 +1,12 @@
+<!-- docs:added -->
+
+# The SDK
+
+Adding it is in the README: [Adding the SDK](../README.md#adding-the-sdk-optional-debug-builds-only). This page has
+the rest.
+
+<!-- /docs:added -->
+
 **Screen names.** By default a screen is named after its class (`CheckoutActivity`, `HomeFragment`). If the
 Activity or Fragment has a public zero-arg `getScreen()` that returns an object with a non-blank String
 `value` (`getScreen()?.value`, e.g. an enum implementing a `ScreenName` interface), that alias is used instead.

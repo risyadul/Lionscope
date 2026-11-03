@@ -36,7 +36,7 @@ after the app changes its top screen (never continuously), and the refresh butto
   function is defined. Its id is its `testTag`; text, content description and flags come from its semantics;
   lazy list items sit under their list, an `AndroidView`'s View under its composable, a `ComposeView` under the
   XML views around it. Bounds are the content box of what it lays out (inside its padding modifiers); composables
-  have no alpha, padding, margin or layout params. With `Lionscope.trackNavigation` (below) the owner shows the
+  have no alpha, padding, margin or layout params. With `Lionscope.trackNavigation` (see [The SDK](../sdk.md)) the owner shows the
   navigation destination a composable is drawn for. Picking on the screen looks through composables that draw
   nothing themselves (no background, border, image or text: an idle toast or snackbar host spread over the whole
   screen) and have no text, content description, test tag or click; they stay in the tree. Clicking again on the
