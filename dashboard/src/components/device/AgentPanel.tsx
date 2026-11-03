@@ -1,9 +1,9 @@
 import { CopyButton } from '../stalls/CopyButton.tsx';
 import './agent.css';
 
-/** The one-client opt-in from the README's "Letting an agent operate the device". */
+/** The one-client opt-in from docs/agents.md's "Letting an agent operate the device". */
 export const AGENT_DEVICE_COMMAND = 'claude mcp add lionscope -- npx -y lionscope mcp --allow-device-control';
-export const AGENTS_DOCS_URL = 'https://github.com/risyadul/Lionscope#use-with-ai-agents';
+export const AGENTS_DOCS_URL = 'https://github.com/risyadul/Lionscope/blob/main/docs/agents.md';
 
 /** Beside the device in the Device view: how to let an AI agent operate it, and what to keep in mind. */
 export function AgentPanel() {

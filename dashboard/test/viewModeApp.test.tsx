@@ -117,6 +117,9 @@ describe('View switch', () => {
     expect(isShown('.side')).toBe(false);
     expect(screen.getByRole('heading', { name: 'Let an agent operate this device' })).toBeTruthy();
     expect(screen.getByText(AGENT_DEVICE_COMMAND)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Use with AI agents' }).getAttribute('href')).toBe(
+      'https://github.com/risyadul/Lionscope/blob/main/docs/agents.md',
+    );
     expect(window.location.search).toBe('?view=device');
   });
 

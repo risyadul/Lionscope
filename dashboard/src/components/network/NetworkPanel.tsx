@@ -21,7 +21,7 @@ import './network.css';
 
 export type NetworkView = 'requests' | 'mocks';
 
-/** Where the interceptor goes (the README has the Retrofit and Ktor variants). */
+/** Where the interceptor goes (docs/features/network.md has the Retrofit and Ktor variants). */
 export const INTERCEPTOR_SNIPPET = `OkHttpClient.Builder()
     .addInterceptor(Lionscope.okHttpInterceptor()) // last among the app's interceptors
     .build()`;
