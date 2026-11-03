@@ -1,0 +1,138 @@
+{
+  "description": "Where each section of the pre-split README.md (base 97b3e01) went. Used by `node scripts/check-docs.mjs --against git:97b3e01`. A section goes with its nearest mapped ancestor unless it has its own entry; `fromBlock` sends a section's blocks from the first one starting with that text on; `shift` changes heading levels. `textRewrites` are the wording changes moved text needed. `added` allowlists each new docs:added region: its file, the moved block it follows (`after`, null for the start of the file) and the sha256 of its text.",
+  "keepReadmeAnchors": ["use-with-ai-agents"],
+  "entries": [
+    {
+      "from": "lionscope",
+      "to": "README.md"
+    },
+    {
+      "from": "what-the-dashboard-shows",
+      "to": "docs/dashboard.md",
+      "shift": -1
+    },
+    {
+      "from": "finding-the-line-that-blocks-the-main-thread",
+      "to": "docs/features/stalls.md",
+      "shift": -2
+    },
+    {
+      "from": "layouts-what-inflating-xml-costs",
+      "to": "docs/features/layouts.md",
+      "shift": -2
+    },
+    {
+      "from": "layout-inspector-pick-a-view-see-where-it-came-from",
+      "to": "docs/features/layout-inspector.md",
+      "shift": -2
+    },
+    {
+      "from": "network-requests-and-mocks",
+      "to": "docs/features/network.md",
+      "shift": -2
+    },
+    {
+      "from": "saved-state-what-makes-it-too-large",
+      "to": "docs/features/saved-state.md",
+      "shift": -2
+    },
+    {
+      "from": "operating-the-emulator-from-the-dashboard",
+      "to": "docs/features/device.md",
+      "shift": -1
+    },
+    {
+      "from": "operating-a-physical-device-from-the-dashboard",
+      "to": "docs/features/device.md",
+      "shift": -1
+    },
+    {
+      "from": "changing-the-devices-location",
+      "to": "docs/features/location.md",
+      "shift": -2
+    },
+    {
+      "from": "adding-the-sdk-optional-debug-builds-only",
+      "fromBlock": "**Screen names.**",
+      "to": "docs/sdk.md",
+      "shift": -1
+    },
+    {
+      "from": "use-with-ai-agents",
+      "to": "docs/agents.md",
+      "shift": -1
+    },
+    {
+      "from": "architecture",
+      "to": "docs/architecture.md",
+      "shift": -1
+    },
+    {
+      "from": "security-model",
+      "to": "docs/security.md",
+      "shift": -1
+    },
+    {
+      "from": "known-limitations",
+      "to": "docs/limitations.md",
+      "shift": -1
+    },
+    {
+      "from": "configuration",
+      "to": "docs/configuration.md",
+      "shift": -1
+    },
+    {
+      "from": "development",
+      "to": "docs/development.md",
+      "shift": -1
+    }
+  ],
+  "base": "97b3e01",
+  "textRewrites": [
+    {
+      "file": "docs/features/layout-inspector.md",
+      "from": "With `Lionscope.trackNavigation` (below) the owner",
+      "to": "With `Lionscope.trackNavigation` (see [The SDK](../sdk.md)) the owner",
+      "reason": "The Navigation Compose paragraph it pointed down to is now in docs/sdk.md."
+    }
+  ],
+  "added": [
+    {
+      "file": "README.md",
+      "after": "<sub>The bundled sample ",
+      "sha256": "f0673d4f18572cd080915f242baa4a08b434c38f6e2860ccb03834786e4a5157",
+      "summary": "## What the dashboard shows"
+    },
+    {
+      "file": "README.md",
+      "after": "No code changes are need",
+      "sha256": "82af1a0c8cd0129095298f7d4937a6d4efb4e1f4adfd2eb3fdcb63db091b1cc7",
+      "summary": "Apps that call the SDK's API (`Lionscope.install()`, `Lionscope.trackNavigation("
+    },
+    {
+      "file": "docs/README.md",
+      "after": null,
+      "sha256": "524ace6b784d5ac210ee32bbbb33a0c0be790f4d9d701d166aa04a070e27d64e",
+      "summary": "# Lionscope docs"
+    },
+    {
+      "file": "docs/dashboard.md",
+      "after": "<sub>The Stalls tab afte",
+      "sha256": "e86dca13306c07d35ded62b6e1d147378a60a1f2888514dc4014a95f6d2aeaaa",
+      "summary": "## Each part in detail"
+    },
+    {
+      "file": "docs/features/device.md",
+      "after": null,
+      "sha256": "c0342f6967b6e869624aaa1df5ec9e81d96538aa94ee05b16c364932954f0eb8",
+      "summary": "# Operating a device"
+    },
+    {
+      "file": "docs/sdk.md",
+      "after": null,
+      "sha256": "7669c1d97abe548fd03c2c5b032f3f08967ab12d9865c294378c2f121c1dfeba",
+      "summary": "# The SDK"
+    }
+  ]
+}

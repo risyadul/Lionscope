@@ -422,7 +422,7 @@ export function SavedStatePanel({
             className="switch"
             aria-checked={tracking}
             disabled={onTrackingChange === undefined}
-            title="Measure each Activity's saved state in the app (main-thread cost per save; see the README)"
+            title="Measure each Activity's saved state in the app (main-thread cost per save; see Saved state in the docs)"
             onClick={() => onTrackingChange?.(!tracking)}
           >
             <span className="switch-track" aria-hidden="true">

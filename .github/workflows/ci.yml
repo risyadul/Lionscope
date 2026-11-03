@@ -27,6 +27,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
+      # Relative links, images, #anchors and github.com/risyadul/Lionscope URLs in the docs and sources resolve.
+      - run: npm run docs:check
       - run: npm test
       # Builds the dashboard, then bundles the server into cli/dist with the dashboard next to it.
       - run: npm run build:cli
