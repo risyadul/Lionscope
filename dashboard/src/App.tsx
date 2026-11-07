@@ -10,6 +10,8 @@ import { LogcatDrawer } from './components/layout/LogcatDrawer.tsx';
 import { LogcatPanel } from './components/logcat/LogcatPanel.tsx';
 import { ScreenPanel } from './components/screens/ScreenPanel.tsx';
 import { SavedStatePanel } from './components/savedState/SavedStatePanel.tsx';
+import { StoragePanel } from './components/storage/StoragePanel.tsx';
+import { storageSessionKey } from './lib/storage.ts';
 import { SidePanel, type SideTab } from './components/side/SidePanel.tsx';
 import { InspectorContext } from './components/inspector/InspectorContext.tsx';
 import { LocationContext } from './components/location/LocationContext.tsx';
@@ -573,6 +575,15 @@ export function App() {
                     />
                   }
                   inspector={<InspectorPanel />}
+                  storage={
+                    <StoragePanel
+                      consent={state.storageConsent}
+                      answers={state.storageAnswers}
+                      outcomes={state.storageOutcomes}
+                      isRunning={state.session.status === 'running'}
+                      sessionKey={storageSessionKey(state.session)}
+                    />
+                  }
                   state={
                     <SavedStatePanel
                       savedStates={savedStatesInWindow}

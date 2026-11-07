@@ -398,7 +398,7 @@ describe('device gateway', () => {
       'utf8',
     )
       .split('\n')
-      .filter((line) => line.includes('"savedStateTracking"'));
+      .filter((line) => line.includes('"savedStateTracking"') && !line.includes('"storageConsent"'));
     expect(client.rawLines.filter((line) => line.startsWith('{"type":"config"'))).toEqual([
       '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true,"savedStateTracking":true}',
       golden.at(-1),

@@ -47,6 +47,7 @@ class NoopParityTest {
         assertTrue(noop.classLoader === noopLoader)
         val api = publicApi(Lionscope::class.java)
         assertTrue(api.contains("fun okHttpInterceptor(): okhttp3.Interceptor"))
+        assertTrue(api.contains("fun trackDatabase(java.lang.String, androidx.room.RoomDatabase): void"))
         assertEquals(api, publicApi(noop))
     }
 

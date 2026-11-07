@@ -9,7 +9,7 @@ import {
   PROTOCOL_VERSION,
   WS_PATH,
 } from '@lionscope/protocol';
-import type { ClientMessage, ServerMessage } from '@lionscope/protocol';
+import type { ClientMessage, ServerMessage, StorageResponse } from '@lionscope/protocol';
 import { DEV_ORIGINS } from '../config.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
@@ -20,6 +20,8 @@ import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { ViewEditOutcome, ViewEdits } from '../inspector/viewEdits.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
+import { STORAGE_MESSAGES } from '../storage/storageService.ts';
+import type { StorageService } from '../storage/storageService.ts';
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const MAX_CLIENTS = 8;
@@ -110,6 +112,9 @@ export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
 /** What the gateway needs from the live view edits. */
 export type GatewayViewEdits = Pick<ViewEdits, 'set' | 'revert'>;
 
+/** What the gateway needs from the storage inspector. */
+export type GatewayStorage = Pick<StorageService, 'consent' | 'list' | 'read' | 'write' | 'auditResponse'>;
+
 /** What the gateway needs from the device locations. */
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
@@ -124,6 +129,8 @@ export interface WsGatewayOptions {
   viewEdits?: GatewayViewEdits;
   /** Device locations (`setLocation` / `clearLocation`); omitted = they are refused. */
   locations?: GatewayLocations;
+  /** The storage inspector (`storageList` / `storageRead` / `storageWrite`); omitted = consent `off`. */
+  storage?: GatewayStorage;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -157,6 +164,10 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   revertViewProperties: 'Could not revert the edits',
   setLocation: 'Could not change the location',
   clearLocation: 'Could not reset the location',
+  storageList: 'Could not list the app storage',
+  storageRead: 'Could not read the app storage',
+  storageWrite: 'Could not change the app storage',
+  storageAudit: 'Could not read the storage audit',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -329,6 +340,24 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         if (!options.locations) throw new PublicError(NO_LOCATIONS_MESSAGE);
         await options.locations.clearLocation(message.serial);
         return;
+      case 'storageList':
+      case 'storageRead':
+      case 'storageWrite':
+      case 'storageAudit': {
+        // Answered with `storage` to this client; refusals (consent off first) come the same way.
+        const storage = options.storage;
+        const response: StorageResponse = !storage
+          ? { ok: false, code: 'consent_required', message: STORAGE_MESSAGES.consent_required! }
+          : message.type === 'storageList'
+            ? await storage.list()
+            : message.type === 'storageRead'
+              ? await storage.read(message.read)
+              : message.type === 'storageAudit'
+                ? storage.auditResponse()
+                : await storage.write(message.write);
+        send(ws, { type: 'storage', requestId: message.requestId, response });
+        return;
+      }
     }
   };
 
@@ -377,6 +406,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       protocolVersion: PROTOCOL_VERSION,
       serverVersion: options.serverVersion,
       bufferWindowMs: options.bufferWindowMs,
+      storageConsent: options.storage?.consent ?? 'off',
     });
     send(ws, { type: 'devices', devices: manager.getDevices() });
     send(ws, { type: 'emulators', emulators: emulators.getEmulators() });

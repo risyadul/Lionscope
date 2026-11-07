@@ -202,6 +202,9 @@ describe('gateway golden lines (server → SDK)', () => {
         'inspect',
         'setViewProperty',
         'revertViewProperties',
+        'storageList',
+        'storageRead',
+        'storageWrite',
       ]),
     );
   });

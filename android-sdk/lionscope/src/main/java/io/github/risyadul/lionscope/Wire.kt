@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 10
+internal const val DEVICE_PROTOCOL_VERSION = 11
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -43,6 +43,11 @@ internal const val DEVICE_PROTOCOL_V9 = 9
  * and `config.savedStateTracking`.
  */
 internal const val DEVICE_PROTOCOL_V10 = 10
+/**
+ * First version with the storage inspector (session links with the link proof only): `storageList` / `storageRead` /
+ * `storageWrite` (server → SDK), their `storage*Result` answers, and `config.storageConsent`.
+ */
+internal const val DEVICE_PROTOCOL_V11 = 11
 /** Which lifecycle point saw the complete bundle: `onActivityPostSaveInstanceState` (API 29+), or a main-thread post. */
 internal enum class SavedStateHook(val wire: String) {
     POST_SAVE("post_save"),
@@ -130,6 +135,8 @@ internal data class SdkOptions(
     val inflateTracking: Boolean = true,
     val rxTracking: Boolean = true,
     val savedStateTracking: Boolean = true,
+    /** v11: what the server lets the storage inspector do; [StorageConsent.OFF] unless a config names another. */
+    val storageConsent: StorageConsent = StorageConsent.OFF,
 ) {
     companion object {
         val DEFAULT = SdkOptions(stallThresholdMs = 150, strictMode = false, inflateTracking = true, rxTracking = true)
@@ -413,3 +420,53 @@ internal class MockRule(
     val matchable: Boolean = url.length <= MAX_MOCK_URL_CHARS &&
         (match != MockMatch.GLOB || url.count { it == '*' } <= MAX_MOCK_GLOB_STARS)
 }
+
+// Storage inspector (v11), mirrors protocol/src/wire.ts, section "Storage inspector".
+
+/** What the server's flags let this link do with storage (`config.storageConsent`); [OFF] until a v11 config says so. */
+internal enum class StorageConsent(val wire: String) {
+    OFF("off"),
+    READ("read"),
+    READ_WRITE("read_write"),
+    ;
+
+    companion object {
+        fun of(wire: String?): StorageConsent = values().firstOrNull { it.wire == wire } ?: OFF
+    }
+}
+
+/** Serialized UTF-8 bytes of one storage answer at most; rows / keys past it are left for the next page. */
+internal const val MAX_STORAGE_REPLY_BYTES = 240 * 1024
+/** UTF-16 code units of a String / TEXT, or bytes of a BLOB, sent per value; longer ones are cut (read-only). */
+internal const val MAX_STORAGE_VALUE_UNITS = 16 * 1024
+/** Time inside one database transaction (read or write), from when it was got. */
+internal const val STORAGE_TX_BUDGET_MS = 250L
+/** Time a prefs `commit()` gets before the answer says `persisted: "timeout"` (a final answer follows). */
+internal const val STORAGE_COMMIT_BUDGET_MS = 1000L
+
+/** The one NaN SharedPreferences stores (`Float.NaN`): `Float.equals` compares canonical bits. */
+internal const val CANONICAL_FLOAT_NAN_BITS = 0x7fc00000L
+internal const val DEFAULT_STORAGE_ROWS = 50
+internal const val MAX_STORAGE_ROWS = 200
+internal const val MAX_STORAGE_PAGES = 4
+internal const val MAX_STORAGE_PREFS_FILES = 128
+internal const val DEFAULT_STORAGE_KEYS = 500
+internal const val MAX_STORAGE_KEYS = 500
+internal const val MAX_STORAGE_TABLES = 256
+internal const val MAX_STORAGE_COLUMNS = 256
+internal const val MAX_STORAGE_DATABASES = 16
+internal const val MAX_STORAGE_SET_ELEMENTS = 500
+internal const val MAX_STORAGE_NAME_CHARS = 1024
+/** A cursor is an opaque token of the device ([StorageCursors]); a longer one is refused. */
+internal const val MAX_STORAGE_CURSOR_CHARS = 64
+/** Characters of one text field of a server → SDK storage line (the server sends lines of 60 KiB at most). */
+internal const val MAX_STORAGE_REQUEST_FIELD_CHARS = 60 * 1024
+/** Cursor tokens one link connection keeps at most (least recently used dropped first). */
+internal const val MAX_STORAGE_CURSORS = 128
+/** UTF-16 code units of a prefs key sent at most; a longer key is sent cut (`keyLength`), read-only. */
+internal const val MAX_STORAGE_KEY_UNITS = MAX_STORAGE_NAME_CHARS
+/** Storage writes: a burst, then this many per second (the server limits them the same way). */
+internal const val STORAGE_WRITE_BURST = 10
+internal const val STORAGE_WRITES_PER_SECOND = 5.0
+/** Requests waiting for the storage worker at most; one more is answered `busy`. */
+internal const val MAX_STORAGE_QUEUED = 8

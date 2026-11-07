@@ -20,3 +20,10 @@
 {"type":"revertViewProperties","requestId":22}
 {"type":"config","stallThresholdMs":250,"strictMode":true,"inflateTracking":true,"rxTracking":false}
 {"type":"config","stallThresholdMs":250,"strictMode":true,"inflateTracking":true,"rxTracking":false,"savedStateTracking":false}
+{"type":"config","stallThresholdMs":250,"strictMode":true,"inflateTracking":true,"rxTracking":false,"savedStateTracking":false,"storageConsent":"read_write"}
+{"type":"storageList","requestId":30}
+{"type":"storageRead","requestId":31,"store":"prefs","name":"app_settings","cursor":"c1.00000000000000000000000000000001","limit":100}
+{"type":"storageRead","requestId":32,"store":"db","name":"app.db","pages":"[{\"table\":\"user\",\"columns\":[\"id\",\"name\"],\"limit\":2},{\"table\":\"pair\",\"cursor\":\"c1.00000000000000000000000000000002\"}]"}
+{"type":"storageWrite","requestId":33,"opId":"6f1c2b8e-0d5a-4f43-9b0e-3a7c2d1e4f50","store":"prefs","name":"app_settings","op":"update","key":"ratio","expected":"{\"t\":\"float\",\"bits\":\"0x3f000000\"}","value":"{\"t\":\"float\",\"bits\":\"0x3fc00000\"}"}
+{"type":"storageWrite","requestId":34,"opId":"0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d","store":"db","name":"app.db","op":"update","table":"user","column":"name","pk":"[{\"t\":\"integer\",\"v\":\"1\"}]","expected":"{\"t\":\"string\",\"v\":\"Ana \\\"A\\\" \\ud800\"}","value":"{\"t\":\"string\",\"v\":\"Ann\"}"}
+{"type":"storageWrite","requestId":35,"opId":"3c9e7f20-58a1-4b6d-9e02-7d4f1a6b8c35","store":"db","name":"app.db","op":"delete","table":"user","pk":"[{\"t\":\"integer\",\"v\":\"9223372036854775807\"}]","rowDigest":"5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f"}

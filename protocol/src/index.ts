@@ -16,6 +16,7 @@ import {
   DEVICE_PROTOCOL_V7,
   DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_V10,
+  DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -56,6 +57,20 @@ import {
   MAX_SCREEN_TEXT_CHARS,
   MAX_SDK_FRAMES_PER_BATCH,
   MAX_STACK_FRAMES,
+  MAX_STORAGE_CLIENT_MESSAGE_BYTES,
+  MAX_STORAGE_COLUMNS,
+  MAX_STORAGE_CURSOR_CHARS,
+  MAX_STORAGE_KEY_UNITS,
+  MAX_STORAGE_DATABASES,
+  MAX_STORAGE_KEYS,
+  MAX_STORAGE_LINE_BYTES,
+  MAX_STORAGE_NAME_CHARS,
+  MAX_STORAGE_PAGES,
+  MAX_STORAGE_PREFS_FILES,
+  MAX_STORAGE_ROWS,
+  MAX_STORAGE_TABLES,
+  STORAGE_CODE_PATTERN,
+  STORAGE_CURSOR_PATTERN,
   MAX_VIEW_PATH_NODES,
   MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
@@ -80,12 +95,25 @@ import {
   type SavedStateEntry,
   type ScreenClientMessage,
   type StallRx,
+  type StorageColumn,
+  type StorageDatabase,
+  type StoragePage,
+  type StoragePrefsEntry,
+  type StoragePrefsFile,
+  type StorageTable,
   type ViewProperty,
   type ViewPropertyValue,
   type ViewState,
 } from './wire.ts';
 
 export * from './wire.ts';
+export * from './storage.ts';
+import {
+  ROW_DIGEST_PATTERN,
+  storageReadInputSchema,
+  storageValueSchema,
+  storageWriteInputSchema,
+} from './storage.ts';
 
 export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
@@ -291,6 +319,14 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       (message) => message.property === undefined || message.nodeId !== undefined,
       'property needs a nodeId',
     ),
+  z.object({ type: z.literal('storageList'), requestId: clientRequestId }).strict(),
+  z
+    .object({ type: z.literal('storageRead'), requestId: clientRequestId, read: storageReadInputSchema })
+    .strict(),
+  z
+    .object({ type: z.literal('storageWrite'), requestId: clientRequestId, write: storageWriteInputSchema })
+    .strict(),
+  z.object({ type: z.literal('storageAudit'), requestId: clientRequestId }).strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -325,7 +361,13 @@ export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
   if (!json.ok) return json;
   const type: unknown =
     typeof json.value === 'object' && json.value !== null && Reflect.get(json.value, 'type');
-  if (type !== 'setNetworkMock' && !withinBytes(raw, MAX_CLIENT_MESSAGE_BYTES)) {
+  const cap =
+    type === 'setNetworkMock'
+      ? MAX_CLIENT_FRAME_BYTES
+      : type === 'storageWrite'
+        ? MAX_STORAGE_CLIENT_MESSAGE_BYTES
+        : MAX_CLIENT_MESSAGE_BYTES;
+  if (!withinBytes(raw, cap)) {
     return { ok: false, error: 'message too large' };
   }
   return validate(json.value, clientMessageSchema);
@@ -676,6 +718,80 @@ const exchangeId = z.number().int().min(1).max(MAX_INT32);
 const mockRev = z.number().int().min(0).max(MAX_INT32);
 const HTTP_PROTOCOL_PATTERN = /^[a-z0-9_./-]{1,32}$/;
 
+// Storage inspector (v11): what the SDK answers. Values are validated whole (storage.ts); app text stays as sent.
+const storageCode = z.string().max(64).regex(STORAGE_CODE_PATTERN, 'invalid storage code');
+const storageNameText = z.string().min(1).max(MAX_STORAGE_NAME_CHARS);
+// Only the SDK's opaque token: an answer whose cursor is anything else (a key value) is refused whole.
+const storageCursor = z
+  .string()
+  .max(MAX_STORAGE_CURSOR_CHARS)
+  .regex(STORAGE_CURSOR_PATTERN, 'invalid cursor');
+const storageMs = z.number().nonnegative().max(600_000);
+const storageReadOnly = z
+  .string()
+  .regex(
+    /^(no_explicit_pk|pk_column|view|virtual|internal|redacted|truncated|unsupported:[a-z_]{1,32})$/,
+    'invalid read-only reason',
+  );
+const storagePrefsFileSchema = z
+  .object({ name: storageNameText, backupOnly: z.boolean() })
+  .strip() satisfies z.ZodType<StoragePrefsFile>;
+const storageDatabaseSchema = z
+  .object({
+    name: storageNameText,
+    status: z.string().regex(/^(ok|unsupported:[a-z_]{1,32})$/, 'invalid database status'),
+  })
+  .strip() as z.ZodType<StorageDatabase>;
+const storagePrefsEntrySchema = z
+  .object({
+    key: z.string().max(MAX_STORAGE_KEY_UNITS),
+    keyLength: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    value: storageValueSchema,
+  })
+  .strip() satisfies z.ZodType<StoragePrefsEntry>;
+const storageColumnSchema = z
+  .object({
+    name: storageNameText,
+    type: z.string().max(MAX_STORAGE_NAME_CHARS),
+    notNull: z.boolean(),
+    pk: z.number().int().min(0).max(MAX_STORAGE_COLUMNS),
+  })
+  .strip() satisfies z.ZodType<StorageColumn>;
+const storageTableSchema = z
+  .object({
+    name: storageNameText,
+    kind: z.enum(['table', 'view', 'virtual', 'internal']),
+    withoutRowid: z.boolean(),
+    columns: z.array(storageColumnSchema).max(MAX_STORAGE_COLUMNS),
+    pk: z.array(storageNameText).max(MAX_STORAGE_COLUMNS),
+    readOnly: storageReadOnly.nullable(),
+  })
+  .strip() as z.ZodType<StorageTable>;
+const storagePageSchema = z
+  .object({
+    table: storageNameText,
+    columns: z.array(storageNameText).max(MAX_STORAGE_COLUMNS),
+    pk: z.array(storageNameText).max(MAX_STORAGE_COLUMNS),
+    readOnly: storageReadOnly.nullable(),
+    rows: z
+      .array(
+        z
+          .object({
+            cells: z.array(storageValueSchema).max(MAX_STORAGE_COLUMNS),
+            digest: z.string().regex(ROW_DIGEST_PATTERN, 'invalid row digest').nullable(),
+          })
+          .strip(),
+      )
+      .max(MAX_STORAGE_ROWS),
+    nextCursor: storageCursor.nullable(),
+    truncated: z.boolean(),
+  })
+  .strip()
+  .refine(
+    (page) => page.rows.every((row) => row.cells.length === page.columns.length),
+    'row width',
+  ) as z.ZodType<StoragePage>;
+
 export const deviceMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -908,6 +1024,48 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS),
     })
     .strip(),
+  z
+    .object({
+      type: z.literal('storageListResult'),
+      requestId,
+      code: storageCode,
+      prefs: z.array(storagePrefsFileSchema).max(MAX_STORAGE_PREFS_FILES),
+      prefsTruncated: z.boolean(),
+      databases: z.array(storageDatabaseSchema).max(MAX_STORAGE_DATABASES),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('storageReadResult'),
+      requestId,
+      code: storageCode,
+      entries: z.array(storagePrefsEntrySchema).max(MAX_STORAGE_KEYS).optional(),
+      nextCursor: storageCursor.nullable().optional(),
+      truncated: z.boolean().optional(),
+      tables: z.array(storageTableSchema).max(MAX_STORAGE_TABLES).optional(),
+      tablesTruncated: z.boolean().optional(),
+      pages: z.array(storagePageSchema).max(MAX_STORAGE_PAGES).optional(),
+      txMs: storageMs.optional(),
+    })
+    .strip(),
+  z
+    .object({
+      type: z.literal('storageWriteResult'),
+      requestId,
+      opId: z.string().regex(/^[0-9a-f-]{36}$/, 'invalid opId'),
+      phase: z.enum(['provisional', 'final']),
+      code: storageCode,
+      current: storageValueSchema.optional(),
+      stored: storageValueSchema.optional(),
+      normalized: z.boolean().optional(),
+      memory: z.enum(['applied', 'not_applied']).optional(),
+      persisted: z.union([z.boolean(), z.literal('timeout')]).optional(),
+      observers: z.enum(['posted_unverified', 'room_invalidation']).optional(),
+      changes: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
+      totalChangesDelta: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+      txMs: storageMs.optional(),
+    })
+    .strip(),
 ]) satisfies z.ZodType<DeviceMessage>;
 
 /**
@@ -929,6 +1087,9 @@ const DIAGNOSTIC_TYPES: ReadonlySet<DeviceMessageType> = new Set([
   'viewPropertyResult',
   'savedState',
   'liveActivities',
+  'storageListResult',
+  'storageReadResult',
+  'storageWriteResult',
 ]);
 
 /**
@@ -953,6 +1114,9 @@ const DEVICE_MESSAGE_VERSIONS: Readonly<Record<DeviceMessageType, number>> = {
   viewPropertyResult: DEVICE_PROTOCOL_V8,
   savedState: DEVICE_PROTOCOL_V10,
   liveActivities: DEVICE_PROTOCOL_V10,
+  storageListResult: DEVICE_PROTOCOL_V11,
+  storageReadResult: DEVICE_PROTOCOL_V11,
+  storageWriteResult: DEVICE_PROTOCOL_V11,
 };
 
 /**
@@ -1005,8 +1169,22 @@ export const LARGE_DEVICE_MESSAGE_TYPES: ReadonlySet<DeviceMessageType> = new Se
   'httpResponse',
 ]);
 
+/** v11 storage answers: up to MAX_STORAGE_LINE_BYTES on a v11 link. */
+export const STORAGE_DEVICE_MESSAGE_TYPES: ReadonlySet<DeviceMessageType> = new Set([
+  'storageListResult',
+  'storageReadResult',
+  'storageWriteResult',
+]);
+
 /** The line size cap for a line of `type` (as peeked) on a link negotiated at `protocolVersion`. */
 export function maxDeviceLineBytes(type: string | null, protocolVersion: number): number {
+  if (
+    protocolVersion >= DEVICE_PROTOCOL_V11 &&
+    type !== null &&
+    STORAGE_DEVICE_MESSAGE_TYPES.has(type as DeviceMessageType)
+  ) {
+    return MAX_STORAGE_LINE_BYTES;
+  }
   return protocolVersion >= DEVICE_PROTOCOL_V7 &&
     type !== null &&
     LARGE_DEVICE_MESSAGE_TYPES.has(type as DeviceMessageType)

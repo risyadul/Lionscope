@@ -2,7 +2,7 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'state' | 'inspector';
+export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'state' | 'storage' | 'inspector';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'screens', label: 'Screens' },
@@ -10,6 +10,7 @@ const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'layouts', label: 'Layouts' },
   { id: 'network', label: 'Network' },
   { id: 'state', label: 'State' },
+  { id: 'storage', label: 'Storage' },
   { id: 'inspector', label: 'Inspector' },
 ];
 
@@ -33,6 +34,8 @@ type Props = {
   layouts: ReactNode;
   network: ReactNode;
   state: ReactNode;
+  /** The storage inspector (0.13.0); no count on its tab. */
+  storage: ReactNode;
   inspector: ReactNode;
   /** Only this tab, under a heading instead of the tab list (the Inspector view); the others stay mounted. */
   lockedTab?: SideTab;
@@ -53,6 +56,7 @@ export function SidePanel({
   layouts,
   network,
   state,
+  storage,
   inspector,
   lockedTab,
 }: Props) {
@@ -62,9 +66,10 @@ export function SidePanel({
     layouts: layoutCount,
     network: networkCount,
     state: stateCount,
+    storage: 0,
     inspector: inspectorCount,
   };
-  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, inspector };
+  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, storage, inspector };
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -105,7 +110,7 @@ export function SidePanel({
   }
 
   return (
-    <aside className="side" aria-label="Screens, stalls, layouts, network, state and inspector">
+    <aside className="side" aria-label="Screens, stalls, layouts, network, state, storage and inspector">
       <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button

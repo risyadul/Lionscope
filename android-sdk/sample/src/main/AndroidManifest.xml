@@ -31,6 +31,11 @@
         <activity
             android:name=".SavedStateActivity"
             android:exported="true" />
+        <!-- Exported for `adb shell am start` with test-hook extras (see StorageActivity). -->
+        <activity
+            android:name=".StorageActivity"
+            android:exported="true"
+            android:launchMode="singleTop" />
         <activity
             android:name=".NetworkActivity"
             android:exported="false"

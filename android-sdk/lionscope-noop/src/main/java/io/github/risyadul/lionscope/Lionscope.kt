@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope
 
 import android.content.Context
 import androidx.navigation.NavController
+import androidx.room.RoomDatabase
 import okhttp3.Interceptor
 import okhttp3.Response
 
@@ -22,6 +23,10 @@ object Lionscope {
     /** Does nothing; exists so navigation tracking compiles against both artifacts. */
     @Suppress("UNUSED_PARAMETER")
     fun trackNavigation(navController: NavController) = Unit
+
+    /** Does nothing (never reads the database); exists so database registration compiles against both artifacts. */
+    @Suppress("UNUSED_PARAMETER")
+    fun trackDatabase(name: String, database: RoomDatabase) = Unit
 
     /**
      * A pass-through interceptor (`chain.proceed(chain.request())`, one instance per process): no capture, no mocks.

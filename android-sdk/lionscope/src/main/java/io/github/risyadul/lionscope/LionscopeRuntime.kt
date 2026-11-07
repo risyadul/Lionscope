@@ -118,6 +118,13 @@ internal object LionscopeRuntime {
             }
         }
         ViewEditRequests(deviceLink, main, editor.takeIf { inspector != null })
+        // Storage requests get an answer even when this fails (the server then times them out): never into the app.
+        try {
+            StorageRequests(deviceLink, StorageInspector(AndroidPrefsAccess(app), DatabaseRegistry.shared))
+        } catch (t: Throwable) {
+            if (isFatal(t)) throw t
+            Log.w(LOG_TAG, "Lionscope storage inspector disabled: $t")
+        }
         screens = ScreenTracker(
             deviceLink,
             main,

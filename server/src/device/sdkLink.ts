@@ -4,6 +4,7 @@ import type {
   InspectorNode,
   NetworkMockRule,
   SdkOptions,
+  StorageConsent,
   ViewProperty,
   ViewPropertyGroup,
   ViewPropertyValue,
@@ -25,6 +26,36 @@ export type SdkLinkMessage = Exclude<
 >;
 export type ByeReason = Extract<GatewayMessage, { type: 'bye' }>['reason'];
 
+type StorageGatewayMessage = Extract<
+  GatewayMessage,
+  { type: 'storageList' } | { type: 'storageRead' } | { type: 'storageWrite' }
+>;
+/** A v11 storage request as the server builds it; the gateway adds the `requestId`. */
+export type SdkStorageRequest = StorageGatewayMessage extends infer M
+  ? M extends StorageGatewayMessage
+    ? Omit<M, 'requestId'>
+    : never
+  : never;
+/** The SDK's answer to a storage request (the result type that matches the request's). */
+export type SdkStorageResult = Extract<
+  DeviceMessage,
+  { type: 'storageListResult' } | { type: 'storageReadResult' } | { type: 'storageWriteResult' }
+>;
+
+/**
+ * Why a storage request got no answer: `unsupported` (a link below v11), `closed`, `timeout` (STORAGE_TIMEOUT_MS),
+ * `busy` (too many waiting on that link), `too_large` (the line would be over MAX_STORAGE_REQUEST_LINE_BYTES: not
+ * sent), `invalid` (an answer of another type).
+ */
+export type SdkStorageFailure = 'unsupported' | 'closed' | 'timeout' | 'busy' | 'too_large' | 'invalid';
+
+export class SdkStorageError extends Error {
+  override name = 'SdkStorageError';
+  constructor(readonly reason: SdkStorageFailure) {
+    super(`SDK storage request failed: ${reason}`);
+  }
+}
+
 /** The device gateway's side of one accepted SDK connection. */
 export interface SdkLink {
   /**
@@ -45,7 +76,7 @@ export interface SdkLink {
    * Send the session's SDK options as `config`. Only links at protocol ≥ 2 get it (a no-op otherwise); called
    * before the `welcome` went out, it is sent right after it.
    */
-  sendConfig(options: SdkOptions): void;
+  sendConfig(options: SdkOptions, storageConsent?: StorageConsent): void;
   /**
    * Send a complete mock rule set (`mocks`, then one `mock` per rule, in the order given: the first match answers).
    * Only session links at protocol ≥ 7 get it (a no-op otherwise); called before the `welcome` went out, the latest
@@ -72,6 +103,12 @@ export interface SdkLink {
     viewKey?: number,
     property?: ViewProperty | ViewPropertyGroup,
   ): Promise<SdkViewEditResult>;
+  /**
+   * v11 (session links with the link proof; callers check): send one storage request and wait for its answer. A
+   * `storageWrite` resolves with its first answer (`provisional` or `final`); a later `final` of it reaches the
+   * link's handler as a message. Rejects with an SdkStorageError.
+   */
+  storage(request: SdkStorageRequest): Promise<SdkStorageResult>;
 }
 
 /**

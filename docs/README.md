@@ -14,6 +14,7 @@ Start with the [README](../README.md): what Lionscope is, requirements, quick st
 | [Saved state: what makes it too large](features/saved-state.md)                       | `TransactionTooLargeException` and each Activity's saved-state size                |
 | [Operating a device](features/device.md)                                              | Emulators (also headless) and USB devices in the Device column                     |
 | [Changing the device's location](features/location.md)                                | Moving a device on a map, and how its real location comes back                     |
+| [Storage: reading and editing app data live](features/storage.md)                     | SharedPreferences and registered Room databases, compare-and-set edits             |
 | [The SDK](sdk.md)                                                                     | Screen names, Navigation Compose, Network, release builds, cost when not connected |
 | [Use with AI agents](agents.md)                                                       | MCP and shell setup per client, the tools, the agent skill, safety notes           |
 | [Architecture](architecture.md)                                                       | How the server, dashboard, SDK and protocol fit together                           |

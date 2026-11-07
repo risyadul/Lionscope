@@ -11,15 +11,17 @@ import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { ViewEdits } from '../inspector/viewEdits.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
+import type { StorageService } from '../storage/storageService.ts';
 import type { DontKeepActivities } from './dontKeepActivities.ts';
 import type { UiHelpers } from './uiHelper.ts';
 import type { UiTree } from './uiTree.ts';
 
 /**
  * `read`: always available; `session`: starts / stops profiling; `dashboard`: changes only what the dashboard
- * shows (always available); `device`: operates a device (opt-in only).
+ * shows (always available); `device`: operates a device (opt-in only); `storage_read` / `storage_write`: the app's
+ * prefs and registered databases (the server's --allow-storage-read / --allow-storage-write).
  */
-export type ToolAccess = 'read' | 'session' | 'dashboard' | 'device';
+export type ToolAccess = 'read' | 'session' | 'dashboard' | 'device' | 'storage_read' | 'storage_write';
 
 /** MCP tool annotations; every Lionscope tool works on this machine only, so `openWorldHint` is always false. */
 export interface ToolAnnotations {
@@ -73,6 +75,9 @@ export type AgentInspector = Pick<InspectorService, 'inspect' | 'select' | 'curr
 /** Live view edits through the current snapshot's SDK link (the dashboard's own). */
 export type AgentViewEdits = Pick<ViewEdits, 'set' | 'setAll' | 'revert'>;
 
+/** The storage inspector: the same one the dashboard's Storage tab uses (its consent is the server's flags). */
+export type AgentStorage = Pick<StorageService, 'consent' | 'list' | 'read' | 'write' | 'auditEntries'>;
+
 /** Device locations: the same ones the dashboard's Location panel shows and sets. */
 export type AgentLocations = Pick<
   LocationService,
@@ -100,6 +105,8 @@ export interface AgentContext {
   viewEdits?: AgentViewEdits;
   /** Omitted: the location tools say locations are unavailable. */
   locations?: AgentLocations;
+  /** Omitted: storage consent is `off` (the storage tools are neither listed nor callable). */
+  storage?: AgentStorage;
   adb: Adb;
   serverVersion: string;
   bufferWindowMs: number;

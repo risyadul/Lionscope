@@ -93,6 +93,7 @@ describe('View switch', () => {
       'Layouts',
       'Network',
       'State',
+      'Storage',
       'Inspector',
     ]);
     expect(window.location.search).toBe('');

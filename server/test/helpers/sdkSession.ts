@@ -9,13 +9,15 @@ import type {
   ViewPropertyValue,
 } from '@lionscope/protocol';
 import { vi } from 'vitest';
-import { SdkEditError, SdkInspectError } from '../../src/device/sdkLink.ts';
+import { SdkEditError, SdkInspectError, SdkStorageError } from '../../src/device/sdkLink.ts';
 import type {
   ByeReason,
   SdkHello,
   SdkInspection,
   SdkLink,
   SdkLinkHandler,
+  SdkStorageRequest,
+  SdkStorageResult,
   SdkViewEditResult,
 } from '../../src/device/sdkLink.ts';
 import { ProfilingSession } from '../../src/session/profilingSession.ts';
@@ -41,11 +43,15 @@ export const HELLO: SdkHello = {
 };
 
 /** What a fake link without edits has of them: a session link below v8, without a proof (edits fail `unsupported`). */
-export const NO_EDITS: Pick<SdkLink, 'mode' | 'proven' | 'setViewProperty' | 'revertViewProperties'> = {
+export const NO_EDITS: Pick<
+  SdkLink,
+  'mode' | 'proven' | 'setViewProperty' | 'revertViewProperties' | 'storage'
+> = {
   mode: 'session',
   proven: false,
   setViewProperty: () => Promise.reject(new SdkEditError('unsupported')),
   revertViewProperties: () => Promise.reject(new SdkEditError('unsupported')),
+  storage: () => Promise.reject(new SdkStorageError('unsupported')),
 };
 
 /** One edit a FakeLink was asked for. */
@@ -58,13 +64,23 @@ export class FakeLink implements SdkLink {
   /** The welcome carried the link proof (a session link the SDK takes edits from). */
   proven = true;
   readonly configs: SdkOptions[] = [];
+  /** The storage consent of each `config` (sendConfig's second argument). */
+  readonly storageConsents: (string | undefined)[] = [];
   closedWith: ByeReason | 'none' | null = null;
   constructor(readonly protocolVersion = 1) {}
   close(reason?: ByeReason): void {
     this.closedWith = reason ?? 'none';
   }
-  sendConfig(options: SdkOptions): void {
+  sendConfig(options: SdkOptions, storageConsent?: string): void {
     this.configs.push(options);
+    this.storageConsents.push(storageConsent);
+  }
+  /** What storage() answers; unset, it fails as `unsupported`. */
+  answerStorage: ((request: SdkStorageRequest) => Promise<SdkStorageResult>) | null = null;
+  readonly storageRequests: SdkStorageRequest[] = [];
+  storage(request: SdkStorageRequest): Promise<SdkStorageResult> {
+    this.storageRequests.push(request);
+    return this.answerStorage?.(request) ?? Promise.reject(new SdkStorageError('unsupported'));
   }
   /** Every rule set sent (`sendMocks`), as given. */
   readonly mockSets: { rev: number; rules: readonly NetworkMockRule[] }[] = [];

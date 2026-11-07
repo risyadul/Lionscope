@@ -1,5 +1,6 @@
 import { isValidPackageName, isValidSerial } from '@lionscope/protocol';
 import type {
+  StorageConsent,
   CpuSample,
   HttpExchangeDetail,
   MemorySample,
@@ -18,7 +19,7 @@ import type { Adb } from '../adb/adb.ts';
 import { ShellSession } from '../adb/shellSession.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
 import { SdkBridge } from '../device/sdkBridge.ts';
-import type { SdkHello, SdkLink, SdkLinkHandler } from '../device/sdkLink.ts';
+import type { SdkHello, SdkLink, SdkLinkHandler, SdkLinkMessage } from '../device/sdkLink.ts';
 import { PublicError } from '../errors.ts';
 import { log } from '../log.ts';
 import { computeCpuUsage } from '../metrics/cpu.ts';
@@ -61,6 +62,8 @@ export const DEFAULT_INTERVALS: CollectorIntervals = {
 
 const TIMEOUTS = { cpu: 3000, frames: 8000, memory: 10_000 };
 
+type SdkStorageWriteResult = Extract<SdkLinkMessage, { type: 'storageWriteResult' }>;
+
 export interface ProfilingSessionOptions {
   adb: Adb;
   serial: string;
@@ -71,6 +74,10 @@ export interface ProfilingSessionOptions {
   intervals?: Partial<CollectorIntervals>;
   /** The device probe finished (the clock offset is known): the SDK link may be set up. */
   onReady?: () => void;
+  /** What the server's storage flags allow (sent to the SDK in `config`); default `off`. */
+  storageConsent?: StorageConsent;
+  /** A storage write's answer that came after its request was settled (see SdkBridge). */
+  onStorageWriteResult?: (message: SdkStorageWriteResult) => void;
 }
 
 /**
@@ -187,6 +194,8 @@ export class ProfilingSession {
       onLiveLink: (link, network) =>
         link && network === 'active' ? this.mocks.linkUp(link) : this.mocks.linkDown(),
       onMocksApplied: (rev) => this.mocks.applied(rev),
+      ...(options.storageConsent ? { storageConsent: options.storageConsent } : {}),
+      ...(options.onStorageWriteResult ? { onStorageWriteResult: options.onStorageWriteResult } : {}),
     });
   }
 

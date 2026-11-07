@@ -67,7 +67,7 @@ describe('applyServerMessage', () => {
   });
 
   it('flags a 0.2 server (protocol 1) as a mismatch: the versions must match exactly', () => {
-    expect(PROTOCOL_VERSION).toBe(10);
+    expect(PROTOCOL_VERSION).toBe(11);
     const next = apply(createInitialState(), {
       type: 'hello',
       protocolVersion: 1,

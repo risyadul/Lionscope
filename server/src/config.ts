@@ -31,6 +31,10 @@ export interface LionscopeConfig {
   allowDeviceControl: boolean;
   /** `--allow-network-bodies`: AI agents may read the text of captured HTTP bodies. */
   allowNetworkBodies: boolean;
+  /** `--allow-storage-read`: the storage inspector reads prefs and registered databases (dashboard and agents). */
+  allowStorageRead: boolean;
+  /** `--allow-storage-write`: it may edit them too (needs `--allow-storage-read`). */
+  allowStorageWrite: boolean;
 }
 
 const PORT_PATTERN = /^\d{1,5}$/;
@@ -76,6 +80,11 @@ Options:
   --allow-network-bodies
                         Let AI agents read captured HTTP request and response bodies (off by default;
                         URLs, headers and timings are always readable)
+  --allow-storage-read  Let the dashboard and AI agents read the profiled app's SharedPreferences and the
+                        Room databases it registers (Lionscope.trackDatabase), through its SDK link; values
+                        that look like credentials stay redacted (off by default)
+  --allow-storage-write Also let them edit those values live, compare-and-set (needs --allow-storage-read;
+                        off by default)
   -h, --help            Show this help
   -v, --version         Print the version
 `;
@@ -93,6 +102,8 @@ export interface CliArgs {
   adb: string | undefined;
   allowDeviceControl: boolean;
   allowNetworkBodies: boolean;
+  allowStorageRead: boolean;
+  allowStorageWrite: boolean;
 }
 
 function argsError(detail: string, cause?: unknown): Error {
@@ -119,6 +130,8 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         adb: { type: 'string' },
         'allow-device-control': { type: 'boolean' },
         'allow-network-bodies': { type: 'boolean' },
+        'allow-storage-read': { type: 'boolean' },
+        'allow-storage-write': { type: 'boolean' },
       },
     });
   } catch (error) {
@@ -143,6 +156,8 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     adb: nonEmpty(values.adb?.trim()),
     allowDeviceControl: values['allow-device-control'] === true,
     allowNetworkBodies: values['allow-network-bodies'] === true,
+    allowStorageRead: values['allow-storage-read'] === true,
+    allowStorageWrite: values['allow-storage-write'] === true,
   };
 }
 
@@ -169,6 +184,8 @@ export function loadConfig(
     dev: env.LIONSCOPE_DEV === '1' || args.dev,
     allowDeviceControl: args.allowDeviceControl,
     allowNetworkBodies: args.allowNetworkBodies,
+    allowStorageRead: args.allowStorageRead,
+    allowStorageWrite: args.allowStorageWrite,
   };
 }
 

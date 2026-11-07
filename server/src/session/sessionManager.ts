@@ -9,6 +9,7 @@ import type {
   ServerMessage,
   SessionState,
   Snapshot,
+  StorageConsent,
   TransactionFailure,
 } from '@lionscope/protocol';
 import { adbShell } from '../adb/adb.ts';
@@ -17,7 +18,7 @@ import { BUFFER_WINDOW_MS } from '../config.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
 import { deliverLinkKey } from '../device/linkKey.ts';
 import { ReverseTunnel } from '../device/reverseTunnel.ts';
-import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkTarget } from '../device/sdkLink.ts';
+import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkMessage, SdkLinkTarget } from '../device/sdkLink.ts';
 import { ErrorThrottle, PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { parseDevices } from '../parsers/devices.ts';
@@ -86,6 +87,21 @@ export interface SessionManagerOptions {
    * session's mapping and device listings, and take a device's mapping over when its session ends.
    */
   inspectLinks?: InspectLinks;
+  /** What the server's storage flags allow; every session's SDK links are told (`config`). Default `off`. */
+  storageConsent?: StorageConsent;
+  /** A storage write's answer that came after its request was settled, with the session it belongs to. */
+  onStorageWriteResult?: (target: StorageSessionTarget, message: SdkStorageWriteResult) => void;
+}
+
+type SdkStorageWriteResult = Extract<SdkLinkMessage, { type: 'storageWriteResult' }>;
+
+/** The running session's app as the storage inspector reaches it: its live, verified SDK link (null while none is). */
+export interface StorageSessionTarget {
+  serial: string;
+  packageName: string;
+  link: SdkLink | null;
+  /** The session is past its device probe (SDK links are only taken from then on). */
+  ready: boolean;
 }
 
 /**
@@ -104,6 +120,8 @@ export class SessionManager implements SdkLinkTarget {
   private readonly linkErrors: ErrorThrottle;
   private readonly refusals: ErrorThrottle;
   private readonly inspectLinks: InspectLinks | undefined;
+  private readonly storageConsent: StorageConsent;
+  private readonly onStorageWriteResult: SessionManagerOptions['onStorageWriteResult'];
   private gatewayDownReported = false;
   private staleChecked = false;
   private lastTunnelAt = 0;
@@ -133,6 +151,8 @@ export class SessionManager implements SdkLinkTarget {
     this.refusals = new ErrorThrottle(this.now);
     this.gatewayPort = options.deviceGatewayPort;
     this.inspectLinks = options.inspectLinks;
+    this.storageConsent = options.storageConsent ?? 'off';
+    this.onStorageWriteResult = options.onStorageWriteResult;
     this.tunnel = new ReverseTunnel({
       adb: this.adb,
       devicePort: DEVICE_LINK_PORT,
@@ -231,6 +251,18 @@ export class SessionManager implements SdkLinkTarget {
     const session = this.session;
     if (!session || session.isStopped || session.serial !== serial) return null;
     return { packageName: session.packageName, link: session.sdkLink, screen: session.topScreen() };
+  }
+
+  /** The running session's app for the storage inspector; null without a session (or once it stopped). */
+  storageTarget(): StorageSessionTarget | null {
+    const session = this.session;
+    if (!session || session.isStopped) return null;
+    return {
+      serial: session.serial,
+      packageName: session.packageName,
+      link: session.sdkLink,
+      ready: session.isReady,
+    };
   }
 
   /** Change the SDK options of the running session (announced with a `session` broadcast). false: no session. */
@@ -364,6 +396,14 @@ export class SessionManager implements SdkLinkTarget {
         // Only once the clock offset is known: SDK data before that would be misplaced in time.
         onReady: () => {
           if (this.session === session) this.openTunnel(serial, packageName);
+        },
+        storageConsent: this.storageConsent,
+        onStorageWriteResult: (message) => {
+          if (this.session !== session) return;
+          this.onStorageWriteResult?.(
+            { serial, packageName, link: session.sdkLink, ready: session.isReady },
+            message,
+          );
         },
       });
       this.session = session;

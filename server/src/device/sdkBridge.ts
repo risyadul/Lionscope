@@ -11,6 +11,7 @@ import type {
   SdkNetworkState,
   SdkOptions,
   SdkStatus,
+  StorageConsent,
 } from '@lionscope/protocol';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
@@ -95,6 +96,13 @@ export interface SdkBridgeOptions {
   onLiveLink?: (link: SdkLink | null, network: SdkNetworkState | null) => void;
   /** The live link's SDK applied mock rule set `rev`. */
   onMocksApplied?: (rev: number) => void;
+  /** What the server's storage flags allow; sent to every link in its `config` (v11). Default `off`. */
+  storageConsent?: StorageConsent;
+  /**
+   * A storage write's answer that no request was waiting for (a `final` after its `provisional`, or after the server
+   * gave up on it), from the live link.
+   */
+  onStorageWriteResult?: (message: Extract<SdkLinkMessage, { type: 'storageWriteResult' }>) => void;
 }
 
 interface LinkEntry {
@@ -186,7 +194,7 @@ export class SdkBridge {
     const entry: LinkEntry = { hello, link, held: [], heldLive: null, network };
     this.pending.add(entry);
     // Options are not sensitive: a link gets them right after its welcome, before its PID is verified.
-    link.sendConfig(this.sdkOptions);
+    link.sendConfig(this.sdkOptions, this.options.storageConsent);
     if (verified) this.activate(entry);
     else void this.verify(entry);
     return {
@@ -239,7 +247,7 @@ export class SdkBridge {
   private pushConfig(): void {
     this.configTimer = null;
     const links = this.active ? [...this.pending, this.active] : [...this.pending];
-    for (const entry of links) entry.link.sendConfig(this.sdkOptions);
+    for (const entry of links) entry.link.sendConfig(this.sdkOptions, this.options.storageConsent);
   }
 
   private async verify(entry: LinkEntry): Promise<void> {
@@ -466,6 +474,13 @@ export class SdkBridge {
         });
         return;
       }
+      case 'storageWriteResult':
+        this.options.onStorageWriteResult?.(message);
+        return;
+      case 'storageListResult':
+      case 'storageReadResult':
+        // Answers to no pending request (the gateway settles the others): stale, dropped.
+        return;
     }
   }
 

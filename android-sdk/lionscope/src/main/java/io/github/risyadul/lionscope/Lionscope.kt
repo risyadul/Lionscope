@@ -2,6 +2,7 @@ package io.github.risyadul.lionscope
 
 import android.content.Context
 import androidx.navigation.NavController
+import androidx.room.RoomDatabase
 import okhttp3.Interceptor
 
 /**
@@ -43,6 +44,19 @@ object Lionscope {
      */
     fun trackNavigation(navController: NavController) {
         LionscopeRuntime.trackNavigation(navController)
+    }
+
+    /**
+     * Lets the storage inspector read and edit [database] under [name] (1-1024 characters; at most 16 databases,
+     * registering a name again replaces it). Nothing is read until a session's server allows it
+     * (`--allow-storage-read`, edits `--allow-storage-write`), and then only through this instance and inside its own
+     * `runInTransaction`, so Room tells its observers (Flow, LiveData) about every edit. Held weakly; a database the
+     * app closes is reported closed. Only Room's SupportSQLite path (Room 2.7.x verified): a database built with
+     * `setDriver` is reported `unsupported:driver`. Safe from any thread, before or after [install]; does nothing in
+     * release builds (`lionscope-noop`).
+     */
+    fun trackDatabase(name: String, database: RoomDatabase) {
+        DatabaseRegistry.track(name, database)
     }
 
     /**

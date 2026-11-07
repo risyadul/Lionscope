@@ -30,6 +30,8 @@ import { createStaticHandler, resolveDashboardDir } from './http/staticFiles.ts'
 import { buildAllowedOrigins, createWsGateway, isAllowedHost } from './http/wsGateway.ts';
 import type { WsGateway } from './http/wsGateway.ts';
 import { SessionManager } from './session/sessionManager.ts';
+import { StorageService } from './storage/storageService.ts';
+import { storageConsentOf } from './storage/consent.ts';
 import type { CollectorIntervals } from './session/profilingSession.ts';
 
 export interface LionscopeServerOptions {
@@ -56,6 +58,10 @@ export interface LionscopeServerOptions {
   allowDeviceControl?: boolean;
   /** --allow-network-bodies: the agent endpoints return HTTP body texts (get_network_request). */
   allowNetworkBodies?: boolean;
+  /** --allow-storage-read: the storage inspector reads prefs and registered databases (dashboard and agents). */
+  allowStorageRead?: boolean;
+  /** --allow-storage-write (with --allow-storage-read): it may also edit them. */
+  allowStorageWrite?: boolean;
   /** The UI helper tried before `uiautomator dump`; defaults to the vendored one. */
   uiHelperJarPath?: string;
 }
@@ -123,6 +129,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   });
   // "Don't keep activities" this server turned on: put back when the device's session stops or the server closes.
   const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
+  const storageConsent = storageConsentOf(
+    options.allowStorageRead ?? false,
+    options.allowStorageWrite ?? false,
+  );
   const manager: SessionManager = new SessionManager({
     adb: options.adb,
     broadcast: (message) => {
@@ -141,6 +151,13 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     sessionIntervals: options.sessionIntervals,
     deviceGatewayPort: () => deviceGateway.address?.port ?? null,
     inspectLinks,
+    storageConsent,
+    onStorageWriteResult: (target, message) => storage.onLateResult(target, message),
+  });
+  const storage: StorageService = new StorageService({
+    consent: storageConsent,
+    target: () => manager.storageTarget(),
+    broadcast: (message) => gateway?.broadcast(message),
   });
   const deviceGateway = createDeviceGateway({
     port: options.devicePort,
@@ -188,6 +205,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     uiHelper,
     dontKeepActivities,
     deviceCalls: new Map(),
+    storage,
   };
   const agentHttp = createAgentHttp({
     ctx: agent,
@@ -248,6 +266,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     inspectLinks,
     viewEdits,
     locations,
+    storage,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,

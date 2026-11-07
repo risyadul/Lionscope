@@ -63,6 +63,16 @@
   restored to its previous mode afterwards. The dashboard's CSP allows images from `https://tile.openstreetmap.org`
   for the map, which the browser fetches (with the dashboard's origin as Referer, as OSM's tile policy asks) only
   while the Location panel is open.
+- Storage (0.13.0) is off unless the server starts with `--allow-storage-read` (reading the app's SharedPreferences
+  and the Room databases it registers with `Lionscope.trackDatabase`) and `--allow-storage-write` (editing them):
+  app data the AI or the dashboard can otherwise not see or change. It works only on a profiling session's link with
+  the link proof above, and the SDK checks the consent the welcome gave it again. Names and values that look like
+  credentials are redacted twice (by the SDK, and again by the server) and are read-only; every value of a view or
+  virtual table is redacted; paging cursors are opaque tokens the SDK keeps, never key values. EncryptedSharedPreferences
+  are not read. Only updates of existing values and deletes by primary key, compare-and-set, through the app's own
+  connection (no raw SQL, no second connection); an edit names the app link its values were read from and is refused
+  on another. The server keeps an audit of every edit (who, what, where, the outcome) without values, primary keys
+  as digests, in memory only. See [Storage](features/storage.md).
 - Live view edits (0.9.0) reach only the app of the current Inspector snapshot, through the SDK link that captured
   it, and only views of that app's latest capture (by a key the SDK gives each View object; a recreated view gets a
   new one). They change what the app does (a disabled button enabled, a label rewritten), so the SDK applies them only

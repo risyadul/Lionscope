@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -1333,11 +1333,372 @@ export interface DeviceLocation {
 }
 
 // ---------------------------------------------------------------------------
+// Storage inspector (0.13.0, device protocol v11): read and edit the app's SharedPreferences and the Room databases it
+// registers with `Lionscope.trackDatabase`, live, through the SDK
+//
+// Off unless the server runs with --allow-storage-read (and --allow-storage-write for edits); the flags cover the
+// dashboard and the agent tools alike. Only a profiling session's SDK link with the link proof is asked (the server
+// refuses before sending anything otherwise, and the SDK refuses again). Values travel typed (StorageValue): integers
+// as decimal strings, floating point by its raw bits, so nothing is rounded on the way. Edits are compare-and-set:
+// they name the value they expect and change nothing when the app holds another. Values whose name or content looks
+// like a credential are redacted on the device and again on the server, and can never be edited.
+// ---------------------------------------------------------------------------
+
+/** Server flags: `off` (default), `read` (--allow-storage-read), `read_write` (both flags). */
+export type StorageConsent = 'off' | 'read' | 'read_write';
+export const STORAGE_CONSENTS: readonly StorageConsent[] = ['off', 'read', 'read_write'];
+
+/** Serialized bytes of one SDK storage answer at most (measured by the SDK while it builds it). */
+export const MAX_STORAGE_REPLY_BYTES = 240 * 1024;
+/** Max bytes of a `storage*Result` line on a v11 link (MAX_STORAGE_REPLY_BYTES plus slack). */
+export const MAX_STORAGE_LINE_BYTES = 256 * 1024;
+/** UTF-16 code units of a TEXT / String (or bytes of a BLOB) sent per value; longer ones are cut and read-only. */
+export const MAX_STORAGE_VALUE_UNITS = 16 * 1024;
+/** A serialized server → SDK storage line longer than this is refused (`invalid_value:too_large`) before it is sent. */
+export const MAX_STORAGE_REQUEST_LINE_BYTES = 60 * 1024;
+/** The server gives up on an SDK storage answer after this long (`timeout`). */
+export const STORAGE_TIMEOUT_MS = 5000;
+/** Time the SDK may spend inside one database transaction (read or write), from when it got it. */
+export const STORAGE_TX_BUDGET_MS = 250;
+/** Time a SharedPreferences `commit()` gets before the answer says `persisted: "timeout"` (a late outcome follows). */
+export const STORAGE_COMMIT_BUDGET_MS = 1000;
+export const DEFAULT_STORAGE_ROWS = 50;
+export const MAX_STORAGE_ROWS = 200;
+/** Table pages read in one request (one transaction, one consistent snapshot). */
+export const MAX_STORAGE_PAGES = 4;
+export const MAX_STORAGE_PREFS_FILES = 128;
+export const DEFAULT_STORAGE_KEYS = 500;
+export const MAX_STORAGE_KEYS = 500;
+export const MAX_STORAGE_TABLES = 256;
+export const MAX_STORAGE_COLUMNS = 256;
+export const MAX_STORAGE_DATABASES = 16;
+/** Elements of a `stringSet` value sent at most (more: cut, read-only). */
+export const MAX_STORAGE_SET_ELEMENTS = 500;
+/** Storage writes per device: a burst, then this many per second (server and SDK alike). */
+export const STORAGE_WRITE_BURST = 10;
+export const STORAGE_WRITES_PER_SECOND = 5;
+/** Requests the SDK keeps waiting for its storage worker; one more is answered `busy`. */
+export const MAX_STORAGE_QUEUED = 8;
+/** Write audit entries the server keeps (in memory, per server run). */
+export const MAX_STORAGE_AUDIT = 1000;
+/** Max bytes of a dashboard `storageWrite` frame (two 16 K values, JSON-escaped, and the rest). */
+export const MAX_STORAGE_CLIENT_MESSAGE_BYTES = 256 * 1024;
+/** Characters of a prefs name, key, database, table or column name the wire accepts. */
+export const MAX_STORAGE_NAME_CHARS = 1024;
+/** Characters of an SDK paging cursor at most (an opaque token: STORAGE_CURSOR_PATTERN). */
+export const MAX_STORAGE_CURSOR_CHARS = 64;
+/**
+ * A paging cursor: an opaque token the SDK hands out and keeps the position of itself (never a key or primary key
+ * value, which could be a credential). Valid for the prefs file / table it pages, on the link connection that gave it.
+ */
+export const STORAGE_CURSOR_PATTERN = /^c1\.[0-9a-f]{32}$/;
+/** UTF-16 code units of a prefs key sent at most; a longer key is cut (`keyLength` its length) and read-only. */
+export const MAX_STORAGE_KEY_UNITS = MAX_STORAGE_NAME_CHARS;
+
+/**
+ * One value, typed. `string` / `int` / `long` / `float` / `bool` / `stringSet` are SharedPreferences types; `string`,
+ * `integer`, `real`, `blob`, `null` are SQLite storage classes (of the cell, not the column's affinity).
+ * - Integers are decimal strings (`-9223372036854775808`), never JSON numbers: nothing may parse them into a Number.
+ * - `float` / `real`: `bits` (`0x` + 8 / 16 lower-case hex digits, the raw IEEE bits) is the value; `v` is for display
+ *   only. Compare-and-set compares bits: `0.0` is not `-0.0`.
+ * - A cut value (`complete: false`, over MAX_STORAGE_VALUE_UNITS, or a set over MAX_STORAGE_SET_ELEMENTS) is read-only.
+ * - `redacted`: the name or the content looks like a credential. `preview` (strings only): the text with the
+ *   credentials replaced, when the rest is worth seeing (a JSON object with a `token` key). Never editable, never
+ *   an `expected` value.
+ */
+export type StorageValue =
+  | { t: 'string'; v: string; complete?: false; length?: number }
+  | { t: 'int' | 'long' | 'integer'; v: string }
+  | { t: 'float' | 'real'; v: string; bits: string }
+  | { t: 'bool'; v: boolean }
+  | { t: 'stringSet'; v: string[]; complete?: false }
+  | { t: 'blob'; b64: string; size: number; complete: boolean }
+  | { t: 'null' }
+  | { t: 'redacted'; orig: StorageValueType; preview?: string };
+
+export type StorageValueType = Exclude<StorageValue['t'], 'redacted'>;
+export const STORAGE_VALUE_TYPES: readonly StorageValueType[] = [
+  'string',
+  'int',
+  'long',
+  'integer',
+  'float',
+  'real',
+  'bool',
+  'stringSet',
+  'blob',
+  'null',
+];
+/** Decimal integers as the wire writes them (range checked per type). */
+export const STORAGE_INTEGER_PATTERN = /^(0|-?[1-9][0-9]*)$/;
+export const STORAGE_FLOAT_BITS_PATTERN = /^0x[0-9a-f]{8}$/;
+export const STORAGE_REAL_BITS_PATTERN = /^0x[0-9a-f]{16}$/;
+
+/**
+ * Result codes: `ok`, `conflict` (the current value is not `expected`; it is sent back, redacted),
+ * `already_applied_or_concurrent` (the current value already is the new one: a retry after a lost answer, or another
+ * writer; nothing was written), `concurrent_after_write` (another writer changed it right after this write),
+ * `type_mismatch`, `constraint_failed`, `not_found`, `read_only:<reason>`, `invalid_identifier`,
+ * `invalid_value[:nan_not_storable|nan_payload|lone_surrogate|too_large|…]`, `unsupported:<reason>`, `consent_required`, `unauthenticated`,
+ * `needs_sdk`, `needs_profiling_session`, `busy`, `timeout`, `failed`.
+ */
+export type StorageCode = string;
+export const STORAGE_CODE_PATTERN =
+  /^(ok|conflict|already_applied_or_concurrent|concurrent_after_write|type_mismatch|constraint_failed|not_found|invalid_identifier|consent_required|unauthenticated|needs_sdk|needs_profiling_session|busy|timeout|failed|read_only:[a-z_]{1,32}|invalid_value(:[a-z_]{1,32})?|unsupported:[a-z_]{1,32})$/;
+
+/** Why a table, column or cell can't be edited (`read_only:<reason>`). */
+export type StorageReadOnlyReason =
+  | 'no_explicit_pk'
+  | 'pk_column'
+  | 'view'
+  | 'virtual'
+  | 'internal'
+  | 'redacted'
+  | 'truncated'
+  | `unsupported:${string}`;
+
+/** A file in `shared_prefs/` (name without `.xml`); `backupOnly`: only `<name>.xml.bak` is there (Android restores it). */
+export interface StoragePrefsFile {
+  name: string;
+  backupOnly: boolean;
+}
+
+/** A database the app registered (`Lionscope.trackDatabase`): `ok`, or `unsupported:closed` / `unsupported:driver`. */
+export interface StorageDatabase {
+  name: string;
+  status: 'ok' | `unsupported:${string}`;
+}
+
+export interface StorageColumn {
+  name: string;
+  /** Declared type as written in the schema (`INTEGER`, `TEXT`, ``), affinity decides nothing on the wire. */
+  type: string;
+  notNull: boolean;
+  /** 1-based position in the primary key, 0 when not part of it. */
+  pk: number;
+}
+
+/** One table (or view, virtual table, SQLite / Room internal table) of a database. */
+export interface StorageTable {
+  name: string;
+  kind: 'table' | 'view' | 'virtual' | 'internal';
+  withoutRowid: boolean;
+  columns: StorageColumn[];
+  /** Primary key columns in key order; empty without an explicit primary key. */
+  pk: string[];
+  /** Why rows of it can't be edited at all (null: cells of non-key columns can be). */
+  readOnly: StorageReadOnlyReason | null;
+}
+
+/** One row of a page: cells in the page's `columns` order, and the digest a delete must name (null when read-only). */
+export interface StorageRow {
+  cells: StorageValue[];
+  digest: string | null;
+}
+
+/**
+ * Which app (and which of its SDK links) a storage answer came from. `link` changes whenever the app's link is
+ * another one: a new session, another app, the app restarted or reconnected. A write naming a `target` is refused
+ * unless it still is the current one, so nothing read from one app, process or link is written to another.
+ */
+export interface StorageTarget {
+  serial: string;
+  packageName: string;
+  link: number;
+}
+
+/** One table page of a database read (rows in primary key order, keyset paging). */
+export interface StoragePage {
+  table: string;
+  columns: string[];
+  pk: string[];
+  readOnly: StorageReadOnlyReason | null;
+  rows: StorageRow[];
+  /** Pass back as `cursor` for the next page; null at the end. */
+  nextCursor: string | null;
+  /** Rows were left out to stay under MAX_STORAGE_REPLY_BYTES (`nextCursor` continues there). */
+  truncated: boolean;
+}
+
+export interface StoragePrefsEntry {
+  key: string;
+  /** Present when `key` was cut (its full length): the entry is read-only. */
+  keyLength?: number;
+  value: StorageValue;
+}
+
+/** A page of a database read: `table`, optionally only some `columns` (exact names), from `cursor`, `limit` rows. */
+export interface StoragePageRequest {
+  table: string;
+  columns?: string[];
+  cursor?: string | null;
+  limit?: number;
+}
+
+/** What to read: one prefs file (a key page), a database's schema (no `pages`), or up to MAX_STORAGE_PAGES pages. */
+export type StorageReadInput =
+  | { store: 'prefs'; name: string; cursor?: string | null; limit?: number }
+  | { store: 'db'; name: string; pages?: StoragePageRequest[] };
+
+/**
+ * An edit (compare-and-set). Prefs: `update` a key's value (same type) or `remove` the key; database: `update` one cell
+ * of the row with primary key `pk` (values in key order) or `delete` that row (`rowDigest` from the read). `undoOf`:
+ * the `opId` whose edit this one reverts (only an `undo` the server offered is accepted, on the link it was made on).
+ * `target`: the answer's `target` the values were read from; the edit is refused when the app's link is another now.
+ */
+export type StorageWriteInput =
+  | {
+      store: 'prefs';
+      name: string;
+      op: 'update';
+      key: string;
+      expected: StorageValue;
+      value: StorageValue;
+      undoOf?: string;
+      target?: StorageTarget;
+    }
+  | {
+      store: 'prefs';
+      name: string;
+      op: 'remove';
+      key: string;
+      expected: StorageValue;
+      target?: StorageTarget;
+    }
+  | {
+      store: 'db';
+      name: string;
+      op: 'update';
+      table: string;
+      column: string;
+      pk: StorageValue[];
+      expected: StorageValue;
+      value: StorageValue;
+      undoOf?: string;
+      target?: StorageTarget;
+    }
+  | {
+      store: 'db';
+      name: string;
+      op: 'delete';
+      table: string;
+      pk: StorageValue[];
+      rowDigest: string;
+      target?: StorageTarget;
+    };
+
+/** The phase of a write's answer: `provisional` (prefs whose commit is still running), `final`. */
+export type StorageWritePhase = 'provisional' | 'final';
+
+/**
+ * The outcome of one write. `phase` is absent when the SDK never answered (`timeout`, `busy`, refusals). Prefs:
+ * `memory` (`applied`: read back from the app's instance equal to the new value), `persisted` (`commit()` true /
+ * false / still running after STORAGE_COMMIT_BUDGET_MS), `observers` `posted_unverified` (Android was asked to notify
+ * the app's listeners; whether they ran, or reacted, is not known). Database: `changes` (rows the statement changed, authoritative),
+ * `totalChangesDelta` (informational: Room's own triggers count too), `observers` `room_invalidation` (Room was told
+ * the table changed; not that any screen changed). `stored`: the value read back inside the same transaction (REAL
+ * `-0.0` is stored as `0.0`: `normalized`). `undo`: the edit that reverts this one, only when it may be undone (an
+ * `ok` final answer in time, prefs persisted). `late`: a final answer that arrived after the request had timed out.
+ */
+export interface StorageWriteOutcome {
+  opId: string;
+  code: StorageCode;
+  phase?: StorageWritePhase;
+  late: boolean;
+  current?: StorageValue;
+  stored?: StorageValue;
+  normalized?: boolean;
+  memory?: 'applied' | 'not_applied';
+  persisted?: boolean | 'timeout';
+  observers?: 'posted_unverified' | 'room_invalidation';
+  changes?: number;
+  totalChangesDelta?: number;
+  /** ms the SDK held the database transaction (or waited for `commit()`). */
+  txMs?: number;
+  undo?: StorageWriteInput;
+  /** Human-readable explanation of a refusal or warning (never app values). */
+  message?: string;
+}
+
+/** The answer to a storage request (dashboard `storage` message, agent tools). */
+export type StorageResponse =
+  | { ok: false; code: StorageCode; message: string }
+  | {
+      ok: true;
+      kind: 'list';
+      target: StorageTarget;
+      prefs: StoragePrefsFile[];
+      prefsTruncated: boolean;
+      databases: StorageDatabase[];
+    }
+  | {
+      ok: true;
+      kind: 'prefs';
+      target: StorageTarget;
+      name: string;
+      entries: StoragePrefsEntry[];
+      nextCursor: string | null;
+      truncated: boolean;
+    }
+  | {
+      ok: true;
+      kind: 'schema';
+      target: StorageTarget;
+      name: string;
+      tables: StorageTable[];
+      tablesTruncated: boolean;
+    }
+  | {
+      ok: true;
+      kind: 'pages';
+      target: StorageTarget;
+      name: string;
+      pages: StoragePage[];
+      txMs: number;
+    }
+  | { ok: true; kind: 'write'; target: StorageTarget; outcome: StorageWriteOutcome }
+  /** The server's write audit, oldest first (no values). */
+  | { ok: true; kind: 'audit'; entries: StorageAuditEntry[] };
+
+/**
+ * One write in the server's audit (no values: neither old, new, expected nor stored). `field`: the key or column
+ * (a credential-looking name is `[redacted-name]`); `pkDigest`: SHA-256 of the row's primary key (canonical JSON).
+ */
+export interface StorageAuditEntry {
+  ts: number;
+  opId: string;
+  serial: string;
+  packageName: string;
+  store: 'prefs' | 'db';
+  name: string;
+  table: string | null;
+  field: string | null;
+  pkDigest: string | null;
+  op: 'update' | 'remove' | 'delete';
+  code: StorageCode;
+  phase: StorageWritePhase | null;
+  late: boolean;
+  persisted: boolean | 'timeout' | null;
+  changes: number | null;
+  totalChangesDelta: number | null;
+}
+
+/** What replaces a credential-looking key or column name in the audit. */
+export const STORAGE_REDACTED_NAME = '[redacted-name]';
+
+// ---------------------------------------------------------------------------
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
 export type ServerMessage =
-  | { type: 'hello'; protocolVersion: number; serverVersion: string; bufferWindowMs: number }
+  | {
+      type: 'hello';
+      protocolVersion: number;
+      serverVersion: string;
+      bufferWindowMs: number;
+      /** 0.13.0. What the server's storage flags allow (absent on older servers: `off`). */
+      storageConsent?: StorageConsent;
+    }
   | { type: 'devices'; devices: DeviceInfo[] }
   /** Every AVD (off or running) and its state; sent on connect, on refresh and on every state change. */
   | { type: 'emulators'; emulators: EmulatorInfo[] }
@@ -1398,6 +1759,13 @@ export type ServerMessage =
     }
   /** 0.10.0. Every location Lionscope has put on a device; sent on connect and on every change. */
   | { type: 'locations'; locations: DeviceLocation[] }
+  /** 0.13.0. The answer to this client's `storageList` / `storageRead` / `storageWrite` (`requestId` is the client's). */
+  | { type: 'storage'; requestId: number; response: StorageResponse }
+  /**
+   * 0.13.0. The final outcome of a write that came after its answer (a late SDK answer after `timeout`, or a prefs
+   * commit that finished after a `provisional` answer), to every client. Never undoable.
+   */
+  | { type: 'storageOutcome'; serial: string; outcome: StorageWriteOutcome }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -1421,6 +1789,8 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'networkMocks',
   'viewEdit',
   'locations',
+  'storage',
+  'storageOutcome',
   'error',
 ]);
 
@@ -1514,7 +1884,17 @@ export type ClientMessage =
    * 0.10.0. Undo `setLocation`: a physical device gets its real location back, an emulator the GPS fix it had before.
    * Answered with the `locations` broadcast.
    */
-  | { type: 'clearLocation'; serial: string };
+  | { type: 'clearLocation'; serial: string }
+  /**
+   * 0.13.0. Storage inspector (needs --allow-storage-read; writes --allow-storage-write too): list the prefs files and
+   * registered databases of the session's app, read one, or edit one value. Answered with `storage` (same
+   * `requestId`, the client's own 0..2^31-1). `storageWrite` frames may be up to MAX_STORAGE_CLIENT_MESSAGE_BYTES.
+   */
+  | { type: 'storageList'; requestId: number }
+  | { type: 'storageRead'; requestId: number; read: StorageReadInput }
+  | { type: 'storageWrite'; requestId: number; write: StorageWriteInput }
+  /** 0.13.0. The server's storage write audit (needs --allow-storage-read): answered with `storage` (`kind: 'audit'`). */
+  | { type: 'storageAudit'; requestId: number };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;
@@ -1537,7 +1917,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 10;
+export const DEVICE_PROTOCOL_VERSION = 11;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1567,6 +1947,12 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * change replaced), and `config` carries `savedStateTracking` (appended last, v10 links only). Below v10 neither side
  * sends them. Pre-release v10 builds send `savedState` without `instanceId` and no `liveActivities`: both are
  * optional to the server.
+ * v11 (0.13.0): the storage inspector, on `session` links only. Server → SDK `storageList`, `storageRead` and
+ * `storageWrite`, answered by `storageListResult`, `storageReadResult` and `storageWriteResult` (lines up to
+ * MAX_STORAGE_LINE_BYTES); `config` carries `storageConsent` (appended last, v11 links only; absent = `off`). The
+ * server sends them only on a link whose welcome carried the link proof and only as far as its consent flags allow;
+ * the SDK answers only on such a link and within the consent it was told (none of these types is in its
+ * `UnprovenType` allowlist). Below v11 neither side sends any of it.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -1577,6 +1963,7 @@ export const DEVICE_PROTOCOL_V7 = 7;
 export const DEVICE_PROTOCOL_V8 = 8;
 export const DEVICE_PROTOCOL_V9 = 9;
 export const DEVICE_PROTOCOL_V10 = 10;
+export const DEVICE_PROTOCOL_V11 = 11;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -1835,6 +2222,56 @@ export type DeviceMessage =
         | 'busy'
         | 'unauthenticated';
       liveEdits: number;
+    }
+  /**
+   * v11. The answer to `storageList`: `code` `ok` or why not (`consent_required`, `busy`, `failed`, …); the prefs
+   * files (at most MAX_STORAGE_PREFS_FILES, `prefsTruncated` when there were more) and the registered databases.
+   */
+  | {
+      type: 'storageListResult';
+      requestId: number;
+      code: StorageCode;
+      prefs: StoragePrefsFile[];
+      prefsTruncated: boolean;
+      databases: StorageDatabase[];
+    }
+  /**
+   * v11. The answer to `storageRead`: for prefs `entries` (keys in order from the cursor, `nextCursor` /
+   * `truncated`), for a database without pages its `tables` (`tablesTruncated`), with pages its `pages` read in one
+   * transaction of `txMs`. Every value is redacted where it looks like a credential.
+   */
+  | {
+      type: 'storageReadResult';
+      requestId: number;
+      code: StorageCode;
+      entries?: StoragePrefsEntry[];
+      nextCursor?: string | null;
+      truncated?: boolean;
+      tables?: StorageTable[];
+      tablesTruncated?: boolean;
+      pages?: StoragePage[];
+      txMs?: number;
+    }
+  /**
+   * v11. The answer to `storageWrite` with the same `requestId` and `opId` (StorageWriteOutcome without `late` /
+   * `undo`, which only the server knows). Exactly one `final` per write the SDK started, even after the server gave up
+   * on it; a prefs write whose commit is still running answers `provisional` first.
+   */
+  | {
+      type: 'storageWriteResult';
+      requestId: number;
+      opId: string;
+      phase: StorageWritePhase;
+      code: StorageCode;
+      current?: StorageValue;
+      stored?: StorageValue;
+      normalized?: boolean;
+      memory?: 'applied' | 'not_applied';
+      persisted?: boolean | 'timeout';
+      observers?: 'posted_unverified' | 'room_invalidation';
+      changes?: number;
+      totalChangesDelta?: number;
+      txMs?: number;
     };
 
 export type DeviceMessageType = DeviceMessage['type'];
@@ -1867,8 +2304,10 @@ export type GatewayMessage =
       inflateTracking: boolean;
       /** v9 links only. */
       rxTracking?: boolean;
-      /** v10 links only, last. */
+      /** v10 links only. */
       savedStateTracking?: boolean;
+      /** v11 links only, last: what storage requests the SDK may answer (StorageConsent). */
+      storageConsent?: StorageConsent;
     }
   /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
   | { type: 'inspect'; requestId: number }
@@ -1914,4 +2353,39 @@ export type GatewayMessage =
       requestId: number;
       viewKey?: number;
       property?: ViewProperty | ViewPropertyGroup;
+    }
+  /** v11 (session links with the link proof). List the prefs files and registered databases: `storageListResult`. */
+  | { type: 'storageList'; requestId: number }
+  /**
+   * v11. Read a prefs file (`cursor` / `limit` page its keys) or a registered database: its schema without `pages`,
+   * else `pages` (a JSON array of StoragePageRequest, as a string: the line stays flat). Answered `storageReadResult`.
+   */
+  | {
+      type: 'storageRead';
+      requestId: number;
+      store: 'prefs' | 'db';
+      name: string;
+      cursor?: string;
+      limit?: number;
+      pages?: string;
+    }
+  /**
+   * v11. One compare-and-set edit (StorageWriteInput without `undoOf`): typed values (`expected`, `value`) and the
+   * primary key (`pk`, a JSON array) are JSON strings, parsed by one strict codec on the device. `opId` is the
+   * server's id of the edit. Answered `storageWriteResult` (`provisional`, then `final`).
+   */
+  | {
+      type: 'storageWrite';
+      requestId: number;
+      opId: string;
+      store: 'prefs' | 'db';
+      name: string;
+      op: 'update' | 'remove' | 'delete';
+      key?: string;
+      table?: string;
+      column?: string;
+      pk?: string;
+      expected?: string;
+      value?: string;
+      rowDigest?: string;
     };

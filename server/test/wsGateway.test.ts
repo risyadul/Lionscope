@@ -141,6 +141,8 @@ describe('WebSocket gateway back-pressure', () => {
       'networkMocks',
       'session',
       'snapshot',
+      'storage',
+      'storageOutcome',
       'viewEdit',
     ]);
     const client = await Client.open(port);

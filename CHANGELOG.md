@@ -6,6 +6,19 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Storage inspector (SDK 0.13.0): the profiled app's SharedPreferences and the Room databases it registers with
+  `Lionscope.trackDatabase(name, db)` (the no-op artifact has it too), read and edited live from the dashboard's
+  **Storage** tab or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless
+  the server starts with `--allow-storage-read` (and `--allow-storage-write` to edit); only on a profiling session's
+  proven link. Reads and edits go through the app's own transaction, never a second connection, one request at a
+  time off the main thread; edits are compare-and-set updates of existing values and deletes by primary key, with
+  undo on the same link. Credential-looking names and values are redacted by the SDK and the server and are
+  read-only, view and virtual table values are always redacted, paging cursors are opaque tokens, and an audit
+  without values records every edit. Runtime-verified on API 28 with Room 2.7.2 only. See
+  [Storage](docs/features/storage.md).
+
 ### Changed
 
 - The README is now an overview (what Lionscope is, requirements, quick start, adding the SDK). The rest moved to

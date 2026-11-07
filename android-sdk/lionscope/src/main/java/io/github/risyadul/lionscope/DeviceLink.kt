@@ -74,6 +74,7 @@ internal class DeviceLink(
     private val inspectListeners = CopyOnWriteArrayList<(Int) -> Unit>()
     private val mocksListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
     private val viewEditListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
+    private val storageListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -119,6 +120,12 @@ internal class DeviceLink(
         }
     }
 
+    override fun sendV11(sizeHint: Int, encode: () -> String?) {
+        if (isConnected && speaks(negotiatedVersion, DEVICE_PROTOCOL_V11)) {
+            queue.offer(V2Item(sizeHint, DEVICE_PROTOCOL_V11, encode))
+        }
+    }
+
     /** Records the top screen (re-sent after every reconnect); encoding happens on the link thread. */
     override fun onScreen(ts: Long, screen: ScreenRef?) {
         currentScreen = screen
@@ -154,7 +161,19 @@ internal class DeviceLink(
         viewEditListeners.add(listener)
     }
 
+    override fun addStorageListener(listener: (GatewayMessage) -> Unit) {
+        storageListeners.add(listener)
+    }
+
     private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
+
+    /** The connection being run ([connectOnce]), for [dropConnection]. */
+    @Volatile
+    private var current: Session? = null
+
+    override fun dropConnection() {
+        current?.close()
+    }
 
     private fun runForever() {
         try {
@@ -185,6 +204,7 @@ internal class DeviceLink(
     private fun connectOnce(): LinkState {
         val socket = Socket()
         val session = Session(socket, newNonce())
+        current = session
         try {
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
@@ -198,6 +218,7 @@ internal class DeviceLink(
         } catch (e: RuntimeException) {
             // e.g. SecurityException without the INTERNET permission.
         } finally {
+            current = null
             isConnected = false
             session.close()
             negotiatedVersion = null
@@ -292,6 +313,7 @@ internal class DeviceLink(
                 is GatewayMessage.Inspect -> onInspect(message.requestId)
                 is GatewayMessage.Mocks, is GatewayMessage.Mock -> onMocks(message)
                 is GatewayMessage.SetViewProperty, is GatewayMessage.RevertViewProperties -> onViewEdit(message)
+                is GatewayMessage.StorageList, is GatewayMessage.StorageRead, is GatewayMessage.StorageWrite -> onStorage(message)
             }
         }
 
@@ -307,6 +329,13 @@ internal class DeviceLink(
         private fun onViewEdit(message: GatewayMessage) {
             if (!welcomed || closed || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V8)) return
             dispatch(viewEditListeners, message)
+        }
+
+        /** Ignored before `welcome`, after close, and on a link negotiated below v11. */
+        @Synchronized
+        private fun onStorage(message: GatewayMessage) {
+            if (!welcomed || closed || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V11)) return
+            dispatch(storageListeners, message)
         }
 
         /** Ignored before `welcome`, after close, and on a link negotiated below v4. */

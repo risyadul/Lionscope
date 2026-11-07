@@ -53,6 +53,7 @@ class RecordingLink implements SdkLink {
   readonly proven = false;
   setViewProperty = NO_EDITS.setViewProperty;
   revertViewProperties = NO_EDITS.revertViewProperties;
+  storage = NO_EDITS.storage;
 }
 
 afterEach(() => {

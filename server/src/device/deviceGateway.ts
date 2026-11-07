@@ -8,8 +8,13 @@ import {
   DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_V9,
   DEVICE_PROTOCOL_V10,
+  DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
+  MAX_STORAGE_QUEUED,
+  MAX_STORAGE_REQUEST_LINE_BYTES,
+  STORAGE_DEVICE_MESSAGE_TYPES,
+  STORAGE_TIMEOUT_MS,
   MAX_DEVICE_LINE_BYTES,
   maxDeviceLineBytes,
   parseDeviceMessage,
@@ -22,12 +27,13 @@ import type {
   InspectorNode,
   NetworkMockRule,
   SdkOptions,
+  StorageConsent,
 } from '@lionscope/protocol';
 import { HOST } from '../config.ts';
 import { ErrorThrottle } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
-import { MAX_INSPECT_ANSWER_BYTES, SdkEditError, SdkInspectError } from './sdkLink.ts';
+import { MAX_INSPECT_ANSWER_BYTES, SdkEditError, SdkInspectError, SdkStorageError } from './sdkLink.ts';
 import type {
   ByeReason,
   SdkEditFailure,
@@ -41,6 +47,9 @@ import type {
   SdkLinkMessage,
   SdkLinkMode,
   SdkLinkTarget,
+  SdkStorageFailure,
+  SdkStorageRequest,
+  SdkStorageResult,
   SdkViewEditResult,
 } from './sdkLink.ts';
 
@@ -71,6 +80,10 @@ export interface DeviceGatewayLimits {
   viewEditTimeoutMs: number;
   /** Edits waiting for their answer per link; one more is refused (`busy`). */
   maxPendingEdits: number;
+  /** A v11 storage request fails (`timeout`) without its answer this long after it was sent. */
+  storageTimeoutMs: number;
+  /** Storage requests waiting for their answer per link; one more is refused (`busy`). */
+  maxPendingStorage: number;
 }
 
 export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
@@ -87,6 +100,8 @@ export const DEFAULT_DEVICE_LIMITS: DeviceGatewayLimits = {
   maxInspectAnswerBytes: MAX_INSPECT_ANSWER_BYTES,
   viewEditTimeoutMs: VIEW_EDIT_TIMEOUT_MS,
   maxPendingEdits: 8,
+  storageTimeoutMs: STORAGE_TIMEOUT_MS,
+  maxPendingStorage: MAX_STORAGE_QUEUED,
 };
 
 /** Browsers can send requests to localhost ports: a request line ends the connection at once. */
@@ -275,10 +290,14 @@ function carriesProof(protocolVersion: number, mode: SdkLinkMode, proof: string 
 export const MAX_PENDING_MOCK_BYTES = 1024 * 1024;
 
 /**
- * `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` on v9 links, then `savedStateTracking` (last)
- * on v10 links only.
+ * `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` on v9 links, then `savedStateTracking` on
+ * v10 links, then `storageConsent` (last, `off` when not given) on v11 links only.
  */
-export function configMessage(options: SdkOptions, protocolVersion: number): GatewayMessage {
+export function configMessage(
+  options: SdkOptions,
+  protocolVersion: number,
+  storageConsent: StorageConsent = 'off',
+): GatewayMessage {
   const config = {
     type: 'config',
     stallThresholdMs: options.stallThresholdMs,
@@ -287,9 +306,9 @@ export function configMessage(options: SdkOptions, protocolVersion: number): Gat
   } as const;
   if (protocolVersion < DEVICE_PROTOCOL_V9) return config;
   const v9 = { ...config, rxTracking: options.rxTracking };
-  return protocolVersion >= DEVICE_PROTOCOL_V10
-    ? { ...v9, savedStateTracking: options.savedStateTracking }
-    : v9;
+  if (protocolVersion < DEVICE_PROTOCOL_V10) return v9;
+  const v10 = { ...v9, savedStateTracking: options.savedStateTracking };
+  return protocolVersion >= DEVICE_PROTOCOL_V11 ? { ...v10, storageConsent } : v10;
 }
 
 /** `Name: value` lines joined by `\n` (names are tokens, values hold no CR / LF): the SDK splits them back. */
@@ -341,6 +360,7 @@ const SHEDDABLE_TYPES: ReadonlySet<string> = new Set([
   'httpRequest',
   'httpResponse',
   'mocksApplied',
+  ...STORAGE_DEVICE_MESSAGE_TYPES,
 ]);
 
 function isInspectMessage(message: { type: string }): message is SdkInspectMessage {
@@ -366,6 +386,24 @@ interface PendingEdit {
   timer: ReturnType<typeof setTimeout>;
   resolve: (result: SdkViewEditResult) => void;
   reject: (error: SdkEditError) => void;
+}
+
+interface PendingStorage {
+  /** The answer type that settles it. */
+  answer: SdkStorageResult['type'];
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (result: SdkStorageResult) => void;
+  reject: (error: SdkStorageError) => void;
+}
+
+const STORAGE_ANSWERS: Readonly<Record<SdkStorageRequest['type'], SdkStorageResult['type']>> = {
+  storageList: 'storageListResult',
+  storageRead: 'storageReadResult',
+  storageWrite: 'storageWriteResult',
+};
+
+function isStorageResult(message: { type: string }): message is SdkStorageResult {
+  return STORAGE_DEVICE_MESSAGE_TYPES.has(message.type as SdkStorageResult['type']);
 }
 
 /** The nodes of a complete answer in seq order, or null when they don't form the snapshot `begin` announced. */
@@ -458,6 +496,9 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   const edits = new Map<number, PendingEdit>();
   /** Edit answers that may still bypass the line budget: one per edit sent; reset when none is pending. */
   let editAllowance = 0;
+  const storages = new Map<number, PendingStorage>();
+  /** Storage answers that may still bypass the line budget: one per request sent; reset when none is pending. */
+  let storageAllowance = 0;
   /**
    * Inspector answer lines (and bytes) of pending requests that may still bypass the line budget: one line per
    * request sent (its begin or error) and, once a begin arrived, one per announced node (a chunk holds at least
@@ -500,10 +541,48 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
   const failAllEdits = (reason: SdkEditFailure): void => {
     for (const requestId of [...edits.keys()]) settleEdit(requestId)?.reject(new SdkEditError(reason));
   };
+  const settleStorage = (requestId: number): PendingStorage | null => {
+    const pending = storages.get(requestId);
+    if (!pending) return null;
+    storages.delete(requestId);
+    clearTimeout(pending.timer);
+    if (storages.size === 0) storageAllowance = 0;
+    return pending;
+  };
+  const failAllStorage = (reason: SdkStorageFailure): void => {
+    for (const requestId of [...storages.keys()])
+      settleStorage(requestId)?.reject(new SdkStorageError(reason));
+  };
   const failPending = (): void => {
     failAllInspects('closed');
     failAllEdits('closed');
+    failAllStorage('closed');
   };
+
+  /**
+   * Send one v11 storage request and wait for its answer: the first `storage*Result` with its request id (a write's
+   * `provisional` or `final`). A line over MAX_STORAGE_REQUEST_LINE_BYTES is never sent (`too_large`).
+   */
+  const storage = (request: SdkStorageRequest): Promise<SdkStorageResult> =>
+    new Promise((resolve, reject) => {
+      if (protocolVersion < DEVICE_PROTOCOL_V11) return reject(new SdkStorageError('unsupported'));
+      if (closing || !handler) return reject(new SdkStorageError('closed'));
+      if (storages.size >= limits.maxPendingStorage) return reject(new SdkStorageError('busy'));
+      const requestId = nextRequestId();
+      // `type` first, then the request id, then the request's own fields in their order.
+      const { type, ...fields } = request;
+      const line = gatewayLine({ type, requestId, ...fields } as GatewayMessage);
+      if (Buffer.byteLength(line) > MAX_STORAGE_REQUEST_LINE_BYTES) {
+        return reject(new SdkStorageError('too_large'));
+      }
+      const timer = setTimeout(
+        () => settleStorage(requestId)?.reject(new SdkStorageError('timeout')),
+        limits.storageTimeoutMs,
+      );
+      storages.set(requestId, { answer: STORAGE_ANSWERS[type], timer, resolve, reject });
+      storageAllowance += 1;
+      socket.write(line);
+    });
 
   /** Send one v8 edit request (built around its request id) and wait for its `viewPropertyResult`. */
   const edit = (line: (requestId: number) => GatewayMessage): Promise<SdkViewEditResult> =>
@@ -634,11 +713,12 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         return proven;
       },
       close,
-      sendConfig: (options) => {
+      sendConfig: (options, storageConsent) => {
         // An inspect-only link gets no options (its SDK runs no collectors).
         if (protocolVersion < DEVICE_PROTOCOL_V2 || closing || mode === 'inspect') return;
-        if (handler) socket.write(gatewayLine(configMessage(options, protocolVersion)));
-        else pendingConfig = configMessage(options, protocolVersion);
+        const config = configMessage(options, protocolVersion, storageConsent);
+        if (handler) socket.write(gatewayLine(config));
+        else pendingConfig = config;
       },
       sendMocks: (rev, rules) => {
         // Mocks belong to a profiling session: inspect-only links never get them.
@@ -651,6 +731,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
         edit((requestId) => ({ type: 'setViewProperty', requestId, viewKey, property, value })),
       revertViewProperties: (viewKey, property) =>
         edit((requestId) => ({ type: 'revertViewProperties', requestId, viewKey, property })),
+      storage,
     };
     let result: SdkAttachResult | Promise<SdkAttachResult>;
     try {
@@ -740,15 +821,22 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       rawBytes <= inspectBytesAllowance;
     // An edit's answer is one line: the edits waiting for one may bypass the budget by that many lines.
     const exemptEdit = type === 'viewPropertyResult' && edits.size > 0 && editAllowance > 0;
-    if (!exempt && !exemptEdit && !bucket.take()) return overBudget(type);
+    // Likewise one storage answer per request waiting for one (a prefs write may answer twice: the second counts).
+    const exemptStorage =
+      type !== null &&
+      STORAGE_DEVICE_MESSAGE_TYPES.has(type as SdkStorageResult['type']) &&
+      storages.size > 0 &&
+      storageAllowance > 0;
+    if (!exempt && !exemptEdit && !exemptStorage && !bucket.take()) return overBudget(type);
     if (!helloSeen) return onHello(line);
     const parsed = parseDeviceMessage(line, protocolVersion);
     // JSON.parse keeps the last of duplicate keys: the type peeked at must be the type parsed.
-    if ((exempt || exemptEdit) && parsedTypeOf(parsed) !== type) {
+    if ((exempt || exemptEdit || exemptStorage) && parsedTypeOf(parsed) !== type) {
       warn('answer of another type');
       return close('protocol_error');
     }
     if (exemptEdit) editAllowance -= 1;
+    if (exemptStorage) storageAllowance -= 1;
     if (exempt) {
       // Only answers to a pending request are exempt; a stale one spends the budget like any line.
       const requestId = parsed.ok && isInspectMessage(parsed.value) ? parsed.value.requestId : null;
@@ -774,6 +862,18 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     // An answer after its edit timed out (or to none at all) is dropped quietly.
     if (parsed.value.type === 'viewPropertyResult')
       return settleEdit(parsed.value.requestId)?.resolve(parsed.value);
+    if (isStorageResult(parsed.value)) {
+      const pending = storages.get(parsed.value.requestId);
+      if (pending) {
+        settleStorage(parsed.value.requestId);
+        if (pending.answer === parsed.value.type) pending.resolve(parsed.value);
+        else pending.reject(new SdkStorageError('invalid'));
+        return;
+      }
+      // A write's `final` after its `provisional`, or after the request timed out: the session records it. Any other
+      // answer to no pending request is stale.
+      if (parsed.value.type !== 'storageWriteResult') return;
+    }
     deliver(parsed.value);
   };
 
