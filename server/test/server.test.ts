@@ -293,6 +293,7 @@ describe('Lionscope server', () => {
         protocolVersion: PROTOCOL_VERSION,
         serverVersion: expect.stringMatching(/^\d+\.\d+\.\d+/),
         bufferWindowMs: BUFFER_WINDOW_MS,
+        storageConsent: 'off',
       });
       client.close();
     });

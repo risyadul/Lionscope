@@ -43,6 +43,8 @@ dependencies {
     compileOnly(libs.navigation.runtime.sdk)
     compileOnly(libs.kotlin.stdlib)
     compileOnly(libs.okhttp)
+    // Lionscope.trackDatabase's parameter type; the app brings Room itself.
+    compileOnly(libs.room.runtime)
 }
 
 afterEvaluate {

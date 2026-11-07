@@ -27,6 +27,35 @@ internal sealed class GatewayMessage {
     /** v8: revert [properties] (all when null) of [viewKey], or every live edit when [viewKey] is null. */
     class RevertViewProperties(val requestId: Int, val viewKey: Int?, val properties: List<ViewProperty>?) : GatewayMessage()
 
+    /** v11: list the prefs files and registered databases. */
+    class StorageList(val requestId: Int) : GatewayMessage()
+
+    /** v11: read a prefs file ([cursor] / [limit]) or a database (schema, or [pages]: a JSON array as text). */
+    class StorageRead(
+        val requestId: Int,
+        val store: String,
+        val name: String,
+        val cursor: String?,
+        val limit: Int?,
+        val pages: String?,
+    ) : GatewayMessage()
+
+    /** v11: one compare-and-set edit; [pk], [expected] and [value] are JSON texts ([StorageCodec]). */
+    class StorageWrite(
+        val requestId: Int,
+        val opId: String,
+        val store: String,
+        val name: String,
+        val op: String,
+        val key: String?,
+        val table: String?,
+        val column: String?,
+        val pk: String?,
+        val expected: String?,
+        val value: String?,
+        val rowDigest: String?,
+    ) : GatewayMessage()
+
     companion object {
         private const val ANY_METHOD = "*"
         private const val MIN_MOCK_STATUS = 100
@@ -41,6 +70,8 @@ internal sealed class GatewayMessage {
         private val STRICT_MODE = Regex("\"strictMode\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         private val INFLATE_TRACKING = Regex("\"inflateTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         private val RX_TRACKING = Regex("\"rxTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
+        private val STORAGE_CONSENT = Regex("\"storageConsent\"\\s*:\\s*\"([a-z_]+)\"")
+        private val OP_ID = Regex("[A-Za-z0-9_-]{1,64}")
         private val SAVED_STATE_TRACKING = Regex("\"savedStateTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         /** A non-negative JSON integer that fits an Int. */
         private val REQUEST_ID = Regex("\"requestId\"\\s*:\\s*(\\d{1,10})(?![\\d.eE])")
@@ -67,6 +98,9 @@ internal sealed class GatewayMessage {
             "mock" -> FlatJson.parse(line)?.takeIf { it.string("type") == "mock" }?.let(::parseMock)
             "setViewProperty" -> FlatJson.parse(line)?.let(::setViewProperty)
             "revertViewProperties" -> FlatJson.parse(line)?.let(::revertViewProperties)
+            "storageList" -> FlatJson.parse(line)?.let(::storageList)
+            "storageRead" -> FlatJson.parse(line)?.let(::storageRead)
+            "storageWrite" -> FlatJson.parse(line)?.let(::storageWrite)
             else -> null
         }
 
@@ -150,7 +184,61 @@ internal sealed class GatewayMessage {
             val inflateTracking = INFLATE_TRACKING.find(line)?.groupValues?.get(1) != "false"
             val rxTracking = RX_TRACKING.find(line)?.groupValues?.get(1) != "false"
             val savedStateTracking = SAVED_STATE_TRACKING.find(line)?.groupValues?.get(1) != "false"
-            return SdkOptions(threshold, strictMode, inflateTracking, rxTracking, savedStateTracking)
+            val storageConsent = StorageConsent.of(STORAGE_CONSENT.find(line)?.groupValues?.get(1))
+            return SdkOptions(threshold, strictMode, inflateTracking, rxTracking, savedStateTracking, storageConsent)
+        }
+
+        private fun storageName(fields: FlatJson, key: String): String? =
+            fields.string(key)?.takeIf { it.isNotEmpty() && it.length <= MAX_STORAGE_NAME_CHARS }
+
+        /** An optional string field: absent or null is null; there, it must be a string of at most [max] chars. */
+        private fun optional(fields: FlatJson, key: String, max: Int): Result<String?> {
+            if (!fields.has(key) || fields.isNull(key)) return Result.success(null)
+            val text = fields.string(key)?.takeIf { it.length <= max } ?: return Result.failure(IllegalArgumentException(key))
+            return Result.success(text)
+        }
+
+        private fun storageList(fields: FlatJson): StorageList? {
+            if (fields.string("type") != "storageList") return null
+            return StorageList(fields.int("requestId")?.takeIf { it >= 0 } ?: return null)
+        }
+
+        /** A storage read with a bad field is dropped (the server then times the request out). */
+        private fun storageRead(fields: FlatJson): StorageRead? {
+            if (fields.string("type") != "storageRead") return null
+            val requestId = fields.int("requestId")?.takeIf { it >= 0 } ?: return null
+            val store = fields.string("store")?.takeIf { it == "prefs" || it == "db" } ?: return null
+            val name = storageName(fields, "name") ?: return null
+            val cursor = optional(fields, "cursor", MAX_STORAGE_CURSOR_CHARS).getOrElse { return null }
+            val pages = optional(fields, "pages", MAX_STORAGE_REQUEST_FIELD_CHARS).getOrElse { return null }
+            val limit = if (fields.has("limit") && !fields.isNull("limit")) fields.int("limit") ?: return null else null
+            return StorageRead(requestId, store, name, cursor, limit, pages)
+        }
+
+        private fun storageWrite(fields: FlatJson): StorageWrite? {
+            if (fields.string("type") != "storageWrite") return null
+            val requestId = fields.int("requestId")?.takeIf { it >= 0 } ?: return null
+            val opId = fields.string("opId")?.takeIf { OP_ID.matches(it) } ?: return null
+            val store = fields.string("store")?.takeIf { it == "prefs" || it == "db" } ?: return null
+            val name = storageName(fields, "name") ?: return null
+            val op = fields.string("op")?.takeIf {
+                (store == "prefs" && (it == "update" || it == "remove")) || (store == "db" && (it == "update" || it == "delete"))
+            } ?: return null
+            val text = MAX_STORAGE_REQUEST_FIELD_CHARS
+            return StorageWrite(
+                requestId = requestId,
+                opId = opId,
+                store = store,
+                name = name,
+                op = op,
+                key = optional(fields, "key", MAX_STORAGE_NAME_CHARS).getOrElse { return null },
+                table = optional(fields, "table", MAX_STORAGE_NAME_CHARS).getOrElse { return null },
+                column = optional(fields, "column", MAX_STORAGE_NAME_CHARS).getOrElse { return null },
+                pk = optional(fields, "pk", text).getOrElse { return null },
+                expected = optional(fields, "expected", text).getOrElse { return null },
+                value = optional(fields, "value", text).getOrElse { return null },
+                rowDigest = optional(fields, "rowDigest", 64).getOrElse { return null },
+            )
         }
     }
 }

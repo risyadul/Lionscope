@@ -1,0 +1,104 @@
+/* Storage tab (0.13.0): the targets, then a prefs file's keys or a database table's page. `.btn`, `.overline` and
+   `.mono` come from the shared styles. Minimal by design: the behaviour is the spec's, the polish comes later. */
+
+.storage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow: auto;
+  background: var(--surface);
+}
+
+.storage-head,
+.storage-paging,
+.storage-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.storage-meta,
+.storage-note,
+.storage-reason,
+.storage-type {
+  color: var(--ink-2);
+  font-size: var(--text-meta);
+}
+
+.storage-note {
+  margin: 0;
+}
+
+.storage-reason {
+  margin-left: var(--space-2);
+}
+
+.storage-error {
+  margin: 0;
+  color: var(--danger, #c62828);
+  font-size: var(--text-meta);
+}
+
+.storage-outcome {
+  padding: var(--space-2);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.storage-targets ul,
+.storage-tables,
+.storage-late ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-target,
+.storage-cell {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.storage-target[aria-pressed='true'] {
+  font-weight: 600;
+}
+
+.storage-target:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.storage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-meta);
+}
+
+.storage-table th,
+.storage-table td {
+  padding: 2px var(--space-2);
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.storage-value[data-type='redacted'],
+.storage-value[data-type='null'] {
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.storage-edit {
+  margin-left: var(--space-2);
+}

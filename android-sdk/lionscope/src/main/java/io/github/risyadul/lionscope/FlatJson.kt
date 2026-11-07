@@ -27,6 +27,9 @@ internal class FlatJson private constructor(private val values: Map<String, Any?
 
     fun has(key: String): Boolean = values.containsKey(key)
 
+    /** Whether [key] is there with the value JSON null. */
+    fun isNull(key: String): Boolean = values.containsKey(key) && values[key] == null
+
     /** A number as written, so integers of any size are told apart from fractions without rounding. */
     private class JsonNumber(val literal: String)
 

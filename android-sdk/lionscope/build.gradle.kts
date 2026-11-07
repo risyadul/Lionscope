@@ -52,6 +52,8 @@ dependencies {
     compileOnly(libs.kotlin.stdlib)
     compileOnly(libs.okhttp)
     compileOnly(libs.rxjava2)
+    // Lionscope.trackDatabase(name, RoomDatabase): only reached when the app registers a database.
+    compileOnly(libs.room.runtime)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.stdlib)
@@ -63,6 +65,9 @@ dependencies {
     testImplementation(libs.okhttp)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.rxjava2)
+    // NoopParityTest loads the API, whose trackDatabase(String, RoomDatabase) needs it.
+    testImplementation(libs.room.runtime)
+    testImplementation(libs.sqlite.jdbc)
 }
 
 /** Inputs every unit-test run gets (the AGP ones and [testOkHttp5]). */

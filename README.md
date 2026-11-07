@@ -53,6 +53,7 @@ Network tabs. See [What the dashboard shows](docs/dashboard.md), and each part i
 - [Saved state: what makes it too large](docs/features/saved-state.md)
 - [Operating the emulator or a physical device from the dashboard](docs/features/device.md)
 - [Changing the device's location](docs/features/location.md)
+- [Storage: reading and editing app data live](docs/features/storage.md)
 
 <!-- /docs:added -->
 
