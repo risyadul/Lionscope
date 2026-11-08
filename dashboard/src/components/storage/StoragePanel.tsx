@@ -58,7 +58,7 @@ interface DbView {
   tables: StorageTable[];
   tablesTruncated: boolean;
   table: string | null;
-  page: { page: StoragePage; target: StorageTarget } | null;
+  page: { page: StoragePage; target: StorageTarget; scope: number } | null;
   cursors: (string | null)[];
 }
 
@@ -88,10 +88,14 @@ interface LastWrite {
 }
 
 /**
- * The open row: a prefs entry (its id) or a table's row by its primary key (never its place on the page, which a
- * refresh may give to another row). A row that is gone after a refresh closes its sheet.
+ * The open row: a prefs entry or a table row by its usable primary key. Read-only rows without a unique usable
+ * key have an identity valid only for that page read. Confirmed absence ends the sheet and its draft.
  */
 type Sheet = { store: 'prefs'; id: string } | { store: 'db'; table: string; row: string };
+
+function prefsIdentity(entry: StoragePrefsEntry): string {
+  return entry.keyLength === undefined ? `k:${entry.key}` : `k:${entry.key}:${entry.keyLength}`;
+}
 
 /** Which field a write names: a prefs key, or a table's row (by its key) and column (none for a delete). */
 function fieldId(write: StorageWriteInput): string {
@@ -109,10 +113,32 @@ function writeLabel(write: StorageWriteInput): string {
     : `${write.table} · ${key} · delete`;
 }
 
-/** A page row's identity: its primary key, or (key columns not on the page: nothing is edited) its place. */
-function rowKey(page: StoragePage, cells: StorageValue[], index: number): string {
-  if (page.pk.length === 0 || page.pk.some((key) => !page.columns.includes(key))) return `#${index}`;
-  return JSON.stringify(page.pk.map((key) => cells[page.columns.indexOf(key)]));
+/** Only complete, non-NULL SQLite keys can address a write; rowid is never a substitute. */
+function rowIdentities(page: StoragePage, scope: number) {
+  const keys = page.rows.map(({ cells }) => {
+    const pk = page.pk.map((key) => cells[page.columns.indexOf(key)]);
+    return pk.length > 0 &&
+      pk.every(
+        (value) =>
+          value !== undefined &&
+          (value.t === 'integer' ||
+            value.t === 'real' ||
+            (value.t === 'string' && value.complete !== false) ||
+            (value.t === 'blob' && value.complete)),
+      )
+      ? (pk as StorageValue[])
+      : null;
+  });
+  const counts = new Map<string, number>();
+  for (const pk of keys) {
+    if (pk === null) continue;
+    const key = JSON.stringify(pk);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return keys.map((pk, index) => {
+    const key = JSON.stringify(pk);
+    return pk !== null && counts.get(key) === 1 ? { key, pk } : { key: `#${scope}:${index}`, pk: null };
+  });
 }
 
 const sameValue = (a: StorageValue | undefined, b: StorageValue | undefined) =>
@@ -178,12 +204,15 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const [audit, setAudit] = useState<StorageAuditEntry[] | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
+  // Reads reconcile the sheet open when they finish, not the one open when they started.
+  const currentSheet = useRef<Sheet | null>(null);
   const [filter, setFilter] = useState('');
   const [readOnlyOpen, setReadOnlyOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   /** Which way the last navigation went: the new level slides in from that side. */
   const [direction, setDirection] = useState<'in' | 'out'>('in');
   const writes = useRef(0);
+  const pages = useRef(0);
 
   /** The view's generation: an answer to a request of an older one is dropped. */
   const generation = useRef(0);
@@ -200,6 +229,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     setBusy(false);
     setEditing(null);
     setConfirmDelete(false);
+    currentSheet.current = null;
     setSheet(null);
     return generation.current;
   }, []);
@@ -208,6 +238,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const openSheet = useCallback((next: Sheet | null) => {
     setEditing(null);
     setConfirmDelete(false);
+    currentSheet.current = next;
     setSheet(next);
   }, []);
 
@@ -259,6 +290,10 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         storage.read({ store: 'prefs', name, ...(cursor ? { cursor } : {}) }),
       );
       if (response?.ok && response.kind === 'prefs') {
+        const open = currentSheet.current;
+        if (open?.store === 'prefs' && !response.entries.some((entry) => prefsIdentity(entry) === open.id)) {
+          openSheet(null);
+        }
         setPrefsView({
           name,
           target: response.target,
@@ -269,7 +304,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         });
       }
     },
-    [run, storage],
+    [openSheet, run, storage],
   );
 
   const loadPage = useCallback(
@@ -280,10 +315,20 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       );
       if (response?.ok && response.kind === 'pages') {
         const page = response.pages[0];
-        setDbView({ ...view, table, cursors, page: page ? { page, target: response.target } : null });
+        const scope = ++pages.current;
+        const open = currentSheet.current;
+        if (
+          open?.store === 'db' &&
+          (open.table !== table ||
+            !page ||
+            !rowIdentities(page, scope).some((identity) => identity.key === open.row))
+        ) {
+          openSheet(null);
+        }
+        setDbView({ ...view, table, cursors, page: page ? { page, target: response.target, scope } : null });
       }
     },
-    [run, storage],
+    [openSheet, run, storage],
   );
 
   const open = useCallback(
@@ -396,16 +441,16 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   };
 
   const deleteRow = (view: DbView, shown: StoragePage, target: StorageTarget, row: number) => {
-    const cells = shown.rows[row]?.cells ?? [];
+    const pk = rowIdentities(shown, 0)[row]?.pk;
     const digest = shown.rows[row]?.digest;
-    if (!digest) return;
+    if (!digest || !pk) return;
     openSheet(null);
     void submit({
       store: 'db',
       name: view.name,
       op: 'delete',
       table: shown.table,
-      pk: shown.pk.map((key) => cells[shown.columns.indexOf(key)]!),
+      pk,
       rowDigest: digest,
       target,
     });
@@ -419,6 +464,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const written: LastWrite | null = lastWrite && (final ? { ...lastWrite, outcome: final } : lastWrite);
   const shown = dbView?.page ?? null;
   const page = shown?.page ?? null;
+  const identities = page && shown ? rowIdentities(page, shown.scope) : [];
   const pkMissing = page !== null && page.pk.some((key) => !page.columns.includes(key));
   // Only what the latest list answer's link shows may be edited (a reconnect makes another link).
   const stale = (target: StorageTarget) => listing !== null && !sameTarget(listing.target, target);
@@ -483,15 +529,13 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     (written.outcome.stored === undefined || sameValue(written.outcome.stored, value));
   const prefsField = (entry: StoragePrefsEntry) =>
     prefsView && entry.keyLength === undefined ? `p\u0000${prefsView.name}\u0000${entry.key}` : null;
-  const cellField = (cells: StorageValue[], column: string) =>
-    dbView && page && !pkMissing && page.pk.length > 0
-      ? `d\u0000${dbView.name}\u0000${page.table}\u0000${JSON.stringify(
-          page.pk.map((key) => cells[page.columns.indexOf(key)]),
-        )}\u0000${column}`
+  const cellField = (row: number, column: string) =>
+    dbView && page && identities[row]?.pk
+      ? `d\u0000${dbView.name}\u0000${page.table}\u0000${JSON.stringify(identities[row]!.pk)}\u0000${column}`
       : null;
-  const savedRow = (cells: StorageValue[]) =>
+  const savedRow = (row: number, cells: StorageValue[]) =>
     page?.columns.find((column, index) => {
-      const id = cellField(cells, column);
+      const id = cellField(row, column);
       return id !== null && marks(id, cells[index]);
     }) ?? null;
 
@@ -705,7 +749,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         </h3>
         {entries.map((entry) => {
           const keyCut = entry.keyLength !== undefined;
-          const id = keyCut ? `k:${entry.key}:${entry.keyLength}` : `k:${entry.key}`;
+          const id = prefsIdentity(entry);
           const open = sheet?.store === 'prefs' && sheet.id === id;
           const field = prefsField(entry);
           const saved = field !== null && marks(field, entry.value);
@@ -829,8 +873,8 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
             </thead>
             <tbody>
               {page.rows.map((row, rowIndex) => {
-                const savedColumn = savedRow(row.cells);
-                const key = rowKey(page, row.cells, rowIndex);
+                const savedColumn = savedRow(rowIndex, row.cells);
+                const key = identities[rowIndex]!.key;
                 const next: Sheet = { store: 'db', table: page.table, row: key };
                 return (
                   <tr
@@ -905,12 +949,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       <div className="storage-field-outcome">{outcomeBlock(false)}</div>
     ) : null;
   if (sheet?.store === 'prefs' && prefsView) {
-    const entry = prefsView.entries.find(
-      (candidate) =>
-        (candidate.keyLength !== undefined
-          ? `k:${candidate.key}:${candidate.keyLength}`
-          : `k:${candidate.key}`) === sheet.id,
-    );
+    const entry = prefsView.entries.find((candidate) => prefsIdentity(candidate) === sheet.id);
     if (entry) {
       const keyCut = entry.keyLength !== undefined;
       const field = prefsField(entry);
@@ -974,24 +1013,23 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       );
     }
   } else if (sheet?.store === 'db' && page && shown && dbView && sheet.table === page.table) {
-    const rowIndex = page.rows.findIndex(
-      (candidate, index) => rowKey(page, candidate.cells, index) === sheet.row,
-    );
+    const rowIndex = identities.findIndex((identity) => identity.key === sheet.row);
     const row = page.rows[rowIndex];
     if (row) {
+      const pk = identities[rowIndex]!.pk;
       const keyText = page.pk
         .map((key) => `${key} = ${displayValue(row.cells[page.columns.indexOf(key)] ?? { t: 'null' })}`)
         .join(', ');
-      const canDelete = canWrite && !page.readOnly && row.digest && !pkMissing && !stale(shown.target);
+      const canDelete = canWrite && !page.readOnly && row.digest && pk !== null && !stale(shown.target);
       const schema = dbView.tables.find((table) => table.name === page.table);
-      sheetFields = page.columns.map((column) => cellField(row.cells, column));
+      sheetFields = page.columns.map((column) => cellField(rowIndex, column));
       sheetBody = (
         <>
           <SheetHead title="Row" detail={keyText || `#${rowIndex + 1}`} onClose={() => openSheet(null)} />
           <div className="storage-fields">
             {row.cells.map((cell, columnIndex) => {
               const column = page.columns[columnIndex] ?? '';
-              const field = cellField(row.cells, column);
+              const field = cellField(rowIndex, column);
               const reason = cellReadOnly(page, column, cell);
               const editable =
                 canWrite && reason === null && !pkMissing && field !== null && !stale(shown.target);
@@ -1028,7 +1066,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
                             op: 'update',
                             table: page.table,
                             column,
-                            pk: page.pk.map((key) => row.cells[page.columns.indexOf(key)]!),
+                            pk: pk!,
                             expected: cell,
                             target: shown.target,
                           },
@@ -1045,6 +1083,11 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
             {canWrite && pkMissing && (
               <p className="storage-group-note">
                 Read-only here: the primary key columns are not on this page.
+              </p>
+            )}
+            {canWrite && !pkMissing && pk === null && (
+              <p className="storage-group-note">
+                Read-only here: this row has no complete, non-NULL, unique primary key.
               </p>
             )}
           </div>

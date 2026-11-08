@@ -810,12 +810,225 @@ describe('Storage tab', () => {
     });
   });
 
+  it.each<{ label: string; pk: string[]; columns: string[]; keys: StorageValue[] }>([
+    { label: 'nullable', pk: ['id'], columns: ['id', 'v'], keys: [{ t: 'null' }] },
+    {
+      label: 'composite nullable',
+      pk: ['id', 'part'],
+      columns: ['id', 'part', 'v'],
+      keys: [str('same'), { t: 'null' }],
+    },
+    { label: 'nonunique', pk: ['id'], columns: ['id', 'v'], keys: [str('same')] },
+    { label: 'redacted', pk: ['id'], columns: ['id', 'v'], keys: [{ t: 'redacted', orig: 'string' }] },
+    {
+      label: 'cut string',
+      pk: ['id'],
+      columns: ['id', 'v'],
+      keys: [{ t: 'string', v: 'prefix', complete: false, length: 10000 }],
+    },
+    {
+      label: 'cut blob',
+      pk: ['id'],
+      columns: ['id', 'v'],
+      keys: [{ t: 'blob', b64: 'YQ==', size: 10000, complete: false }],
+    },
+    { label: 'missing column', pk: ['id'], columns: ['v'], keys: [] },
+    { label: 'missing cell', pk: ['id'], columns: ['v', 'id'], keys: [] },
+    { label: 'no explicit key', pk: [], columns: ['v'], keys: [] },
+  ])(
+    'inspects exact rows with $label primary keys without offering unsafe writes',
+    async ({ pk, columns, keys }) => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const h = setup('read_write');
+        await openItem(h);
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+        const response = rowsOf('item', []) as Extract<StorageResponse, { kind: 'pages' }>;
+        Object.assign(response.pages[0]!, {
+          pk,
+          columns,
+          rows: ['First unsafe row', 'Second unsafe row'].map((value) => ({
+            cells: [...keys, str(value)],
+            digest: 'a'.repeat(64),
+          })),
+        });
+        await h.answer(response);
+        for (const value of ['Second unsafe row', 'First unsafe row']) {
+          fireEvent.click(rowOf(value));
+          expect(within(sheet()!).getByText(value)).toBeTruthy();
+          expect(editButtons()).toHaveLength(0);
+          expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
+        }
+        expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+        expect(h.writes()).toHaveLength(0);
+      } finally {
+        errors.mockRestore();
+      }
+    },
+  );
+
+  it.each<{ pk: StorageValue[] }>([
+    { pk: [str('group'), { t: 'integer', v: '7' }] },
+    { pk: [{ t: 'blob', b64: 'YQ==', size: 1, complete: true }] },
+  ])('keeps complete unique primary keys writable ($pk)', async ({ pk }) => {
+    const h = setup('read_write');
+    await openItem(h);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const response = pageOf('shop.db', 'item', '') as Extract<StorageResponse, { kind: 'pages' }>;
+    const keyColumns = pk.map((_, index) => `key${index}`);
+    Object.assign(response.pages[0]!, {
+      pk: keyColumns,
+      columns: [...keyColumns, 'v'],
+      rows: [{ cells: [...pk, str('Before')], digest: 'a'.repeat(64) }],
+    });
+    await h.answer(response);
+    fireEvent.click(rowOf('Before'));
+    expect(screen.getByRole('button', { name: 'Delete row' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), { target: { value: 'After' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.writes().at(-1)).toMatchObject({ write: { pk, expected: str('Before'), value: str('After') } });
+  });
+
+  it('does not carry a fallback row identity into a refreshed page or another cursor', async () => {
+    const h = setup('read_write');
+    await openItem(h);
+    const nullablePage = (value: string, nextCursor: string | null = null) => {
+      const response = pageOf('shop.db', 'item', value) as Extract<StorageResponse, { kind: 'pages' }>;
+      response.pages[0]!.rows[0]!.cells[0] = { t: 'null' };
+      response.pages[0]!.nextCursor = nextCursor;
+      return response;
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(nullablePage('First page', TOKEN));
+    fireEvent.click(rowOf('First page'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(BUSY);
+    expect(within(sheet()!).getByText('First page')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(nullablePage('Replacement page', TOKEN));
+    expect(sheet()).toBeNull();
+    fireEvent.click(rowOf('Replacement page'));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await h.answer(nullablePage('Next page'));
+    expect(sheet()).toBeNull();
+    fireEvent.click(rowOf('Next page'));
+    expect(within(sheet()!).getByText('Next page')).toBeTruthy();
+    expect(editButtons()).toHaveLength(0);
+    expect(h.writes()).toHaveLength(0);
+  });
+
   it('closes the sheet of a row a Refresh no longer shows', async () => {
     const h = setup('read_write');
     await openItem(h);
     fireEvent.click(rowOf('Milk'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await h.answer(rowsOf('item', [['1', str('Bread')]]));
+    expect(sheet()).toBeNull();
+  });
+
+  it.each(['draft', 'delete'] as const)(
+    'forgets a missing DB row and its $0 state when the same PK reappears',
+    async (state) => {
+      const h = setup('read_write');
+      await openItem(h);
+      fireEvent.click(rowOf('Milk'));
+      if (state === 'draft') {
+        fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), {
+          target: { value: 'Cream' },
+        });
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: 'Delete row' }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      await h.answer(rowsOf('item', [['1', str('Bread')]]));
+      expect(sheet()).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      await h.answer(rowsOf('item', SHOP_ROWS));
+      expect(sheet()).toBeNull();
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+      expect(h.writes()).toHaveLength(0);
+      fireEvent.click(rowOf('Milk'));
+      expect((screen.getByRole('button', { name: 'Edit v' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole('button', { name: 'Delete row' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Delete id =/ })).toBeNull();
+    },
+  );
+
+  it('forgets a missing prefs key and its draft when the same key reappears', async () => {
+    const h = setup('read_write');
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await h.answer(listOf(['p']));
+    fireEvent.click(screen.getByRole('button', { name: 'p' }));
+    const entries: StoragePrefsEntry[] = [{ key: 'count', value: { t: 'int', v: '3' } }];
+    await h.answer(prefsOf('p', entries));
+    editKey('count');
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of count' }), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(prefsOf('p', []));
+    expect(screen.queryByRole('dialog', { name: 'Key' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(prefsOf('p', entries));
+    expect(screen.queryByRole('dialog', { name: 'Key' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(h.writes()).toHaveLength(0);
+    openKey('count');
+    expect((screen.getByRole('button', { name: 'Edit count' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('preserves a DB draft across failed reads without rebasing its expected snapshot', async () => {
+    const h = setup('read_write');
+    await openItem(h);
+    fireEvent.click(rowOf('Milk'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), { target: { value: 'Cream' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(BUSY);
+    expect((screen.getByRole('textbox', { name: 'New value of v' }) as HTMLInputElement).value).toBe('Cream');
+    expect(sheet()!.textContent).toContain('id = 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.writes().at(-1)).toMatchObject({
+      write: { pk: [{ t: 'integer', v: '2' }], expected: str('Milk'), value: str('Cream'), target: TARGET },
+    });
+  });
+
+  it('preserves a prefs draft across filtering and failed reads with its original expected snapshot', async () => {
+    const h = setup('read_write');
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await h.answer(listOf(['p']));
+    fireEvent.click(screen.getByRole('button', { name: 'p' }));
+    const entries: StoragePrefsEntry[] = [{ key: 'count', value: { t: 'int', v: '3' } }];
+    await h.answer(prefsOf('p', entries));
+    editKey('count');
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of count' }), { target: { value: '4' } });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'not present' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(prefsOf('p', entries));
+    expect((screen.getByRole('textbox', { name: 'New value of count' }) as HTMLInputElement).value).toBe('4');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(BUSY);
+    expect((screen.getByRole('textbox', { name: 'New value of count' }) as HTMLInputElement).value).toBe('4');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '9' } }]));
+    expect(screen.getByText(/Save compares with that/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(h.writes().at(-1)).toMatchObject({
+      write: { key: 'count', expected: { t: 'int', v: '3' }, value: { t: 'int', v: '4' }, target: TARGET },
+    });
+  });
+
+  it('reconciles the latest sheet when the user switches rows while Refresh is pending', async () => {
+    const h = setup('read_write');
+    await openItem(h);
+    fireEvent.click(rowOf('Bread'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(rowOf('Milk'));
+    await h.answer(rowsOf('item', [['1', str('Bread')]]));
+    expect(sheet()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await h.answer(rowsOf('item', SHOP_ROWS));
     expect(sheet()).toBeNull();
   });
 

@@ -31,6 +31,13 @@ All notable changes to Lionscope are documented here. The format is based on
 - CI runs `npm run docs:check`: relative links, images and anchors in the README and `docs/`, and Lionscope GitHub
   URLs in the sources, must resolve.
 
+### Fixed
+
+- Storage: rows with nullable, incomplete, redacted or non-unique primary keys open their own read-only sheet,
+  without duplicate row identities or implicit rowid writes. A successful refresh that no longer contains the
+  open row or prefs key closes its sheet and discards its draft, so a reused key cannot revive an old edit;
+  failed reads preserve the draft.
+
 ## [0.12.0] - 2026-11-02
 
 ### Added
