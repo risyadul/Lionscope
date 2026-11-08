@@ -286,6 +286,22 @@ const pageOf = (name: string, table: string, value: string): StorageResponse => 
 
 const BUSY: StorageResponse = { ok: false, code: 'busy', message: 'busy' };
 
+/** The row of a prefs key (its name as shown: a cut key ends with its length). */
+const keyRow = (shown: string) => {
+  const row = screen
+    .getAllByRole('button')
+    .find((button) => button.querySelector('.storage-row-name')?.textContent === shown);
+  if (!row) throw new Error(`no row ${shown}`);
+  return row;
+};
+/** Opens a key's (or a page row's) sheet, then its value's editor. */
+const openKey = (shown: string) => fireEvent.click(keyRow(shown));
+const editKey = (key: string) => {
+  openKey(key);
+  fireEvent.click(screen.getByRole('button', { name: `Edit ${key}` }));
+};
+const editButtons = () => screen.queryAllByRole('button', { name: /^Edit / });
+
 describe('Storage tab', () => {
   it('shows that storage is off and sends nothing', () => {
     const { sent } = setup('off');
@@ -308,7 +324,9 @@ describe('Storage tab', () => {
         { name: 'old.db', status: 'unsupported:closed' },
       ],
     });
-    expect((screen.getByRole('button', { name: /old\.db/ }) as HTMLButtonElement).disabled).toBe(true);
+    // A database that can't be read is not a way in: it says why instead.
+    expect(screen.queryByRole('button', { name: /old\.db/ })).toBeNull();
+    expect(screen.getByText('old.db').closest('[aria-disabled="true"]')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'app_settings' }));
     expect(sent.at(-1)).toMatchObject({
       type: 'storageRead',
@@ -321,9 +339,10 @@ describe('Storage tab', () => {
       ]),
     );
     expect(screen.getByText(LONG_MAX)).toBeTruthy();
+    openKey('session_token');
     expect(screen.getByText(/read-only: looks like a credential/)).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(editButtons()).toHaveLength(0);
+    editKey('big');
     fireEvent.change(screen.getByRole('textbox', { name: 'New value of big' }), {
       target: { value: '9223372036854775806' },
     });
@@ -355,6 +374,9 @@ describe('Storage tab', () => {
     });
     expect(screen.getByRole('status').textContent).toMatch(/memory only/);
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+    // Changed in the app's memory only is not saved: no saved mark on the key, no tick.
+    expect(keyRow('big').hasAttribute('data-saved')).toBe(false);
+    expect(screen.getByRole('status').querySelector('.storage-tick')).toBeNull();
   });
 
   it('keeps a cut key read-only next to the key its prefix names (keyLength)', async () => {
@@ -372,14 +394,16 @@ describe('Storage tab', () => {
           { key: prefix, keyLength: 1030, value: { t: 'int', v: '3' } },
         ]),
       );
-      expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
-      expect(screen.getByText(/read-only: the key is too long to send whole/)).toBeTruthy();
-      expect(screen.getByText(/\(1030 chars\)/)).toBeTruthy();
       // No two rows share a React key (the cut one would otherwise collide with the other).
       expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
-      // The one Edit is the key itself, written as itself.
-      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-      fireEvent.change(screen.getAllByRole('textbox')[0]!, { target: { value: '4' } });
+      openKey(`${prefix}… (1030 chars)`);
+      expect(editButtons()).toHaveLength(0);
+      expect(screen.getByText(/read-only: the key is too long to send whole/)).toBeTruthy();
+      // The editable one is the key itself, written as itself.
+      openKey(prefix);
+      expect(editButtons()).toHaveLength(1);
+      fireEvent.click(editButtons()[0]!);
+      fireEvent.change(screen.getAllByRole('textbox').at(-1)!, { target: { value: '4' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
       const write = sent.at(-1) as Extract<ClientMessage, { type: 'storageWrite' }>;
       expect(write.write).toMatchObject({ key: prefix, expected: { t: 'int', v: '3' } });
@@ -394,8 +418,9 @@ describe('Storage tab', () => {
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }]));
-    expect(screen.getByText(/Read only \(--allow-storage-write is off\)/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.getByText('Read only')).toBeTruthy();
+    openKey('count');
+    expect(editButtons()).toHaveLength(0);
   });
 
   it('drops an answer for a target that is no longer shown: a slow read of A never edits B', async () => {
@@ -404,17 +429,20 @@ describe('Storage tab', () => {
     await answer(listOf(['prefs_a', 'prefs_b']));
     fireEvent.click(screen.getByRole('button', { name: 'prefs_a' }));
     const readA = lastId();
+    // Back to the stores, then B: A's read is of an older generation.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('button', { name: 'prefs_b' }));
     await answer(BUSY);
     // A's answer comes last: it is not shown under B, so nothing of it can be edited.
     await answerTo(readA, prefsOf('prefs_a', [{ key: 'count', value: { t: 'int', v: '3' } }]));
     expect(screen.queryByTestId('storage-prefs')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(editButtons()).toHaveLength(0);
     expect(writes()).toHaveLength(0);
     // B read for real: its own values, written to B.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('button', { name: 'prefs_b' }));
     await answer(prefsOf('prefs_b', [{ key: 'count', value: { t: 'int', v: '5' } }]));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    editKey('count');
     fireEvent.change(screen.getByRole('textbox', { name: 'New value of count' }), { target: { value: '6' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(writes().at(-1)).toMatchObject({
@@ -428,6 +456,7 @@ describe('Storage tab', () => {
     await answer(listOf([], ['x.db', 'y.db']));
     fireEvent.click(screen.getByRole('button', { name: 'x.db' }));
     const schemaX = lastId();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('button', { name: 'y.db' }));
     await answer(schemaOf('y.db', ['y_table']));
     await answerTo(schemaX, schemaOf('x.db', ['x_table']));
@@ -449,7 +478,7 @@ describe('Storage tab', () => {
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }]));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    editKey('count');
     const input = screen.getByRole('textbox', { name: 'New value of count' });
     fireEvent.change(input, { target: { value: '4' } });
     const form = input.closest('form')!;
@@ -464,7 +493,7 @@ describe('Storage tab', () => {
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }]));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    editKey('count');
     fireEvent.change(screen.getByRole('textbox', { name: 'New value of count' }), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await answer({
@@ -493,22 +522,24 @@ describe('Storage tab', () => {
     await setSession({ status: 'idle' });
     await setSession({});
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(editButtons()).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'p' })).toBeNull();
     // Another app (or the same one restarted: another pid) on the same device: the same.
     fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }]));
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeTruthy();
+    openKey('count');
+    expect(screen.getByRole('button', { name: 'Edit count' })).toBeTruthy();
     await setSession({ packageName: 'com.example.other' });
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(editButtons()).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }]));
+    openKey('count');
     await setSession({ packageName: 'com.example.other', pid: 4321 });
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(editButtons()).toHaveLength(0);
     expect(writes()).toHaveLength(1);
   });
 
@@ -520,7 +551,8 @@ describe('Storage tab', () => {
     await answer(
       prefsOf('p', [{ key: 'count', value: { t: 'int', v: '3' } }], { target: { ...TARGET, link: 2 } }),
     );
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    openKey('count');
+    expect(editButtons()).toHaveLength(0);
     expect(screen.getByText(/SDK link changed/)).toBeTruthy();
   });
 
@@ -555,7 +587,8 @@ describe('Storage tab', () => {
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'kkk', keyLength: 5000, value: { t: 'int', v: '1' } }]));
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    openKey('kkk… (5000 chars)');
+    expect(editButtons()).toHaveLength(0);
     expect(screen.getByText(/key is too long/)).toBeTruthy();
   });
 
@@ -598,7 +631,7 @@ describe('Storage tab', () => {
     await answer(listOf(['p']));
     fireEvent.click(screen.getByRole('button', { name: 'p' }));
     await answer(prefsOf('p', [{ key: 'name', value: { t: 'string', v: 'Ana' } }]));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    editKey('name');
     fireEvent.change(screen.getByRole('textbox', { name: 'New value of name' }), { target: { value: 'Bo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     const base = {
@@ -615,8 +648,108 @@ describe('Storage tab', () => {
       outcome: { ...base, phase: 'provisional', persisted: 'timeout' },
     });
     expect(screen.getByRole('status').textContent).toMatch(/still running/);
+    // Provisional: not saved yet, no mark.
+    expect(screen.getByRole('status').querySelector('.storage-tick')).toBeNull();
     await late({ ...base, phase: 'final', persisted: true });
     expect(screen.getByRole('status').textContent).not.toMatch(/still running/);
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('opens a database table as a grid, a row in a sheet, and edits one value at a time', async () => {
+    const { answer, writes } = setup('read_write');
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await answer(listOf([], ['shop.db']));
+    fireEvent.click(screen.getByRole('button', { name: 'shop.db' }));
+    await answer(schemaOf('shop.db', ['item']));
+    fireEvent.click(screen.getByRole('button', { name: 'item' }));
+    await answer(pageOf('shop.db', 'item', 'Bread'));
+    expect(screen.getByRole('table')).toBeTruthy();
+    fireEvent.click(screen.getByText('Bread').closest('tr')!);
+    // The key is never editable; one field is edited at a time.
+    expect(screen.queryByRole('button', { name: 'Edit id' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+    expect(screen.getByRole('textbox', { name: 'New value of v' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Delete/ })).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), { target: { value: 'Rye' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(writes().at(-1)).toMatchObject({
+      write: {
+        store: 'db',
+        name: 'shop.db',
+        op: 'update',
+        table: 'item',
+        column: 'v',
+        pk: [{ t: 'integer', v: '1' }],
+        expected: { t: 'string', v: 'Bread' },
+        value: { t: 'string', v: 'Rye' },
+      },
+    });
+    await answer({
+      ok: true,
+      kind: 'write',
+      target: TARGET,
+      outcome: {
+        opId: 'o2',
+        code: 'ok',
+        phase: 'final',
+        late: false,
+        changes: 1,
+        observers: 'room_invalidation',
+      },
+    });
+    // The page is read again after the write.
+    await answer(pageOf('shop.db', 'item', 'Rye'));
+    const row = screen.getByText('Rye', { selector: 'td' }).closest('tr')!;
+    expect(row.hasAttribute('data-saved')).toBe(true);
+    expect(row.querySelector('td[data-changed]')?.textContent).toBe('Rye');
+    expect(screen.getByRole('status').querySelector('.storage-tick')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(/Room was told the table changed/);
+  });
+
+  it('marks nothing saved for a late final outcome of a timed-out write', async () => {
+    const { answer } = setup('read_write');
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await answer(listOf([], ['shop.db']));
+    fireEvent.click(screen.getByRole('button', { name: 'shop.db' }));
+    await answer(schemaOf('shop.db', ['item']));
+    fireEvent.click(screen.getByRole('button', { name: 'item' }));
+    await answer(pageOf('shop.db', 'item', 'Bread'));
+    fireEvent.click(screen.getByText('Bread').closest('tr')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), { target: { value: 'Rye' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await answer({
+      ok: true,
+      kind: 'write',
+      target: TARGET,
+      outcome: { opId: 'o3', code: 'ok', phase: 'final', late: true, changes: 1 },
+    });
+    await answer(pageOf('shop.db', 'item', 'Rye'));
+    expect(screen.getByText('Rye', { selector: 'td' }).closest('tr')!.hasAttribute('data-saved')).toBe(false);
+    expect(screen.getByRole('status').textContent).toMatch(/after the request had timed out/);
+  });
+
+  it('groups read-only tables, collapsed, with a short reason and the whole one on hover', async () => {
+    const { answer } = setup('read_write');
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await answer(listOf([], ['shop.db']));
+    fireEvent.click(screen.getByRole('button', { name: 'shop.db' }));
+    const schema = schemaOf('shop.db', ['item', 'item_names']) as Extract<
+      StorageResponse,
+      { kind: 'schema' }
+    >;
+    schema.tables[1]!.readOnly = 'view';
+    await answer(schema);
+    expect(screen.getByRole('button', { name: 'item' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /item_names/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Show/ }));
+    const view = screen.getByRole('button', { name: /item_names/ });
+    expect(view.textContent).toContain('view');
+    expect(view.getAttribute('title')).toMatch(/read-only: a view/);
+    // A filter shows matching tables of both groups.
+    fireEvent.click(screen.getByRole('button', { name: /Hide/ }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'names' } });
+    expect(screen.queryByRole('button', { name: 'item' })).toBeNull();
+    expect(screen.getByRole('button', { name: /item_names/ })).toBeTruthy();
   });
 });

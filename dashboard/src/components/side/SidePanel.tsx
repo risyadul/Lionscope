@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
@@ -70,6 +70,13 @@ export function SidePanel({
     inspector: inspectorCount,
   };
   const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, storage, inspector };
+  // The strip scrolls when the column is narrow: the selected tab is kept in view (its label never ends up cut off).
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    strip.current
+      ?.querySelector<HTMLElement>(`#side-tab-${tab}`)
+      ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [tab]);
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -111,7 +118,7 @@ export function SidePanel({
 
   return (
     <aside className="side" aria-label="Screens, stalls, layouts, network, state, storage and inspector">
-      <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
+      <div ref={strip} className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
         {TABS.map((t) => (
           <button
             key={t.id}

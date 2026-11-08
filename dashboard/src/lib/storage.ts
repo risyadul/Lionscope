@@ -144,6 +144,38 @@ export function readOnlyText(reason: string): string {
   return READ_ONLY_TEXT[bare] ?? bare.replace(/_/g, ' ');
 }
 
+const READ_ONLY_CHIP: Record<string, string> = {
+  no_explicit_pk: 'no key',
+  pk_column: 'key',
+  view: 'view',
+  virtual: 'virtual',
+  deferred_fk: 'deferred FK',
+  defer_foreign_keys: 'deferred FK',
+  internal: 'internal',
+  redacted: 'credential',
+  truncated: 'too long',
+};
+
+/** A read-only reason in a word or two, for a chip next to the name (readOnlyText says it whole). */
+export function readOnlyChip(reason: string): string {
+  const bare = reason.startsWith('read_only:') ? reason.slice('read_only:'.length) : reason;
+  const what = bare.startsWith('unsupported:') ? bare.slice('unsupported:'.length) : bare;
+  return READ_ONLY_CHIP[what] ?? what.replace(/_/g, ' ');
+}
+
+/**
+ * Whether a write's outcome may be shown as saved (a mark on the row it changed): an `ok` final answer, in time,
+ * and for prefs written to disk. A change in the app's memory only, a provisional or a late answer is not.
+ */
+export function showsSaved(outcome: StorageWriteOutcome): boolean {
+  return (
+    outcome.code === 'ok' &&
+    outcome.phase === 'final' &&
+    !outcome.late &&
+    (outcome.persisted === undefined || outcome.persisted === true)
+  );
+}
+
 /** Why a cell of a page can't be edited (null: it can). */
 export function cellReadOnly(page: StoragePage, column: string, value: StorageValue): string | null {
   if (page.readOnly) return readOnlyText(page.readOnly);

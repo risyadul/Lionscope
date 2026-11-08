@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type {
   StorageAuditEntry,
   StorageConsent,
@@ -24,8 +24,10 @@ import {
   isEditable,
   outcomeText,
   parseValue,
+  readOnlyChip,
   readOnlyText,
   sameTarget,
+  showsSaved,
 } from '../../lib/storage.ts';
 import type { StorageAnswer, StorageOutcomeNotice } from '../../lib/store.ts';
 import './storage.css';
@@ -61,7 +63,7 @@ interface DbView {
 }
 
 interface Editing {
-  /** prefs key, or `row:column` of a page cell. */
+  /** `k:` prefs key (and its cut length), or `row:column` of a page cell: one field at a time. */
   id: string;
   text: string;
   error: string | null;
@@ -69,7 +71,14 @@ interface Editing {
 
 interface LastWrite {
   outcome: StorageWriteOutcome;
+  /** What was sent: the row or key it names gets the saved mark when the outcome allows it. */
+  write: StorageWriteInput;
+  /** Counts writes, so the mark plays again for a second edit of the same row. */
+  seq: number;
 }
+
+/** The open row: a prefs entry (its id) or a page row (its index on the shown page). */
+type Sheet = { store: 'prefs'; id: string } | { store: 'db'; row: number };
 
 const PAGE_ROWS = 50;
 
@@ -129,6 +138,14 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const [lastWrite, setLastWrite] = useState<LastWrite | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [audit, setAudit] = useState<StorageAuditEntry[] | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [sheet, setSheet] = useState<Sheet | null>(null);
+  const [filter, setFilter] = useState('');
+  const [readOnlyOpen, setReadOnlyOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  /** Which way the last navigation went: the new level slides in from that side. */
+  const [direction, setDirection] = useState<'in' | 'out'>('in');
+  const writes = useRef(0);
 
   /** The view's generation: an answer to a request of an older one is dropped. */
   const generation = useRef(0);
@@ -140,6 +157,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     generation.current += 1;
     setEditing(null);
     setConfirmDelete(null);
+    setSheet(null);
     return generation.current;
   }, []);
 
@@ -169,6 +187,9 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     setPrefsView(null);
     setDbView(null);
     setLastWrite(null);
+    setAuditOpen(false);
+    setFilter('');
+    setDirection('out');
     const response = await run(gen, storage.list);
     if (response?.ok && response.kind === 'list') {
       setListing({
@@ -221,6 +242,9 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       setPrefsView(null);
       setDbView(null);
       setLastWrite(null);
+      setFilter('');
+      setReadOnlyOpen(false);
+      setDirection('in');
       if (next.store === 'prefs') return loadPrefs(gen, next.name, [null]);
       const response = await run(gen, () => storage.read({ store: 'db', name: next.name }));
       if (response?.ok && response.kind === 'schema') {
@@ -242,6 +266,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     async (name: string) => {
       if (!dbView) return;
       const gen = begin();
+      setDirection('in');
       const view = { ...dbView, table: name, page: null, cursors: [null] };
       setDbView(view);
       await loadPage(gen, view, name, [null]);
@@ -274,7 +299,10 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       try {
         const response = await run(gen, () => storage.write(write));
         if (gen !== generation.current) return;
-        if (response?.ok && response.kind === 'write') setLastWrite({ outcome: response.outcome });
+        if (response?.ok && response.kind === 'write') {
+          writes.current += 1;
+          setLastWrite({ outcome: response.outcome, write, seq: writes.current });
+        }
       } finally {
         writing.current = false;
       }
@@ -328,6 +356,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     const cells = shown.rows[row]?.cells ?? [];
     const digest = shown.rows[row]?.digest;
     if (!digest) return;
+    setSheet(null);
     void submit({
       store: 'db',
       name: view.name,
@@ -339,430 +368,992 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     });
   };
 
-  if (consent === 'off') {
-    return (
-      <section className="storage" aria-label="Storage">
-        <p className="storage-note" data-testid="storage-consent-off">
-          Storage is off. Start Lionscope with <code>--allow-storage-read</code> to read the app’s
-          SharedPreferences and the Room databases it registers (<code>Lionscope.trackDatabase</code>), and{' '}
-          <code>--allow-storage-write</code> as well to edit them.
-        </p>
-      </section>
-    );
-  }
-
   // A provisional answer shows its final outcome once that came (it carries no undo).
   const final =
     lastWrite?.outcome.phase === 'provisional'
       ? outcomes.find((notice) => notice.outcome.opId === lastWrite.outcome.opId)?.outcome
       : undefined;
-  const written = lastWrite && (final ? { outcome: final } : lastWrite);
+  const written: LastWrite | null = lastWrite && (final ? { ...lastWrite, outcome: final } : lastWrite);
   const shown = dbView?.page ?? null;
   const page = shown?.page ?? null;
   const pkMissing = page !== null && page.pk.some((key) => !page.columns.includes(key));
   // Only what the latest list answer's link shows may be edited (a reconnect makes another link).
   const stale = (target: StorageTarget) => listing !== null && !sameTarget(listing.target, target);
 
-  return (
-    <section className="storage" aria-label="Storage">
-      <div className="storage-head">
-        <button type="button" className="btn" onClick={() => void refresh()} disabled={busy || !isRunning}>
-          {listing ? 'Refresh' : 'Load storage'}
-        </button>
-        <button type="button" className="btn" onClick={() => void loadAudit()} disabled={busy || !isRunning}>
-          {audit ? 'Refresh audit' : 'Write audit'}
-        </button>
-        <span className="storage-meta">
-          {canWrite ? 'Read and edit' : 'Read only (--allow-storage-write is off)'}
-          {busy ? ' · working…' : ''}
-        </span>
-      </div>
-      {!isRunning && (
-        <p className="storage-note">
-          Start a profiling session of an app with the Lionscope SDK 0.13.0 or newer.
-        </p>
-      )}
-      {error && (
-        <p className="storage-error" role="alert">
-          {error}
-        </p>
-      )}
-      {written && (
-        <div className="storage-outcome" role="status" data-code={written.outcome.code}>
-          <span>{outcomeText(written.outcome)}</span>
-          {written.outcome.current && (
-            <span>
-              {' '}
-              Current value: <ValueText value={written.outcome.current} />
-            </span>
-          )}
-          {written.outcome.undo && (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => {
-                const undo = written.outcome.undo!;
-                setLastWrite(null);
-                void submit(undo);
-              }}
-            >
-              Undo
-            </button>
-          )}
+  /** The level shown: the stores, one prefs file or database (its keys or tables), a table's rows, the audit. */
+  const level: 'stores' | 'audit' | 'prefs' | 'tables' | 'rows' = auditOpen
+    ? 'audit'
+    : selected?.store === 'prefs'
+      ? 'prefs'
+      : selected?.store === 'db'
+        ? dbView?.table
+          ? 'rows'
+          : 'tables'
+        : 'stores';
+
+  /** Back to the stores: what was read of a file or database is dropped (the listing stays). */
+  const toStores = () => {
+    setDirection('out');
+    setInfoOpen(false);
+    setAuditOpen(false);
+    if (!selected) return;
+    begin();
+    setSelected(null);
+    setPrefsView(null);
+    setDbView(null);
+    setFilter('');
+  };
+
+  const back = () => {
+    if (level === 'rows' && dbView) {
+      setDirection('out');
+      setInfoOpen(false);
+      begin();
+      setFilter('');
+      return setDbView({ ...dbView, table: null, page: null, cursors: [null] });
+    }
+    toStores();
+  };
+
+  const openAudit = () => {
+    setDirection('in');
+    setAuditOpen(true);
+    void loadAudit();
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape') return;
+    if (editing) return setEditing(null);
+    if (infoOpen) return setInfoOpen(false);
+    if (sheet) {
+      setConfirmDelete(null);
+      return setSheet(null);
+    }
+  };
+
+  /** The saved mark: an outcome that allows it, on the key or row its write named. */
+  const savedPrefs = (key: string) =>
+    written !== null &&
+    showsSaved(written.outcome) &&
+    written.write.store === 'prefs' &&
+    written.write.key === key;
+  const savedRow = (cells: StorageValue[]) => {
+    if (written === null || !showsSaved(written.outcome) || written.write.store !== 'db' || !page)
+      return null;
+    if (written.write.op !== 'update' || written.write.table !== page.table) return null;
+    const pk = JSON.stringify(page.pk.map((key) => cells[page.columns.indexOf(key)]));
+    return pk === JSON.stringify(written.write.pk) ? written.write.column : null;
+  };
+
+  if (consent === 'off') {
+    return (
+      <section className="storage" aria-label="Storage">
+        <div className="storage-empty" data-testid="storage-consent-off">
+          <p className="storage-empty-title">Storage is off</p>
+          <p>
+            Start Lionscope with <code>--allow-storage-read</code> to read the app’s SharedPreferences and the
+            Room databases it registers (<code>Lionscope.trackDatabase</code>), and add{' '}
+            <code>--allow-storage-write</code> to edit them.
+          </p>
+          <pre className="storage-snippet mono">npx lionscope --allow-storage-read --allow-storage-write</pre>
         </div>
+      </section>
+    );
+  }
+
+  const outcome = written && (
+    <div className="storage-outcome" role="status" data-code={written.outcome.code}>
+      <span className="storage-outcome-text">
+        {showsSaved(written.outcome) && <TickIcon />}
+        {outcomeText(written.outcome)}
+        {written.outcome.current && (
+          <>
+            {' '}
+            Current value: <ValueText value={written.outcome.current} />
+          </>
+        )}
+      </span>
+      {written.outcome.undo && (
+        <button
+          type="button"
+          className="storage-link"
+          disabled={busy}
+          onClick={() => {
+            const undo = written.outcome.undo!;
+            setLastWrite(null);
+            void submit(undo);
+          }}
+        >
+          Undo
+        </button>
       )}
-      {listing && ((prefsView && stale(prefsView.target)) || (shown && stale(shown.target))) && (
-        <p className="storage-note" role="alert">
-          The app’s SDK link changed since the list was read (a reconnect or a restart): Refresh to edit
-          again.
-        </p>
-      )}
-      {listing && (
-        <div className="storage-targets">
-          <h3 className="overline">SharedPreferences</h3>
-          {listing.prefs.length === 0 && <p className="storage-note">No prefs files.</p>}
-          <ul>
-            {listing.prefs.map((file) => (
-              <li key={`p:${file.name}`}>
-                <button
-                  type="button"
-                  className="storage-target"
-                  aria-pressed={selected?.store === 'prefs' && selected.name === file.name}
-                  onClick={() => void open({ store: 'prefs', name: file.name })}
-                >
-                  {file.name}
-                  {file.backupOnly ? ' (backup only)' : ''}
-                </button>
-              </li>
-            ))}
+    </div>
+  );
+
+  /** Where each crumb leads: the stores, the database's tables, or nowhere (the level shown). */
+  const crumbs: { label: string; mono?: boolean; to: 'stores' | 'tables' | null }[] = [
+    { label: 'Storage', to: level === 'stores' ? null : 'stores' },
+  ];
+  if (level === 'audit') crumbs.push({ label: 'Write audit', to: null });
+  if (selected) crumbs.push({ label: selected.name, mono: true, to: level === 'rows' ? 'tables' : null });
+  if (level === 'rows' && dbView?.table) crumbs.push({ label: dbView.table, mono: true, to: null });
+
+  const query = filter.trim().toLowerCase();
+
+  let body: ReactNode;
+  if (level === 'audit') {
+    body = (
+      <div className="storage-group" data-testid="storage-audit">
+        <h3 className="storage-group-head">Writes of this server run, newest first (no values)</h3>
+        {audit === null ? (
+          <p className="storage-group-note">Reading…</p>
+        ) : audit.length === 0 ? (
+          <p className="storage-group-note">No writes yet.</p>
+        ) : (
+          <ul className="storage-audit">
+            {audit
+              .slice()
+              .reverse()
+              .map((entry) => (
+                <li key={`${entry.opId}:${entry.ts}:${entry.phase ?? ''}`} className="mono">
+                  {auditText(entry)}
+                </li>
+              ))}
           </ul>
-          {listing.prefsTruncated && <p className="storage-note">More files than listed.</p>}
-          <h3 className="overline">Databases</h3>
+        )}
+      </div>
+    );
+  } else if (!listing) {
+    body = (
+      <div className="storage-empty">
+        <p className="storage-empty-title">Read the app’s storage</p>
+        <p>
+          Its SharedPreferences files and the Room databases it registers, read through its own SDK link.
+          {canWrite ? ' Values can be edited.' : ''}
+        </p>
+        {!isRunning && (
+          <p className="storage-empty-note">
+            Start a profiling session of an app with the Lionscope SDK 0.13.0 or newer.
+          </p>
+        )}
+        <div className="storage-empty-actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void refresh()}
+            disabled={busy || !isRunning}
+          >
+            Load storage
+          </button>
+          <button type="button" className="btn" onClick={openAudit} disabled={busy}>
+            Write audit
+          </button>
+        </div>
+      </div>
+    );
+  } else if (level === 'stores') {
+    body = (
+      <>
+        <div className="storage-group">
+          <h3 className="storage-group-head">
+            SharedPreferences <span className="mono">{listing.prefs.length}</span>
+          </h3>
+          {listing.prefs.length === 0 && <p className="storage-group-note">No prefs files.</p>}
+          {listing.prefs.map((file) => (
+            <button
+              key={`p:${file.name}`}
+              type="button"
+              className="storage-row"
+              onClick={() => void open({ store: 'prefs', name: file.name })}
+            >
+              <PrefsIcon />
+              <span className="storage-row-name">{file.name}</span>
+              {file.backupOnly && <span className="storage-chip">backup only</span>}
+              <ChevronIcon />
+            </button>
+          ))}
+          {listing.prefsTruncated && <p className="storage-group-note">More files than listed.</p>}
+        </div>
+        <div className="storage-group">
+          <h3 className="storage-group-head">
+            Databases <span className="mono">{listing.databases.length}</span>
+          </h3>
           {listing.databases.length === 0 && (
-            <p className="storage-note">
-              None registered. The app registers them with Lionscope.trackDatabase.
+            <p className="storage-group-note">
+              None registered. The app registers them with <code>Lionscope.trackDatabase</code>.
             </p>
           )}
-          <ul>
-            {listing.databases.map((db) => (
-              <li key={`d:${db.name}`}>
-                <button
-                  type="button"
-                  className="storage-target"
-                  disabled={db.status !== 'ok'}
-                  title={db.status === 'ok' ? undefined : readOnlyText(db.status)}
-                  aria-pressed={selected?.store === 'db' && selected.name === db.name}
-                  onClick={() => void open({ store: 'db', name: db.name })}
-                >
-                  {db.name}
-                  {db.status !== 'ok' ? ` (${readOnlyText(db.status)})` : ''}
-                </button>
-              </li>
-            ))}
-          </ul>
+          {listing.databases.map((db) =>
+            db.status === 'ok' ? (
+              <button
+                key={`d:${db.name}`}
+                type="button"
+                className="storage-row"
+                onClick={() => void open({ store: 'db', name: db.name })}
+              >
+                <DatabaseIcon />
+                <span className="storage-row-name">{db.name}</span>
+                <ChevronIcon />
+              </button>
+            ) : (
+              <div
+                key={`d:${db.name}`}
+                className="storage-row"
+                aria-disabled="true"
+                title={readOnlyText(db.status)}
+              >
+                <DatabaseIcon />
+                <span className="storage-row-name">{db.name}</span>
+                <span className="storage-chip" data-tone="warn">
+                  {readOnlyText(db.status)}
+                </span>
+              </div>
+            ),
+          )}
         </div>
-      )}
-      {prefsView && (
-        <div className="storage-body" data-testid="storage-prefs">
-          <p className="storage-note">
-            Values as the app holds them in memory (its own SharedPreferences instance, main process only),
-            not necessarily what is on disk.
+        <div className="storage-group">
+          <h3 className="storage-group-head">This server run</h3>
+          <button type="button" className="storage-row" onClick={openAudit} disabled={!isRunning}>
+            <AuditIcon />
+            <span>Write audit</span>
+            <ChevronIcon />
+          </button>
+          {outcomes.length > 0 && (
+            <div className="storage-late">
+              <p className="storage-group-note">Final outcomes after the answer</p>
+              <ul>
+                {outcomes
+                  .slice()
+                  .reverse()
+                  .map(({ serial, outcome: late }) => (
+                    <li key={`${serial}:${late.opId}`} className="mono">
+                      {late.opId.slice(0, 8)} · {outcomeText(late)}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </>
+    );
+  } else if (level === 'prefs') {
+    const entries = (prefsView?.entries ?? []).filter((entry) => entry.key.toLowerCase().includes(query));
+    body = prefsView && (
+      <div className="storage-group" data-testid="storage-prefs">
+        <h3 className="storage-group-head">
+          Keys <span className="mono">{prefsView.entries.length}</span>
+          <span className="storage-group-aside">as the app holds them in memory</span>
+        </h3>
+        {entries.map((entry) => {
+          const keyCut = entry.keyLength !== undefined;
+          const id = keyCut ? `k:${entry.key}:${entry.keyLength}` : `k:${entry.key}`;
+          const open = sheet?.store === 'prefs' && sheet.id === id;
+          return (
+            <button
+              key={`${id}:${savedPrefs(entry.key) ? written?.seq : 0}`}
+              type="button"
+              className="storage-row storage-row--entry"
+              aria-pressed={open}
+              data-saved={savedPrefs(entry.key) || undefined}
+              onClick={() => setSheet({ store: 'prefs', id })}
+            >
+              <span className="storage-row-name">
+                {entry.key}
+                {keyCut ? `… (${entry.keyLength} chars)` : ''}
+              </span>
+              <span className="storage-row-value mono" data-type={entry.value.t}>
+                {displayValue(entry.value)}
+              </span>
+            </button>
+          );
+        })}
+        {entries.length === 0 && <p className="storage-group-note">No key matches.</p>}
+      </div>
+    );
+  } else if (level === 'tables') {
+    const tables = (dbView?.tables ?? []).filter((table) => table.name.toLowerCase().includes(query));
+    const editable = tables.filter((table) => !table.readOnly);
+    const readOnly = tables.filter((table) => table.readOnly);
+    const showReadOnly = readOnlyOpen || query !== '';
+    body = dbView && (
+      <>
+        <div className="storage-group">
+          <h3 className="storage-group-head">
+            {canWrite ? 'Editable' : 'Tables'} <span className="mono">{editable.length}</span>
+          </h3>
+          {editable.map((table) => (
+            <button
+              key={table.name}
+              type="button"
+              className="storage-row"
+              onClick={() => void openTable(table.name)}
+            >
+              <TableIcon />
+              <span className="storage-row-name">{table.name}</span>
+              <ChevronIcon />
+            </button>
+          ))}
+          {editable.length === 0 && <p className="storage-group-note">None.</p>}
+        </div>
+        {readOnly.length > 0 && (
+          <div className="storage-group" data-collapsed={showReadOnly ? undefined : ''}>
+            <h3 className="storage-group-head">
+              Read-only <span className="mono">{readOnly.length}</span>
+              <button
+                type="button"
+                className="storage-group-toggle"
+                aria-expanded={showReadOnly}
+                onClick={() => setReadOnlyOpen(!readOnlyOpen)}
+                disabled={query !== ''}
+              >
+                <DisclosureIcon />
+                {showReadOnly ? 'Hide' : 'Show'}
+              </button>
+            </h3>
+            {showReadOnly &&
+              readOnly.map((table) => (
+                <button
+                  key={table.name}
+                  type="button"
+                  className="storage-row"
+                  title={`read-only: ${readOnlyText(table.readOnly!)}`}
+                  onClick={() => void openTable(table.name)}
+                >
+                  <TableIcon />
+                  <span className="storage-row-name">{table.name}</span>
+                  <span className="storage-chip">
+                    <LockIcon />
+                    {readOnlyChip(table.readOnly!)}
+                  </span>
+                  <ChevronIcon />
+                </button>
+              ))}
+          </div>
+        )}
+        {dbView.tablesTruncated && <p className="storage-group-note">More tables than listed.</p>}
+      </>
+    );
+  } else {
+    body = shown && page && dbView && (
+      <>
+        {page.readOnly && (
+          <p className="storage-banner">
+            <span className="storage-chip">
+              <LockIcon />
+              {readOnlyChip(page.readOnly)}
+            </span>
+            Read-only: {readOnlyText(page.readOnly)}.
           </p>
-          <table className="storage-table">
+        )}
+        <div className="storage-grid-wrap">
+          <table className="storage-grid">
             <thead>
               <tr>
-                <th>Key</th>
-                <th>Type</th>
-                <th>Value</th>
+                {page.columns.map((column) => {
+                  const type = dbView.tables
+                    .find((table) => table.name === page.table)
+                    ?.columns.find((candidate) => candidate.name === column)?.type;
+                  return (
+                    <th key={column} scope="col">
+                      <span className={page.pk.includes(column) ? 'storage-key' : undefined}>
+                        {page.pk.includes(column) && <KeyIcon />}
+                        {column}
+                        {page.pk.includes(column) && <span className="sr-only"> (key)</span>}
+                      </span>
+                      {type && <small>{type}</small>}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {prefsView.entries.map((entry) => {
-                // A cut key shows the same text as the key its prefix names: keyLength keeps the two apart.
-                const keyCut = entry.keyLength !== undefined;
-                const id = keyCut ? `k:${entry.key}:${entry.keyLength}` : `k:${entry.key}`;
-                const editable = canWrite && !keyCut && !stale(prefsView.target) && isEditable(entry.value);
+              {page.rows.map((row, rowIndex) => {
+                const savedColumn = savedRow(row.cells);
                 return (
-                  <tr key={id}>
-                    <td className="mono">
-                      {entry.key}
-                      {keyCut ? `… (${entry.keyLength} chars)` : ''}
-                    </td>
-                    <td className="storage-type">{typeLabel(entry.value)}</td>
-                    <td>
-                      {editing?.id === id ? (
-                        <form
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            savePrefs(prefsView, entry);
-                          }}
+                  <tr
+                    key={`${rowIndex}:${savedColumn !== null ? written?.seq : 0}`}
+                    tabIndex={0}
+                    aria-selected={sheet?.store === 'db' && sheet.row === rowIndex}
+                    data-saved={savedColumn !== null || undefined}
+                    onClick={() => setSheet({ store: 'db', row: rowIndex })}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSheet({ store: 'db', row: rowIndex });
+                      }
+                    }}
+                  >
+                    {row.cells.map((cell, columnIndex) => {
+                      const column = page.columns[columnIndex] ?? '';
+                      return (
+                        <td
+                          key={column}
+                          data-type={cell.t}
+                          data-changed={savedColumn === column || undefined}
                         >
-                          <input
-                            aria-label={`New value of ${entry.key}`}
-                            className="mono"
-                            value={editing.text}
-                            onChange={(event) =>
-                              setEditing({ ...editing, text: event.target.value, error: null })
-                            }
-                            autoFocus
-                          />
-                          <button type="submit" className="btn" disabled={busy}>
-                            Save
-                          </button>
-                          <button type="button" className="btn" onClick={() => setEditing(null)}>
-                            Cancel
-                          </button>
-                          {editing.error && <span className="storage-error">{editing.error}</span>}
-                        </form>
-                      ) : (
-                        <>
-                          <ValueText value={entry.value} />
-                          {editable ? (
-                            <button
-                              type="button"
-                              className="btn storage-edit"
-                              disabled={busy}
-                              onClick={() => setEditing({ id, text: editText(entry.value), error: null })}
-                            >
-                              Edit
-                            </button>
-                          ) : keyCut ? (
-                            <span className="storage-reason">
-                              read-only: the key is too long to send whole
-                            </span>
-                          ) : entry.value.t === 'redacted' ? (
-                            <span className="storage-reason">read-only: {readOnlyText('redacted')}</span>
-                          ) : (
-                            !isEditable(entry.value) &&
-                            canWrite && (
-                              <span className="storage-reason">
-                                read-only:{' '}
-                                {entry.value.t === 'stringSet' && entry.value.complete === false
-                                  ? readOnlyText('truncated')
-                                  : entry.value.t === 'string'
-                                    ? readOnlyText('truncated')
-                                    : 'sets are edited from an agent (write_storage)'}
-                              </span>
-                            )
-                          )}
-                        </>
-                      )}
-                    </td>
+                          {displayValue(cell)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          <div className="storage-paging">
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || prefsView.cursors.length < 2}
-              onClick={() => {
-                const gen = begin();
-                void loadPrefs(gen, prefsView.name, prefsView.cursors.slice(0, -1));
-              }}
-            >
-              Previous
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || prefsView.nextCursor === null}
-              onClick={() => {
-                const gen = begin();
-                void loadPrefs(gen, prefsView.name, [...prefsView.cursors, prefsView.nextCursor]);
-              }}
-            >
-              Next
-            </button>
-            {prefsView.truncated && (
-              <span className="storage-note">Keys cut to stay under the answer size: Next continues.</span>
-            )}
-            {prefsView.nextCursor !== null && !prefsView.truncated && (
-              <span className="storage-note">More keys: Next continues.</span>
+          {page.rows.length === 0 && <p className="storage-group-note">No rows.</p>}
+        </div>
+      </>
+    );
+  }
+
+  const pager =
+    level === 'rows' && dbView && page ? (
+      <Pager
+        label={`${page.rows.length} ${page.rows.length === 1 ? 'row' : 'rows'}`}
+        note={page.truncated ? 'Rows or values cut to stay under the answer size: Next continues.' : null}
+        canPrevious={!busy && dbView.cursors.length > 1}
+        canNext={!busy && page.nextCursor !== null}
+        onPrevious={() => void loadPage(begin(), dbView, page.table, dbView.cursors.slice(0, -1))}
+        onNext={() => void loadPage(begin(), dbView, page.table, [...dbView.cursors, page.nextCursor])}
+      />
+    ) : level === 'prefs' && prefsView ? (
+      <Pager
+        label={`${prefsView.entries.length} ${prefsView.entries.length === 1 ? 'key' : 'keys'}`}
+        note={
+          prefsView.truncated
+            ? 'Keys cut to stay under the answer size: Next continues.'
+            : prefsView.nextCursor !== null
+              ? 'More keys: Next continues.'
+              : null
+        }
+        canPrevious={!busy && prefsView.cursors.length > 1}
+        canNext={!busy && prefsView.nextCursor !== null}
+        onPrevious={() => void loadPrefs(begin(), prefsView.name, prefsView.cursors.slice(0, -1))}
+        onNext={() => void loadPrefs(begin(), prefsView.name, [...prefsView.cursors, prefsView.nextCursor])}
+      />
+    ) : null;
+
+  // The open row's sheet: every field, one edited at a time, its write's outcome under it.
+  let sheetBody: ReactNode = null;
+  if (sheet?.store === 'prefs' && prefsView) {
+    const entry = prefsView.entries.find(
+      (candidate) =>
+        (candidate.keyLength !== undefined
+          ? `k:${candidate.key}:${candidate.keyLength}`
+          : `k:${candidate.key}`) === sheet.id,
+    );
+    if (entry) {
+      const keyCut = entry.keyLength !== undefined;
+      const editable = canWrite && !keyCut && !stale(prefsView.target) && isEditable(entry.value);
+      const reason = keyCut
+        ? 'the key is too long to send whole'
+        : entry.value.t === 'redacted'
+          ? readOnlyText('redacted')
+          : !isEditable(entry.value)
+            ? entry.value.t === 'stringSet' && entry.value.complete !== false
+              ? 'sets are edited from an agent (write_storage)'
+              : readOnlyText('truncated')
+            : null;
+      sheetBody = (
+        <>
+          <SheetHead
+            title="Key"
+            detail={keyCut ? `${entry.key}… (${entry.keyLength} chars)` : entry.key}
+            onClose={() => setSheet(null)}
+          />
+          <div className="storage-fields">
+            <Field label="value" type={typeLabel(entry.value)}>
+              {editing?.id === sheet.id ? (
+                <ValueEditor
+                  label={entry.key}
+                  editing={editing}
+                  busy={busy}
+                  onChange={setEditing}
+                  onSave={() => savePrefs(prefsView, entry)}
+                />
+              ) : (
+                <FieldValue
+                  value={entry.value}
+                  editLabel={editable ? `Edit ${entry.key}` : null}
+                  disabled={busy || editing !== null}
+                  onEdit={() => setEditing({ id: sheet.id, text: editText(entry.value), error: null })}
+                  reason={canWrite || keyCut || entry.value.t === 'redacted' ? reason : null}
+                />
+              )}
+            </Field>
+          </div>
+          <div className="storage-sheet-foot">{outcome}</div>
+        </>
+      );
+    }
+  } else if (sheet?.store === 'db' && page && shown && dbView) {
+    const row = page.rows[sheet.row];
+    if (row) {
+      const keyText = page.pk
+        .map((key) => `${key} = ${displayValue(row.cells[page.columns.indexOf(key)] ?? { t: 'null' })}`)
+        .join(', ');
+      const canDelete = canWrite && !page.readOnly && row.digest && !pkMissing && !stale(shown.target);
+      sheetBody = (
+        <>
+          <SheetHead title="Row" detail={keyText || `#${sheet.row + 1}`} onClose={() => setSheet(null)} />
+          <div className="storage-fields">
+            {row.cells.map((cell, columnIndex) => {
+              const column = page.columns[columnIndex] ?? '';
+              const id = `${sheet.row}:${column}`;
+              const reason = cellReadOnly(page, column, cell);
+              const editable = canWrite && reason === null && !pkMissing && !stale(shown.target);
+              const type = dbView.tables
+                .find((table) => table.name === page.table)
+                ?.columns.find((candidate) => candidate.name === column)?.type;
+              return (
+                <Field
+                  key={column}
+                  label={column}
+                  type={page.pk.includes(column) ? `key · ${type ?? cell.t}` : (type ?? cell.t)}
+                >
+                  {editing?.id === id ? (
+                    <ValueEditor
+                      label={column}
+                      editing={editing}
+                      busy={busy}
+                      onChange={setEditing}
+                      onSave={() => saveCell(dbView, page, shown.target, sheet.row, column)}
+                    />
+                  ) : (
+                    <FieldValue
+                      value={cell}
+                      editLabel={editable ? `Edit ${column}` : null}
+                      disabled={busy || editing !== null}
+                      onEdit={() => setEditing({ id, text: editText(cell), error: null })}
+                      reason={canWrite && !page.pk.includes(column) && !page.readOnly ? reason : null}
+                    />
+                  )}
+                </Field>
+              );
+            })}
+            {canWrite && pkMissing && (
+              <p className="storage-group-note">
+                Read-only here: the primary key columns are not on this page.
+              </p>
             )}
           </div>
+          <div className="storage-sheet-foot">
+            {outcome}
+            {canDelete && (
+              <button
+                type="button"
+                className="btn storage-delete"
+                data-armed={confirmDelete === sheet.row || undefined}
+                disabled={busy}
+                onClick={() =>
+                  confirmDelete === sheet.row
+                    ? deleteRow(dbView, page, shown.target, sheet.row)
+                    : setConfirmDelete(sheet.row)
+                }
+              >
+                {confirmDelete === sheet.row ? `Delete ${keyText}?` : 'Delete row'}
+              </button>
+            )}
+          </div>
+        </>
+      );
+    }
+  }
+
+  const levelKey = `${level}:${selected?.name ?? ''}:${dbView?.table ?? ''}`;
+
+  return (
+    <section className="storage" aria-label="Storage" onKeyDown={onKeyDown}>
+      <header className="storage-head">
+        <button
+          type="button"
+          className="storage-icon-btn"
+          aria-label="Back"
+          disabled={level === 'stores'}
+          onClick={back}
+        >
+          <BackIcon />
+        </button>
+        <nav className="storage-crumbs" aria-label="Location">
+          {crumbs.map((crumb, index) => (
+            <span key={`${index}:${crumb.label}`} className="storage-crumb-item">
+              {index > 0 && <span className="storage-crumb-sep">/</span>}
+              <button
+                type="button"
+                className={`storage-crumb${crumb.mono ? ' mono' : ''}`}
+                aria-current={index === crumbs.length - 1 ? 'page' : undefined}
+                disabled={crumb.to === null}
+                onClick={() => (crumb.to === 'stores' ? toStores() : back())}
+              >
+                {crumb.label}
+              </button>
+            </span>
+          ))}
+        </nav>
+        <span
+          className="storage-mode"
+          data-mode={canWrite ? 'edit' : 'read'}
+          title={
+            canWrite
+              ? 'Values can be edited'
+              : 'Started without --allow-storage-write: values can’t be edited'
+          }
+        >
+          <i aria-hidden="true" />
+          {canWrite ? 'Edit' : 'Read only'}
+        </span>
+        <button
+          type="button"
+          className="storage-icon-btn"
+          aria-label="How reads and edits reach the app"
+          aria-expanded={infoOpen}
+          onClick={() => setInfoOpen(!infoOpen)}
+        >
+          <InfoIcon />
+        </button>
+        <button
+          type="button"
+          className="storage-icon-btn"
+          aria-label="Refresh"
+          data-busy={busy || undefined}
+          disabled={busy || !isRunning || !listing}
+          onClick={() => void (level === 'audit' ? loadAudit() : level === 'stores' ? refresh() : reload())}
+        >
+          <RefreshIcon />
+        </button>
+      </header>
+      {infoOpen && (
+        <div className="storage-pop" role="dialog" aria-label="How reads and edits reach the app">
+          <p>
+            <b>Reads</b> run in the app’s own transaction, one request at a time: consistent within that read
+            only, and the app’s database writers wait while it runs (a budget of 250 ms, checked between
+            statements: a slow statement can run past it). Prefs are the app’s own instance in memory, main
+            process only, not necessarily what is on disk.
+          </p>
+          <p>
+            <b>Edits</b> are compare-and-set: refused with the current value when the app changed it since it
+            was read. One value per edit; Undo is offered from the answer, on the same link only.
+          </p>
         </div>
       )}
-      {dbView && (
-        <div className="storage-body">
-          <ul className="storage-tables">
-            {dbView.tables.map((candidate) => (
-              <li key={candidate.name}>
-                <button
-                  type="button"
-                  className="storage-target"
-                  aria-pressed={dbView.table === candidate.name}
-                  onClick={() => void openTable(candidate.name)}
-                >
-                  {candidate.name}
-                </button>
-                {candidate.readOnly && (
-                  <span className="storage-reason">read-only: {readOnlyText(candidate.readOnly)}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {dbView.tablesTruncated && <p className="storage-note">More tables than listed.</p>}
-          {shown && page && (
-            <>
-              <p className="storage-note">
-                Read in one transaction: consistent within this read only. Reading holds the app’s database
-                writers while it runs (a budget of 250 ms, checked between statements: a slow statement can
-                run past it).
-                {page.readOnly ? ` Read-only: ${readOnlyText(page.readOnly)}.` : ''}
-              </p>
-              <table className="storage-table">
-                <thead>
-                  <tr>
-                    {page.columns.map((column) => (
-                      <th key={column} className="mono">
-                        {column}
-                        {page.pk.includes(column) ? ' (key)' : ''}
-                      </th>
-                    ))}
-                    {canWrite && !page.readOnly && <th aria-label="Row actions" />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {page.rows.map((row, rowIndex) => (
-                    <tr key={rowIndex}>
-                      {row.cells.map((cell, columnIndex) => {
-                        const column = page.columns[columnIndex] ?? '';
-                        const id = `${rowIndex}:${column}`;
-                        const reason = cellReadOnly(page, column, cell);
-                        return (
-                          <td key={id} title={reason ? `read-only: ${reason}` : typeLabel(cell)}>
-                            {editing?.id === id ? (
-                              <form
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  saveCell(dbView, page, shown.target, rowIndex, column);
-                                }}
-                              >
-                                <input
-                                  aria-label={`New value of ${column}`}
-                                  className="mono"
-                                  value={editing.text}
-                                  onChange={(event) =>
-                                    setEditing({ ...editing, text: event.target.value, error: null })
-                                  }
-                                  autoFocus
-                                />
-                                <button type="submit" className="btn" disabled={busy}>
-                                  Save
-                                </button>
-                                <button type="button" className="btn" onClick={() => setEditing(null)}>
-                                  Cancel
-                                </button>
-                                {editing.error && <span className="storage-error">{editing.error}</span>}
-                              </form>
-                            ) : canWrite && reason === null && !pkMissing && !stale(shown.target) ? (
-                              <button
-                                type="button"
-                                className="storage-cell"
-                                disabled={busy}
-                                onClick={() => setEditing({ id, text: editText(cell), error: null })}
-                              >
-                                <ValueText value={cell} />
-                              </button>
-                            ) : (
-                              <ValueText value={cell} />
-                            )}
-                          </td>
-                        );
-                      })}
-                      {canWrite && !page.readOnly && (
-                        <td>
-                          {row.digest && !pkMissing && !stale(shown.target) && (
-                            <button
-                              type="button"
-                              className="btn"
-                              disabled={busy}
-                              onClick={() =>
-                                confirmDelete === rowIndex
-                                  ? deleteRow(dbView, page, shown.target, rowIndex)
-                                  : setConfirmDelete(rowIndex)
-                              }
-                            >
-                              {confirmDelete === rowIndex ? 'Confirm delete' : 'Delete'}
-                            </button>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="storage-paging">
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={busy || dbView.cursors.length < 2}
-                  onClick={() => {
-                    const gen = begin();
-                    void loadPage(gen, dbView, page.table, dbView.cursors.slice(0, -1));
-                  }}
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={busy || page.nextCursor === null}
-                  onClick={() => {
-                    const gen = begin();
-                    void loadPage(gen, dbView, page.table, [...dbView.cursors, page.nextCursor]);
-                  }}
-                >
-                  Next
-                </button>
-                {page.truncated && (
-                  <span className="storage-note">
-                    Rows or values cut to stay under the answer size: Next continues.
-                  </span>
-                )}
-              </div>
-            </>
-          )}
+      {level === 'tables' || level === 'prefs' ? (
+        <div className="storage-toolbar">
+          <label className="storage-search">
+            <span className="sr-only">{level === 'tables' ? 'Filter tables' : 'Filter keys'}</span>
+            <SearchIcon />
+            <input
+              type="search"
+              value={filter}
+              placeholder={level === 'tables' ? 'Filter tables' : 'Filter keys on this page'}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setFilter(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && filter !== '') {
+                  event.stopPropagation();
+                  setFilter('');
+                }
+              }}
+            />
+          </label>
         </div>
+      ) : null}
+      {listing && !isRunning && (
+        <p className="storage-banner">
+          Start a profiling session of an app with the Lionscope SDK 0.13.0 or newer.
+        </p>
       )}
-      {audit && (
-        <div className="storage-audit" data-testid="storage-audit">
-          <h3 className="overline">Write audit (this server run, no values)</h3>
-          {audit.length === 0 ? (
-            <p className="storage-note">No writes yet.</p>
-          ) : (
-            <ul>
-              {audit
-                .slice()
-                .reverse()
-                .map((entry) => (
-                  <li key={`${entry.opId}:${entry.ts}:${entry.phase ?? ''}`} className="mono">
-                    {auditText(entry)}
-                  </li>
-                ))}
-            </ul>
-          )}
-        </div>
+      {error && (
+        <p className="storage-banner" data-tone="critical" role="alert">
+          {error}
+        </p>
       )}
-      {outcomes.length > 0 && (
-        <div className="storage-late">
-          <h3 className="overline">Final outcomes after the answer</h3>
-          <ul>
-            {outcomes
-              .slice()
-              .reverse()
-              .map(({ serial, outcome }) => (
-                <li key={`${serial}:${outcome.opId}`} className="mono">
-                  {outcome.opId.slice(0, 8)} · {outcomeText(outcome)}
-                </li>
-              ))}
-          </ul>
+      {listing && ((prefsView && stale(prefsView.target)) || (shown && stale(shown.target))) && (
+        <p className="storage-banner" role="alert">
+          The app’s SDK link changed since the list was read (a reconnect or a restart): Refresh to edit
+          again.
+        </p>
+      )}
+      <div className="storage-body" key={levelKey} data-direction={direction} aria-busy={busy || undefined}>
+        {body}
+      </div>
+      {pager}
+      {sheetBody ? (
+        <div className="storage-sheet" role="dialog" aria-label={sheet?.store === 'db' ? 'Row' : 'Key'}>
+          {sheetBody}
         </div>
+      ) : (
+        outcome && <div className="storage-foot">{outcome}</div>
       )}
     </section>
+  );
+}
+
+function ValueEditor({
+  label,
+  editing,
+  busy,
+  onChange,
+  onSave,
+}: {
+  label: string;
+  editing: Editing;
+  busy: boolean;
+  onChange: (editing: Editing | null) => void;
+  onSave: () => void;
+}) {
+  return (
+    <form
+      className="storage-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <input
+        aria-label={`New value of ${label}`}
+        className="mono"
+        value={editing.text}
+        spellCheck={false}
+        onChange={(event) => onChange({ ...editing, text: event.target.value, error: null })}
+        autoFocus
+      />
+      <button type="submit" className="btn btn--primary" disabled={busy}>
+        Save
+      </button>
+      <button type="button" className="btn" onClick={() => onChange(null)}>
+        Cancel
+      </button>
+      {editing.error && (
+        <span className="storage-error" role="alert">
+          {editing.error}
+        </span>
+      )}
+    </form>
+  );
+}
+
+function SheetHead({ title, detail, onClose }: { title: string; detail: string; onClose: () => void }) {
+  return (
+    <div className="storage-sheet-head">
+      <span className="storage-sheet-title">
+        {title} <span className="mono">{detail}</span>
+      </span>
+      <button type="button" className="storage-icon-btn" aria-label="Close" onClick={onClose}>
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
+function Field({ label, type, children }: { label: string; type: string; children: ReactNode }) {
+  return (
+    <div className="storage-field">
+      <span className="storage-field-label">
+        <span className="mono">{label}</span>
+        <small>{type}</small>
+      </span>
+      <div className="storage-field-body">{children}</div>
+    </div>
+  );
+}
+
+function FieldValue({
+  value,
+  editLabel,
+  disabled,
+  onEdit,
+  reason,
+}: {
+  value: StorageValue;
+  editLabel: string | null;
+  disabled: boolean;
+  onEdit: () => void;
+  reason: string | null;
+}) {
+  return (
+    <>
+      <ValueText value={value} />
+      {editLabel ? (
+        <button
+          type="button"
+          className="storage-edit"
+          aria-label={editLabel}
+          disabled={disabled}
+          onClick={onEdit}
+        >
+          <PencilIcon />
+          Edit
+        </button>
+      ) : (
+        reason && <span className="storage-reason">read-only: {reason}</span>
+      )}
+    </>
+  );
+}
+
+function Pager({
+  label,
+  note,
+  canPrevious,
+  canNext,
+  onPrevious,
+  onNext,
+}: {
+  label: string;
+  note: string | null;
+  canPrevious: boolean;
+  canNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="storage-pager">
+      <span className="mono">{label}</span>
+      {note && <span className="storage-pager-note">{note}</span>}
+      <span className="storage-pager-gap" />
+      <button
+        type="button"
+        className="storage-icon-btn"
+        aria-label="Previous"
+        disabled={!canPrevious}
+        onClick={onPrevious}
+      >
+        <BackIcon />
+      </button>
+      <button
+        type="button"
+        className="storage-icon-btn"
+        aria-label="Next"
+        disabled={!canNext}
+        onClick={onNext}
+      >
+        <ChevronIcon />
+      </button>
+    </div>
+  );
+}
+
+const stroke = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+} as const;
+
+function BackIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10 3.5 5.5 8l4.5 4.5" {...stroke} strokeWidth="1.6" />
+    </svg>
+  );
+}
+function ChevronIcon() {
+  return (
+    <svg className="storage-chevron" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="m6 3.5 4.5 4.5L6 12.5" {...stroke} strokeWidth="1.6" />
+    </svg>
+  );
+}
+function DisclosureIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="m3 4.5 3 3 3-3" {...stroke} strokeWidth="1.5" />
+    </svg>
+  );
+}
+function InfoIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.25" {...stroke} strokeWidth="1.4" />
+      <path d="M8 7.2v3.6M8 5.1v.1" {...stroke} strokeWidth="1.6" />
+    </svg>
+  );
+}
+function RefreshIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.8v2.6h-2.6" {...stroke} strokeWidth="1.5" />
+    </svg>
+  );
+}
+function SearchIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true">
+      <circle cx="5.5" cy="5.5" r="4.25" {...stroke} strokeWidth="1.5" />
+      <path d="m8.6 8.6 3.4 3.4" {...stroke} strokeWidth="1.5" />
+    </svg>
+  );
+}
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="m4 4 8 8M12 4l-8 8" {...stroke} strokeWidth="1.6" />
+    </svg>
+  );
+}
+function PencilIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10.5 3 13 5.5 6 12.5H3.5V10z" {...stroke} strokeWidth="1.4" />
+    </svg>
+  );
+}
+function TickIcon() {
+  return (
+    <svg className="storage-tick" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path d="m3 7.5 2.6 2.5L11 4.5" {...stroke} strokeWidth="1.8" />
+    </svg>
+  );
+}
+function KeyIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+      <circle cx="4" cy="6" r="2.4" {...stroke} strokeWidth="1.3" />
+      <path d="M6.4 6H11M9 6v1.8" {...stroke} strokeWidth="1.3" />
+    </svg>
+  );
+}
+function LockIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+      <rect x="2.5" y="5.5" width="7" height="5" rx="1" fill="currentColor" />
+      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" {...stroke} strokeWidth="1.3" />
+    </svg>
+  );
+}
+function PrefsIcon() {
+  return (
+    <svg className="storage-row-icon" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 2.5h5.5L12 5v8.5H4z" {...stroke} strokeWidth="1.3" />
+      <path d="M6 8h4M6 10.5h4" {...stroke} strokeWidth="1.3" />
+    </svg>
+  );
+}
+function DatabaseIcon() {
+  return (
+    <svg className="storage-row-icon" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <ellipse cx="8" cy="4" rx="4.75" ry="1.75" {...stroke} strokeWidth="1.3" />
+      <path
+        d="M3.25 4v8c0 1 2.1 1.75 4.75 1.75s4.75-.75 4.75-1.75V4M3.25 8c0 1 2.1 1.75 4.75 1.75S12.75 9 12.75 8"
+        {...stroke}
+        strokeWidth="1.3"
+      />
+    </svg>
+  );
+}
+function TableIcon() {
+  return (
+    <svg className="storage-row-icon" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" {...stroke} strokeWidth="1.3" />
+      <path d="M2.5 6.5h11M6.5 6.5V13" {...stroke} strokeWidth="1.3" />
+    </svg>
+  );
+}
+function AuditIcon() {
+  return (
+    <svg className="storage-row-icon" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 3.5h10M3 8h10M3 12.5h6" {...stroke} strokeWidth="1.3" />
+    </svg>
   );
 }
