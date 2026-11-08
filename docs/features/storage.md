@@ -7,6 +7,8 @@ an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit
 
 <!-- /docs:added -->
 
+<img width="880" alt="The dashboard with the sample's StorageActivity mirrored: the Storage tab shows shop.db's item table after Bread's qty was edited from 5 to 6, and on the device the screen observing the table through a Room Flow shows Flow #2 with Bread × 6 while the list loaded once still shows Bread × 5" src="../images/dashboard-storage.png">
+
 ## Turning it on
 
 Storage is off unless the server starts with it:
@@ -120,6 +122,8 @@ What an answer says, and does not:
   recorded (audit, dashboards, agent) even when both arrive together.
 - A **lost answer** is a `timeout`: the edit may have been applied. Read again before retrying; a retry of an edit
   that went through answers `already_applied_or_concurrent` and writes nothing.
+
+<img width="363" alt="Storage tab on the sample's edge.db: artist and track marked read-only because track declares a deferred foreign key to artist, and track's row shown with the same reason, so no edit control is offered" src="../images/dashboard-storage-readonly.png">
 
 SQLite and Android facts that show up as answers: a REAL cell cannot hold `-0.0` (written, read back as `0.0`,
 `normalized: true`) or NaN (`invalid_value:nan_not_storable`); prefs keep a single NaN (bits `0x7fc00000`), so another
