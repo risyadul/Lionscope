@@ -7,7 +7,7 @@ an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit
 
 <!-- /docs:added -->
 
-<img width="880" alt="The dashboard with the sample's StorageActivity mirrored: the Storage tab shows shop.db's item table as a grid and Bread's row open in a sheet after its qty was edited to 7, with the server's answer under it; on the device the screen observing the table through a Room Flow shows Bread × 7 while the list loaded once still shows Bread × 5" src="../images/dashboard-storage.png">
+<img width="880" alt="The dashboard with the sample's StorageActivity mirrored: the Storage tab shows shop.db's item table as a grid and Bread's row open in a sheet after its qty was edited to 7, with the server's answer under that field; on the device the screen observing the table through a Room Flow shows Bread × 7 while the list loaded once still shows Bread × 5" src="../images/dashboard-storage.png">
 
 ## Turning it on
 

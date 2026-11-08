@@ -213,7 +213,7 @@ export function outcomeText(outcome: StorageWriteOutcome): string {
   if (outcome.observers === 'room_invalidation') {
     parts.push('Room was told the table changed; screens that don’t observe it change when they reload');
   }
-  if (outcome.normalized) parts.push('SQLite stored it differently (shown is what it stored)');
+  if (outcome.normalized) parts.push('SQLite stored it differently');
   if (
     outcome.changes !== undefined &&
     outcome.totalChangesDelta !== undefined &&

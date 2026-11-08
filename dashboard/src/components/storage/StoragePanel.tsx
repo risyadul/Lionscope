@@ -62,11 +62,21 @@ interface DbView {
   cursors: (string | null)[];
 }
 
+type PrefsUpdate = Extract<StorageWriteInput, { store: 'prefs'; op: 'update' }>;
+type DbUpdate = Extract<StorageWriteInput, { store: 'db'; op: 'update' }>;
+
+/**
+ * A draft of one field. What it writes (the key, or the row by its key and the column, the value it was read as,
+ * the link) is taken when Edit is pressed: a refresh, a late page or another row never changes it.
+ */
 interface Editing {
-  /** `k:` prefs key (and its cut length), or `row:column` of a page cell: one field at a time. */
+  /** The field: the same id as [fieldId] of its write. */
   id: string;
   text: string;
   error: string | null;
+  base: Omit<PrefsUpdate, 'value'> | Omit<DbUpdate, 'value'>;
+  /** A database column's declared affinity (how the text is read). */
+  affinity?: 'string' | 'integer' | 'real';
 }
 
 interface LastWrite {
@@ -77,8 +87,36 @@ interface LastWrite {
   seq: number;
 }
 
-/** The open row: a prefs entry (its id) or a page row (its index on the shown page). */
-type Sheet = { store: 'prefs'; id: string } | { store: 'db'; row: number };
+/**
+ * The open row: a prefs entry (its id) or a table's row by its primary key (never its place on the page, which a
+ * refresh may give to another row). A row that is gone after a refresh closes its sheet.
+ */
+type Sheet = { store: 'prefs'; id: string } | { store: 'db'; table: string; row: string };
+
+/** Which field a write names: a prefs key, or a table's row (by its key) and column (none for a delete). */
+function fieldId(write: StorageWriteInput): string {
+  if (write.store === 'prefs') return `p\u0000${write.name}\u0000${write.key}`;
+  const column = write.op === 'update' ? write.column : '';
+  return `d\u0000${write.name}\u0000${write.table}\u0000${JSON.stringify(write.pk)}\u0000${column}`;
+}
+
+/** What a write names, for an outcome shown away from its field. */
+function writeLabel(write: StorageWriteInput): string {
+  if (write.store === 'prefs') return `${write.name} · ${write.key}`;
+  const key = write.pk.map(displayValue).join(', ');
+  return write.op === 'update'
+    ? `${write.table} · ${key} · ${write.column}`
+    : `${write.table} · ${key} · delete`;
+}
+
+/** A page row's identity: its primary key, or (key columns not on the page: nothing is edited) its place. */
+function rowKey(page: StoragePage, cells: StorageValue[], index: number): string {
+  if (page.pk.length === 0 || page.pk.some((key) => !page.columns.includes(key))) return `#${index}`;
+  return JSON.stringify(page.pk.map((key) => cells[page.columns.indexOf(key)]));
+}
+
+const sameValue = (a: StorageValue | undefined, b: StorageValue | undefined) =>
+  a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
 const PAGE_ROWS = 50;
 
@@ -136,7 +174,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [lastWrite, setLastWrite] = useState<LastWrite | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [audit, setAudit] = useState<StorageAuditEntry[] | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
@@ -151,14 +189,26 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const generation = useRef(0);
   /** A write is on its way: another Save / Delete / Undo is ignored until it is answered. */
   const writing = useRef(false);
+  /** The request that owns the busy state: only its own completion ends it (a newer one takes it over). */
+  const request = useRef(0);
 
   /** Starts a new generation: nothing on screen may be edited from an answer of before. */
   const begin = useCallback(() => {
     generation.current += 1;
+    // What the view left was waiting for is not this view's: it no longer holds it busy.
+    request.current += 1;
+    setBusy(false);
     setEditing(null);
-    setConfirmDelete(null);
+    setConfirmDelete(false);
     setSheet(null);
     return generation.current;
+  }, []);
+
+  /** Opens another row or key (or none): a draft or an armed Delete of the one before ends with it. */
+  const openSheet = useCallback((next: Sheet | null) => {
+    setEditing(null);
+    setConfirmDelete(false);
+    setSheet(next);
   }, []);
 
   /**
@@ -167,11 +217,12 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
    */
   const run = useCallback(
     async (gen: number, call: () => Promise<StorageResponse>): Promise<StorageResponse | null> => {
+      const own = ++request.current;
       setBusy(true);
       setError(null);
       const response = await call();
+      if (own === request.current) setBusy(false);
       if (gen !== generation.current) return null;
-      setBusy(false);
       if (!response.ok) {
         setError(`${response.code}: ${response.message}`);
         return null;
@@ -281,6 +332,26 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     if (dbView?.table) return loadPage(gen, dbView, dbView.table, dbView.cursors);
   }, [dbView, loadPage, loadPrefs, prefsView]);
 
+  /** Reads the shown database's tables again. */
+  const reloadSchema = useCallback(async () => {
+    if (!dbView) return;
+    const gen = generation.current;
+    const name = dbView.name;
+    const response = await run(gen, () => storage.read({ store: 'db', name }));
+    if (response?.ok && response.kind === 'schema') {
+      setDbView((view) =>
+        view && view.name === name && view.table === null
+          ? {
+              ...view,
+              target: response.target,
+              tables: response.tables,
+              tablesTruncated: response.tablesTruncated,
+            }
+          : view,
+      );
+    }
+  }, [dbView, run, storage]);
+
   const loadAudit = useCallback(async () => {
     const gen = generation.current;
     const response = await run(gen, storage.audit);
@@ -293,7 +364,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       writing.current = true;
       const gen = generation.current;
       setEditing(null);
-      setConfirmDelete(null);
+      setConfirmDelete(false);
       // A new write ends the offer of the last one's undo (it would revert under the new value).
       setLastWrite(null);
       try {
@@ -312,51 +383,23 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     [audit, loadAudit, reload, run, storage],
   );
 
-  const savePrefs = (view: PrefsView, entry: StoragePrefsEntry) => {
-    // A cut key is only a prefix: written as a key it would name another one.
-    if (!editing || entry.keyLength !== undefined) return;
-    const parsed = parseValue(editing.text, entry.value);
-    if ('error' in parsed) return setEditing({ ...editing, error: parsed.error });
-    void submit({
-      store: 'prefs',
-      name: view.name,
-      op: 'update',
-      key: entry.key,
-      expected: entry.value,
-      value: parsed.value,
-      target: view.target,
-    });
-  };
-
-  const saveCell = (view: DbView, shown: StoragePage, target: StorageTarget, row: number, column: string) => {
+  /** Saves the draft: the write it was started as, with the new value (one field, one write). */
+  const save = () => {
     if (!editing) return;
-    const cells = shown.rows[row]?.cells ?? [];
-    const current = cells[shown.columns.indexOf(column)];
-    if (!current) return;
-    const schema = view.tables.find((candidate) => candidate.name === shown.table);
+    const { base, affinity } = editing;
     const parsed =
-      editing.text === '' && current.t !== 'string'
+      base.store === 'db' && editing.text === '' && base.expected.t !== 'string'
         ? { value: { t: 'null' } as StorageValue }
-        : parseValue(editing.text, current, affinityOf(schema, column));
+        : parseValue(editing.text, base.expected, affinity);
     if ('error' in parsed) return setEditing({ ...editing, error: parsed.error });
-    void submit({
-      store: 'db',
-      name: view.name,
-      op: 'update',
-      table: shown.table,
-      column,
-      pk: shown.pk.map((key) => cells[shown.columns.indexOf(key)]!),
-      expected: current,
-      value: parsed.value,
-      target,
-    });
+    void submit({ ...base, value: parsed.value } as StorageWriteInput);
   };
 
   const deleteRow = (view: DbView, shown: StoragePage, target: StorageTarget, row: number) => {
     const cells = shown.rows[row]?.cells ?? [];
     const digest = shown.rows[row]?.digest;
     if (!digest) return;
-    setSheet(null);
+    openSheet(null);
     void submit({
       store: 'db',
       name: view.name,
@@ -425,25 +468,32 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     if (event.key !== 'Escape') return;
     if (editing) return setEditing(null);
     if (infoOpen) return setInfoOpen(false);
-    if (sheet) {
-      setConfirmDelete(null);
-      return setSheet(null);
-    }
+    if (sheet) return openSheet(null);
   };
 
-  /** The saved mark: an outcome that allows it, on the key or row its write named. */
-  const savedPrefs = (key: string) =>
+  const writtenId = written ? fieldId(written.write) : null;
+  /**
+   * The saved mark: an outcome that allows it, on the field its write named, while that field shows what the write
+   * stored (a later read that failed, or that saw the app change it since, shows no mark).
+   */
+  const marks = (id: string, value: StorageValue | undefined) =>
     written !== null &&
+    writtenId === id &&
     showsSaved(written.outcome) &&
-    written.write.store === 'prefs' &&
-    written.write.key === key;
-  const savedRow = (cells: StorageValue[]) => {
-    if (written === null || !showsSaved(written.outcome) || written.write.store !== 'db' || !page)
-      return null;
-    if (written.write.op !== 'update' || written.write.table !== page.table) return null;
-    const pk = JSON.stringify(page.pk.map((key) => cells[page.columns.indexOf(key)]));
-    return pk === JSON.stringify(written.write.pk) ? written.write.column : null;
-  };
+    (written.outcome.stored === undefined || sameValue(written.outcome.stored, value));
+  const prefsField = (entry: StoragePrefsEntry) =>
+    prefsView && entry.keyLength === undefined ? `p\u0000${prefsView.name}\u0000${entry.key}` : null;
+  const cellField = (cells: StorageValue[], column: string) =>
+    dbView && page && !pkMissing && page.pk.length > 0
+      ? `d\u0000${dbView.name}\u0000${page.table}\u0000${JSON.stringify(
+          page.pk.map((key) => cells[page.columns.indexOf(key)]),
+        )}\u0000${column}`
+      : null;
+  const savedRow = (cells: StorageValue[]) =>
+    page?.columns.find((column, index) => {
+      const id = cellField(cells, column);
+      return id !== null && marks(id, cells[index]);
+    }) ?? null;
 
   if (consent === 'off') {
     return (
@@ -461,34 +511,43 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     );
   }
 
-  const outcome = written && (
-    <div className="storage-outcome" role="status" data-code={written.outcome.code}>
-      <span className="storage-outcome-text">
-        {showsSaved(written.outcome) && <TickIcon />}
-        {outcomeText(written.outcome)}
-        {written.outcome.current && (
-          <>
-            {' '}
-            Current value: <ValueText value={written.outcome.current} />
-          </>
+  /** The last write's outcome, in the server's words; [away]: shown away from its field, so it names it. */
+  const outcomeBlock = (away: boolean) =>
+    written && (
+      <div className="storage-outcome" role="status" data-code={written.outcome.code}>
+        <span className="storage-outcome-text">
+          {away && <span className="storage-outcome-target mono">{writeLabel(written.write)}: </span>}
+          {showsSaved(written.outcome) && <TickIcon />}
+          {outcomeText(written.outcome)}
+          {written.outcome.normalized && written.outcome.stored && (
+            <>
+              {' '}
+              Stored: <ValueText value={written.outcome.stored} />
+            </>
+          )}
+          {written.outcome.current && (
+            <>
+              {' '}
+              Current value: <ValueText value={written.outcome.current} />
+            </>
+          )}
+        </span>
+        {written.outcome.undo && (
+          <button
+            type="button"
+            className="storage-link"
+            disabled={busy}
+            onClick={() => {
+              const undo = written.outcome.undo!;
+              setLastWrite(null);
+              void submit(undo);
+            }}
+          >
+            Undo
+          </button>
         )}
-      </span>
-      {written.outcome.undo && (
-        <button
-          type="button"
-          className="storage-link"
-          disabled={busy}
-          onClick={() => {
-            const undo = written.outcome.undo!;
-            setLastWrite(null);
-            void submit(undo);
-          }}
-        >
-          Undo
-        </button>
-      )}
-    </div>
-  );
+      </div>
+    );
 
   /** Where each crumb leads: the stores, the database's tables, or nowhere (the level shown). */
   const crumbs: { label: string; mono?: boolean; to: 'stores' | 'tables' | null }[] = [
@@ -648,14 +707,16 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
           const keyCut = entry.keyLength !== undefined;
           const id = keyCut ? `k:${entry.key}:${entry.keyLength}` : `k:${entry.key}`;
           const open = sheet?.store === 'prefs' && sheet.id === id;
+          const field = prefsField(entry);
+          const saved = field !== null && marks(field, entry.value);
           return (
             <button
-              key={`${id}:${savedPrefs(entry.key) ? written?.seq : 0}`}
+              key={`${id}:${saved ? written?.seq : 0}`}
               type="button"
               className="storage-row storage-row--entry"
               aria-pressed={open}
-              data-saved={savedPrefs(entry.key) || undefined}
-              onClick={() => setSheet({ store: 'prefs', id })}
+              data-saved={saved || undefined}
+              onClick={() => openSheet({ store: 'prefs', id })}
             >
               <span className="storage-row-name">
                 {entry.key}
@@ -769,17 +830,19 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
             <tbody>
               {page.rows.map((row, rowIndex) => {
                 const savedColumn = savedRow(row.cells);
+                const key = rowKey(page, row.cells, rowIndex);
+                const next: Sheet = { store: 'db', table: page.table, row: key };
                 return (
                   <tr
-                    key={`${rowIndex}:${savedColumn !== null ? written?.seq : 0}`}
+                    key={`${key}:${savedColumn !== null ? written?.seq : 0}`}
                     tabIndex={0}
-                    aria-selected={sheet?.store === 'db' && sheet.row === rowIndex}
+                    aria-selected={sheet?.store === 'db' && sheet.table === page.table && sheet.row === key}
                     data-saved={savedColumn !== null || undefined}
-                    onClick={() => setSheet({ store: 'db', row: rowIndex })}
+                    onClick={() => openSheet(next)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
-                        setSheet({ store: 'db', row: rowIndex });
+                        openSheet(next);
                       }
                     }}
                   >
@@ -833,8 +896,14 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       />
     ) : null;
 
-  // The open row's sheet: every field, one edited at a time, its write's outcome under it.
+  // The open row's sheet: every field, one edited at a time, the last write's outcome under the field it named.
   let sheetBody: ReactNode = null;
+  /** The fields of the open sheet: the last write's outcome goes under its own one, else in the foot. */
+  let sheetFields: (string | null)[] = [];
+  const fieldOutcome = (id: string | null) =>
+    id !== null && id === writtenId ? (
+      <div className="storage-field-outcome">{outcomeBlock(false)}</div>
+    ) : null;
   if (sheet?.store === 'prefs' && prefsView) {
     const entry = prefsView.entries.find(
       (candidate) =>
@@ -844,6 +913,8 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     );
     if (entry) {
       const keyCut = entry.keyLength !== undefined;
+      const field = prefsField(entry);
+      sheetFields = [field];
       const editable = canWrite && !keyCut && !stale(prefsView.target) && isEditable(entry.value);
       const reason = keyCut
         ? 'the key is too long to send whole'
@@ -859,75 +930,115 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
           <SheetHead
             title="Key"
             detail={keyCut ? `${entry.key}… (${entry.keyLength} chars)` : entry.key}
-            onClose={() => setSheet(null)}
+            onClose={() => openSheet(null)}
           />
           <div className="storage-fields">
             <Field label="value" type={typeLabel(entry.value)}>
-              {editing?.id === sheet.id ? (
+              {editing !== null && editing.id === field ? (
                 <ValueEditor
                   label={entry.key}
                   editing={editing}
+                  shown={entry.value}
                   busy={busy}
                   onChange={setEditing}
-                  onSave={() => savePrefs(prefsView, entry)}
+                  onSave={save}
                 />
               ) : (
                 <FieldValue
                   value={entry.value}
                   editLabel={editable ? `Edit ${entry.key}` : null}
                   disabled={busy || editing !== null}
-                  onEdit={() => setEditing({ id: sheet.id, text: editText(entry.value), error: null })}
+                  onEdit={() =>
+                    field !== null &&
+                    setEditing({
+                      id: field,
+                      text: editText(entry.value),
+                      error: null,
+                      base: {
+                        store: 'prefs',
+                        name: prefsView.name,
+                        op: 'update',
+                        key: entry.key,
+                        expected: entry.value,
+                        target: prefsView.target,
+                      },
+                    })
+                  }
                   reason={canWrite || keyCut || entry.value.t === 'redacted' ? reason : null}
                 />
               )}
+              {fieldOutcome(field)}
             </Field>
           </div>
-          <div className="storage-sheet-foot">{outcome}</div>
         </>
       );
     }
-  } else if (sheet?.store === 'db' && page && shown && dbView) {
-    const row = page.rows[sheet.row];
+  } else if (sheet?.store === 'db' && page && shown && dbView && sheet.table === page.table) {
+    const rowIndex = page.rows.findIndex(
+      (candidate, index) => rowKey(page, candidate.cells, index) === sheet.row,
+    );
+    const row = page.rows[rowIndex];
     if (row) {
       const keyText = page.pk
         .map((key) => `${key} = ${displayValue(row.cells[page.columns.indexOf(key)] ?? { t: 'null' })}`)
         .join(', ');
       const canDelete = canWrite && !page.readOnly && row.digest && !pkMissing && !stale(shown.target);
+      const schema = dbView.tables.find((table) => table.name === page.table);
+      sheetFields = page.columns.map((column) => cellField(row.cells, column));
       sheetBody = (
         <>
-          <SheetHead title="Row" detail={keyText || `#${sheet.row + 1}`} onClose={() => setSheet(null)} />
+          <SheetHead title="Row" detail={keyText || `#${rowIndex + 1}`} onClose={() => openSheet(null)} />
           <div className="storage-fields">
             {row.cells.map((cell, columnIndex) => {
               const column = page.columns[columnIndex] ?? '';
-              const id = `${sheet.row}:${column}`;
+              const field = cellField(row.cells, column);
               const reason = cellReadOnly(page, column, cell);
-              const editable = canWrite && reason === null && !pkMissing && !stale(shown.target);
-              const type = dbView.tables
-                .find((table) => table.name === page.table)
-                ?.columns.find((candidate) => candidate.name === column)?.type;
+              const editable =
+                canWrite && reason === null && !pkMissing && field !== null && !stale(shown.target);
+              const type = schema?.columns.find((candidate) => candidate.name === column)?.type;
               return (
                 <Field
                   key={column}
                   label={column}
                   type={page.pk.includes(column) ? `key · ${type ?? cell.t}` : (type ?? cell.t)}
                 >
-                  {editing?.id === id ? (
+                  {editing !== null && editing.id === field ? (
                     <ValueEditor
                       label={column}
                       editing={editing}
+                      shown={cell}
                       busy={busy}
                       onChange={setEditing}
-                      onSave={() => saveCell(dbView, page, shown.target, sheet.row, column)}
+                      onSave={save}
                     />
                   ) : (
                     <FieldValue
                       value={cell}
                       editLabel={editable ? `Edit ${column}` : null}
                       disabled={busy || editing !== null}
-                      onEdit={() => setEditing({ id, text: editText(cell), error: null })}
+                      onEdit={() =>
+                        field !== null &&
+                        setEditing({
+                          id: field,
+                          text: editText(cell),
+                          error: null,
+                          base: {
+                            store: 'db',
+                            name: dbView.name,
+                            op: 'update',
+                            table: page.table,
+                            column,
+                            pk: page.pk.map((key) => row.cells[page.columns.indexOf(key)]!),
+                            expected: cell,
+                            target: shown.target,
+                          },
+                          affinity: affinityOf(schema, column),
+                        })
+                      }
                       reason={canWrite && !page.pk.includes(column) && !page.readOnly ? reason : null}
                     />
                   )}
+                  {fieldOutcome(field)}
                 </Field>
               );
             })}
@@ -937,28 +1048,38 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
               </p>
             )}
           </div>
-          <div className="storage-sheet-foot">
-            {outcome}
-            {canDelete && (
+          {canDelete && (
+            <div className="storage-sheet-foot">
               <button
                 type="button"
                 className="btn storage-delete"
-                data-armed={confirmDelete === sheet.row || undefined}
-                disabled={busy}
+                data-armed={confirmDelete || undefined}
+                disabled={busy || editing !== null}
                 onClick={() =>
-                  confirmDelete === sheet.row
-                    ? deleteRow(dbView, page, shown.target, sheet.row)
-                    : setConfirmDelete(sheet.row)
+                  confirmDelete ? deleteRow(dbView, page, shown.target, rowIndex) : setConfirmDelete(true)
                 }
               >
-                {confirmDelete === sheet.row ? `Delete ${keyText}?` : 'Delete row'}
+                {confirmDelete ? `Delete ${keyText}?` : 'Delete row'}
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </>
       );
     }
   }
+  const footOutcome = writtenId !== null && sheetFields.includes(writtenId) ? null : outcomeBlock(true);
+
+  /**
+   * Refresh reads the level shown again. An armed Delete ends with it; a draft stays, still writing what it was
+   * started as (its row by key, the value it was read as): the app's change since makes it a conflict, not a rebase.
+   */
+  const refreshShown = () => {
+    setConfirmDelete(false);
+    if (level === 'audit') return void loadAudit();
+    if (level === 'stores') return void refresh();
+    if (level === 'tables') return void reloadSchema();
+    void reload();
+  };
 
   const levelKey = `${level}:${selected?.name ?? ''}:${dbView?.table ?? ''}`;
 
@@ -1017,7 +1138,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
           aria-label="Refresh"
           data-busy={busy || undefined}
           disabled={busy || !isRunning || !listing}
-          onClick={() => void (level === 'audit' ? loadAudit() : level === 'stores' ? refresh() : reload())}
+          onClick={refreshShown}
         >
           <RefreshIcon />
         </button>
@@ -1078,12 +1199,11 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         {body}
       </div>
       {pager}
-      {sheetBody ? (
+      {footOutcome && !sheetBody && <div className="storage-foot">{footOutcome}</div>}
+      {sheetBody && (
         <div className="storage-sheet" role="dialog" aria-label={sheet?.store === 'db' ? 'Row' : 'Key'}>
           {sheetBody}
         </div>
-      ) : (
-        outcome && <div className="storage-foot">{outcome}</div>
       )}
     </section>
   );
@@ -1092,12 +1212,15 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
 function ValueEditor({
   label,
   editing,
+  shown,
   busy,
   onChange,
   onSave,
 }: {
   label: string;
   editing: Editing;
+  /** The value the field shows now (read again since Edit was pressed, it may differ from what Save compares). */
+  shown: StorageValue;
   busy: boolean;
   onChange: (editing: Editing | null) => void;
   onSave: () => void;
@@ -1127,6 +1250,12 @@ function ValueEditor({
       {editing.error && (
         <span className="storage-error" role="alert">
           {editing.error}
+        </span>
+      )}
+      {!sameValue(shown, editing.base.expected) && (
+        <span className="storage-reason storage-editor-note">
+          Read as <ValueText value={editing.base.expected} /> when the edit began: Save compares with that, so
+          it is refused if the app changed it.
         </span>
       )}
     </form>

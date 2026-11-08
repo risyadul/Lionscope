@@ -797,6 +797,10 @@
   font-size: var(--text-meta);
 }
 
+.storage-editor-note {
+  flex-basis: 100%;
+}
+
 .storage-error {
   flex-basis: 100%;
   color: var(--critical);
@@ -861,6 +865,16 @@
 
 .storage-outcome-text {
   min-width: 0;
+}
+
+.storage-outcome-target {
+  color: var(--ink);
+}
+
+.storage-field-outcome {
+  flex-basis: 100%;
+  display: flex;
+  padding-top: var(--space-1);
 }
 
 .storage-tick {
