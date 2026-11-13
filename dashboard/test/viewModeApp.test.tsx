@@ -87,25 +87,46 @@ describe('View switch', () => {
     expect(option('Profiler').getAttribute('aria-checked')).toBe('true');
     expect(workspace().dataset.view).toBe('profile');
     expect(isShown('.instrument')).toBe(true);
-    expect(sideTabs().map((tab) => tab.textContent)).toEqual([
-      'Screens',
-      'Stalls',
-      'Layouts',
-      'Network',
-      'State',
-      'Storage',
-      'Inspector',
-    ]);
+    expect(sideTabs().map((tab) => tab.textContent)).toEqual(['Screens', 'Stalls', 'Layouts', 'Saved State']);
     expect(window.location.search).toBe('');
+  });
+
+  it('opens Network and Storage as dedicated bookmarked workspaces with the mirror initially closed', () => {
+    setup();
+    for (const [label, id] of [
+      ['Network', 'network'],
+      ['Storage', 'storage'],
+    ]) {
+      fireEvent.click(option(label!));
+      expect(workspace().dataset.view).toBe(id);
+      expect(window.location.search).toBe(`?view=${id}`);
+      expect(isShown('.instrument')).toBe(false);
+      expect(screen.queryByRole('tab', { name: /Screens|Stalls|Layouts|Saved State/ })).toBeNull();
+      expect(document.querySelector('.device-col')?.hasAttribute('data-collapsed')).toBe(true);
+    }
+    fireEvent.click(option('Profiler'));
+    expect(isShown('.instrument')).toBe(true);
+    expect(sideTabs().map((tab) => tab.textContent)).toEqual(['Screens', 'Stalls', 'Layouts', 'Saved State']);
+  });
+
+  it('dismisses the navigation drawer with Escape and returns focus to the menu button', () => {
+    setup();
+    const menu = screen.getByRole('button', { name: '☰ Workspaces' });
+    fireEvent.click(menu);
+    expect(menu.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(option('Profiler'));
+    fireEvent.keyDown(option('Profiler'), { key: 'Escape' });
+    expect(menu.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(menu);
   });
 
   it('Inspector view: no charts, only the Inspector panel under a heading, and the URL says so', () => {
     setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     expect(workspace().dataset.view).toBe('inspect');
     expect(isShown('.instrument')).toBe(false);
     expect(sideTabs()).toEqual([]);
-    expect(screen.getByRole('heading', { name: 'Inspector' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Layout Inspector' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Inspect the screen' })).toBeTruthy();
     expect(window.location.search).toBe('?view=inspect');
     expect(window.localStorage.getItem(LAYOUT_KEYS.viewMode)).toBe('inspect');
@@ -136,7 +157,7 @@ describe('View switch', () => {
     window.localStorage.setItem(LAYOUT_KEYS.viewMode, 'device');
     window.history.replaceState(null, '', '/?view=inspect');
     setup();
-    expect(option('Inspector').getAttribute('aria-checked')).toBe('true');
+    expect(option('Layout Inspector').getAttribute('aria-checked')).toBe('true');
   });
 
   it('opens in the remembered mode when the URL names none, and puts it in the address', () => {
@@ -157,14 +178,14 @@ describe('View switch', () => {
     const singleCore = () => screen.getByRole('button', { name: /1 core/ });
     fireEvent.click(singleCore());
     expect(singleCore().getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     fireEvent.click(option('Profiler'));
     expect(singleCore().getAttribute('aria-pressed')).toBe('true');
   });
 
   it('switching to the Device view ends inspect mode (live screen again)', () => {
     const { sent } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
     expect(screen.getByRole('button', { name: 'Inspect' }).getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(option('Device'));
@@ -175,9 +196,9 @@ describe('View switch', () => {
   it('arrow keys move the selection (radio group)', () => {
     setup();
     fireEvent.keyDown(option('Profiler'), { key: 'ArrowRight' });
-    expect(option('Inspector').getAttribute('aria-checked')).toBe('true');
-    expect(document.activeElement).toBe(option('Inspector'));
-    fireEvent.keyDown(option('Inspector'), { key: 'End' });
+    expect(option('Layout Inspector').getAttribute('aria-checked')).toBe('true');
+    expect(document.activeElement).toBe(option('Layout Inspector'));
+    fireEvent.keyDown(option('Layout Inspector'), { key: 'End' });
     expect(option('Device').getAttribute('aria-checked')).toBe('true');
     fireEvent.keyDown(option('Device'), { key: 'ArrowRight' });
     expect(option('Profiler').getAttribute('aria-checked')).toBe('true');
@@ -187,7 +208,7 @@ describe('View switch', () => {
     window.localStorage.setItem(LAYOUT_KEYS.deviceCollapsed, 'true');
     setup();
     expect(document.querySelector('.device-col')?.hasAttribute('data-collapsed')).toBe(true);
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     const column = document.querySelector('.device-col')!;
     expect(column.hasAttribute('data-collapsed')).toBe(false);
     expect(document.querySelector('.device-collapse')).toBeNull();
@@ -201,7 +222,7 @@ describe('View switch', () => {
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
     });
-    expect(option('Inspector').getAttribute('aria-checked')).toBe('true');
+    expect(option('Layout Inspector').getAttribute('aria-checked')).toBe('true');
     expect(sent.filter((m) => m.type === 'inspect')).toEqual([{ type: 'inspect', serial: 'emulator-5554' }]);
   });
 });

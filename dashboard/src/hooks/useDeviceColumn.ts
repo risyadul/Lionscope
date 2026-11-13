@@ -25,10 +25,14 @@ export interface DeviceColumnState {
  * Pinned (`isPinned`, the views built around the device): always docked and open; the remembered collapse
  * comes back in the Profiler view.
  */
-export function useDeviceColumn(isPinned = false): DeviceColumnState {
+export function useDeviceColumn(
+  isPinned = false,
+  optionalView: 'network' | 'storage' | null = null,
+): DeviceColumnState {
   const isOverlay = useMediaQuery(DEVICE_OVERLAY_QUERY);
   const isPageVisible = useDocumentVisible();
   const [isCollapsed, setIsCollapsed] = useStoredState(LAYOUT_KEYS.deviceCollapsed, parseCollapsed);
+  const [optionalOpen, setOptionalOpen] = useState({ network: false, storage: false });
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   // Pinning closes the drawer for good: back in the Profiler it starts closed again (adjusting state while rendering).
   const [wasPinned, setWasPinned] = useState(isPinned);
@@ -39,13 +43,17 @@ export function useDeviceColumn(isPinned = false): DeviceColumnState {
   const setOpen = useCallback(
     (open: boolean) => {
       if (isPinned) return;
+      if (optionalView) {
+        setOptionalOpen((views) => ({ ...views, [optionalView]: open }));
+        return;
+      }
       if (isOverlay) setIsDrawerOpen(open);
       else setIsCollapsed(!open);
     },
-    [isPinned, isOverlay, setIsCollapsed],
+    [isPinned, optionalView, isOverlay, setIsCollapsed],
   );
   if (isPinned) return { mode: 'docked', isOpen: true, setOpen, isVisible: isPageVisible, isPinned };
-  const isOpen = isOverlay ? isDrawerOpen : !isCollapsed;
+  const isOpen = optionalView ? optionalOpen[optionalView] : isOverlay ? isDrawerOpen : !isCollapsed;
   return {
     mode: isOverlay ? 'overlay' : 'docked',
     isOpen,

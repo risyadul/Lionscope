@@ -89,3 +89,107 @@
     width: auto;
   }
 }
+
+/* Primary workspaces share device/app/session controls and retain their panel state. */
+.app-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.workspace-navigation {
+  flex: 0 0 164px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--rule);
+  background: var(--surface);
+}
+.workspace-navigation .view-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  border: 0;
+  background: none;
+}
+.workspace-navigation .view-switch-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--ink-2);
+  text-align: left;
+}
+.workspace-navigation .view-switch-option[aria-checked='true'] {
+  background: var(--hover-wash);
+  color: var(--ink);
+  font-weight: 600;
+}
+.workspace-navigation .view-switch-label {
+  display: inline;
+}
+.workspace-navigation .workspace-menu,
+.workspace-navigation .workspace-menu-close,
+.workspace-backdrop {
+  display: none;
+}
+.workspace[data-view='network'],
+.workspace[data-view='storage'] {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.workspace:is([data-view='network'], [data-view='storage'])[data-device='overlay'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace:is([data-view='storage'], [data-view='network']) > .side {
+  min-width: 0;
+}
+@media (max-width: 1024px) {
+  .app-shell {
+    flex-direction: column;
+  }
+  .workspace-navigation {
+    flex-basis: auto;
+    padding: 6px 10px;
+    position: relative;
+  }
+  .workspace-navigation .workspace-menu {
+    display: inline-flex;
+  }
+  .workspace-navigation .view-switch {
+    display: none;
+  }
+  .workspace-navigation[data-open] .view-switch {
+    display: flex;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 51;
+    height: 100dvh;
+    margin: 0;
+    width: 220px;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    box-shadow: 0 8px 24px #0003;
+  }
+  .workspace-navigation .workspace-menu-close {
+    display: block;
+    margin-bottom: 12px;
+  }
+  .workspace-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: #0006;
+    border: 0;
+  }
+  .workspace[data-view='network'],
+  .workspace[data-view='storage'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

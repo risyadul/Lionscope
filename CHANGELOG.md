@@ -10,7 +10,7 @@ All notable changes to Lionscope are documented here. The format is based on
 
 - Storage inspector (SDK 0.13.0): the profiled app's SharedPreferences and the Room databases it registers with
   `Lionscope.trackDatabase(name, db)` (the no-op artifact has it too), read and edited live from the dashboard's
-  **Storage** tab or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless
+  **Storage** workspace or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless
   the server starts with `--allow-storage-read` (and `--allow-storage-write` to edit); only on a profiling session's
   proven link. Reads and edits go through the app's own transaction, never a second connection, one request at a
   time off the main thread; edits are compare-and-set updates of existing values and deletes by primary key, with
@@ -20,6 +20,10 @@ All notable changes to Lionscope are documented here. The format is based on
   [Storage](docs/features/storage.md).
 
 ### Changed
+
+- Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
+  and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network
+  and Storage use dedicated workspaces with the mirror initially closed.
 
 - The README is now an overview (what Lionscope is, requirements, quick start, adding the SDK). The rest moved to
   pages under `docs/` with its text unchanged (only links, heading levels and one cross-reference adjusted): the

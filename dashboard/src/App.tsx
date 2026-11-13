@@ -117,7 +117,10 @@ export function App() {
   const now = useNow(windowMs <= 60_000 ? 250 : 1000);
   const chartsRef = useRef<HTMLDivElement>(null);
   const [viewMode, setViewMode] = useViewMode();
-  const deviceColumn = useDeviceColumn(viewMode !== 'profile');
+  const deviceColumn = useDeviceColumn(
+    viewMode === 'inspect' || viewMode === 'device',
+    viewMode === 'network' || viewMode === 'storage' ? viewMode : null,
+  );
 
   const isOpen = state.connection.status === 'open';
   const isActive = isSessionActive(state);
@@ -137,7 +140,7 @@ export function App() {
   });
   useInspectorFocus({
     send,
-    isInspectorShown: viewMode === 'inspect' || (viewMode === 'profile' && sideTab === 'inspector'),
+    isInspectorShown: viewMode === 'inspect',
     serial: inspector.canInspect ? inspectorSerial : null,
     isOpen,
   });
@@ -215,11 +218,10 @@ export function App() {
   );
   const toggleInspector = useCallback(() => {
     if (!isInspecting) {
-      setSideTab('inspector');
-      if (viewMode === 'device') setViewMode('inspect');
+      setViewMode('inspect');
     }
     toggleInspect();
-  }, [isInspecting, toggleInspect, viewMode, setViewMode]);
+  }, [isInspecting, toggleInspect, setViewMode]);
   useEscape(isInspecting, exitInspect);
   const inspectorValue = useMemo(
     () => ({ ...inspector, toggle: toggleInspector }),
@@ -237,8 +239,7 @@ export function App() {
   }, []);
   const viewNetwork = useCallback(() => setSideTab('network'), []);
   const openMocks = useCallback(() => {
-    changeView('profile');
-    setSideTab('network');
+    changeView('network');
     setNetworkView('mocks');
   }, [changeView]);
 
@@ -305,8 +306,7 @@ export function App() {
     [series.http, selectedHttp],
   );
   const isNetworkDetailOpen =
-    viewMode === 'profile' &&
-    sideTab === 'network' &&
+    (viewMode === 'network' || (viewMode === 'profile' && sideTab === 'network')) &&
     networkView === 'requests' &&
     selectedExchange !== null;
   // One Escape, one thing: an open stall or request detail closes first; otherwise the screen selection clears.
@@ -423,7 +423,7 @@ export function App() {
                 <DeviceToggle isOpen={deviceColumn.isOpen} onOpenChange={deviceColumn.setOpen} />
               )
             }
-            viewSwitch={<ViewSwitch value={viewMode} onChange={changeView} />}
+            viewSwitch={null}
             mocksIndicator={mocksState && <MocksIndicator indicator={mocksState} onOpen={openMocks} />}
             onRefreshDevices={() => send({ type: 'refreshDevices' })}
             apps={apps}
@@ -452,191 +452,218 @@ export function App() {
               deviceLabel={emulator !== null && isSoftwareRendered(emulator) ? emulatorLabel(emulator) : null}
             />
           </div>
-          <main className="workspace" data-device={deviceColumn.mode} data-view={viewMode}>
-            <DeviceColumn
-              mode={deviceColumn.mode}
-              isOpen={deviceColumn.isOpen}
-              onOpenChange={deviceColumn.setOpen}
-              subtitle={emulator !== null ? emulatorLabel(emulator) : serial}
-              isPinned={deviceColumn.isPinned}
-            >
-              <DevicePanel
-                target={selection.target}
-                device={serial === null ? null : (state.devices?.find((d) => d.serial === serial) ?? null)}
-                hasDeviceList={state.devices !== null}
-                isOnline={isOpen}
-                isVisible={deviceColumn.isVisible}
-                pending={emulatorActions.pending}
-                isInSession={isInSession}
-                onBoot={emulatorActions.boot}
-                onShutdown={emulatorActions.shutdown}
-              />
-            </DeviceColumn>
-            {/* The Inspector and Device views hide the charts: effects torn down (no plots), renders frozen (no
+          <div className="app-shell">
+            <ViewSwitch value={viewMode} onChange={changeView} />
+            <main className="workspace" data-device={deviceColumn.mode} data-view={viewMode}>
+              <DeviceColumn
+                mode={deviceColumn.mode}
+                isOpen={deviceColumn.isOpen}
+                onOpenChange={deviceColumn.setOpen}
+                subtitle={emulator !== null ? emulatorLabel(emulator) : serial}
+                isPinned={deviceColumn.isPinned}
+              >
+                <DevicePanel
+                  target={selection.target}
+                  device={serial === null ? null : (state.devices?.find((d) => d.serial === serial) ?? null)}
+                  hasDeviceList={state.devices !== null}
+                  isOnline={isOpen}
+                  isVisible={deviceColumn.isVisible}
+                  pending={emulatorActions.pending}
+                  isInSession={isInSession}
+                  onBoot={emulatorActions.boot}
+                  onShutdown={emulatorActions.shutdown}
+                />
+              </DeviceColumn>
+              {/* The Inspector and Device views hide the charts: effects torn down (no plots), renders frozen (no
               work per clock tick), state kept (logcat filters, Clear, the CPU mode are there when you come back). */}
-            <Activity mode={viewMode === 'profile' ? 'visible' : 'hidden'}>
-              <Frozen isFrozen={viewMode !== 'profile'}>
-                <div className="instrument">
-                  <StatStrip stats={stats} />
-                  {/* What the timeline and the logcat drawer share: the drawer's height is bounded by this box. */}
-                  <div ref={chartsRef} className="instrument-charts">
-                    <Timeline
-                      cpu={series.cpu}
-                      memory={series.memory}
-                      frames={series.frames}
-                      events={series.events}
-                      screens={series.screens}
-                      breakdown={series.breakdown}
-                      stalls={series.stalls}
-                      strictMode={series.strictMode}
-                      inflates={series.inflates}
-                      http={series.http}
-                      showScreens={showScreens}
-                      showBreakdown={showBreakdown}
-                      showMainThread={showMainThread}
-                      stallThresholdMs={sdkOptions.stallThresholdMs}
-                      isStrictModeOn={isActive && sdkOptions.strictMode}
-                      selectedStall={selectedStall}
-                      onSelectStall={selectStall}
-                      onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
-                      onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
-                      isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
-                      showNetwork={showNetwork}
-                      selectedHttp={selectedHttp}
-                      onSelectHttp={selectHttp}
-                      onViewNetwork={sideTab === 'network' ? undefined : viewNetwork}
-                      isSdkConnected={isSdkConnected}
-                      selectedScreen={selectedScreen}
-                      onSelectScreen={setSelectedScreen}
-                      onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
-                      endTs={endTs}
-                      windowMs={windowMs}
-                      probeTs={probeTs}
-                      cursorX={cursorX}
-                      toolbar={
-                        <WindowControls
-                          windowMs={windowMs}
-                          onWindowChange={setWindowMs}
-                          isPaused={paused !== null}
-                          pausedAt={paused?.at ?? null}
-                          onPause={pause}
-                          onResume={() => setPaused(null)}
-                          cursorX={cursorX}
-                        />
-                      }
-                      overlay={overlay}
-                      notice={notice && <p className="timeline-notice">{notice}</p>}
-                    />
-                    <LogcatDrawer columnRef={chartsRef}>
-                      <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} />
-                    </LogcatDrawer>
+              <Activity mode={viewMode === 'profile' ? 'visible' : 'hidden'}>
+                <Frozen isFrozen={viewMode !== 'profile'}>
+                  <div className="instrument">
+                    <StatStrip stats={stats} />
+                    {/* What the timeline and the logcat drawer share: the drawer's height is bounded by this box. */}
+                    <div ref={chartsRef} className="instrument-charts">
+                      <Timeline
+                        cpu={series.cpu}
+                        memory={series.memory}
+                        frames={series.frames}
+                        events={series.events}
+                        screens={series.screens}
+                        breakdown={series.breakdown}
+                        stalls={series.stalls}
+                        strictMode={series.strictMode}
+                        inflates={series.inflates}
+                        http={series.http}
+                        showScreens={showScreens}
+                        showBreakdown={showBreakdown}
+                        showMainThread={showMainThread}
+                        stallThresholdMs={sdkOptions.stallThresholdMs}
+                        isStrictModeOn={isActive && sdkOptions.strictMode}
+                        selectedStall={selectedStall}
+                        onSelectStall={selectStall}
+                        onViewStalls={sideTab === 'stalls' ? undefined : viewStalls}
+                        onViewLayouts={sideTab === 'layouts' ? undefined : viewLayouts}
+                        isInflateTrackingOn={isActive && sdkOptions.inflateTracking && isLayoutCapable(sdk)}
+                        showNetwork={showNetwork}
+                        selectedHttp={selectedHttp}
+                        onSelectHttp={selectHttp}
+                        onViewNetwork={sideTab === 'network' ? undefined : viewNetwork}
+                        isSdkConnected={isSdkConnected}
+                        selectedScreen={selectedScreen}
+                        onSelectScreen={setSelectedScreen}
+                        onViewScreens={sideTab === 'screens' ? undefined : viewScreens}
+                        endTs={endTs}
+                        windowMs={windowMs}
+                        probeTs={probeTs}
+                        cursorX={cursorX}
+                        toolbar={
+                          <WindowControls
+                            windowMs={windowMs}
+                            onWindowChange={setWindowMs}
+                            isPaused={paused !== null}
+                            pausedAt={paused?.at ?? null}
+                            onPause={pause}
+                            onResume={() => setPaused(null)}
+                            cursorX={cursorX}
+                          />
+                        }
+                        overlay={overlay}
+                        notice={notice && <p className="timeline-notice">{notice}</p>}
+                      />
+                      <LogcatDrawer columnRef={chartsRef}>
+                        <LogcatPanel logs={state.logs} pid={state.session.pid} probeTs={probeTs} />
+                      </LogcatDrawer>
+                    </div>
                   </div>
-                </div>
-              </Frozen>
-            </Activity>
-            {viewMode === 'device' && <AgentPanel />}
-            <Activity mode={viewMode === 'device' ? 'hidden' : 'visible'}>
-              <Frozen isFrozen={viewMode === 'device'}>
-                <SidePanel
-                  tab={sideTab}
-                  lockedTab={viewMode === 'inspect' ? 'inspector' : undefined}
-                  onTabChange={setSideTab}
-                  screenCount={screenRows.length}
-                  stallCount={stallTabCount}
-                  layoutCount={layoutTabCount}
-                  networkCount={networkTabCount}
-                  stateCount={stateTabCount}
-                  inspectorCount={inspector.snapshot?.nodes.length ?? 0}
-                  screens={
-                    <ScreenPanel
-                      rows={screenRows}
-                      empty={screensEmpty}
-                      selected={selectedScreen}
-                      onSelect={setSelectedScreen}
-                      showStalls={showMainThread}
-                      showLayouts={showLayouts}
-                    />
-                  }
-                  stalls={
-                    <StallsPanel
-                      stalls={series.stalls}
-                      strictMode={series.strictMode}
-                      fromTs={startTs}
-                      toTs={endTs}
-                      empty={stallsEmpty}
-                      options={optionsControl.shown}
-                      optionsBlocker={optionsBlocker}
-                      isOptionsPending={optionsControl.isPending}
-                      onOptionsChange={changeOptions}
-                      inflateBlocker={inflateBlocker}
-                      rxBlocker={rxBlocker}
-                      selectedKey={selectedStall}
-                      onSelect={setSelectedStall}
-                    />
-                  }
-                  inspector={<InspectorPanel />}
-                  storage={
-                    <StoragePanel
-                      consent={state.storageConsent}
-                      answers={state.storageAnswers}
-                      outcomes={state.storageOutcomes}
-                      isRunning={state.session.status === 'running'}
-                      sessionKey={storageSessionKey(state.session)}
-                    />
-                  }
-                  state={
-                    <SavedStatePanel
-                      savedStates={savedStatesInWindow}
-                      failures={state.transactionFailures}
-                      instances={state.savedStateInstances}
-                      fromTs={startTs}
-                      toTs={endTs}
-                      isMeasuring={isActive && isSavedStateCapable(sdk) && sdkOptions.savedStateTracking}
-                      tracking={isActive && isSavedStateCapable(sdk) ? sdkOptions.savedStateTracking : null}
-                      onTrackingChange={
-                        optionsBlocker === null && isSavedStateCapable(sdk)
-                          ? (savedStateTracking) => changeOptions({ savedStateTracking })
-                          : undefined
-                      }
-                    />
-                  }
-                  network={
-                    // Off screen (another tab, the Inspector view) it holds its last render: no work per clock tick.
-                    <Frozen isFrozen={viewMode !== 'profile' || sideTab !== 'network'}>
-                      <NetworkPanel
-                        exchanges={series.http}
+                </Frozen>
+              </Activity>
+              {viewMode === 'device' && <AgentPanel />}
+              <Activity mode={viewMode === 'device' ? 'hidden' : 'visible'}>
+                <Frozen isFrozen={viewMode === 'device'}>
+                  <SidePanel
+                    tab={sideTab}
+                    lockedTab={
+                      viewMode === 'inspect'
+                        ? 'inspector'
+                        : viewMode === 'network'
+                          ? 'network'
+                          : viewMode === 'storage'
+                            ? 'storage'
+                            : sideTab === 'network'
+                              ? 'network'
+                              : undefined
+                    }
+                    contextAction={
+                      viewMode === 'profile' && sideTab === 'network' ? (
+                        <>
+                          <button type="button" className="btn" onClick={() => changeView('network')}>
+                            Open in Network
+                          </button>
+                          <button type="button" className="btn" onClick={() => setSideTab('screens')}>
+                            Close details
+                          </button>
+                        </>
+                      ) : null
+                    }
+                    onTabChange={setSideTab}
+                    screenCount={screenRows.length}
+                    stallCount={stallTabCount}
+                    layoutCount={layoutTabCount}
+                    networkCount={networkTabCount}
+                    stateCount={stateTabCount}
+                    inspectorCount={inspector.snapshot?.nodes.length ?? 0}
+                    screens={
+                      <ScreenPanel
+                        rows={screenRows}
+                        empty={screensEmpty}
+                        selected={selectedScreen}
+                        onSelect={setSelectedScreen}
+                        showStalls={showMainThread}
+                        showLayouts={showLayouts}
+                      />
+                    }
+                    stalls={
+                      <StallsPanel
+                        stalls={series.stalls}
+                        strictMode={series.strictMode}
                         fromTs={startTs}
                         toTs={endTs}
-                        openEnd={endTs}
-                        empty={networkEmpty}
-                        view={networkView}
-                        onViewChange={setNetworkView}
-                        selectedId={selectedExchange === null ? null : selectedHttp}
-                        onSelect={setSelectedHttp}
-                        detail={httpDetail}
-                        mocks={state.networkMocks}
-                        mockControl={mockRules}
+                        empty={stallsEmpty}
+                        options={optionsControl.shown}
+                        optionsBlocker={optionsBlocker}
+                        isOptionsPending={optionsControl.isPending}
+                        onOptionsChange={changeOptions}
+                        inflateBlocker={inflateBlocker}
+                        rxBlocker={rxBlocker}
+                        selectedKey={selectedStall}
+                        onSelect={setSelectedStall}
                       />
-                    </Frozen>
-                  }
-                  layouts={
-                    <LayoutsPanel
-                      inflates={series.inflates}
-                      fromTs={startTs}
-                      toTs={endTs}
-                      empty={layoutsEmpty}
-                      isTrackingOff={isActive && isLayoutCapable(sdk) && !sdkOptions.inflateTracking}
-                      onEnableTracking={
-                        optionsBlocker === null && isLayoutCapable(sdk)
-                          ? () => changeOptions({ inflateTracking: true })
-                          : undefined
-                      }
-                    />
-                  }
-                />
-              </Frozen>
-            </Activity>
-          </main>
+                    }
+                    inspector={<InspectorPanel />}
+                    storage={
+                      <StoragePanel
+                        consent={state.storageConsent}
+                        answers={state.storageAnswers}
+                        outcomes={state.storageOutcomes}
+                        isRunning={state.session.status === 'running'}
+                        sessionKey={storageSessionKey(state.session)}
+                      />
+                    }
+                    state={
+                      <SavedStatePanel
+                        savedStates={savedStatesInWindow}
+                        failures={state.transactionFailures}
+                        instances={state.savedStateInstances}
+                        fromTs={startTs}
+                        toTs={endTs}
+                        isMeasuring={isActive && isSavedStateCapable(sdk) && sdkOptions.savedStateTracking}
+                        tracking={isActive && isSavedStateCapable(sdk) ? sdkOptions.savedStateTracking : null}
+                        onTrackingChange={
+                          optionsBlocker === null && isSavedStateCapable(sdk)
+                            ? (savedStateTracking) => changeOptions({ savedStateTracking })
+                            : undefined
+                        }
+                      />
+                    }
+                    network={
+                      // Off screen (another tab, the Inspector view) it holds its last render: no work per clock tick.
+                      <Frozen
+                        isFrozen={viewMode !== 'network' && (viewMode !== 'profile' || sideTab !== 'network')}
+                      >
+                        <NetworkPanel
+                          exchanges={series.http}
+                          fromTs={startTs}
+                          toTs={endTs}
+                          openEnd={endTs}
+                          empty={networkEmpty}
+                          view={networkView}
+                          onViewChange={setNetworkView}
+                          selectedId={selectedExchange === null ? null : selectedHttp}
+                          onSelect={setSelectedHttp}
+                          detail={httpDetail}
+                          mocks={state.networkMocks}
+                          mockControl={mockRules}
+                        />
+                      </Frozen>
+                    }
+                    layouts={
+                      <LayoutsPanel
+                        inflates={series.inflates}
+                        fromTs={startTs}
+                        toTs={endTs}
+                        empty={layoutsEmpty}
+                        isTrackingOff={isActive && isLayoutCapable(sdk) && !sdkOptions.inflateTracking}
+                        onEnableTracking={
+                          optionsBlocker === null && isLayoutCapable(sdk)
+                            ? () => changeOptions({ inflateTracking: true })
+                            : undefined
+                        }
+                      />
+                    }
+                  />
+                </Frozen>
+              </Activity>
+            </main>
+          </div>
           {mockRules.editor && (
             <MockEditor
               key={mockRules.editor.openId}

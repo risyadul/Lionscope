@@ -43,8 +43,8 @@ screens by jank.</sub>
 
 ## What the dashboard shows
 
-One page: the device, the charts on one time axis, logcat and, with the SDK, the Screens, Stalls, Layouts and
-Network tabs. See [What the dashboard shows](docs/dashboard.md), and each part in detail:
+Five workspaces: Profiler (charts on one time axis, logcat, Screens, Stalls, Layouts and Saved State), Layout
+Inspector, Network, Storage and Device. See [What the dashboard shows](docs/dashboard.md), and each part in detail:
 
 - [Finding the line that blocks the main thread](docs/features/stalls.md)
 - [Layouts: what inflating XML costs](docs/features/layouts.md)
