@@ -17,6 +17,7 @@ import {
   DEVICE_PROTOCOL_V8,
   DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_V11,
+  DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -112,6 +113,7 @@ import {
   ROW_DIGEST_PATTERN,
   storageReadInputSchema,
   storageValueSchema,
+  storageFieldValueSchema,
   storageWriteInputSchema,
 } from './storage.ts';
 
@@ -1057,6 +1059,13 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       code: storageCode,
       current: storageValueSchema.optional(),
       stored: storageValueSchema.optional(),
+      rowDigest: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/)
+        .optional(),
+      storedFields: z.array(storageFieldValueSchema).max(MAX_STORAGE_COLUMNS).optional(),
+      currentFields: z.array(storageFieldValueSchema).max(MAX_STORAGE_COLUMNS).optional(),
+      pk: z.array(storageValueSchema).max(64).optional(),
       normalized: z.boolean().optional(),
       memory: z.enum(['applied', 'not_applied']).optional(),
       persisted: z.union([z.boolean(), z.literal('timeout')]).optional(),
@@ -1212,6 +1221,18 @@ export function parseDeviceMessage(
   const since = type === null ? MIN_DEVICE_PROTOCOL_VERSION : DEVICE_MESSAGE_VERSIONS[type];
   if (type !== null && since > protocolVersion) {
     return { ok: false, error: `${type} needs protocol version ${since}`, unnegotiated: { type, since } };
+  }
+  if (
+    type === 'storageWriteResult' &&
+    protocolVersion < DEVICE_PROTOCOL_V12 &&
+    object &&
+    ['storedFields', 'currentFields', 'pk', 'rowDigest'].some((key) => Object.hasOwn(object, key))
+  ) {
+    return {
+      ok: false,
+      error: 'Row outcomes need protocol version 12',
+      unnegotiated: { type, since: DEVICE_PROTOCOL_V12 },
+    };
   }
   const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;
   if (typeof version === 'number' && !isSupportedProtocolVersion(version)) {

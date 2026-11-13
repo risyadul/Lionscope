@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -143,6 +143,8 @@ export interface TimelineEvent {
 export type SessionStatus = 'idle' | 'waiting_for_process' | 'running' | 'error';
 
 export interface SdkStatus {
+  /** Session-local SDK connection generation, including replacements without an observable disconnect. */
+  linkGeneration?: number;
   /** An SDK connection for the session's app is live. */
   connected: boolean;
   sdkVersion: string | null;
@@ -1486,7 +1488,7 @@ export interface StorageTable {
   columns: StorageColumn[];
   /** Primary key columns in key order; empty without an explicit primary key. */
   pk: string[];
-  /** Why rows of it can't be edited at all (null: cells of non-key columns can be). */
+  /** Why rows of it can't be edited at all (null: supported cells can be). */
   readOnly: StorageReadOnlyReason | null;
 }
 
@@ -1541,11 +1543,22 @@ export type StorageReadInput =
   | { store: 'db'; name: string; pages?: StoragePageRequest[] };
 
 /**
- * An edit (compare-and-set). Prefs: `update` a key's value (same type) or `remove` the key; database: `update` one cell
+ * An edit (compare-and-set). Prefs: `update` a key's value (same type) or `remove` the key; database: `update` one cell or v12 `updateRow` multiple fields
  * of the row with primary key `pk` (values in key order) or `delete` that row (`rowDigest` from the read). `undoOf`:
  * the `opId` whose edit this one reverts (only an `undo` the server offered is accepted, on the link it was made on).
  * `target`: the answer's `target` the values were read from; the edit is refused when the app's link is another now.
  */
+export interface StorageFieldValue {
+  column: string;
+  value: StorageValue;
+}
+
+export interface StorageFieldEdit {
+  column: string;
+  expected: StorageValue;
+  value: StorageValue;
+}
+
 export type StorageWriteInput =
   | {
       store: 'prefs';
@@ -1580,6 +1593,16 @@ export type StorageWriteInput =
   | {
       store: 'db';
       name: string;
+      op: 'updateRow';
+      table: string;
+      pk: StorageValue[];
+      edits: StorageFieldEdit[];
+      undoOf?: string;
+      target?: StorageTarget;
+    }
+  | {
+      store: 'db';
+      name: string;
       op: 'delete';
       table: string;
       pk: StorageValue[];
@@ -1607,6 +1630,11 @@ export interface StorageWriteOutcome {
   late: boolean;
   current?: StorageValue;
   stored?: StorageValue;
+  /** v12 row edits: readback/conflicts by column and confirmed post-write primary key. */
+  storedFields?: StorageFieldValue[];
+  rowDigest?: string;
+  currentFields?: StorageFieldValue[];
+  pk?: StorageValue[];
   normalized?: boolean;
   memory?: 'applied' | 'not_applied';
   persisted?: boolean | 'timeout';
@@ -1674,7 +1702,7 @@ export interface StorageAuditEntry {
   table: string | null;
   field: string | null;
   pkDigest: string | null;
-  op: 'update' | 'remove' | 'delete';
+  op: 'update' | 'updateRow' | 'remove' | 'delete';
   code: StorageCode;
   phase: StorageWritePhase | null;
   late: boolean;
@@ -1917,7 +1945,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 11;
+export const DEVICE_PROTOCOL_VERSION = 12;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1953,6 +1981,8 @@ export const MIN_DEVICE_PROTOCOL_VERSION = 1;
  * server sends them only on a link whose welcome carried the link proof and only as far as its consent flags allow;
  * the SDK answers only on such a link and within the consent it was told (none of these types is in its
  * `UnprovenType` allowlist). Below v11 neither side sends any of it.
+ * v12: original Storage values and atomic `updateRow` edits (including primary keys). Row outcomes carry
+ * `storedFields`, `currentFields`, the confirmed `pk` and `rowDigest`. Older negotiated links retain v11 behavior.
  */
 export const DEVICE_PROTOCOL_V2 = 2;
 export const DEVICE_PROTOCOL_V3 = 3;
@@ -1964,6 +1994,7 @@ export const DEVICE_PROTOCOL_V8 = 8;
 export const DEVICE_PROTOCOL_V9 = 9;
 export const DEVICE_PROTOCOL_V10 = 10;
 export const DEVICE_PROTOCOL_V11 = 11;
+export const DEVICE_PROTOCOL_V12 = 12;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -2265,6 +2296,10 @@ export type DeviceMessage =
       code: StorageCode;
       current?: StorageValue;
       stored?: StorageValue;
+      storedFields?: StorageFieldValue[];
+      rowDigest?: string;
+      currentFields?: StorageFieldValue[];
+      pk?: StorageValue[];
       normalized?: boolean;
       memory?: 'applied' | 'not_applied';
       persisted?: boolean | 'timeout';
@@ -2380,7 +2415,7 @@ export type GatewayMessage =
       opId: string;
       store: 'prefs' | 'db';
       name: string;
-      op: 'update' | 'remove' | 'delete';
+      op: 'update' | 'updateRow' | 'remove' | 'delete';
       key?: string;
       table?: string;
       column?: string;
@@ -2388,4 +2423,6 @@ export type GatewayMessage =
       expected?: string;
       value?: string;
       rowDigest?: string;
+      /** v12 only: canonical JSON of StorageFieldEdit[]. */
+      edits?: string;
     };

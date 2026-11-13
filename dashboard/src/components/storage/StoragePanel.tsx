@@ -13,6 +13,7 @@ import type {
   StorageWriteInput,
   StorageWriteOutcome,
 } from '@lionscope/protocol/wire';
+import { sameStorageValue } from '@lionscope/protocol/storage-values';
 import { useServices } from '../../app/services.ts';
 import { useStorage } from '../../hooks/useStorage.ts';
 import {
@@ -79,6 +80,12 @@ interface Editing {
   affinity?: 'string' | 'integer' | 'real';
 }
 
+interface RowDraft {
+  row: string;
+  base: Omit<Extract<StorageWriteInput, { op: 'updateRow' }>, 'edits'>;
+  fields: Record<string, Editing>;
+}
+
 interface LastWrite {
   outcome: StorageWriteOutcome;
   /** What was sent: the row or key it names gets the saved mark when the outcome allows it. */
@@ -110,7 +117,7 @@ function writeLabel(write: StorageWriteInput): string {
   const key = write.pk.map(displayValue).join(', ');
   return write.op === 'update'
     ? `${write.table} · ${key} · ${write.column}`
-    : `${write.table} · ${key} · delete`;
+    : `${write.table} · ${key} · ${write.op === 'updateRow' ? 'row edit' : 'delete'}`;
 }
 
 /** Only complete, non-NULL SQLite keys can address a write; rowid is never a substitute. */
@@ -161,6 +168,7 @@ function ValueText({ value }: { value: StorageValue }) {
 
 type Props = {
   consent: StorageConsent;
+  rowEditing?: boolean;
   /** This client's storage answers (DashboardState.storageAnswers). */
   answers: readonly StorageAnswer[];
   /** Final outcomes that came after their answer (DashboardState.storageOutcomes). */
@@ -187,7 +195,7 @@ export const StoragePanel = memo(function StoragePanel(props: Props) {
   return <StorageTab key={props.sessionKey} {...props} />;
 });
 
-function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
+function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }: Props) {
   const { send } = useServices();
   const storage = useStorage(send, answers);
   const canWrite = consent === 'read_write';
@@ -199,6 +207,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [rowDraft, setRowDraft] = useState<RowDraft | null>(null);
   const [lastWrite, setLastWrite] = useState<LastWrite | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [audit, setAudit] = useState<StorageAuditEntry[] | null>(null);
@@ -228,6 +237,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
     request.current += 1;
     setBusy(false);
     setEditing(null);
+    setRowDraft(null);
     setConfirmDelete(false);
     currentSheet.current = null;
     setSheet(null);
@@ -237,6 +247,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
   /** Opens another row or key (or none): a draft or an armed Delete of the one before ends with it. */
   const openSheet = useCallback((next: Sheet | null) => {
     setEditing(null);
+    setRowDraft(null);
     setConfirmDelete(false);
     currentSheet.current = next;
     setSheet(next);
@@ -408,7 +419,6 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       if (writing.current) return;
       writing.current = true;
       const gen = generation.current;
-      setEditing(null);
       setConfirmDelete(false);
       // A new write ends the offer of the last one's undo (it would revert under the new value).
       setLastWrite(null);
@@ -418,6 +428,42 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         if (response?.ok && response.kind === 'write') {
           writes.current += 1;
           setLastWrite({ outcome: response.outcome, write, seq: writes.current });
+          if (response.outcome.code === 'ok') {
+            setEditing(null);
+            if (write.op === 'updateRow') {
+              setRowDraft(null);
+              const { pk, storedFields, rowDigest } = response.outcome;
+              if (pk && storedFields) {
+                const oldKey = JSON.stringify(write.pk);
+                const newKey = JSON.stringify(pk);
+                const next: Sheet = { store: 'db', table: write.table, row: newKey };
+                currentSheet.current = next;
+                setSheet(next);
+                setDbView((view) => {
+                  if (!view?.page || view.name !== write.name || view.table !== write.table) return view;
+                  const shown = view.page;
+                  const ids = rowIdentities(shown.page, shown.scope);
+                  const rows = shown.page.rows.map((row, index) =>
+                    ids[index]?.key === oldKey
+                      ? {
+                          cells: shown.page.columns.map(
+                            (column, cell) =>
+                              storedFields.find((field) => field.column === column)?.value ??
+                              row.cells[cell]!,
+                          ),
+                          digest: rowDigest ?? null,
+                        }
+                      : row,
+                  );
+                  return { ...view, page: { ...shown, page: { ...shown.page, rows } } };
+                });
+              } else openSheet(null);
+            }
+          }
+          if (write.op === 'updateRow' && response.outcome.code === 'ok' && response.outcome.pk) {
+            if (audit !== null) await loadAudit();
+            return;
+          }
         }
       } finally {
         writing.current = false;
@@ -425,7 +471,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
       await reload();
       if (audit !== null) await loadAudit();
     },
-    [audit, loadAudit, reload, run, storage],
+    [audit, loadAudit, reload, run, storage, openSheet],
   );
 
   /** Saves the draft: the write it was started as, with the new value (one field, one write). */
@@ -438,6 +484,29 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
         : parseValue(editing.text, base.expected, affinity);
     if ('error' in parsed) return setEditing({ ...editing, error: parsed.error });
     void submit({ ...base, value: parsed.value } as StorageWriteInput);
+  };
+
+  const applyRow = () => {
+    if (!rowDraft) return;
+    const edits = [];
+    for (const [column, field] of Object.entries(rowDraft.fields)) {
+      if (field.text === editText(field.base.expected)) continue;
+      const parsed =
+        field.text === '' && field.base.expected.t !== 'string' && field.base.expected.t !== 'blob'
+          ? { value: { t: 'null' } as const }
+          : parseValue(field.text, field.base.expected, field.affinity);
+      if ('error' in parsed) {
+        setRowDraft({
+          ...rowDraft,
+          fields: { ...rowDraft.fields, [column]: { ...field, error: parsed.error } },
+        });
+        return;
+      }
+      if (!sameStorageValue(parsed.value, field.base.expected))
+        edits.push({ column, expected: field.base.expected, value: parsed.value });
+    }
+    if (edits.length) void submit({ ...rowDraft.base, edits });
+    else setRowDraft(null);
   };
 
   const deleteRow = (view: DbView, shown: StoragePage, target: StorageTarget, row: number) => {
@@ -522,11 +591,18 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
    * The saved mark: an outcome that allows it, on the field its write named, while that field shows what the write
    * stored (a later read that failed, or that saw the app change it since, shows no mark).
    */
-  const marks = (id: string, value: StorageValue | undefined) =>
-    written !== null &&
-    writtenId === id &&
-    showsSaved(written.outcome) &&
-    (written.outcome.stored === undefined || sameValue(written.outcome.stored, value));
+  const marks = (id: string, value: StorageValue | undefined) => {
+    if (!written || !showsSaved(written.outcome)) return false;
+    if (written.write.op === 'updateRow') {
+      const base = fieldId({ ...written.write, pk: written.outcome.pk ?? written.write.pk });
+      const edit = written.write.edits.find((edit) => id === `${base}${edit.column}`);
+      const stored = written.outcome.storedFields?.find((field) => field.column === edit?.column)?.value;
+      return edit !== undefined && stored !== undefined && sameValue(stored, value);
+    }
+    return (
+      writtenId === id && (written.outcome.stored === undefined || sameValue(written.outcome.stored, value))
+    );
+  };
   const prefsField = (entry: StoragePrefsEntry) =>
     prefsView && entry.keyLength === undefined ? `p\u0000${prefsView.name}\u0000${entry.key}` : null;
   const cellField = (row: number, column: string) =>
@@ -569,6 +645,20 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
               Stored: <ValueText value={written.outcome.stored} />
             </>
           )}
+          {written.outcome.storedFields &&
+            written.outcome.normalized &&
+            written.outcome.storedFields.map((field) => (
+              <span key={field.column}>
+                {' '}
+                Stored {field.column}: <ValueText value={field.value} />
+              </span>
+            ))}
+          {written.outcome.currentFields?.map((field) => (
+            <span key={field.column}>
+              {' '}
+              Current {field.column}: <ValueText value={field.value} />
+            </span>
+          ))}
           {written.outcome.current && (
             <>
               {' '}
@@ -587,7 +677,7 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
               void submit(undo);
             }}
           >
-            Undo
+            {written.write.store === 'db' ? 'Revert row edit' : 'Undo'}
           </button>
         )}
       </div>
@@ -1030,7 +1120,10 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
             {row.cells.map((cell, columnIndex) => {
               const column = page.columns[columnIndex] ?? '';
               const field = cellField(rowIndex, column);
-              const reason = cellReadOnly(page, column, cell);
+              const reason =
+                !rowEditing && page.pk.includes(column)
+                  ? 'update the SDK to edit primary keys'
+                  : cellReadOnly(page, column, cell);
               const editable =
                 canWrite && reason === null && !pkMissing && field !== null && !stale(shown.target);
               const type = schema?.columns.find((candidate) => candidate.name === column)?.type;
@@ -1040,23 +1133,53 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
                   label={column}
                   type={page.pk.includes(column) ? `key · ${type ?? cell.t}` : (type ?? cell.t)}
                 >
-                  {editing !== null && editing.id === field ? (
-                    <ValueEditor
-                      label={column}
-                      editing={editing}
-                      shown={cell}
-                      busy={busy}
-                      onChange={setEditing}
-                      onSave={save}
-                    />
+                  {rowDraft?.fields[column] ? (
+                    <div className="storage-editor" data-changed="true">
+                      <label className="storage-draft-label">
+                        Draft
+                        <input
+                          aria-label={`New value of ${column}`}
+                          className="mono"
+                          value={rowDraft.fields[column]!.text}
+                          disabled={busy}
+                          spellCheck={false}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setRowDraft((draft) =>
+                              draft
+                                ? {
+                                    ...draft,
+                                    fields: {
+                                      ...draft.fields,
+                                      [column]: { ...draft.fields[column]!, text: value, error: null },
+                                    },
+                                  }
+                                : null,
+                            );
+                          }}
+                        />
+                      </label>
+                      <span>
+                        Read as <ValueText value={rowDraft.fields[column]!.base.expected} /> when the edit
+                        began: Apply compares with that.
+                      </span>
+                      {!sameValue(cell, rowDraft.fields[column]!.base.expected) && (
+                        <span>
+                          Current <ValueText value={cell} />
+                        </span>
+                      )}
+                      {rowDraft.fields[column]!.error && (
+                        <span role="alert">{rowDraft.fields[column]!.error}</span>
+                      )}
+                    </div>
                   ) : (
                     <FieldValue
                       value={cell}
                       editLabel={editable ? `Edit ${column}` : null}
-                      disabled={busy || editing !== null}
-                      onEdit={() =>
-                        field !== null &&
-                        setEditing({
+                      disabled={busy || (!rowEditing && rowDraft !== null)}
+                      onEdit={() => {
+                        if (!pk || !field) return;
+                        const editing: Editing = {
                           id: field,
                           text: editText(cell),
                           error: null,
@@ -1066,14 +1189,26 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
                             op: 'update',
                             table: page.table,
                             column,
-                            pk: pk!,
+                            pk,
                             expected: cell,
                             target: shown.target,
                           },
                           affinity: affinityOf(schema, column),
-                        })
-                      }
-                      reason={canWrite && !page.pk.includes(column) && !page.readOnly ? reason : null}
+                        };
+                        setRowDraft((draft) => ({
+                          row: sheet.row,
+                          base: draft?.base ?? {
+                            store: 'db',
+                            name: dbView.name,
+                            op: 'updateRow',
+                            table: page.table,
+                            pk,
+                            target: shown.target,
+                          },
+                          fields: { ...draft?.fields, [column]: editing },
+                        }));
+                      }}
+                      reason={canWrite ? reason : null}
                     />
                   )}
                   {fieldOutcome(field)}
@@ -1091,13 +1226,23 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
               </p>
             )}
           </div>
+          {rowDraft && (
+            <div className="storage-sheet-foot">
+              <button type="button" className="btn btn--primary" disabled={busy} onClick={applyRow}>
+                Apply
+              </button>
+              <button type="button" className="btn" disabled={busy} onClick={() => setRowDraft(null)}>
+                Discard
+              </button>
+            </div>
+          )}
           {canDelete && (
             <div className="storage-sheet-foot">
               <button
                 type="button"
                 className="btn storage-delete"
                 data-armed={confirmDelete || undefined}
-                disabled={busy || editing !== null}
+                disabled={busy || rowDraft !== null}
                 onClick={() =>
                   confirmDelete ? deleteRow(dbView, page, shown.target, rowIndex) : setConfirmDelete(true)
                 }
@@ -1238,16 +1383,77 @@ function StorageTab({ consent, answers, outcomes, isRunning }: Props) {
           again.
         </p>
       )}
-      <div className="storage-body" key={levelKey} data-direction={direction} aria-busy={busy || undefined}>
-        {body}
-      </div>
-      {pager}
-      {footOutcome && !sheetBody && <div className="storage-foot">{footOutcome}</div>}
-      {sheetBody && (
-        <div className="storage-sheet" role="dialog" aria-label={sheet?.store === 'db' ? 'Row' : 'Key'}>
-          {sheetBody}
+      <div className="storage-workspace">
+        {listing && (
+          <nav className="storage-browser" aria-label="Storage sources">
+            <h3>Preferences</h3>
+            {listing.prefs.map((file) => (
+              <button
+                type="button"
+                className="storage-row"
+                key={`prefs:${file.name}`}
+                aria-label={`Open preferences ${file.name}`}
+                aria-current={selected?.store === 'prefs' && selected.name === file.name ? 'page' : undefined}
+                onClick={() => void open({ store: 'prefs', name: file.name })}
+              >
+                {file.name}
+              </button>
+            ))}
+            <h3>Databases</h3>
+            {listing.databases.map((database) => (
+              <div key={database.name}>
+                <button
+                  type="button"
+                  className="storage-row"
+                  aria-label={`Open database ${database.name}`}
+                  disabled={database.status !== 'ok'}
+                  onClick={() => void open({ store: 'db', name: database.name })}
+                >
+                  {database.name}
+                </button>
+                {dbView?.name === database.name &&
+                  dbView.tables.map((table) => (
+                    <button
+                      type="button"
+                      key={table.name}
+                      className="storage-row storage-table-link"
+                      aria-label={`Open table ${table.name}`}
+                      aria-current={dbView.table === table.name ? 'page' : undefined}
+                      title={table.readOnly ? readOnlyText(table.readOnly) : 'Editable table'}
+                      onClick={() => void openTable(table.name)}
+                    >
+                      {table.name}
+                      {table.readOnly && ' · read-only'}
+                    </button>
+                  ))}
+              </div>
+            ))}
+          </nav>
+        )}
+        <div className="storage-content">
+          <div
+            className="storage-body"
+            key={levelKey}
+            data-direction={direction}
+            aria-busy={busy || undefined}
+          >
+            {body}
+          </div>
+          {pager}
+          {footOutcome && !sheetBody && <div className="storage-foot">{footOutcome}</div>}
         </div>
-      )}
+        {sheetBody && (
+          <div className="storage-sheet" role="dialog" aria-label={sheet?.store === 'db' ? 'Row' : 'Key'}>
+            {sheetBody}
+            {written?.write.op === 'updateRow' &&
+              sheet?.store === 'db' &&
+              sheet.table === written.write.table &&
+              [JSON.stringify(written.write.pk), JSON.stringify(written.outcome.pk)].includes(sheet.row) && (
+                <div className="storage-field-outcome">{outcomeBlock(false)}</div>
+              )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

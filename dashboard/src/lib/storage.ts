@@ -50,12 +50,13 @@ export function displayValue(value: StorageValue): string {
 
 /** Whether a value can be edited in place (a complete value of a type the editor knows, not redacted). */
 export function isEditable(value: StorageValue): boolean {
-  if (value.t === 'redacted' || value.t === 'blob' || value.t === 'stringSet') return false;
-  return !(value.t === 'string' && value.complete === false);
+  return value.t !== 'redacted' && !('complete' in value && value.complete === false);
 }
 
 /** The text an edit field starts with. */
 export function editText(value: StorageValue): string {
+  if (value.t === 'blob') return value.b64;
+  if (value.t === 'stringSet') return JSON.stringify(value.v);
   return value.t === 'null' ? '' : displayValue(value);
 }
 
@@ -113,6 +114,23 @@ export function parseValue(
       if (trimmed !== 'true' && trimmed !== 'false') return { error: 'true or false.' };
       return { value: { t: 'bool', v: trimmed === 'true' } };
     }
+    case 'stringSet': {
+      let values: unknown;
+      try {
+        values = JSON.parse(text);
+      } catch {
+        return { error: 'Enter a JSON array of strings.' };
+      }
+      if (!Array.isArray(values) || !values.every((value): value is string => typeof value === 'string'))
+        return { error: 'Enter a JSON array of strings.' };
+      return { value: { t: 'stringSet', v: [...new Set(values)] } };
+    }
+    case 'blob': {
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text))
+        return { error: 'Enter standard base64.' };
+      const size = (text.length / 4) * 3 - (text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0);
+      return { value: { t: 'blob', b64: text, size, complete: true } };
+    }
     case 'null':
       return { value: { t: 'null' } };
     default:
@@ -123,14 +141,14 @@ export function parseValue(
 const READ_ONLY_TEXT: Record<string, string> = {
   no_explicit_pk: 'no explicit primary key (rowid is not stable)',
   pk_column: 'primary key column',
-  view: 'a view (its values are hidden: which table column they come from is not known)',
-  virtual: 'a virtual table (its values are hidden: which table column they come from is not known)',
+  view: 'a view',
+  virtual: 'a virtual table',
   deferred_fk:
     'a table in a deferred foreign key (its check would only fail at COMMIT, inside the app’s transaction)',
   defer_foreign_keys:
     'the app left PRAGMA defer_foreign_keys on (every foreign key would only be checked at COMMIT)',
   internal: 'an SQLite / Room internal table',
-  redacted: 'looks like a credential',
+  redacted: 'credential hidden by the linked SDK; update it for original Storage values',
   truncated: 'too long to send whole',
 };
 
@@ -179,13 +197,8 @@ export function showsSaved(outcome: StorageWriteOutcome): boolean {
 /** Why a cell of a page can't be edited (null: it can). */
 export function cellReadOnly(page: StoragePage, column: string, value: StorageValue): string | null {
   if (page.readOnly) return readOnlyText(page.readOnly);
-  if (page.pk.includes(column)) return readOnlyText('pk_column');
   if (value.t === 'redacted') return readOnlyText('redacted');
-  if (value.t === 'blob' || (value.t === 'string' && value.complete === false)) {
-    return value.t === 'blob' && value.complete
-      ? 'BLOBs are edited from an agent (write_storage)'
-      : readOnlyText('truncated');
-  }
+  if ('complete' in value && value.complete === false) return readOnlyText('truncated');
   return null;
 }
 
@@ -291,5 +304,6 @@ export function storageSessionKey(session: SessionState): string {
     session.pid ?? '',
     session.startedAt ?? '',
     session.sdk?.connected ? 'sdk' : 'no-sdk',
+    session.sdk?.linkGeneration ?? '',
   ].join('|');
 }

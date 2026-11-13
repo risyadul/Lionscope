@@ -9,6 +9,7 @@ import {
   DEVICE_PROTOCOL_V9,
   DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_V11,
+  DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_STORAGE_QUEUED,
@@ -565,7 +566,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
    */
   const storage = (request: SdkStorageRequest): Promise<SdkStorageResult> =>
     new Promise((resolve, reject) => {
-      if (protocolVersion < DEVICE_PROTOCOL_V11) return reject(new SdkStorageError('unsupported'));
+      if (
+        protocolVersion < DEVICE_PROTOCOL_V11 ||
+        (request.type === 'storageWrite' &&
+          request.op === 'updateRow' &&
+          protocolVersion < DEVICE_PROTOCOL_V12)
+      )
+        return reject(new SdkStorageError('unsupported'));
       if (closing || !handler) return reject(new SdkStorageError('closed'));
       if (storages.size >= limits.maxPendingStorage) return reject(new SdkStorageError('busy'));
       const requestId = nextRequestId();

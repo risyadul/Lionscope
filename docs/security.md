@@ -66,11 +66,12 @@
 - Storage (0.13.0) is off unless the server starts with `--allow-storage-read` (reading the app's SharedPreferences
   and the Room databases it registers with `Lionscope.trackDatabase`) and `--allow-storage-write` (editing them):
   app data the AI or the dashboard can otherwise not see or change. It works only on a profiling session's link with
-  the link proof above, and the SDK checks the consent the welcome gave it again. Names and values that look like
-  credentials are redacted twice (by the SDK, and again by the server) and are read-only; every value of a view or
-  virtual table is redacted; paging cursors are opaque tokens the SDK keeps, never key values. EncryptedSharedPreferences
+  the link proof above, and the SDK checks the consent the welcome gave it again. On device protocol 12 links, Storage values are original, including credentials,
+  and editable from the dashboard or agents under the same read/write permissions. Older negotiated links keep
+  v11 redaction and primary-key restrictions. Views and virtual/internal tables remain read-only; paging cursors are opaque tokens the SDK keeps, never key values. EncryptedSharedPreferences
   are not read. Only updates of existing values and deletes by primary key, compare-and-set, through the app's own
-  connection (no raw SQL, no second connection); an edit names the app link its values were read from and is refused
+  connection (no raw SQL, no second connection); v12 row updates can include primary-key columns, compare every
+  edited field, and apply all changes in one transaction with database constraints intact. An edit names the app link its values were read from and is refused
   on another. The server keeps an audit of every edit (who, what, where, the outcome) without values, primary keys
   as digests, in memory only. See [Storage](features/storage.md).
 - Live view edits (0.9.0) reach only the app of the current Inspector snapshot, through the SDK link that captured

@@ -19,6 +19,12 @@ internal class StorageInspector(
     private val maxReplyBytes: Int = MAX_STORAGE_REPLY_BYTES,
     private val cursors: StorageCursors = StorageCursors(),
 ) {
+    /** v12 only: older negotiated links retain the v11 redaction policy. Set on the storage worker. */
+    var originalValues: Boolean = false
+
+    private fun redact(name: String, value: StorageValue): StorageValue =
+        if (originalValues) value else StorageRedaction.redact(name, value)
+
     /** Forgets every cursor (the link connection changed: tokens of the last one mean nothing now). */
     fun resetCursors() = cursors.clear()
 
@@ -137,7 +143,7 @@ internal class StorageInspector(
             val entry = JsonWriter().beginObject().name("key").value(StorageCut.prefix(key, MAX_STORAGE_KEY_UNITS))
             if (key.length > MAX_STORAGE_KEY_UNITS) entry.name("keyLength").value(key.length.toLong())
             entry.name("value")
-            StorageCodec.write(entry, StorageRedaction.redact(key, value))
+            StorageCodec.write(entry, redact(key, value))
             val text = entry.endObject().toString()
             val size = utf8Bytes(text) + (if (entries.isEmpty()) 0 else 1)
             if (bytes + size > maxReplyBytes) {
@@ -177,10 +183,10 @@ internal class StorageInspector(
         if (all.keys.any { it.startsWith(ENCRYPTED_KEY_PREFIX) }) throw StorageAbort("unsupported:encrypted")
         val expected = decodeValue(message.expected) ?: throw StorageAbort("invalid_value")
         if (expected.wireType !in StorageValue.PREFS_TYPES) throw StorageAbort("type_mismatch")
-        if (StorageRedaction.isSensitiveName(key)) throw StorageAbort("read_only:redacted")
+        if (!originalValues && StorageRedaction.isSensitiveName(key)) throw StorageAbort("read_only:redacted")
         val raw = all[key]
         val current = if (all.containsKey(key)) StorageCut.prefs(raw) ?: throw StorageAbort("failed") else null
-        if (current != null && StorageRedaction.hides(key, current)) throw StorageAbort("read_only:redacted")
+        if (!originalValues && current != null && StorageRedaction.hides(key, current)) throw StorageAbort("read_only:redacted")
         if (current != null && !current.complete) throw StorageAbort("read_only:truncated")
         val editor = instance.edit()
         val written: StorageValue?
@@ -355,7 +361,7 @@ internal class StorageInspector(
         // `false` is the longer of the two flags: the shell is measured with it.
         val shell = utf8Bytes(pageText(page, emptyList(), TOKEN_PLACEHOLDER, truncated = false))
         if (shell > budget) throw StorageAbort("invalid_value:too_large")
-        val hidden = page.table.kind in PROVENANCE_UNKNOWN
+        val hidden = !originalValues && page.table.kind in PROVENANCE_UNKNOWN
         val rows = ArrayList<String>()
         var bytes = shell
         var cut = false
@@ -364,7 +370,7 @@ internal class StorageInspector(
                 val value = StorageCut.cell(raw)
                 when {
                     hidden && value !is StorageValue.Null -> StorageValue.Redacted(value.wireType)
-                    else -> StorageRedaction.redact(page.columns[index], value)
+                    else -> redact(page.columns[index], value)
                 }
             }
             val digest = page.digest(row)
@@ -481,6 +487,9 @@ internal class StorageInspector(
             if (message.op == "delete") {
                 val digest = message.rowDigest?.takeIf { DIGEST.matches(it) } ?: throw StorageAbort("invalid_value")
                 db.delete(database, table, pk, digest)
+            } else if (message.op == "updateRow") {
+                if (!originalValues) throw StorageAbort("needs_sdk")
+                db.updateRow(database, table, pk, parseEdits(message.edits))
             } else {
                 val column = message.column ?: throw StorageAbort("invalid_identifier")
                 val expected = decodeValue(message.expected) ?: throw StorageAbort("invalid_value")
@@ -493,8 +502,8 @@ internal class StorageInspector(
                 // Android's SQLite binding turns UTF-16 into UTF-8: a lone surrogate swallows the code unit after it
                 // (API 28: U+D800 then a space is stored as the pair D800 DC20), so TEXT with one is refused before any SQL.
                 if (value is StorageValue.Text && value.hasLoneSurrogate) throw StorageAbort("invalid_value:lone_surrogate")
-                if (StorageRedaction.isSensitiveName(column)) throw StorageAbort("read_only:redacted")
-                db.update(database, table, column, pk, expected, value)
+                if (!originalValues && StorageRedaction.isSensitiveName(column)) throw StorageAbort("read_only:redacted")
+                db.update(database, table, column, pk, expected, value, originalValues)
             }
         } catch (e: SqlConstraintException) {
             throw StorageAbort("constraint_failed")
@@ -503,13 +512,39 @@ internal class StorageInspector(
         return WriteAnswer(
             code = outcome.code,
             stored = outcome.stored,
+            current = outcome.current,
+            storedFields = outcome.storedFields,
+            rowDigest = outcome.rowDigest,
+            currentFields = outcome.currentFields,
+            pk = outcome.pk,
             normalized = outcome.normalized,
-            observers = "room_invalidation",
+            observers = if (outcome.code == "ok") "room_invalidation" else null,
             changes = outcome.changes,
             totalChangesDelta = outcome.totalChangesDelta,
             txMs = timed.txMs,
             field = message.column ?: "",
         )
+    }
+
+    private fun parseEdits(text: String?): List<FieldEdit> {
+        val list = text?.let { StrictJson.parse(it) as? List<*> } ?: throw StorageAbort("invalid_value")
+        if (list.isEmpty() || list.size > MAX_STORAGE_COLUMNS) throw StorageAbort("invalid_value")
+        val columns = HashSet<String>()
+        return list.map { item ->
+            val edit = item as? Map<*, *> ?: throw StorageAbort("invalid_value")
+            if (edit.keys != setOf("column", "expected", "value")) throw StorageAbort("invalid_value")
+            val column = (edit["column"] as? String)?.takeIf { it.isNotEmpty() && it.length <= MAX_STORAGE_NAME_CHARS }
+                ?: throw StorageAbort("invalid_identifier")
+            if (!columns.add(column)) throw StorageAbort("invalid_value")
+            val expected = StorageCodec.decode(edit["expected"])?.takeIf { it.complete && it !is StorageValue.Redacted }
+                ?: throw StorageAbort("invalid_value")
+            val value = StorageCodec.decode(edit["value"])?.takeIf { it.complete && it !is StorageValue.Redacted }
+                ?: throw StorageAbort("invalid_value")
+            if (expected.wireType !in StorageValue.SQLITE_TYPES || value.wireType !in StorageValue.SQLITE_TYPES) throw StorageAbort("type_mismatch")
+            if (value is StorageValue.Real && value.isNaN) throw StorageAbort("invalid_value:nan_not_storable")
+            if (value is StorageValue.Text && value.hasLoneSurrogate) throw StorageAbort("invalid_value:lone_surrogate")
+            FieldEdit(column, expected, value)
+        }
     }
 
     // --- answers -----------------------------------------------------------------------------------------------
@@ -518,6 +553,10 @@ internal class StorageInspector(
         val code: String,
         val current: StorageValue? = null,
         val stored: StorageValue? = null,
+        val storedFields: List<FieldValue>? = null,
+        val rowDigest: String? = null,
+        val currentFields: List<FieldValue>? = null,
+        val pk: List<StorageValue>? = null,
         val normalized: Boolean? = null,
         val memory: String? = null,
         /** Prefs: true / false, null = still running (`timeout`). */
@@ -541,15 +580,27 @@ internal class StorageInspector(
         var units = MAX_STORAGE_VALUE_UNITS
         while (true) {
             val line = writeText(message, phase, answer) { StorageCut.squeeze(StorageCut.forWire(it), units) }
-            if (utf8Bytes(line) <= maxReplyBytes || units == 0) return line
+            if (utf8Bytes(line) <= maxReplyBytes) return line
+            if (units == 0) return writeText(message, phase, answer, readback = false) { it }
             units /= 2
         }
+    }
+
+    private fun writeFields(json: JsonWriter, fields: List<FieldValue>, cut: (StorageValue) -> StorageValue) {
+        json.beginArray()
+        fields.forEach { field ->
+            json.beginObject().name("column").value(field.column).name("value")
+            StorageCodec.write(json, cut(field.value))
+            json.endObject()
+        }
+        json.endArray()
     }
 
     private fun writeText(
         message: GatewayMessage.StorageWrite,
         phase: String,
         answer: WriteAnswer,
+        readback: Boolean = true,
         cut: (StorageValue) -> StorageValue,
     ): String {
         val field = message.key ?: message.column ?: answer.field
@@ -559,8 +610,18 @@ internal class StorageInspector(
             .name("opId").value(message.opId)
             .name("phase").value(phase)
             .name("code").value(answer.code)
-        answer.current?.let { StorageCodec.write(json.name("current"), StorageRedaction.redact(field, cut(it))) }
-        answer.stored?.let { StorageCodec.write(json.name("stored"), StorageRedaction.redact(field, cut(it))) }
+        if (readback) {
+            answer.current?.let { StorageCodec.write(json.name("current"), redact(field, cut(it))) }
+            answer.stored?.let { StorageCodec.write(json.name("stored"), redact(field, cut(it))) }
+            answer.rowDigest?.let { json.name("rowDigest").value(it) }
+            answer.storedFields?.let { fields -> writeFields(json.name("storedFields"), fields, cut) }
+            answer.currentFields?.let { fields -> writeFields(json.name("currentFields"), fields, cut) }
+            answer.pk?.let { keys ->
+                json.name("pk").beginArray()
+                keys.forEach { StorageCodec.write(json, cut(it)) }
+                json.endArray()
+            }
+        }
         answer.normalized?.let { json.name("normalized").value(it) }
         answer.memory?.let { json.name("memory").value(it) }
         if (answer.prefs && answer.code != "failed") {

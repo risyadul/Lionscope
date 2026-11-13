@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { gatewayLine } from '../src/device/deviceGateway.ts';
 import type { ServerMessage, StorageResponse, StorageWriteInput } from '@lionscope/protocol';
 import { STORAGE_WRITE_BURST } from '@lionscope/protocol';
 import { describe, expect, it } from 'vitest';
@@ -814,5 +816,155 @@ describe('storage pages: cursors and views', () => {
       kind: 'audit',
       entries: [{ code: 'consent_required' }],
     });
+  });
+});
+
+describe('protocol 12 row edits and original values', () => {
+  const rowEdit: StorageWriteInput = {
+    store: 'db',
+    name: 'app.db',
+    table: 'account',
+    op: 'updateRow',
+    pk: [{ t: 'integer', v: '1' }],
+    edits: [
+      { column: 'id', expected: { t: 'integer', v: '1' }, value: { t: 'integer', v: '7' } },
+      { column: 'password', expected: { t: 'string', v: 'old' }, value: { t: 'string', v: 'new' } },
+    ],
+  };
+
+  it('sends one atomic request and binds revert to the confirmed new key and exact offered fields', async () => {
+    const { service, link, answerWrites } = harness({ version: 12 });
+    answerWrites(() => ({
+      pk: [{ t: 'integer', v: '7' }],
+      storedFields: [
+        { column: 'id', value: { t: 'integer', v: '7' } },
+        { column: 'password', value: { t: 'string', v: 'new' } },
+      ],
+    }));
+    const outcome = outcomeOf(await service.write(rowEdit));
+    const request = link.storageRequests[0];
+    if (!request || request.type !== 'storageWrite') throw new Error('missing row request');
+    const { type, ...fields } = request;
+    expect(
+      gatewayLine({ type, requestId: 40, ...fields, opId: '00000000-0000-4000-8000-000000000040' }),
+    ).toBe(
+      readFileSync(new URL('../../protocol/fixtures/gateway-storage-row.ndjson', import.meta.url), 'utf8'),
+    );
+
+    expect(link.storageRequests).toHaveLength(1);
+    expect(link.storageRequests[0]).toMatchObject({ op: 'updateRow', pk: '[{"t":"integer","v":"1"}]' });
+    expect(outcome.undo).toMatchObject({
+      op: 'updateRow',
+      pk: [{ t: 'integer', v: '7' }],
+      edits: [
+        { column: 'id', expected: { t: 'integer', v: '7' }, value: { t: 'integer', v: '1' } },
+        { column: 'password', expected: { t: 'string', v: 'new' }, value: { t: 'string', v: 'old' } },
+      ],
+    });
+    const undo = outcome.undo;
+    if (!undo || undo.op !== 'updateRow') throw new Error('missing row revert');
+    await expect(
+      service.write({
+        ...undo,
+        edits: [{ column: 'id', expected: { t: 'integer', v: '7' }, value: { t: 'integer', v: '99' } }],
+      }),
+    ).resolves.toMatchObject({ ok: false });
+    expect(link.storageRequests).toHaveLength(1);
+    await expect(service.write(undo)).resolves.toMatchObject({ ok: true });
+    expect(link.storageRequests).toHaveLength(2);
+    expect(JSON.stringify(service.auditEntries())).not.toContain('"new"');
+  });
+
+  it('refuses row edits on v11 before dispatch, and rejects an invalid field before dispatch on v12', async () => {
+    const legacy = harness();
+    await expect(legacy.service.write(rowEdit)).resolves.toMatchObject({ code: 'needs_sdk' });
+    expect(legacy.link.storageRequests).toEqual([]);
+    const modern = harness({ version: 12 });
+    if (rowEdit.op !== 'updateRow') throw new Error('row edit');
+    await expect(
+      modern.service.write({
+        ...rowEdit,
+        edits: [
+          ...rowEdit.edits,
+          {
+            column: 'note',
+            expected: { t: 'string', v: 'x' },
+            value: { t: 'string', v: '\ud800' },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ code: 'invalid_value:lone_surrogate' });
+    expect(modern.link.storageRequests).toEqual([]);
+    await expect(
+      legacy.service.write({
+        store: 'db',
+        name: 'app.db',
+        table: 'account',
+        op: 'updateRow',
+        pk: [{ t: 'integer', v: '1' }],
+        edits: [
+          { column: 'password', expected: { t: 'string', v: 'old' }, value: { t: 'string', v: 'new' } },
+        ],
+      }),
+    ).resolves.toMatchObject({ code: 'read_only:redacted' });
+    expect(legacy.link.storageRequests).toEqual([]);
+  });
+
+  it('uses a scalar v11 request for a single-field draft and keeps its conditional revert', async () => {
+    const { service, link, answerWrites } = harness({ version: 11 });
+    answerWrites(() => ({ stored: { t: 'string', v: 'after' } }));
+    const outcome = outcomeOf(
+      await service.write({
+        store: 'db',
+        name: 'app.db',
+        table: 'item',
+        op: 'updateRow',
+        pk: [{ t: 'integer', v: '1' }],
+        edits: [
+          { column: 'name', expected: { t: 'string', v: 'before' }, value: { t: 'string', v: 'after' } },
+        ],
+      }),
+    );
+    expect(link.storageRequests[0]).toMatchObject({ op: 'update', column: 'name' });
+    expect(link.storageRequests[0]).not.toHaveProperty('edits');
+    expect(outcome.pk).toEqual([{ t: 'integer', v: '1' }]);
+    expect(outcome.undo).toMatchObject({
+      op: 'updateRow',
+      edits: [{ column: 'name', expected: { t: 'string', v: 'after' }, value: { t: 'string', v: 'before' } }],
+    });
+    if (!outcome.undo) throw new Error('missing revert');
+    await expect(service.write(outcome.undo)).resolves.toMatchObject({ ok: true });
+    expect(link.storageRequests[1]).toMatchObject({ op: 'update', value: '{"t":"string","v":"before"}' });
+  });
+
+  it('preserves original credentials on reads and writes, but never offers revert for missing or cut readback', async () => {
+    const { service, link, answerWrites } = harness({ version: 12 });
+    link.answerStorage = () =>
+      Promise.resolve({
+        type: 'storageReadResult',
+        requestId: 1,
+        code: 'ok',
+        entries: [{ key: 'access_token', value: { t: 'string', v: 'synthetic-token' } }],
+      });
+    await expect(service.read({ store: 'prefs', name: 'app' })).resolves.toMatchObject({
+      entries: [{ value: { t: 'string', v: 'synthetic-token' } }],
+    });
+    answerWrites(() => ({ stored: { t: 'string', v: 'new' }, persisted: true }));
+    expect(
+      outcomeOf(
+        await service.write({
+          store: 'prefs',
+          name: 'app',
+          op: 'update',
+          key: 'access_token',
+          expected: { t: 'string', v: 'old' },
+          value: { t: 'string', v: 'new' },
+        }),
+      ).stored,
+    ).toEqual({ t: 'string', v: 'new' });
+    answerWrites(() => ({
+      storedFields: [{ column: 'password', value: { t: 'string', v: '', complete: false, length: 50000 } }],
+    }));
+    expect(outcomeOf(await service.write(rowEdit)).undo).toBeUndefined();
   });
 });

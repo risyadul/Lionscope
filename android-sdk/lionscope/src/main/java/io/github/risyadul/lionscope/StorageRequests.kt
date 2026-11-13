@@ -75,6 +75,8 @@ internal class StorageRequests(
     /** Why [message] may not run on the current link (null: it may). */
     private fun refusalOf(message: GatewayMessage): String? {
         if (!DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V11)) return "needs_sdk"
+        if (message is GatewayMessage.StorageWrite && message.op == "updateRow" &&
+            !DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V12)) return "needs_sdk"
         if (!link.isServerVerified) return "unauthenticated"
         val consent = currentConsent()
         val needed = if (message is GatewayMessage.StorageWrite) StorageConsent.READ_WRITE else StorageConsent.READ
@@ -102,6 +104,7 @@ internal class StorageRequests(
             inspector.resetCursors()
             cursorConnection = connection
         }
+        inspector.originalValues = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V12)
         when (message) {
             is GatewayMessage.StorageList -> send(connection, inspector.list(message.requestId))
             is GatewayMessage.StorageRead -> send(connection, inspector.read(message))

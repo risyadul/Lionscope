@@ -36,9 +36,9 @@ const RESULTS = lines('storage-results.ndjson');
 const REQUESTS = lines('gateway-messages.ndjson').filter((line) => line.startsWith('{"type":"storage'));
 
 describe('storage protocol v11', () => {
-  it('raises both protocol versions to 11', () => {
-    expect(DEVICE_PROTOCOL_VERSION).toBe(DEVICE_PROTOCOL_V11);
-    expect(PROTOCOL_VERSION).toBe(11);
+  it('raises dashboard and device protocol to v12', () => {
+    expect(DEVICE_PROTOCOL_VERSION).toBe(12);
+    expect(PROTOCOL_VERSION).toBe(12);
   });
 
   it('parses every golden SDK answer on a v11 link, and none below it', () => {
@@ -380,5 +380,49 @@ describe('storage cursors and keys', () => {
       ).ok,
     ).toBe(false);
     expect(parseClientMessage(JSON.stringify({ type: 'storageAudit', requestId: 2 })).ok).toBe(true);
+  });
+});
+
+describe('storage row protocol v12', () => {
+  it('parses shared row outcome golden lines only on negotiated v12 links', () => {
+    for (const line of lines('storage-row-results.ndjson')) {
+      const result = parseDeviceMessage(line, 12);
+      expect(result.ok).toBe(true);
+      expect(parseDeviceMessage(line, 11).ok).toBe(false);
+      if (result.ok && result.value.type === 'storageWriteResult') {
+        expect(result.value.pk).toEqual([{ t: 'integer', v: '7' }]);
+        expect(result.value.storedFields?.find((field) => field.column === 'password')?.value).toEqual({
+          t: 'string',
+          v: 'new',
+        });
+      }
+    }
+  });
+
+  it('validates all edits, including duplicate columns and incomplete values', () => {
+    const row = {
+      store: 'db',
+      name: 'app.db',
+      op: 'updateRow',
+      table: 'account',
+      pk: [{ t: 'integer', v: '1' }],
+      edits: [{ column: 'id', expected: { t: 'integer', v: '1' }, value: { t: 'integer', v: '7' } }],
+    };
+    expect(storageWriteInputSchema.safeParse(row).success).toBe(true);
+    expect(storageWriteInputSchema.safeParse({ ...row, edits: [...row.edits, ...row.edits] }).success).toBe(
+      false,
+    );
+    expect(storageWriteInputSchema.safeParse({ ...row, edits: [] }).success).toBe(false);
+    expect(
+      storageWriteInputSchema.safeParse({
+        ...row,
+        edits: [
+          { column: 'v', expected: { t: 'string', v: '', complete: false }, value: { t: 'string', v: 'x' } },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(parseClientMessage(JSON.stringify({ type: 'storageWrite', requestId: 40, write: row })).ok).toBe(
+      true,
+    );
   });
 });

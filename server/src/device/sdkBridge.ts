@@ -277,10 +277,12 @@ export class SdkBridge {
     // The app reconnected (or restarted): the screen span and gfxinfo pause carry over to the new link.
     previous?.link.close();
     this.linkedOnce = true;
+    const linkGeneration = (this.status.linkGeneration ?? 0) + 1;
     // Calls still open on the old link get no response anymore.
     if (previous) this.options.store.http.linkClosed(previous.link);
     this.update({
       connected: true,
+      linkGeneration,
       sdkVersion: entry.hello.sdkVersion,
       processName: entry.hello.processName,
       apiLevel: entry.hello.apiLevel,

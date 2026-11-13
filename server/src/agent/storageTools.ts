@@ -20,7 +20,7 @@ const NO_STORAGE =
   'The storage inspector is off. Start Lionscope with --allow-storage-read (and --allow-storage-write to edit values).';
 
 export const VALUES_NOTE =
-  'Values are typed: {"t":"string"|"int"|"long"|"integer"|"float"|"real"|"bool"|"stringSet"|"blob"|"null", ...}. Integers are decimal strings (never numbers); float/real carry "bits" (raw IEEE bits, the exact value) and "v" (display only). {"t":"redacted"} values look like credentials: never shown, never editable. complete:false values were cut: read-only. A prefs entry with "keyLength" has a key too long to send: "key" is only its first code units, read-only (written as a key, that prefix would name ANOTHER key).';
+  'Values are typed: {"t":"string"|"int"|"long"|"integer"|"float"|"real"|"bool"|"stringSet"|"blob"|"null", ...}. Integers are decimal strings (never numbers); float/real carry "bits" (raw IEEE bits, the exact value) and "v" (display only). {"t":"redacted"} values come from older SDK redaction and are not editable; protocol 12 returns original Storage values including credentials. complete:false values were cut: read-only. A prefs entry with "keyLength" has a key too long to send: "key" is only its first code units, read-only (written as a key, that prefix would name ANOTHER key).';
 
 const name = z.string().min(1).max(MAX_STORAGE_NAME_CHARS);
 
@@ -55,7 +55,7 @@ export const listStorageTool = defineTool({
 export const readStorageTool = defineTool({
   name: 'read_storage',
   title: 'Read app storage',
-  description: `Reads the profiled app's storage through its SDK, live (needs --allow-storage-read): a SharedPreferences file (store "prefs": its keys in order with typed values, ${MAX_STORAGE_KEYS} at most per call; pass nextCursor back as cursor for more), a registered database's schema (store "db" without pages: tables with columns, primary key and why a table is read-only), or up to ${MAX_STORAGE_PAGES} table pages read in ONE transaction (store "db" with pages: [{table, columns?, cursor?, limit? (1-${MAX_STORAGE_ROWS}, default 50)}], rows in primary key order, each with the digest a delete needs). Cursors are opaque tokens: pass a nextCursor back as it came (valid for that file or table while the app's link lasts). A page with truncated:true was cut to stay under the answer size (rows left out, or a row too large sent with its values cut): its nextCursor continues. Values of views and virtual tables are all redacted (which table column they come from is not known). Reading a database holds the app's writers while it runs (a 250 ms budget checked between statements, so a slow statement can run past it). The answer's "target" names the app link it came from: pass it to write_storage so an edit never goes to another app, process or link. ${VALUES_NOTE} Use list_storage first for the names.`,
+  description: `Reads the profiled app's storage through its SDK, live (needs --allow-storage-read): a SharedPreferences file (store "prefs": its keys in order with typed values, ${MAX_STORAGE_KEYS} at most per call; pass nextCursor back as cursor for more), a registered database's schema (store "db" without pages: tables with columns, primary key and why a table is read-only), or up to ${MAX_STORAGE_PAGES} table pages read in ONE transaction (store "db" with pages: [{table, columns?, cursor?, limit? (1-${MAX_STORAGE_ROWS}, default 50)}], rows in primary key order, each with the digest a delete needs). Cursors are opaque tokens: pass a nextCursor back as it came (valid for that file or table while the app's link lasts). A page with truncated:true was cut to stay under the answer size (rows left out, or a row too large sent with its values cut): its nextCursor continues. On protocol 12, Storage values are original, including credentials; views and virtual tables remain read-only. Older SDKs redact values. Reading a database holds the app's writers while it runs (a 250 ms budget checked between statements, so a slow statement can run past it). The answer's "target" names the app link it came from: pass it to write_storage so an edit never goes to another app, process or link. ${VALUES_NOTE} Use list_storage first for the names.`,
   access: 'storage_read',
   input: z.object({
     store: z.enum(['prefs', 'db']).describe('prefs: a SharedPreferences file; db: a registered database'),
@@ -109,12 +109,12 @@ export const readStorageTool = defineTool({
 export const writeStorageTool = defineTool({
   name: 'write_storage',
   title: 'Edit app storage',
-  description: `Edits one value of the profiled app's storage live, compare-and-set (needs --allow-storage-write): nothing is written unless the current value equals "expected" exactly (same type; floats by bits). prefs: op "update" (key, expected, value of the SAME type) or "remove" (key, expected). db: op "update" one cell (table, column, pk = the row's primary key values in key order, expected, value; primary key columns and redacted cells are read-only) or "delete" one row (table, pk, rowDigest from read_storage). Codes: ok, conflict (current holds the app's value), already_applied_or_concurrent (it already was the new value: e.g. a retry after a lost answer; nothing written), type_mismatch, read_only:<why> (the schema says why a table is read-only, before you try), unsupported:<why> (e.g. deferred_fk: an edit that could fail at COMMIT on a deferred foreign key; defer_foreign_keys: the app left PRAGMA defer_foreign_keys on, nothing written), invalid_value[:nan_not_storable|nan_payload|lone_surrogate], constraint_failed, not_found, timeout (may still have been applied: read again; never undoable), busy. Prefs report memory (in the app), persisted (true/false/"timeout"; not true = in memory only) and observers "posted_unverified"; a database reports changes and observers "room_invalidation" (Room was told; screens that don't observe the database won't change until they reload). Only an ok final answer carries "undo": call write_storage with exactly that object to revert (it fails as conflict if the app changed the value since, and is refused once the app's link changed: a new session, another app, a restart or reconnect). Pass "target" from the read_storage answer the values came from: the edit is refused (nothing written) when the app's link is another one now. The server never retries. ${VALUES_NOTE}`,
+  description: `Edits existing values of the profiled app's storage live, compare-and-set (needs --allow-storage-write): nothing is written unless the current value equals "expected" exactly (same type; floats by bits). prefs: op "update" (key, expected, value of the SAME type) or "remove" (key, expected). db: op "update" one cell (table, column, pk = the row's primary key values in key order, expected, value; primary keys are editable on protocol 12; cut or legacy-redacted cells remain read-only) or "updateRow" (protocol 12: table, pk, edits:[{column,expected,value}], all comparisons and changes in one transaction, including composite primary keys) or "delete" one row (table, pk, rowDigest from read_storage). Codes: ok, conflict (current holds the app's value), already_applied_or_concurrent (it already was the new value: e.g. a retry after a lost answer; nothing written), type_mismatch, read_only:<why> (the schema says why a table is read-only, before you try), unsupported:<why> (e.g. deferred_fk: an edit that could fail at COMMIT on a deferred foreign key; defer_foreign_keys: the app left PRAGMA defer_foreign_keys on, nothing written), invalid_value[:nan_not_storable|nan_payload|lone_surrogate], constraint_failed, not_found, timeout (may still have been applied: read again; never undoable), busy. Prefs report memory (in the app), persisted (true/false/"timeout"; not true = in memory only) and observers "posted_unverified"; a database reports changes and observers "room_invalidation" (Room was told; screens that don't observe the database won't change until they reload). Only an ok final answer carries "undo": call write_storage with exactly that object to revert (it fails as conflict if the app changed the value since, and is refused once the app's link changed: a new session, another app, a restart or reconnect). Pass "target" from the read_storage answer the values came from: the edit is refused (nothing written) when the app's link is another one now. The server never retries. ${VALUES_NOTE}`,
   access: 'storage_write',
   input: z.object({
     store: z.enum(['prefs', 'db']),
     name,
-    op: z.enum(['update', 'remove', 'delete']),
+    op: z.enum(['update', 'updateRow', 'remove', 'delete']),
     key: name.optional().describe('prefs: the key'),
     table: name.optional().describe('db: the table'),
     column: name.optional().describe('db update: the column'),
@@ -126,6 +126,14 @@ export const writeStorageTool = defineTool({
       .describe('db: the row primary key, typed values in key order'),
     expected: z.unknown().optional().describe('The typed value the app must hold now'),
     value: z.unknown().optional().describe('update: the new typed value'),
+    edits: z
+      .array(z.object({ column: name, expected: z.unknown(), value: z.unknown() }).strict())
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        'db updateRow (protocol 12): all fields compared and updated in one transaction, including primary keys',
+      ),
     rowDigest: z.string().optional().describe('db delete: the row digest from read_storage'),
     undoOf: z.string().optional().describe('Only as given in an "undo" object'),
     target: z

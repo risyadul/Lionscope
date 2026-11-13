@@ -2,12 +2,12 @@
 
 # Storage: reading and editing app data live
 
-The profiled app's SharedPreferences and the Room databases it registers, from the dashboard's **Storage** tab or
-an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Needs SDK 0.13.0 or newer.
+The profiled app's SharedPreferences and the Room databases it registers, from the dashboard's **Storage** workspace or
+an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Needs SDK 0.13.0 or newer; original values and atomic row edits require device protocol 12 on both sides.
 
 <!-- /docs:added -->
 
-<img width="880" alt="The dashboard with the sample's StorageActivity mirrored: the Storage tab shows shop.db's item table as a grid and Bread's row open in a sheet after its qty was edited to 7, with the server's answer under that field; on the device the screen observing the table through a Room Flow shows Bread × 7 while the list loaded once still shows Bread × 5" src="../images/dashboard-storage.png">
+<img width="880" alt="Storage workspace with synthetic data: five-area sidebar, database/table list, grid with original access_token values, and a row editor following id 7 after a primary-key edit" src="../images/dashboard-storage-workspace.png">
 
 ## Turning it on
 
@@ -80,10 +80,23 @@ its process changes, and an answer for a file or table that is no longer shown i
 
 ## Editing
 
-Edits are compare-and-set: each one carries the value it was read as, and is refused (`conflict`, with the current
-value) when the app changed it since. Only updates of existing values and deleting a row by its primary key; no
+Edits are compare-and-set: each changed field carries the value it was read as, and the entire edit is refused
+(`conflict`, with current values) when the app changed an edited field since. Only updates of existing values and deleting a row by its primary key; no
 inserts, no raw SQL. Values keep their exact type: a Long stays a decimal string end to end, a float or double is
 compared by its raw bits (`0.0` and `-0.0` differ), and a value of another type is `type_mismatch`.
+
+The workspace has a source list on the left, a grid in the center, and a row editor on the right (a sheet in
+narrow windows). Room edits are drafts: change any supported fields, including primary-key fields, then **Apply**
+them together in one transaction or **Discard** them. BLOBs use standard base64; string sets use JSON arrays of
+strings. Preferences are saved per key. Switching workspaces preserves the selection and draft on the same app
+link; a new link or app clears them. A conflicting Apply keeps the draft alongside current values for comparison.
+
+Agents can use `op: "updateRow"` with `table`, the original `pk`, and
+`edits: [{column, expected, value}]`. With an older SDK, a single-field draft uses the legacy scalar edit; multi-field Apply is refused with
+`needs_sdk`. Existing scalar agent edits continue using the v11 contract. Successful row results carry `storedFields`, the confirmed new `pk`, and a new
+`rowDigest`. The dashboard follows the new key using that transaction's readback rather than reopening the old
+key; refresh reads the current page again. If a trigger moved or deleted the row beyond the requested new key,
+the outcome is still applied, but no confirmed row identity or revert is offered.
 
 What an answer says, and does not:
 
@@ -96,9 +109,11 @@ What an answer says, and does not:
 - **Room**: `changes`, and `observers: room_invalidation`: screens that observe the table through Room (`Flow`,
   `LiveData`) refresh; one that loaded once does not until it queries again. `totalChangesDelta` counts triggers and
   Room's own bookkeeping too.
-- **Undo** is offered only after an edit's final answer was `ok` in time (and, for prefs, persisted), and only on the
+- **Undo** (**Revert row edit** for Room) is offered only after an edit's final answer was `ok` in time (and, for prefs, persisted), and only on the
   link it was made on: after a new session, another app, a restart or a reconnect it is refused. It is itself
-  compare-and-set, so it is a `conflict` when the app changed the value in between.
+  compare-and-set, so it is a `conflict` when the app changed an edited value in between. A row revert restores every field in its Apply, including
+  primary keys, in one conditional transaction. Trigger/cascade effects follow database rules; this does not
+  restore the entire database or remove trigger-created audit records.
 - A delete or update that breaks a constraint (a foreign key still referenced, `NOT NULL`, `CHECK`, `UNIQUE`) is
   `constraint_failed` and rolled back.
 - **Deferred foreign keys** (`DEFERRABLE INITIALLY DEFERRED`) are checked only at COMMIT, and on Android a COMMIT that
@@ -121,7 +136,8 @@ What an answer says, and does not:
 - A prefs edit whose commit outlasts 1 s answers `provisional` first; its `final` answer always comes after it, and is
   recorded (audit, dashboards, agent) even when both arrive together.
 - A **lost answer** is a `timeout`: the edit may have been applied. Read again before retrying; a retry of an edit
-  that went through answers `already_applied_or_concurrent` and writes nothing.
+  that went through may answer `already_applied_or_concurrent` and writes nothing. After a primary-key change,
+  read again to locate the row before any deliberate retry.
 
 <img width="363" alt="Storage tab on the sample's edge.db: the editable tables listed first, and artist and track in the read-only group, marked deferred FK because track declares a deferred foreign key to artist; Room's own tables are marked internal" src="../images/dashboard-storage-readonly.png">
 
@@ -132,15 +148,18 @@ in a TEXT cell, Android's SQLite binding converts UTF-16 to UTF-8 and would chan
 prefs string or string set, Android keeps it in the app's memory but writes it to the file as `?`, so the app would
 read another value after a restart. Text and blobs over 16 KiB are shown cut and are read-only.
 
-## Not read, and redacted
+## Original values and read-only boundaries
 
-A key or column whose name looks like a credential (`token`, `password`, `secret`, `session`, `auth`, `…_key`, …)
-is shown as `redacted`. A string with a credential inside (a JSON `token` field, a JWT, `Bearer …`, a URL with a
-signature parameter) is shown with those parts replaced. Either is read-only. EncryptedSharedPreferences are
-`unsupported:encrypted`. Views, virtual (FTS) tables, Room's own tables and tables without an explicit primary key
-are read-only, each with its reason. Every value of a view or a virtual table is redacted, whatever its columns are
-called: which table column a view column comes from is not known, so a renamed credential column would otherwise
-show.
+On device protocol 12 links, Storage shows original app values, including credential-looking keys/columns and
+credentials inside strings. They are editable under the same write permission as other supported values, in
+both the dashboard and AI agents; no additional reveal toggle is needed. Network and Layout Inspector retain
+their own redaction policies. An older negotiated link keeps v11 redaction and primary-key restrictions: update
+both the server and SDK to use the new behavior.
+
+EncryptedSharedPreferences remain `unsupported:encrypted`. Views, virtual (FTS) tables, Room's own tables, tables
+without an explicit primary key, unsupported deferred-foreign-key cases, and truncated values retain their
+technical read-only restrictions, each with its reason. Complete, unique, non-NULL primary keys are required to
+address a row; changing a key does not bypass `UNIQUE`, foreign-key, `NOT NULL`, or other database constraints.
 
 The audit records who changed what and the outcome, never a value; a primary key is recorded as a digest. It is
 kept in the server's memory for its run, and read with `get_storage_audit` or the tab's **Write audit** button.

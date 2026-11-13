@@ -4,14 +4,15 @@
  *
  * Fail-closed in this order, before anything reaches the device: the server's consent flags (`consent_required`), a
  * running session (`needs_profiling_session`), its app's live SDK link at device protocol v11 (`needs_sdk`) with the
- * link proof (`unauthenticated`). One request per device at a time (`busy`), writes rate-limited per device. What the
- * SDK answers is redacted again here. Every write (refused ones too, and late outcomes) is audited without values.
+ * link proof (`unauthenticated`). One request per device at a time (`busy`), writes rate-limited per device. Original values are returned on v12 links; v11 reads retain the legacy redaction pass. Every write (refused ones too, and late outcomes) is audited without values.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import {
   canonicalPkJson,
   canonicalStorageJson,
   DEVICE_PROTOCOL_V11,
+  DEVICE_PROTOCOL_V12,
+  storageWriteValueSchema,
   isSensitiveStorageName,
   MAX_STORAGE_AUDIT,
   redactStoragePage,
@@ -100,7 +101,17 @@ interface OpRecord {
    */
   early?: SdkWriteResult;
   undoable: boolean;
-  input: Omit<StorageWriteInput, 'expected' | 'value' | 'rowDigest' | 'undoOf' | 'target'>;
+  undoHash?: string;
+  input: WriteMetadata;
+}
+
+interface WriteMetadata {
+  store: 'prefs' | 'db';
+  name: string;
+  op: StorageWriteInput['op'];
+  table: string | null;
+  field: string | null;
+  pkDigest: string | null;
 }
 
 export interface StorageServiceOptions {
@@ -188,7 +199,7 @@ export class StorageService {
           entries: (result.entries ?? []).map(({ key, keyLength, value }) => ({
             key,
             ...(keyLength !== undefined ? { keyLength } : {}),
-            value: redactStorageValue(key, value),
+            value: link.protocolVersion >= DEVICE_PROTOCOL_V12 ? value : redactStorageValue(key, value),
           })),
           nextCursor: result.nextCursor ?? null,
           truncated: result.truncated ?? false,
@@ -209,7 +220,9 @@ export class StorageService {
         kind: 'pages',
         target,
         name: input.name,
-        pages: (result.pages ?? []).map((page) => redactStoragePage(page)),
+        pages: (result.pages ?? []).map((page) =>
+          link.protocolVersion >= DEVICE_PROTOCOL_V12 ? page : redactStoragePage(page),
+        ),
         txMs: result.txMs ?? 0,
       };
     });
@@ -233,8 +246,26 @@ export class StorageService {
       return refusal(code, message ?? codeMessage(code));
     };
     if (!('serial' in reached)) return refuse(reached.code, reached.message);
-    const field = input.op === 'delete' ? null : input.store === 'prefs' ? input.key : input.column;
-    if (field !== null && isSensitiveStorageName(field)) return refuse('read_only:redacted');
+    if (
+      input.op === 'updateRow' &&
+      input.edits.length !== 1 &&
+      reached.link.protocolVersion < DEVICE_PROTOCOL_V12
+    )
+      return refuse(
+        'needs_sdk',
+        'Atomic row edits need device protocol 12: update the app SDK and restart it.',
+      );
+    const field =
+      input.op === 'delete' || input.op === 'updateRow'
+        ? null
+        : input.store === 'prefs'
+          ? input.key
+          : input.column;
+    const sensitive =
+      input.op === 'updateRow'
+        ? input.edits.some((edit) => isSensitiveStorageName(edit.column))
+        : field !== null && isSensitiveStorageName(field);
+    if (reached.link.protocolVersion < DEVICE_PROTOCOL_V12 && sensitive) return refuse('read_only:redacted');
     const problem = storageWriteProblem(input);
     if (problem) return refuse(problem);
     // Values read from another app, process or link must not be written here (checked before anything is sent).
@@ -246,6 +277,7 @@ export class StorageService {
       if (
         !original ||
         !original.undoable ||
+        original.undoHash !== sha256(JSON.stringify(writeRequest('', input))) ||
         original.target !== target ||
         original.serial !== reached.serial ||
         original.packageName !== reached.packageName ||
@@ -265,15 +297,23 @@ export class StorageService {
       target,
       state: 'pending',
       undoable: false,
-      input: stripValues(input),
+      input: writeMetadata(input),
     };
     this.remember(opId, record);
     this.inFlight.add(reached.serial);
     let result: SdkWriteResult;
     try {
-      const answer = await reached.link.storage(writeRequest(opId, input));
+      const answer = await reached.link.storage(writeRequest(opId, input, reached.link.protocolVersion));
       if (answer.type !== 'storageWriteResult' || answer.opId !== opId) throw new SdkStorageError('invalid');
       result = answer;
+      if (input.op === 'updateRow' && reached.link.protocolVersion < DEVICE_PROTOCOL_V12) {
+        const column = input.edits[0]!.column;
+        result = {
+          ...answer,
+          ...(answer.stored ? { storedFields: [{ column, value: answer.stored }], pk: input.pk } : {}),
+          ...(answer.current ? { currentFields: [{ column, value: answer.current }] } : {}),
+        };
+      }
     } catch (error) {
       if (!(error instanceof SdkStorageError)) throw error;
       const { code, message } = FAILURE_CODES[error.reason];
@@ -293,6 +333,10 @@ export class StorageService {
     record.state = result.phase === 'provisional' ? 'provisional' : 'done';
     const outcome = this.outcome(input, result, false, reached.target);
     record.undoable = outcome.undo !== undefined;
+    if (outcome.undo) {
+      record.target = writeTarget(outcome.undo);
+      record.undoHash = sha256(JSON.stringify(writeRequest('', outcome.undo)));
+    }
     this.audit(opId, record, input, result.code, result.phase, false, result);
     this.takeEarly(opId, record);
     return { ok: true, kind: 'write', target: reached.target, outcome };
@@ -328,11 +372,11 @@ export class StorageService {
     record.state = 'done';
     record.undoable = false;
     const outcome: StorageWriteOutcome = {
-      ...this.outcome(record.input as StorageWriteInput, message, true),
+      ...this.outcome(null, message, true),
       late,
     };
     delete outcome.undo;
-    this.audit(opId, record, record.input as StorageWriteInput, message.code, 'final', late, message);
+    this.audit(opId, record, record.input, message.code, 'final', late, message);
     log.info(
       `Storage: ${late ? 'late' : 'final'} outcome of write ${opId} on ${record.serial}: ${message.code}`,
     );
@@ -405,26 +449,31 @@ export class StorageService {
     return id;
   }
 
-  /** The outcome for callers: values redacted again, `undo` only for an `ok` final answer in time (bound to [target]). */
+  /** The outcome for callers: readback from the linked SDK, `undo` only for an `ok` final answer in time (bound to [target]). */
   private outcome(
-    input: StorageWriteInput,
+    input: StorageWriteInput | null,
     result: SdkWriteResult,
     late: boolean,
     target?: StorageTarget,
   ): StorageWriteOutcome {
-    const field = input.op === 'delete' ? '' : input.store === 'prefs' ? input.key : input.column;
-    const redact = (value: StorageValue | undefined) =>
-      value === undefined ? undefined : redactStorageValue(field, value);
     const outcome: StorageWriteOutcome = {
       opId: result.opId,
       code: result.code,
       phase: result.phase,
       late,
     };
-    const current = redact(result.current);
-    const stored = redact(result.stored);
+    const current = result.current;
+    const stored = result.stored;
     if (current) outcome.current = current;
     if (stored) outcome.stored = stored;
+    if (result.storedFields) outcome.storedFields = result.storedFields;
+    if (result.currentFields) outcome.currentFields = result.currentFields;
+    if (
+      result.pk?.length &&
+      result.pk.every((value) => value.t !== 'null' && storageWriteValueSchema.safeParse(value).success)
+    )
+      outcome.pk = result.pk;
+    if (result.rowDigest) outcome.rowDigest = result.rowDigest;
     if (result.normalized !== undefined) outcome.normalized = result.normalized;
     if (result.memory !== undefined) outcome.memory = result.memory;
     if (result.persisted !== undefined) outcome.persisted = result.persisted;
@@ -433,7 +482,7 @@ export class StorageService {
     if (result.totalChangesDelta !== undefined) outcome.totalChangesDelta = result.totalChangesDelta;
     if (result.txMs !== undefined) outcome.txMs = result.txMs;
     if (result.code !== 'ok') outcome.message = codeMessage(result.code);
-    else if (input.store === 'prefs' && result.persisted !== true) {
+    else if (result.persisted !== undefined && result.persisted !== true) {
       outcome.message =
         result.persisted === 'timeout'
           ? 'Changed in the app\u2019s memory; saving to disk is still running (its final outcome follows).'
@@ -443,13 +492,13 @@ export class StorageService {
       !late &&
       result.code === 'ok' &&
       result.phase === 'final' &&
-      input.op === 'update' &&
+      input?.op === 'update' &&
       (input.store === 'db' || result.persisted === true) &&
       stored !== undefined &&
       stored.t !== 'redacted' &&
       // A cut value (what a trigger or another writer left, too large to send) can't be an undo's `expected`.
       !isCut(stored);
-    if (undoable && input.op === 'update' && stored) {
+    if (undoable && input?.op === 'update' && stored) {
       outcome.undo =
         input.store === 'prefs'
           ? {
@@ -468,12 +517,41 @@ export class StorageService {
               op: 'update',
               table: input.table,
               column: input.column,
-              pk: input.pk,
+              pk: result.pk ?? input.pk,
               expected: stored,
               value: input.expected,
               undoOf: result.opId,
               ...(target ? { target } : {}),
             };
+    }
+    if (
+      !late &&
+      result.code === 'ok' &&
+      result.phase === 'final' &&
+      input?.op === 'updateRow' &&
+      result.pk?.length &&
+      result.pk.every((value) => value.t !== 'null' && storageWriteValueSchema.safeParse(value).success) &&
+      result.storedFields &&
+      result.storedFields.length >= input.edits.length
+    ) {
+      const fields = result.storedFields;
+      const edits = input.edits.flatMap((edit) => {
+        const stored = fields.find((field) => field.column === edit.column)?.value;
+        return stored && storageWriteValueSchema.safeParse(stored).success
+          ? [{ column: edit.column, expected: stored, value: edit.expected }]
+          : [];
+      });
+      if (edits.length === input.edits.length)
+        outcome.undo = {
+          store: 'db',
+          name: input.name,
+          table: input.table,
+          op: 'updateRow',
+          pk: result.pk,
+          edits,
+          undoOf: result.opId,
+          ...(target ? { target } : {}),
+        };
     }
     return outcome;
   }
@@ -490,24 +568,19 @@ export class StorageService {
     opId: string,
     serial: string,
     packageName: string,
-    input: StorageWriteInput,
+    input: StorageWriteInput | WriteMetadata,
     code: StorageCode,
     phase: 'provisional' | 'final' | null,
     late: boolean,
     result: Partial<SdkWriteResult>,
   ): void {
-    const field = input.op === 'delete' ? null : input.store === 'prefs' ? input.key : input.column;
+    const metadata = 'pkDigest' in input ? input : writeMetadata(input);
     this.auditLog.push({
       ts: this.now(),
       opId,
       serial,
       packageName,
-      store: input.store,
-      name: input.name,
-      table: input.store === 'db' ? input.table : null,
-      field: field === null ? null : isSensitiveStorageName(field) ? STORAGE_REDACTED_NAME : field,
-      pkDigest: input.store === 'db' ? sha256(canonicalPkJson(input.pk)) : null,
-      op: input.op,
+      ...metadata,
       code,
       phase,
       late,
@@ -522,7 +595,7 @@ export class StorageService {
   private audit(
     opId: string,
     record: OpRecord,
-    input: StorageWriteInput,
+    input: StorageWriteInput | WriteMetadata,
     code: StorageCode,
     phase: 'provisional' | 'final' | null,
     late: boolean,
@@ -595,29 +668,53 @@ function sameTarget(a: StorageTarget, b: StorageTarget): boolean {
 
 /** A write's target without values (what an undo must name the same). */
 function writeTarget(input: StorageWriteInput): string {
-  return JSON.stringify([
-    input.store,
-    input.name,
-    input.op === 'delete' ? null : input.store === 'prefs' ? input.key : [input.table, input.column],
-    input.store === 'db' ? canonicalPkJson(input.pk) : null,
-  ]);
+  return sha256(
+    JSON.stringify([
+      input.store,
+      input.name,
+      input.op === 'delete'
+        ? null
+        : input.store === 'prefs'
+          ? input.key
+          : [input.table, input.op === 'updateRow' ? input.edits.map((edit) => edit.column) : input.column],
+      input.store === 'db' ? canonicalPkJson(input.pk) : null,
+    ]),
+  );
 }
 
-function stripValues(input: StorageWriteInput): OpRecord['input'] {
-  const {
-    expected: _expected,
-    value: _value,
-    rowDigest: _rowDigest,
-    undoOf: _undoOf,
-    target: _target,
-    ...rest
-  } = input as Partial<Record<'expected' | 'value' | 'rowDigest' | 'undoOf' | 'target', unknown>> &
-    StorageWriteInput;
-  return rest;
+function writeMetadata(input: StorageWriteInput): WriteMetadata {
+  const field =
+    input.op === 'delete' || input.op === 'updateRow'
+      ? null
+      : input.store === 'prefs'
+        ? input.key
+        : input.column;
+  return {
+    store: input.store,
+    name: input.name,
+    op: input.op,
+    table: input.store === 'db' ? input.table : null,
+    field: field === null ? null : isSensitiveStorageName(field) ? STORAGE_REDACTED_NAME : field,
+    pkDigest: input.store === 'db' ? sha256(canonicalPkJson(input.pk)) : null,
+  };
 }
 
 /** The flat `storageWrite` line's fields (typed values and the key as canonical JSON strings). */
-function writeRequest(opId: string, input: StorageWriteInput): SdkStorageRequest {
+function writeRequest(
+  opId: string,
+  input: StorageWriteInput,
+  protocolVersion = DEVICE_PROTOCOL_V12,
+): SdkStorageRequest {
+  if (input.op === 'updateRow' && protocolVersion < DEVICE_PROTOCOL_V12 && input.edits.length === 1) {
+    return writeRequest(opId, {
+      store: 'db',
+      name: input.name,
+      op: 'update',
+      table: input.table,
+      pk: input.pk,
+      ...input.edits[0]!,
+    });
+  }
   if (input.store === 'prefs') {
     return input.op === 'update'
       ? {
@@ -640,6 +737,17 @@ function writeRequest(opId: string, input: StorageWriteInput): SdkStorageRequest
           expected: canonicalStorageJson(input.expected),
         };
   }
+  if (input.op === 'updateRow')
+    return {
+      type: 'storageWrite',
+      opId,
+      store: 'db',
+      name: input.name,
+      op: 'updateRow',
+      table: input.table,
+      pk: canonicalPkJson(input.pk),
+      edits: `[${input.edits.map((edit) => `{"column":${JSON.stringify(edit.column)},"expected":${canonicalStorageJson(edit.expected)},"value":${canonicalStorageJson(edit.value)}}`).join(',')}]`,
+    };
   return input.op === 'update'
     ? {
         type: 'storageWrite',

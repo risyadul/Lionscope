@@ -62,6 +62,9 @@ internal class PageRequest(
     val limit: Int,
 )
 
+internal class FieldEdit(val column: String, val expected: StorageValue, val value: StorageValue)
+internal class FieldValue(val column: String, val value: StorageValue)
+
 /**
  * The storage inspector's database side: the schema, pages of rows and compare-and-set edits of one registered
  * database, each request in ONE transaction of the app's own database ([TrackedDatabase.inTransaction]), never through
@@ -122,40 +125,106 @@ internal class DbInspector(
         pk: List<StorageValue>,
         expected: StorageValue,
         value: StorageValue,
-    ): Timed<WriteOutcome> = transaction(db) { conn, budget ->
-        val info = editableTable(conn, table)
-        val target = info.columns.firstOrNull { it.name == column } ?: throw StorageAbort("invalid_identifier")
-        if (target.pk > 0) throw StorageAbort("read_only:pk_column")
-        val row = rowByPk(conn, info, pk) ?: throw StorageAbort("not_found")
-        budget.check()
-        val raw = row[info.columns.indexOf(target)]
-        if (StorageCut.isCut(raw)) throw StorageAbort("read_only:truncated")
-        val current = StorageCut.exactCell(raw)
-        if (StorageRedaction.hides(column, current)) throw StorageAbort("read_only:redacted")
-        if (!current.same(expected)) {
-            throw StorageAbort(if (current.same(value)) "already_applied_or_concurrent" else "conflict", current)
+        originalValues: Boolean = false,
+    ): Timed<WriteOutcome> {
+        if (originalValues) {
+            val result = updateRow(db, table, pk, listOf(FieldEdit(column, expected, value)))
+            val outcome = result.value
+            return Timed(
+                WriteOutcome(
+                    code = outcome.code,
+                    current = outcome.currentFields?.firstOrNull()?.value,
+                    stored = outcome.storedFields?.firstOrNull { it.column == column }?.value,
+                    normalized = outcome.normalized,
+                    changes = outcome.changes,
+                    totalChangesDelta = outcome.totalChangesDelta,
+                    pk = outcome.pk,
+                ),
+                result.txMs,
+            )
         }
-        if (!fits(value, current, target.type)) throw StorageAbort("type_mismatch")
-        val before = totalChanges(conn)
-        val changes = conn.updateDelete(
-            "UPDATE ${quote(info.name)} SET ${quote(column)} = ? WHERE ${pkWhere(info)}",
-            listOf(StorageCut.bindable(value)) + pk.map(StorageCut::bindable),
-        )
-        if (changes != 1) throw StorageAbort("failed")
-        val stored = StorageCut.exactCell(
-            conn.query("SELECT ${quote(column)} FROM ${quote(info.name)} WHERE ${pkWhere(info)}", pk.map(StorageCut::bindable))
-                .rows.singleOrNull()?.get(0).also { budget.check() },
-        )
-        val delta = totalChanges(conn) - before
-        budget.check()
-        WriteOutcome(
-            code = "ok",
-            stored = stored,
-            normalized = !stored.same(value),
-            changes = changes,
-            totalChangesDelta = delta,
-        )
+        return transaction(db) { conn, budget ->
+            val info = editableTable(conn, table)
+            val target = info.columns.firstOrNull { it.name == column } ?: throw StorageAbort("invalid_identifier")
+            if (target.pk > 0) throw StorageAbort("read_only:pk_column")
+            val row = rowByPk(conn, info, pk) ?: throw StorageAbort("not_found")
+            budget.check()
+            val raw = row[info.columns.indexOf(target)]
+            if (StorageCut.isCut(raw)) throw StorageAbort("read_only:truncated")
+            val current = StorageCut.exactCell(raw)
+            if (StorageRedaction.hides(column, current)) throw StorageAbort("read_only:redacted")
+            if (!current.same(expected)) {
+                throw StorageAbort(if (current.same(value)) "already_applied_or_concurrent" else "conflict", current)
+            }
+            if (!fits(value, current, target.type)) throw StorageAbort("type_mismatch")
+            val before = totalChanges(conn)
+            val changes = conn.updateDelete(
+                "UPDATE ${quote(info.name)} SET ${quote(column)} = ? WHERE ${pkWhere(info)}",
+                listOf(StorageCut.bindable(value)) + pk.map(StorageCut::bindable),
+            )
+            if (changes != 1) throw StorageAbort("failed")
+            val stored = StorageCut.exactCell(
+                conn.query("SELECT ${quote(column)} FROM ${quote(info.name)} WHERE ${pkWhere(info)}", pk.map(StorageCut::bindable))
+                    .rows.singleOrNull()?.get(0).also { budget.check() },
+            )
+            val delta = totalChanges(conn) - before
+            budget.check()
+            WriteOutcome(
+                code = "ok",
+                stored = stored,
+                normalized = !stored.same(value),
+                changes = changes,
+                totalChangesDelta = delta,
+            )
+        }
     }
+
+    /** Compare every edited cell, then update all columns in one statement in the app-owned transaction. */
+    fun updateRow(
+        db: TrackedDatabase,
+        table: String,
+        pk: List<StorageValue>,
+        edits: List<FieldEdit>,
+    ): Timed<WriteOutcome> =
+        transaction(db) { conn, budget ->
+            val info = editableTable(conn, table)
+            val row = rowByPk(conn, info, pk) ?: throw StorageAbort("not_found")
+            val targets = edits.map { edit ->
+                info.columns.firstOrNull { it.name == edit.column } ?: throw StorageAbort("invalid_identifier")
+            }
+            val current = targets.map { target ->
+                val raw = row[info.columns.indexOf(target)]
+                if (StorageCut.isCut(raw)) throw StorageAbort("read_only:truncated")
+                FieldValue(target.name, StorageCut.exactCell(raw))
+            }
+            if (current.indices.any { !current[it].value.same(edits[it].expected) }) {
+                val code = if (current.indices.all { current[it].value.same(edits[it].value) }) "already_applied_or_concurrent" else "conflict"
+                return@transaction WriteOutcome(code = code, currentFields = current)
+            }
+            edits.forEachIndexed { index, edit ->
+                if (!fits(edit.value, current[index].value, targets[index].type)) throw StorageAbort("type_mismatch")
+            }
+            budget.check()
+            val nextPk = info.pk.mapIndexed { index, name -> edits.firstOrNull { it.column == name }?.value ?: pk[index] }
+            // A NULL key cannot identify one row uniquely in SQLite rowid tables.
+            if (nextPk.any { it is StorageValue.Null }) throw StorageAbort("invalid_value:null_pk")
+            val before = totalChanges(conn)
+            val assignments = targets.joinToString(", ") { "${quote(it.name)} = ?" }
+            val changes = conn.updateDelete("UPDATE ${quote(info.name)} SET $assignments WHERE ${pkWhere(info)}",
+                edits.map { StorageCut.bindable(it.value) } + pk.map(StorageCut::bindable))
+            if (changes != 1) throw StorageAbort("failed")
+            // A trigger can move/delete the row again. Do not invent a stored NULL or reuse the old identity.
+            val storedRow = conn.query("SELECT ${info.columns.joinToString(", ") { quote(it.name) }} FROM ${quote(info.name)} WHERE ${pkWhere(info)}",
+                nextPk.map(StorageCut::bindable)).rows.singleOrNull()
+            val fields = storedRow?.let { values -> info.columns.map { FieldValue(it.name, StorageCut.exactCell(values[info.columns.indexOf(it)])) } }
+            val storedPk = storedRow?.let { values -> info.pk.map { name -> StorageCut.exactCell(values[info.columns.indexOfFirst { it.name == name }]) } }
+            val delta = totalChanges(conn) - before
+            budget.check()
+            WriteOutcome(code = "ok", storedFields = fields, pk = storedPk,
+                normalized = fields?.let { stored -> edits.any { edit -> !stored.first { it.column == edit.column }.value.same(edit.value) } },
+                rowDigest = storedRow?.let(RowDigest::of),
+                changes = changes, totalChangesDelta = delta)
+        }
 
     /** Delete one row, compare-and-set on its digest; a row already gone is `already_applied_or_concurrent`. */
     fun delete(db: TrackedDatabase, table: String, pk: List<StorageValue>, rowDigest: String): Timed<WriteOutcome> =
@@ -179,6 +248,10 @@ internal class DbInspector(
         val normalized: Boolean? = null,
         val changes: Int? = null,
         val totalChangesDelta: Long? = null,
+        val storedFields: List<FieldValue>? = null,
+        val rowDigest: String? = null,
+        val currentFields: List<FieldValue>? = null,
+        val pk: List<StorageValue>? = null,
     )
 
     private fun <T> transaction(db: TrackedDatabase, block: (SqlConnection, Budget) -> T): Timed<T> {

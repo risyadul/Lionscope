@@ -54,6 +54,7 @@ internal sealed class GatewayMessage {
         val expected: String?,
         val value: String?,
         val rowDigest: String?,
+        val edits: String? = null,
     ) : GatewayMessage()
 
     companion object {
@@ -222,7 +223,7 @@ internal sealed class GatewayMessage {
             val store = fields.string("store")?.takeIf { it == "prefs" || it == "db" } ?: return null
             val name = storageName(fields, "name") ?: return null
             val op = fields.string("op")?.takeIf {
-                (store == "prefs" && (it == "update" || it == "remove")) || (store == "db" && (it == "update" || it == "delete"))
+                (store == "prefs" && (it == "update" || it == "remove")) || (store == "db" && (it == "update" || it == "updateRow" || it == "delete"))
             } ?: return null
             val text = MAX_STORAGE_REQUEST_FIELD_CHARS
             return StorageWrite(
@@ -238,6 +239,7 @@ internal sealed class GatewayMessage {
                 expected = optional(fields, "expected", text).getOrElse { return null },
                 value = optional(fields, "value", text).getOrElse { return null },
                 rowDigest = optional(fields, "rowDigest", 64).getOrElse { return null },
+                edits = optional(fields, "edits", text).getOrElse { return null },
             )
         }
     }
