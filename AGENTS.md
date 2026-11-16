@@ -57,6 +57,9 @@ the CLI smoke test and rebuilding/comparing the UI helper jar.
 
 ## Implementation conventions
 
+- Before changing dashboard UI or reviewing layout, controls, themes or responsive behavior, read
+  [DESIGN.md](DESIGN.md). Reuse its tokens/components and run the browser checks relevant to the affected contracts.
+
 - Follow nearby code and existing abstractions. TypeScript uses ES modules, explicit `.ts` import extensions,
   and strict checking; avoid bypassing validation with unchecked casts or `any`.
 - Use the repository ESLint and Prettier configuration. Format changed files rather than unrelated files.
