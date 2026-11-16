@@ -8,9 +8,9 @@ workspaces (a drawer on narrow windows):
   1280 px. Clicking a request on the timeline opens contextual request details without leaving the charts;
   **Open in Network** continues in the dedicated workspace.
 - **Layout Inspector**: the device and view hierarchy/property editor, with room for the tree and attributes.
-- **Network**: Requests and Mocks, with the device mirror initially closed and available on demand.
+- **Network**: Requests and Mocks, with the device mirror initially shown and available to hide.
 - **Storage**: preferences and registered databases, with a source list, grid, and row editor; the device mirror
-  initially stays closed to leave room for data editing. See [Storage](features/storage.md).
+  starts shown and can be hidden independently from Network. See [Storage](features/storage.md).
 - **Device**: the device screen and guidance for letting an AI agent operate it.
 
 A running session keeps recording when workspaces change. Hidden charts stop drawing while retaining their

@@ -21,9 +21,9 @@ export interface DeviceColumnState {
 }
 
 /**
- * Docked: collapsed or not, remembered per viewer. Overlay: a drawer that starts closed on every load.
- * Pinned (`isPinned`, the views built around the device): always docked and open; the remembered collapse
- * comes back in the Profiler view.
+ * Profiler remembers its docked collapse choice; its narrow drawer starts closed on each load.
+ * Network and Storage start open and keep independent choices for this page.
+ * Pinned views are always docked and open; the Profiler's remembered choice returns when leaving them.
  */
 export function useDeviceColumn(
   isPinned = false,
@@ -32,7 +32,7 @@ export function useDeviceColumn(
   const isOverlay = useMediaQuery(DEVICE_OVERLAY_QUERY);
   const isPageVisible = useDocumentVisible();
   const [isCollapsed, setIsCollapsed] = useStoredState(LAYOUT_KEYS.deviceCollapsed, parseCollapsed);
-  const [optionalOpen, setOptionalOpen] = useState({ network: false, storage: false });
+  const [optionalOpen, setOptionalOpen] = useState({ network: true, storage: true });
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   // Pinning closes the drawer for good: back in the Profiler it starts closed again (adjusting state while rendering).
   const [wasPinned, setWasPinned] = useState(isPinned);

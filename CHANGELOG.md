@@ -28,7 +28,7 @@ All notable changes to Lionscope are documented here. The format is based on
 
 - Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
   and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network
-  and Storage use dedicated workspaces with the mirror initially closed.
+  and Storage use dedicated workspaces with the mirror initially shown and independent hide/show choices.
 - Storage adds per-row drafts with Apply/Discard, primary-key identity handoff, conditional Revert row edit,
   dashboard BLOB/string-set editing, and draft preservation across workspace switches on the same SDK link.
 

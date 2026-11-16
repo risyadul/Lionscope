@@ -20,8 +20,9 @@ Switching workspaces preserves Storage's selected table, selected row, and draft
 remain the same. A different app or a newly established SDK link clears the old draft; navigation must never
 retarget a draft to another row or link.
 
-The device mirror remains available in Profiler and Layout Inspector. In Network and Storage it starts closed
-and can be opened explicitly, leaving room for request details and data editing. Device makes the screen its
+The device mirror remains available in Profiler and Layout Inspector. In Network and Storage it starts shown,
+as requested in the 16 November follow-up, and can be hidden explicitly. Each workspace remembers its own
+hide/show choice while the page stays open. This supersedes the initial closed default. Device makes the screen its
 primary content. Global device selection, app selection, and session Start/Stop controls remain outside the
 individual workspaces; switching workspaces does not stop session recording.
 
