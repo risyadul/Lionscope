@@ -3,7 +3,7 @@
 # Storage: reading and editing app data live
 
 The profiled app's SharedPreferences and the Room databases it registers, from the dashboard's **Storage** workspace or
-an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Needs SDK 0.13.0 or newer; original values and atomic row edits require device protocol 12 on both sides.
+an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Needs SDK 0.13.0 or newer; original values and atomic row edits require device protocol 12 on both sides. The dashboard's SQL Query console requires device protocol 13.
 
 <!-- /docs:added -->
 
@@ -78,11 +78,46 @@ Every answer names the app link it came from (`target`: device, package and link
 one now: another app, a restart or a reconnect. The dashboard drops everything it read when the session, its app or
 its process changes, and an answer for a file or table that is no longer shown is dropped.
 
+## Query console
+
+Load Storage, select a database or table, then **+ New Query**. The editor stays beside the source browser;
+**Tables** returns to the table inspector. Choose the execution database, enter SQL and press **Run** or
+Ctrl/Command+Enter. A text selection runs only that selection. Each Run accepts one statement:
+
+```sql
+SELECT category, SUM(qty) AS total FROM item GROUP BY category;
+```
+
+SELECT, JOIN, WHERE, GROUP BY and WITH are supported. INSERT, UPDATE and DELETE require
+`--allow-storage-write` as well as read access. These explicit SQL mutations change matching rows directly,
+without compare-and-set or undo. They report affected rows; timeouts and disconnects are uncertain and never
+trigger an automatic retry. A late final result updates the original execution. Table drafts and undo offers are
+discarded before a SQL mutation attempt; returning to Tables refreshes the data.
+
+History holds at most 20 statements in memory for this app link. Choosing one loads it without running it.
+Changing database clears results, and a new session or SDK link clears the editor, history and results. Query
+results are read-only projections; use Tables for conditional row edits. Query text is never written to audit
+metadata, logs or browser storage. SQLite error text is displayed as untrusted app data.
+
+SQL is capped at 16,384 characters. Results use exact typed values, up to 200 rows per request (50 in the UI),
+256 columns and 240 KiB per reply. Column labels longer than 128 characters and large cells may be shortened;
+the result reports truncation. Next advances by the number of returned rows. Each page executes a new read,
+so use ORDER BY and expect concurrent app changes between pages.
+
+The console executes through the registered Room instance and its transaction. It excludes DDL, PRAGMA,
+ATTACH/DETACH, transaction commands, multiple statements, parameter placeholders, RETURNING and ROLLBACK
+conflict actions. Mutations retain the table inspector's technical restrictions below. A schema containing
+ROLLBACK behavior also refuses SQL mutations conservatively, including trigger paths. A temporary table or view
+shadowing the target table is refused, and temporary triggers participate in deferred-key checks. The existing cooperative
+transaction budget applies; it cannot interrupt a slow statement. Query execution is covered by JVM/SQLite JDBC
+and synthetic browser tests, not yet by Android device runtime evidence.
+
 ## Editing
 
-Edits are compare-and-set: each changed field carries the value it was read as, and the entire edit is refused
-(`conflict`, with current values) when the app changed an edited field since. Only updates of existing values and deleting a row by its primary key; no
-inserts, no raw SQL. Values keep their exact type: a Long stays a decimal string end to end, a float or double is
+Row-editor edits are compare-and-set: each changed field carries the value it was read as, and the entire edit is refused
+(`conflict`, with current values) when the app changed an edited field since. The row editor updates existing values
+and deletes a row by its primary key. SQL inserts and mutations use the separate Query console described above.
+Values keep their exact type: a Long stays a decimal string end to end, a float or double is
 compared by its raw bits (`0.0` and `-0.0` differ), and a value of another type is `type_mismatch`.
 
 The workspace has a source list on the left, a grid in the center, and a row editor on the right (a sheet in

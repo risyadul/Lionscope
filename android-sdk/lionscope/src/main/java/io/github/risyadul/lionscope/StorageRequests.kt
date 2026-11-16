@@ -57,7 +57,7 @@ internal class StorageRequests(
         val connection = link.connection
         val refusal = refusalOf(message)
         if (refusal != null) return answerRefusal(message, refusal, connection)
-        if (message is GatewayMessage.StorageWrite && !writes.take()) return answerRefusal(message, "busy", connection)
+        if (isMutation(message) && !writes.take()) return answerRefusal(message, "busy", connection)
         if (!enqueue()) return answerRefusal(message, "busy", connection)
         try {
             worker.execute {
@@ -78,14 +78,21 @@ internal class StorageRequests(
         if (message is GatewayMessage.StorageWrite && message.op == "updateRow" &&
             !DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V12)) return "needs_sdk"
         if (!link.isServerVerified) return "unauthenticated"
+        if (message is GatewayMessage.StorageQuery) {
+            if (!DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V13)) return "needs_sdk"
+            try { StorageSql.plan(message.sql) } catch (abort: StorageAbort) { return abort.code }
+        }
         val consent = currentConsent()
-        val needed = if (message is GatewayMessage.StorageWrite) StorageConsent.READ_WRITE else StorageConsent.READ
+        val needed = if (isMutation(message)) StorageConsent.READ_WRITE else StorageConsent.READ
         return if (consent == StorageConsent.OFF || (needed == StorageConsent.READ_WRITE && consent != StorageConsent.READ_WRITE)) {
             "consent_required"
         } else {
             null
         }
     }
+
+    private fun isMutation(message: GatewayMessage): Boolean = message is GatewayMessage.StorageWrite ||
+        (message is GatewayMessage.StorageQuery && try { !StorageSql.plan(message.sql).readOnly } catch (_: StorageAbort) { false })
 
     private fun enqueue(): Boolean {
         if (queued.incrementAndGet() <= maxQueued) return true
@@ -108,6 +115,7 @@ internal class StorageRequests(
         when (message) {
             is GatewayMessage.StorageList -> send(connection, inspector.list(message.requestId))
             is GatewayMessage.StorageRead -> send(connection, inspector.read(message))
+            is GatewayMessage.StorageQuery -> send(connection, inspector.query(message))
             is GatewayMessage.StorageWrite -> {
                 val drop = StorageTestHooks.dropNextWriteResult
                 if (drop) StorageTestHooks.dropNextWriteResult = false
@@ -134,6 +142,7 @@ internal class StorageRequests(
             is GatewayMessage.StorageList -> StorageInspector.codeLine(message.requestId, "storageListResult", code)
             is GatewayMessage.StorageRead -> StorageInspector.codeLine(message.requestId, "storageReadResult", code)
             is GatewayMessage.StorageWrite -> StorageInspector.writeRefusal(message.requestId, message.opId, code)
+            is GatewayMessage.StorageQuery -> StorageInspector.writeRefusal(message.requestId, message.opId, code)
             else -> return
         }
         send(connection, line)

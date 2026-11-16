@@ -28,6 +28,8 @@ internal class StorageInspector(
     /** Forgets every cursor (the link connection changed: tokens of the last one mean nothing now). */
     fun resetCursors() = cursors.clear()
 
+    fun query(message: GatewayMessage.StorageQuery): String = StorageQuery(databases, db).run(message)
+
     /** Never throws, as read: an unexpected failure is answered `failed`, not left to time out. */
     fun list(requestId: Int): String = guarded(requestId, "storageListResult") { listing(requestId) }
 

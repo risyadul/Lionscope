@@ -110,7 +110,7 @@ class StorageContractTest {
             Regex("""PRAGMA defer_foreign_keys"""),
             Regex("""SELECT name, sql FROM sqlite_master WHERE type = 'table' AND instr\(upper\(sql\), 'DEFERRED'\) > 0"""),
             Regex("""SELECT name FROM sqlite_master WHERE type = 'table'"""),
-            Regex("""SELECT tbl_name FROM sqlite_master WHERE type = 'trigger'"""),
+            Regex("""SELECT tbl_name FROM sqlite_master WHERE type = 'trigger' UNION ALL SELECT tbl_name FROM sqlite_temp_master WHERE type = 'trigger'"""),
             Regex("""SELECT total_changes\(\)"""),
             Regex("""SELECT [^;]* FROM "[^;]*"( WHERE [^;]*)?( ORDER BY [^;]*)? ?(LIMIT \d+( OFFSET \d+)?)?"""),
             Regex("""UPDATE "[^;]*" SET "[^;]*" = \? WHERE [^;]*"""),

@@ -30,6 +30,40 @@ class StorageRequestsTest {
 
     private val read = GatewayMessage.StorageRead(1, "prefs", "app", null, null, null)
 
+    @Test
+    fun sqlRequiresV13AndIndependentWriteConsent() {
+        requests()
+        val select = GatewayMessage.StorageQuery(1, "op1", "shop.db", "SELECT 1", 50, 0)
+        link.welcome(true, DEVICE_PROTOCOL_V12)
+        consent(StorageConsent.READ_WRITE)
+        link.storage(select)
+        assertEquals(listOf("needs_sdk"), codes())
+        link.v11Lines.clear()
+        link.welcome(true, DEVICE_PROTOCOL_V13)
+        consent(StorageConsent.READ)
+        link.storage(GatewayMessage.StorageQuery(2, "op2", "shop.db", "WITH x AS (SELECT 1) DELETE FROM item", 50, 0))
+        assertEquals(listOf("consent_required"), codes())
+        assertTrue(tasks.isEmpty())
+        link.storage(select)
+        assertEquals(1, tasks.size)
+        runAll()
+        assertEquals("not_found", codes().last())
+    }
+
+    @Test
+    fun invalidSqlAndChangedConsentNeverReachTheDatabase() {
+        requests()
+        link.welcome(true, DEVICE_PROTOCOL_V13)
+        consent(StorageConsent.READ_WRITE)
+        link.storage(GatewayMessage.StorageQuery(1, "op1", "shop.db", "SELECT 1; DELETE FROM item", 50, 0))
+        assertEquals(listOf("unsupported:multiple_statements"), codes())
+        assertTrue(tasks.isEmpty())
+        link.storage(GatewayMessage.StorageQuery(2, "op2", "shop.db", "UPDATE item SET id=2", 50, 0))
+        consent(StorageConsent.READ)
+        runAll()
+        assertEquals("consent_required", codes().last())
+    }
+
     private fun write(id: Int) = GatewayMessage.StorageWrite(
         id, "op$id", "prefs", "app", "update", "count", null, null, null,
         """{"t":"int","v":"3"}""", """{"t":"int","v":"4"}""", null,

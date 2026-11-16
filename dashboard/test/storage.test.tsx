@@ -350,6 +350,34 @@ const OK = (opId: string, more: Partial<StorageWriteOutcome> = {}): StorageRespo
 });
 
 describe('Storage tab', () => {
+  it('keeps Query beside Tables, blocks navigation while running and refreshes after SQL mutations', async () => {
+    const h = setup('read_write');
+    await openItem(h);
+    fireEvent.click(rowOf('Bread'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit v' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New value of v' }), { target: { value: 'draft' } });
+    fireEvent.click(screen.getByRole('button', { name: '+ New Query' }));
+    const editor = screen.getByRole('textbox', { name: /SQL editor/ });
+    expect((editor as HTMLTextAreaElement).value).toBe('SELECT * FROM "item";');
+    fireEvent.change(editor, { target: { value: "UPDATE item SET v='SQL' WHERE id=1" } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(h.sent.at(-1)).toMatchObject({ type: 'storageQuery', query: { name: 'shop.db', target: TARGET } });
+    expect(screen.getByRole('button', { name: 'Tables' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled')).toBe(true);
+    await h.answer({
+      ok: true,
+      kind: 'query',
+      target: TARGET,
+      outcome: { opId: 'sql1', code: 'ok', phase: 'final', late: false, changes: 1 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(h.sent.at(-1)).toMatchObject({ type: 'storageRead', read: { pages: [{ table: 'item' }] } });
+    await h.answer(rowsOf('item', [['1', str('SQL')]]));
+    expect(screen.queryByRole('textbox', { name: 'New value of v' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull();
+    expect(screen.getByRole('cell', { name: 'SQL' })).toBeTruthy();
+  });
+
   it('shows that storage is off and sends nothing', () => {
     const { sent } = setup('off');
     expect(screen.getByTestId('storage-consent-off').textContent).toContain('--allow-storage-read');

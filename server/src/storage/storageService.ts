@@ -12,6 +12,10 @@ import {
   canonicalStorageJson,
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
+  DEVICE_PROTOCOL_V13,
+  DEFAULT_STORAGE_ROWS,
+  planStorageSql,
+  storageQueryInputSchema,
   storageWriteValueSchema,
   isSensitiveStorageName,
   MAX_STORAGE_AUDIT,
@@ -28,6 +32,7 @@ import type {
   StorageConsent,
   StorageCode,
   StorageReadInput,
+  StorageQueryInput,
   StorageResponse,
   StorageTarget,
   StorageValue,
@@ -87,6 +92,7 @@ function refusal(
 
 /** What the server remembers of a write (no values): enough to judge an undo and to place a late answer. */
 interface OpRecord {
+  readOnly?: boolean;
   serial: string;
   packageName: string;
   /** The SDK link it was sent on (StorageTarget.link): an undo goes only to that same link. */
@@ -108,7 +114,7 @@ interface OpRecord {
 interface WriteMetadata {
   store: 'prefs' | 'db';
   name: string;
-  op: StorageWriteInput['op'];
+  op: StorageAuditEntry['op'];
   table: string | null;
   field: string | null;
   pkDigest: string | null;
@@ -226,6 +232,82 @@ export class StorageService {
         txMs: result.txMs ?? 0,
       };
     });
+  }
+
+  /** One explicit SQL execution, with the same link, consent and late-outcome rules as row writes. */
+  async query(input: StorageQueryInput): Promise<StorageResponse> {
+    if (!storageQueryInputSchema.safeParse(input).success) return refusal('invalid_value');
+    const plan = planStorageSql(input.sql);
+    if (typeof plan === 'string') return refusal('invalid_value', plan);
+    const metadata: WriteMetadata = {
+      store: 'db',
+      name: input.name,
+      op: 'query',
+      table: plan.table,
+      field: null,
+      pkDigest: null,
+    };
+    const reached = this.reach(plan.readOnly ? 'read' : 'read_write');
+    const opId = this.newOpId();
+    const refuse = (code: StorageCode, message?: string): StorageResponse => {
+      if (!plan.readOnly) {
+        const target = this.options.target();
+        this.record(opId, target?.serial ?? '', target?.packageName ?? '', metadata, code, null, false, {});
+      }
+      return refusal(code, message ?? codeMessage(code));
+    };
+    if (!('serial' in reached)) return refuse(reached.code, reached.message);
+    if (reached.link.protocolVersion < DEVICE_PROTOCOL_V13)
+      return refuse('needs_sdk', 'SQL queries need device protocol 13. Update the app SDK and restart it.');
+    if (!sameTarget(input.target, reached.target)) return refuse('failed', STORAGE_MESSAGES.stale_target);
+    if (this.inFlight.has(reached.serial) || (!plan.readOnly && !this.bucket(reached.serial).take()))
+      return refuse('busy');
+    const record: OpRecord = {
+      serial: reached.serial,
+      packageName: reached.packageName,
+      link: reached.target.link,
+      target: '',
+      state: 'pending',
+      undoable: false,
+      input: metadata,
+      readOnly: plan.readOnly,
+    };
+    this.remember(opId, record);
+    this.inFlight.add(reached.serial);
+    try {
+      const result = await reached.link.storage({
+        type: 'storageQuery',
+        opId,
+        name: input.name,
+        sql: plan.sql,
+        limit: input.limit ?? DEFAULT_STORAGE_ROWS,
+        offset: input.offset ?? 0,
+      });
+      if (result.type !== 'storageWriteResult' || result.opId !== opId) throw new SdkStorageError('invalid');
+      record.state = result.phase === 'provisional' ? 'provisional' : 'done';
+      this.audit(opId, record, metadata, result.code, result.phase, false, result);
+      this.takeEarly(opId, record);
+      return { ok: true, kind: 'query', target: reached.target, outcome: this.outcome(null, result, false) };
+    } catch (error) {
+      if (!(error instanceof SdkStorageError)) throw error;
+      const { code, message } = FAILURE_CODES[error.reason];
+      record.state = error.reason === 'timeout' ? 'timeout' : 'done';
+      this.audit(opId, record, metadata, code, null, false, {});
+      this.takeEarly(opId, record);
+      return {
+        ok: true,
+        kind: 'query',
+        target: reached.target,
+        outcome: {
+          opId,
+          code,
+          late: false,
+          message: plan.readOnly && code === 'timeout' ? 'The query did not answer in time.' : message,
+        },
+      };
+    } finally {
+      this.inFlight.delete(reached.serial);
+    }
   }
 
   /**
@@ -481,6 +563,8 @@ export class StorageService {
     if (result.changes !== undefined) outcome.changes = result.changes;
     if (result.totalChangesDelta !== undefined) outcome.totalChangesDelta = result.totalChangesDelta;
     if (result.txMs !== undefined) outcome.txMs = result.txMs;
+    if (result.query) outcome.query = result.query;
+    if (result.queryError) outcome.queryError = result.queryError;
     if (result.code !== 'ok') outcome.message = codeMessage(result.code);
     else if (result.persisted !== undefined && result.persisted !== true) {
       outcome.message =
@@ -601,6 +685,7 @@ export class StorageService {
     late: boolean,
     result: Partial<SdkWriteResult>,
   ): void {
+    if (record.readOnly) return;
     this.record(opId, record.serial, record.packageName, input, code, phase, late, result);
   }
 

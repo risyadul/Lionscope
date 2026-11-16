@@ -90,6 +90,30 @@ internal class DbInspector(
 
     class Timed<T>(val value: T, val txMs: Long)
 
+    class QueryResult(val rows: ConsoleRows?, val changes: Int? = null, val delta: Long? = null)
+
+    fun query(db: TrackedDatabase, plan: StorageSqlPlan, limit: Int, offset: Int): Timed<QueryResult> = transaction(db) { conn, budget ->
+        val result = if (plan.readOnly) {
+            QueryResult(conn.queryConsole("SELECT * FROM (\n${plan.sql}\n) LIMIT ${limit + 1} OFFSET $offset", limit))
+        } else {
+            val table = plan.table ?: throw StorageAbort("invalid_identifier")
+            val shadow = conn.query("SELECT name FROM sqlite_temp_master WHERE type IN ('table','view') AND name = ? COLLATE NOCASE", listOf(plan.table))
+            if (shadow.rows.isNotEmpty()) throw StorageAbort("unsupported:temporary_shadow")
+            editableTable(conn, table)
+            // A ROLLBACK conflict action can end Room's outer transaction behind its back, including via triggers.
+            val rollback = conn.query("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL UNION ALL SELECT sql FROM sqlite_temp_master WHERE sql IS NOT NULL").rows.any { row ->
+                (row[0] as? String)?.let { Regex("\\bROLLBACK\\b", RegexOption.IGNORE_CASE).containsMatchIn(it) } == true
+            }
+            if (rollback) throw StorageAbort("unsupported:rollback_conflict")
+            budget.check()
+            val before = totalChanges(conn)
+            val changes = conn.updateDelete(plan.sql, emptyList())
+            QueryResult(null, changes, totalChanges(conn) - before)
+        }
+        budget.check()
+        result
+    }
+
     /** Every table (at most [MAX_STORAGE_TABLES], `more` when there were more). */
     fun schema(db: TrackedDatabase): Timed<Pair<List<TableInfo>, Boolean>> = transaction(db) { conn, budget ->
         val master = conn.query(MASTER_SQL + " ORDER BY name LIMIT ${MAX_STORAGE_TABLES + 1}")
@@ -583,7 +607,7 @@ internal class DbInspector(
         private const val DEFERRED_SQL =
             "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND instr(upper(sql), 'DEFERRED') > 0"
         private const val TABLE_NAMES_SQL = "SELECT name FROM sqlite_master WHERE type = 'table'"
-        private const val TRIGGER_TABLES_SQL = "SELECT tbl_name FROM sqlite_master WHERE type = 'trigger'"
+        private const val TRIGGER_TABLES_SQL = "SELECT tbl_name FROM sqlite_master WHERE type = 'trigger' UNION ALL SELECT tbl_name FROM sqlite_temp_master WHERE type = 'trigger'"
 
         /** Foreign key actions that change the child's rows when the parent's change. */
         private val ACTING_FK = setOf("CASCADE", "SET NULL", "SET DEFAULT")

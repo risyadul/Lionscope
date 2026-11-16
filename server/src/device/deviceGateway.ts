@@ -10,6 +10,7 @@ import {
   DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
+  DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_STORAGE_QUEUED,
@@ -401,6 +402,7 @@ const STORAGE_ANSWERS: Readonly<Record<SdkStorageRequest['type'], SdkStorageResu
   storageList: 'storageListResult',
   storageRead: 'storageReadResult',
   storageWrite: 'storageWriteResult',
+  storageQuery: 'storageWriteResult',
 };
 
 function isStorageResult(message: { type: string }): message is SdkStorageResult {
@@ -568,6 +570,7 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     new Promise((resolve, reject) => {
       if (
         protocolVersion < DEVICE_PROTOCOL_V11 ||
+        (request.type === 'storageQuery' && protocolVersion < DEVICE_PROTOCOL_V13) ||
         (request.type === 'storageWrite' &&
           request.op === 'updateRow' &&
           protocolVersion < DEVICE_PROTOCOL_V12)

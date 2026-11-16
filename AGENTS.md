@@ -89,8 +89,11 @@ Read `docs/features/storage.md` before changing storage behavior.
 - Storage starts off. Reads require `--allow-storage-read`; writes also require `--allow-storage-write`,
   an active profiling session, and its authenticated SDK link. Retain enforcement on both server and SDK.
 - Database access uses the registered app-owned Room instance and its transactions. Do not open a second
-  SQLite connection, accept raw SQL, or derive SQL identifiers directly from unchecked client input.
-- Preserve compare-and-set semantics, exact numeric types/bits, row digests, and link-bound write targets.
+  SQLite connection. The protocol 13 Query console accepts one validated SELECT/WITH or INSERT/UPDATE/DELETE
+  statement; keep its statement, target-table, transaction-control, consent and result-size checks on both sides.
+  Row-editor SQL identifiers must still come from checked schema names.
+- Preserve row-editor compare-and-set semantics, exact numeric types/bits, row digests, and link-bound write targets.
+  Explicit SQL mutations do not use compare-and-set and never offer row-editor undo. Never retain SQL text in audit metadata.
   Prefs compare-and-set is not atomic against app writes; do not describe it as an atomic transaction.
 - On device protocol 12 links, return original Storage values, including credentials, and allow primary-key
   edits. Older negotiated links retain their legacy redaction and primary-key restrictions. Preserve technical

@@ -25,15 +25,52 @@ internal class SqlConstraintException(message: String?) : RuntimeException(messa
 
 /**
  * The app's own database connection while the storage inspector holds a transaction of it ([TrackedDatabase.inTransaction]).
- * Only the statements of the allowlist go through it: SELECTs the inspector builds, the schema PRAGMAs,
- * `SELECT total_changes()`, and UPDATE / DELETE of one row by primary key. Arguments are Long, Double, String,
- * ByteArray or null.
+ * Row-editor statements use schema-checked identifiers and bound values. The v13 console additionally executes
+ * one validated SELECT or DML statement, with target-table restrictions and bounded result collection.
+ * Arguments are Long, Double, String, ByteArray or null.
  */
 internal interface SqlConnection {
     fun query(sql: String, args: List<Any?> = emptyList()): SqlRows
 
+    fun queryConsole(sql: String, limit: Int): ConsoleRows {
+        val result = query(sql)
+        val rows = result.rows.iterator()
+        return consoleRows(result.columns, limit) { if (rows.hasNext()) rows.next() else null }
+    }
+
     /** Rows changed; throws [SqlConstraintException] when a constraint refuses it. */
     fun updateDelete(sql: String, args: List<Any?>): Int
+}
+
+internal class ConsoleRows(val columns: List<String>, val rows: List<List<StorageValue>>, val hasMore: Boolean, val truncated: Boolean)
+
+/** Bounds retained cells while the cursor is consumed, rather than materializing the entire result first. */
+internal fun consoleRows(columns: List<String>, limit: Int, next: () -> List<Any?>?): ConsoleRows {
+    val names = columns.take(MAX_STORAGE_COLUMNS).map { it.take(128) }
+    val namesJson = JsonWriter().beginArray()
+    names.forEach { namesJson.value(it) }
+    val rowBudget = minOf(160 * 1024, MAX_STORAGE_REPLY_BYTES - utf8Bytes(namesJson.endArray().toString()) - 4096)
+    val rows = ArrayList<List<StorageValue>>()
+    var bytes = 0
+    var truncated = columns.size > names.size || columns.any { it.length > 128 }
+    while (true) {
+        val raw = next() ?: return ConsoleRows(names, rows, false, truncated)
+        if (rows.size == limit) return ConsoleRows(names, rows, true, truncated)
+        var units = 1024
+        var cells: List<StorageValue>
+        var size: Int
+        do {
+            cells = raw.take(names.size).map { StorageCut.squeeze(StorageCut.cell(it), units) }
+            val json = JsonWriter().beginArray()
+            cells.forEach { StorageCodec.write(json, it) }
+            size = utf8Bytes(json.endArray().toString())
+            units /= 2
+        } while (size > minOf(64 * 1024, rowBudget) && units > 0)
+        if (bytes + size > rowBudget) return ConsoleRows(names, rows, true, true)
+        truncated = truncated || cells.any { when (it) { is StorageValue.Text -> !it.complete; is StorageValue.Blob -> !it.complete; else -> false } }
+        rows += cells
+        bytes += size
+    }
 }
 
 /**

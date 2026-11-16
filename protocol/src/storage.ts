@@ -4,6 +4,7 @@
  * codec), and the server's second redaction pass (the SDK redacts first, with the same rules).
  */
 import { z } from 'zod';
+import { MAX_STORAGE_SQL_CHARS, MAX_STORAGE_QUERY_OFFSET } from './storageSql.ts';
 import { isSensitiveName, redactFreeText, redactJsonText } from './insights/network.ts';
 import {
   HTTP_REDACTED,
@@ -29,6 +30,22 @@ import {
 } from './wire.ts';
 
 const INT_RANGE = [-(2n ** 31n), 2n ** 31n - 1n] as const;
+
+export const storageQueryInputSchema = z
+  .object({
+    name: z.string().min(1).max(MAX_STORAGE_NAME_CHARS),
+    sql: z.string().min(1).max(MAX_STORAGE_SQL_CHARS),
+    target: z
+      .object({
+        serial: z.string().min(1).max(128),
+        packageName: z.string().min(1).max(255),
+        link: z.number().int().positive(),
+      })
+      .strict(),
+    limit: z.number().int().min(1).max(MAX_STORAGE_ROWS).optional(),
+    offset: z.number().int().min(0).max(MAX_STORAGE_QUERY_OFFSET).optional(),
+  })
+  .strict();
 const LONG_RANGE = [-(2n ** 63n), 2n ** 63n - 1n] as const;
 
 /** A decimal integer string within the range of `type` (`int`: 32-bit, `long` / `integer`: 64-bit). */

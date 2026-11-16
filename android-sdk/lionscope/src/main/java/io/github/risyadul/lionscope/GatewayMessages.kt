@@ -57,6 +57,8 @@ internal sealed class GatewayMessage {
         val edits: String? = null,
     ) : GatewayMessage()
 
+    class StorageQuery(val requestId: Int, val opId: String, val name: String, val sql: String, val limit: Int, val offset: Int) : GatewayMessage()
+
     companion object {
         private const val ANY_METHOD = "*"
         private const val MIN_MOCK_STATUS = 100
@@ -102,6 +104,7 @@ internal sealed class GatewayMessage {
             "storageList" -> FlatJson.parse(line)?.let(::storageList)
             "storageRead" -> FlatJson.parse(line)?.let(::storageRead)
             "storageWrite" -> FlatJson.parse(line)?.let(::storageWrite)
+            "storageQuery" -> FlatJson.parse(line)?.let(::storageQuery)
             else -> null
         }
 
@@ -214,6 +217,16 @@ internal sealed class GatewayMessage {
             val pages = optional(fields, "pages", MAX_STORAGE_REQUEST_FIELD_CHARS).getOrElse { return null }
             val limit = if (fields.has("limit") && !fields.isNull("limit")) fields.int("limit") ?: return null else null
             return StorageRead(requestId, store, name, cursor, limit, pages)
+        }
+
+        private fun storageQuery(fields: FlatJson): StorageQuery? {
+            val requestId = fields.int("requestId")?.takeIf { it >= 0 } ?: return null
+            val opId = fields.string("opId")?.takeIf { OP_ID.matches(it) } ?: return null
+            val name = storageName(fields, "name") ?: return null
+            val sql = fields.string("sql")?.takeIf { it.length in 1..16 * 1024 } ?: return null
+            val limit = fields.int("limit")?.takeIf { it in 1..MAX_STORAGE_ROWS } ?: return null
+            val offset = fields.int("offset")?.takeIf { it in 0..1_000_000 } ?: return null
+            return StorageQuery(requestId, opId, name, sql, limit, offset)
         }
 
         private fun storageWrite(fields: FlatJson): StorageWrite? {

@@ -18,6 +18,7 @@ import {
   DEVICE_PROTOCOL_V10,
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
+  DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -109,9 +110,11 @@ import {
 
 export * from './wire.ts';
 export * from './storage.ts';
+export * from './storageSql.ts';
 import {
   ROW_DIGEST_PATTERN,
   storageReadInputSchema,
+  storageQueryInputSchema,
   storageValueSchema,
   storageFieldValueSchema,
   storageWriteInputSchema,
@@ -328,6 +331,9 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   z
     .object({ type: z.literal('storageWrite'), requestId: clientRequestId, write: storageWriteInputSchema })
     .strict(),
+  z
+    .object({ type: z.literal('storageQuery'), requestId: clientRequestId, query: storageQueryInputSchema })
+    .strict(),
   z.object({ type: z.literal('storageAudit'), requestId: clientRequestId }).strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
@@ -366,7 +372,7 @@ export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
   const cap =
     type === 'setNetworkMock'
       ? MAX_CLIENT_FRAME_BYTES
-      : type === 'storageWrite'
+      : type === 'storageWrite' || type === 'storageQuery'
         ? MAX_STORAGE_CLIENT_MESSAGE_BYTES
         : MAX_CLIENT_MESSAGE_BYTES;
   if (!withinBytes(raw, cap)) {
@@ -1057,6 +1063,19 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       opId: z.string().regex(/^[0-9a-f-]{36}$/, 'invalid opId'),
       phase: z.enum(['provisional', 'final']),
       code: storageCode,
+      query: z
+        .object({
+          readOnly: z.boolean(),
+          columns: z.array(z.string().max(MAX_STORAGE_NAME_CHARS)).max(MAX_STORAGE_COLUMNS),
+          rows: z.array(z.array(storageValueSchema).max(MAX_STORAGE_COLUMNS)).max(MAX_STORAGE_ROWS),
+          hasMore: z.boolean(),
+          truncated: z.boolean(),
+          offset: z.number().int().min(0).max(1_000_000),
+        })
+        .strict()
+        .refine((value) => value.rows.every((row) => row.length === value.columns.length))
+        .optional(),
+      queryError: z.string().max(1024).optional(),
       current: storageValueSchema.optional(),
       stored: storageValueSchema.optional(),
       rowDigest: z
@@ -1232,6 +1251,18 @@ export function parseDeviceMessage(
       ok: false,
       error: 'Row outcomes need protocol version 12',
       unnegotiated: { type, since: DEVICE_PROTOCOL_V12 },
+    };
+  }
+  if (
+    type === 'storageWriteResult' &&
+    protocolVersion < DEVICE_PROTOCOL_V13 &&
+    object &&
+    ['query', 'queryError'].some((key) => Object.hasOwn(object, key))
+  ) {
+    return {
+      ok: false,
+      error: 'SQL outcomes need protocol version 13',
+      unnegotiated: { type, since: DEVICE_PROTOCOL_V13 },
     };
   }
   const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;

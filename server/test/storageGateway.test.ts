@@ -60,7 +60,7 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
   }
 }
 
-const STORAGE_TYPES = new Set(['storageList', 'storageRead', 'storageWrite']);
+const STORAGE_TYPES = new Set(['storageList', 'storageRead', 'storageWrite', 'storageQuery']);
 const OP_ID = '6f1c2b8e-0d5a-4f43-9b0e-3a7c2d1e4f50';
 
 describe('storage config', () => {
@@ -104,6 +104,42 @@ describe('device gateway storage requests', () => {
       GatewayMessage,
       { requestId: number }
     >[];
+
+  it('gates SQL at v13 and resolves query operation envelopes on negotiated links', async () => {
+    const old = await linked({}, 12);
+    const query = {
+      type: 'storageQuery' as const,
+      opId: OP_ID,
+      name: 'shop.db',
+      sql: 'SELECT 1',
+      limit: 50,
+      offset: 0,
+    };
+    await expect(old.link.storage(query)).rejects.toMatchObject({ reason: 'unsupported' });
+    expect(requests(old.client)).toHaveLength(0);
+    old.client.socket.destroy();
+    await gateway?.close();
+    const current = await linked({}, 13);
+    const pending = current.link.storage(query);
+    await waitUntil(() => requests(current.client).length === 1);
+    const request = requests(current.client)[0]!;
+    current.client.send({
+      type: 'storageWriteResult',
+      requestId: request.requestId,
+      opId: OP_ID,
+      phase: 'final',
+      code: 'ok',
+      query: {
+        readOnly: true,
+        columns: ['n'],
+        rows: [[{ t: 'integer', v: '1' }]],
+        hasMore: false,
+        truncated: false,
+        offset: 0,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({ type: 'storageWriteResult', query: { readOnly: true } });
+  });
 
   afterEach(async () => {
     for (const client of clients.splice(0)) client.socket.destroy();

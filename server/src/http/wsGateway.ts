@@ -113,7 +113,10 @@ export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
 export type GatewayViewEdits = Pick<ViewEdits, 'set' | 'revert'>;
 
 /** What the gateway needs from the storage inspector. */
-export type GatewayStorage = Pick<StorageService, 'consent' | 'list' | 'read' | 'write' | 'auditResponse'>;
+export type GatewayStorage = Pick<
+  StorageService,
+  'consent' | 'list' | 'read' | 'write' | 'query' | 'auditResponse'
+>;
 
 /** What the gateway needs from the device locations. */
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
@@ -167,6 +170,7 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   storageList: 'Could not list the app storage',
   storageRead: 'Could not read the app storage',
   storageWrite: 'Could not change the app storage',
+  storageQuery: 'Could not run the SQL query',
   storageAudit: 'Could not read the storage audit',
 };
 
@@ -343,6 +347,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       case 'storageList':
       case 'storageRead':
       case 'storageWrite':
+      case 'storageQuery':
       case 'storageAudit': {
         // Answered with `storage` to this client; refusals (consent off first) come the same way.
         const storage = options.storage;
@@ -354,7 +359,9 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
               ? await storage.read(message.read)
               : message.type === 'storageAudit'
                 ? storage.auditResponse()
-                : await storage.write(message.write);
+                : message.type === 'storageQuery'
+                  ? await storage.query(message.query)
+                  : await storage.write(message.write);
         send(ws, { type: 'storage', requestId: message.requestId, response });
         return;
       }

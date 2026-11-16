@@ -8,6 +8,11 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Database Query workbench with a SQL editor, database selector, session-only history, keyboard execution and
+  paginated result grids. Device protocol 13 supports SELECT/WITH and explicit INSERT/UPDATE/DELETE through the
+  registered Room transaction; mutations require write consent, report affected rows and preserve late outcomes
+  without automatic retries or undo.
+
 - Storage inspector (SDK 0.13.0): the profiled app's SharedPreferences and the Room databases it registers with
   `Lionscope.trackDatabase(name, db)` (the no-op artifact has it too), read and edited live from the dashboard's
   **Storage** workspace or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless

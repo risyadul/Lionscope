@@ -28,7 +28,7 @@ export type ByeReason = Extract<GatewayMessage, { type: 'bye' }>['reason'];
 
 type StorageGatewayMessage = Extract<
   GatewayMessage,
-  { type: 'storageList' } | { type: 'storageRead' } | { type: 'storageWrite' }
+  { type: 'storageList' } | { type: 'storageRead' } | { type: 'storageWrite' } | { type: 'storageQuery' }
 >;
 /** A v11 storage request as the server builds it; the gateway adds the `requestId`. */
 export type SdkStorageRequest = StorageGatewayMessage extends infer M

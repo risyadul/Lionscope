@@ -11,6 +11,9 @@ initial scope is editing existing values, including dashboard editors for BLOBs 
 adding rows, creating preferences, or renaming preference keys. This decision applies to Storage only; Network
 and Layout Inspector redaction policies are outside this change.
 
+[ADR 0003](0003-add-a-database-query-workbench.md) extends this initial scope with a separate SQL Query console,
+including inserts and direct mutations. The row-editor contract below remains in effect.
+
 ## Access and editing
 
 Dashboard and AI agents receive the same original Storage values, including credentials, under the existing

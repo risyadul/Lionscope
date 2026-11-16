@@ -8,7 +8,7 @@
 | `--allow-device-control` |                           | off     | AI agents may take screenshots, tap, type, launch apps and boot / shut down emulators, and set network mocks            |
 | `--allow-network-bodies` |                           | off     | AI agents get HTTP request and response bodies in `get_network_request`                                                 |
 | `--allow-storage-read`   |                           | off     | Dashboard and AI agents read the app's SharedPreferences and registered Room databases ([storage](features/storage.md)) |
-| `--allow-storage-write`  |                           | off     | They may also edit those values, compare-and-set (needs `--allow-storage-read`)                                         |
+| `--allow-storage-write`  |                           | off     | Conditional value/row edits and explicit SQL mutations (needs `--allow-storage-read`)                                   |
 |                          | `LIONSCOPE_DASHBOARD_DIR` | auto    | Built dashboard to serve                                                                                                |
 
 Flags win over environment variables. Without `LIONSCOPE_DASHBOARD_DIR`, the server serves the dashboard that

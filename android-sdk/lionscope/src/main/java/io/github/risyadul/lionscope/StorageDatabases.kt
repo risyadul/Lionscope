@@ -103,6 +103,23 @@ internal class RoomTrackedDatabase(database: RoomDatabase) : TrackedDatabase {
 
 /** The allowlisted statements on the connection of the app's own transaction. */
 internal class SupportConnection(private val db: SupportSQLiteDatabase) : SqlConnection {
+    override fun queryConsole(sql: String, limit: Int): ConsoleRows {
+        StorageTestHooks.touched()
+        db.query(SimpleSQLiteQuery(sql)).use { cursor ->
+            return consoleRows(cursor.columnNames.toList(), limit) {
+                if (!cursor.moveToNext()) null else (0 until minOf(cursor.columnCount, MAX_STORAGE_COLUMNS)).map { index ->
+                    when (cursor.getType(index)) {
+                        Cursor.FIELD_TYPE_NULL -> null
+                        Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
+                        Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
+                        Cursor.FIELD_TYPE_STRING -> cursor.getString(index)
+                        else -> cursor.getBlob(index)
+                    }
+                }
+            }
+        }
+    }
+
     override fun query(sql: String, args: List<Any?>): SqlRows {
         StorageTestHooks.touched()
         db.query(SimpleSQLiteQuery(sql, args.toTypedArray())).use { cursor ->

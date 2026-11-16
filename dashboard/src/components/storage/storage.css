@@ -13,6 +13,247 @@
   background: var(--surface);
 }
 
+.storage-table-view,
+.storage-query-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.storage-table-view[hidden],
+.storage-query-view[hidden] {
+  display: none;
+}
+
+.storage-workbench-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.storage-workbench-tabs .btn {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+}
+
+.storage-workbench-tabs .btn[aria-pressed='true'] {
+  border-bottom-color: var(--brand);
+  color: var(--ink);
+}
+
+.storage-query {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.storage-query button,
+.storage-query select {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.storage-query button:disabled,
+.storage-query select:disabled {
+  cursor: not-allowed;
+}
+
+.storage-query :is(button, select, textarea, [tabindex]):focus-visible,
+.storage-workbench-tabs button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.storage-query-label {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.storage-query-label span,
+.storage-query-note,
+.storage-query-pagination,
+.storage-query-result-head span {
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: 400;
+}
+
+.storage-query-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 150px;
+  max-height: 45vh;
+  resize: vertical;
+  padding: var(--space-3);
+  border: 0;
+  border-block: 1px solid var(--rule);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.storage-query-toolbar,
+.storage-query-result-head,
+.storage-query-pagination,
+.storage-query-history-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.storage-query-toolbar label {
+  display: flex;
+  flex: 1 1 180px;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-small);
+}
+
+.storage-query-toolbar select {
+  width: 100%;
+  min-width: 0;
+  max-width: 300px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.storage-query-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.storage-query-results {
+  min-width: 0;
+}
+
+.storage-query-result-head {
+  justify-content: space-between;
+  min-height: 44px;
+}
+
+.storage-query-result-head span {
+  overflow-wrap: anywhere;
+}
+
+.storage-query-grid {
+  max-height: 55vh;
+  overflow: auto;
+}
+
+.storage-query-grid table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--text-small);
+}
+
+.storage-query-grid :is(th, td) {
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-query-grid thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.storage-query-pagination span {
+  flex: 1 1 200px;
+}
+
+.storage-query-history {
+  flex: none;
+  max-height: 280px;
+  overflow: auto;
+  border-bottom: 1px solid var(--rule);
+}
+
+.storage-query-history-head {
+  justify-content: space-between;
+  font-size: var(--text-small);
+}
+
+.storage-query-history > button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+}
+
+.storage-query-history > button:hover {
+  background: var(--hover-wash);
+}
+
+.storage-query-history code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-query-history > button > span {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-query-error {
+  margin: 0;
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .storage-query-toolbar label {
+    flex-basis: 100%;
+  }
+  .storage-query-editor {
+    font-size: 16px;
+  }
+}
+
 /* Head: back, where you are, the mode, info, refresh ------------------------------------------------------------ */
 
 .storage-head {

@@ -313,7 +313,7 @@ internal class DeviceLink(
                 is GatewayMessage.Inspect -> onInspect(message.requestId)
                 is GatewayMessage.Mocks, is GatewayMessage.Mock -> onMocks(message)
                 is GatewayMessage.SetViewProperty, is GatewayMessage.RevertViewProperties -> onViewEdit(message)
-                is GatewayMessage.StorageList, is GatewayMessage.StorageRead, is GatewayMessage.StorageWrite -> onStorage(message)
+                is GatewayMessage.StorageList, is GatewayMessage.StorageRead, is GatewayMessage.StorageWrite, is GatewayMessage.StorageQuery -> onStorage(message)
             }
         }
 

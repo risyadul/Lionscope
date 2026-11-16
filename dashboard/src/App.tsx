@@ -603,6 +603,7 @@ export function App() {
                       <StoragePanel
                         consent={state.storageConsent}
                         rowEditing={(sdk?.protocolVersion ?? 0) >= 12}
+                        queryEnabled={(sdk?.protocolVersion ?? 0) >= 13}
                         answers={state.storageAnswers}
                         outcomes={state.storageOutcomes}
                         isRunning={state.session.status === 'running'}

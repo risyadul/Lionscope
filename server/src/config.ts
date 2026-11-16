@@ -82,9 +82,9 @@ Options:
                         URLs, headers and timings are always readable)
   --allow-storage-read  Let the dashboard and AI agents read the profiled app's SharedPreferences and the
                         Room databases it registers (Lionscope.trackDatabase), through its SDK link; values
-                        that look like credentials stay redacted (off by default)
-  --allow-storage-write Also let them edit those values live, compare-and-set (needs --allow-storage-read;
-                        off by default)
+                        are original on device protocol 12+ links (off by default)
+  --allow-storage-write Also allow conditional row edits and explicit SQL mutations in the Query console
+                        (needs --allow-storage-read; off by default)
   -h, --help            Show this help
   -v, --version         Print the version
 `;

@@ -18,5 +18,9 @@ The workspace for examining the app's HTTP requests and configuring mock respons
 **Storage Inspector**:
 The workspace for reading and editing the app's preferences and registered databases, labeled Storage in navigation.
 
+**Query console**:
+The SQL editor inside Storage for explicit queries and mutations on a registered database. Its result grid is a
+read-only projection; SQL mutations have no row-editor compare-and-set or undo contract.
+
 **Device**:
 The workspace for viewing and operating the connected Android device or emulator.

@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -1623,11 +1623,32 @@ export type StorageWritePhase = 'provisional' | 'final';
  * `-0.0` is stored as `0.0`: `normalized`). `undo`: the edit that reverts this one, only when it may be undone (an
  * `ok` final answer in time, prefs persisted). `late`: a final answer that arrived after the request had timed out.
  */
+export interface StorageQueryInput {
+  name: string;
+  sql: string;
+  target: StorageTarget;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StorageQueryData {
+  readOnly: boolean;
+  columns: string[];
+  rows: StorageValue[][];
+  hasMore: boolean;
+  truncated: boolean;
+  offset: number;
+}
+
 export interface StorageWriteOutcome {
   opId: string;
   code: StorageCode;
   phase?: StorageWritePhase;
   late: boolean;
+  /** v13 SQL console: projections are read-only and have no row-editor identity. */
+  query?: StorageQueryData;
+  /** Untrusted SQLite diagnostic, bounded to 1,024 characters. */
+  queryError?: string;
   current?: StorageValue;
   stored?: StorageValue;
   /** v12 row edits: readback/conflicts by column and confirmed post-write primary key. */
@@ -1685,6 +1706,7 @@ export type StorageResponse =
       txMs: number;
     }
   | { ok: true; kind: 'write'; target: StorageTarget; outcome: StorageWriteOutcome }
+  | { ok: true; kind: 'query'; target: StorageTarget; outcome: StorageWriteOutcome }
   /** The server's write audit, oldest first (no values). */
   | { ok: true; kind: 'audit'; entries: StorageAuditEntry[] };
 
@@ -1702,7 +1724,7 @@ export interface StorageAuditEntry {
   table: string | null;
   field: string | null;
   pkDigest: string | null;
-  op: 'update' | 'updateRow' | 'remove' | 'delete';
+  op: 'update' | 'updateRow' | 'remove' | 'delete' | 'query';
   code: StorageCode;
   phase: StorageWritePhase | null;
   late: boolean;
@@ -1921,6 +1943,7 @@ export type ClientMessage =
   | { type: 'storageList'; requestId: number }
   | { type: 'storageRead'; requestId: number; read: StorageReadInput }
   | { type: 'storageWrite'; requestId: number; write: StorageWriteInput }
+  | { type: 'storageQuery'; requestId: number; query: StorageQueryInput }
   /** 0.13.0. The server's storage write audit (needs --allow-storage-read): answered with `storage` (`kind: 'audit'`). */
   | { type: 'storageAudit'; requestId: number };
 
@@ -1945,7 +1968,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 12;
+export const DEVICE_PROTOCOL_VERSION = 13;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -1995,6 +2018,8 @@ export const DEVICE_PROTOCOL_V9 = 9;
 export const DEVICE_PROTOCOL_V10 = 10;
 export const DEVICE_PROTOCOL_V11 = 11;
 export const DEVICE_PROTOCOL_V12 = 12;
+/** SQL console on the registered Room connection. */
+export const DEVICE_PROTOCOL_V13 = 13;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -2294,6 +2319,8 @@ export type DeviceMessage =
       opId: string;
       phase: StorageWritePhase;
       code: StorageCode;
+      query?: StorageQueryData;
+      queryError?: string;
       current?: StorageValue;
       stored?: StorageValue;
       storedFields?: StorageFieldValue[];
@@ -2321,6 +2348,15 @@ export type DeviceMessageType = DeviceMessage['type'];
  * MAX_GATEWAY_LINE_BYTES.
  */
 export type GatewayMessage =
+  | {
+      type: 'storageQuery';
+      requestId: number;
+      opId: string;
+      name: string;
+      sql: string;
+      limit: number;
+      offset: number;
+    }
   /** v5 adds `mode` (sent on v5 links only; absent = `session`). */
   | {
       type: 'welcome';

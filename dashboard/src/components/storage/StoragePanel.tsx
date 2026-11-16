@@ -32,6 +32,7 @@ import {
 } from '../../lib/storage.ts';
 import type { StorageAnswer, StorageOutcomeNotice } from '../../lib/store.ts';
 import './storage.css';
+import { StorageQuery } from './StorageQuery.tsx';
 
 type Selected = { store: 'prefs'; name: string } | { store: 'db'; name: string };
 
@@ -169,6 +170,7 @@ function ValueText({ value }: { value: StorageValue }) {
 type Props = {
   consent: StorageConsent;
   rowEditing?: boolean;
+  queryEnabled?: boolean;
   /** This client's storage answers (DashboardState.storageAnswers). */
   answers: readonly StorageAnswer[];
   /** Final outcomes that came after their answer (DashboardState.storageOutcomes). */
@@ -195,12 +197,23 @@ export const StoragePanel = memo(function StoragePanel(props: Props) {
   return <StorageTab key={props.sessionKey} {...props} />;
 });
 
-function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }: Props) {
+function StorageTab({
+  consent,
+  answers,
+  outcomes,
+  isRunning,
+  rowEditing = true,
+  queryEnabled = true,
+}: Props) {
   const { send } = useServices();
   const storage = useStorage(send, answers);
   const canWrite = consent === 'read_write';
 
   const [listing, setListing] = useState<Listing | null>(null);
+  const [queryOpen, setQueryOpen] = useState(false);
+  const [queryBusy, setQueryBusy] = useState(false);
+  const [querySeed, setQuerySeed] = useState<{ database: string; table: string | null } | null>(null);
+  const [queryChangedData, setQueryChangedData] = useState(false);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [prefsView, setPrefsView] = useState<PrefsView | null>(null);
   const [dbView, setDbView] = useState<DbView | null>(null);
@@ -344,6 +357,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
 
   const open = useCallback(
     async (next: Selected) => {
+      setQueryOpen(false);
       const gen = begin();
       setSelected(next);
       setPrefsView(null);
@@ -371,6 +385,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
 
   const openTable = useCallback(
     async (name: string) => {
+      setQueryOpen(false);
       if (!dbView) return;
       const gen = begin();
       setDirection('in');
@@ -690,6 +705,12 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
   if (level === 'audit') crumbs.push({ label: 'Write audit', to: null });
   if (selected) crumbs.push({ label: selected.name, mono: true, to: level === 'rows' ? 'tables' : null });
   if (level === 'rows' && dbView?.table) crumbs.push({ label: dbView.table, mono: true, to: null });
+  const visibleCrumbs = queryOpen
+    ? [
+        { label: 'Storage', to: 'stores' as const },
+        { label: 'Query', to: null },
+      ]
+    : crumbs;
 
   const query = filter.trim().toLowerCase();
 
@@ -1270,6 +1291,13 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
   };
 
   const levelKey = `${level}:${selected?.name ?? ''}:${dbView?.table ?? ''}`;
+  const showTables = () => {
+    setQueryOpen(false);
+    if (queryChangedData) {
+      setQueryChangedData(false);
+      void reload();
+    }
+  };
 
   return (
     <section className="storage" aria-label="Storage" onKeyDown={onKeyDown}>
@@ -1278,21 +1306,25 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
           type="button"
           className="storage-icon-btn"
           aria-label="Back"
-          disabled={level === 'stores'}
-          onClick={back}
+          disabled={queryBusy || (!queryOpen && level === 'stores')}
+          onClick={() => (queryOpen ? showTables() : back())}
         >
           <BackIcon />
         </button>
         <nav className="storage-crumbs" aria-label="Location">
-          {crumbs.map((crumb, index) => (
+          {visibleCrumbs.map((crumb, index) => (
             <span key={`${index}:${crumb.label}`} className="storage-crumb-item">
               {index > 0 && <span className="storage-crumb-sep">/</span>}
               <button
                 type="button"
-                className={`storage-crumb${crumb.mono ? ' mono' : ''}`}
-                aria-current={index === crumbs.length - 1 ? 'page' : undefined}
-                disabled={crumb.to === null}
-                onClick={() => (crumb.to === 'stores' ? toStores() : back())}
+                className={`storage-crumb${'mono' in crumb && crumb.mono ? ' mono' : ''}`}
+                aria-current={index === visibleCrumbs.length - 1 ? 'page' : undefined}
+                disabled={queryBusy || crumb.to === null}
+                onClick={() => {
+                  setQueryOpen(false);
+                  if (crumb.to === 'stores') toStores();
+                  else back();
+                }}
               >
                 {crumb.label}
               </button>
@@ -1325,7 +1357,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
           className="storage-icon-btn"
           aria-label="Refresh"
           data-busy={busy || undefined}
-          disabled={busy || !isRunning || !listing}
+          disabled={queryOpen || busy || !isRunning || !listing}
           onClick={refreshShown}
         >
           <RefreshIcon />
@@ -1341,11 +1373,12 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
           </p>
           <p>
             <b>Edits</b> are compare-and-set: refused with the current value when the app changed it since it
-            was read. One value per edit; Undo is offered from the answer, on the same link only.
+            was read. Room drafts apply changed fields together. Eligible edits offer Undo on the same link.
+            SQL writes change matching rows directly and have no Undo.
           </p>
         </div>
       )}
-      {level === 'tables' || level === 'prefs' ? (
+      {!queryOpen && (level === 'tables' || level === 'prefs') ? (
         <div className="storage-toolbar">
           <label className="storage-search">
             <span className="sr-only">{level === 'tables' ? 'Filter tables' : 'Filter keys'}</span>
@@ -1393,6 +1426,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
                 className="storage-row"
                 key={`prefs:${file.name}`}
                 aria-label={`Open preferences ${file.name}`}
+                disabled={queryBusy}
                 aria-current={selected?.store === 'prefs' && selected.name === file.name ? 'page' : undefined}
                 onClick={() => void open({ store: 'prefs', name: file.name })}
               >
@@ -1406,7 +1440,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
                   type="button"
                   className="storage-row"
                   aria-label={`Open database ${database.name}`}
-                  disabled={database.status !== 'ok'}
+                  disabled={queryBusy || database.status !== 'ok'}
                   onClick={() => void open({ store: 'db', name: database.name })}
                 >
                   {database.name}
@@ -1418,6 +1452,7 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
                       key={table.name}
                       className="storage-row storage-table-link"
                       aria-label={`Open table ${table.name}`}
+                      disabled={queryBusy}
                       aria-current={dbView.table === table.name ? 'page' : undefined}
                       title={table.readOnly ? readOnlyText(table.readOnly) : 'Editable table'}
                       onClick={() => void openTable(table.name)}
@@ -1431,18 +1466,75 @@ function StorageTab({ consent, answers, outcomes, isRunning, rowEditing = true }
           </nav>
         )}
         <div className="storage-content">
-          <div
-            className="storage-body"
-            key={levelKey}
-            data-direction={direction}
-            aria-busy={busy || undefined}
-          >
-            {body}
+          {listing && listing.databases.some((database) => database.status === 'ok') && (
+            <div className="storage-workbench-tabs" aria-label="Database views">
+              <button
+                type="button"
+                className="btn"
+                aria-pressed={!queryOpen}
+                disabled={queryBusy}
+                onClick={showTables}
+              >
+                Tables
+              </button>
+              <button
+                type="button"
+                className="btn"
+                aria-pressed={queryOpen}
+                disabled={!queryEnabled}
+                title={
+                  queryEnabled
+                    ? 'Open SQL editor'
+                    : 'Update the app SDK to device protocol 13 for SQL queries'
+                }
+                onClick={() => {
+                  if (!querySeed)
+                    setQuerySeed({
+                      database:
+                        dbView?.name ?? listing.databases.find((database) => database.status === 'ok')!.name,
+                      table: dbView?.table ?? null,
+                    });
+                  setQueryOpen(true);
+                }}
+              >
+                {querySeed ? 'Query' : '+ New Query'}
+              </button>
+            </div>
+          )}
+          <div className="storage-table-view" hidden={queryOpen}>
+            <div
+              className="storage-body"
+              key={levelKey}
+              data-direction={direction}
+              aria-busy={busy || undefined}
+            >
+              {body}
+            </div>
+            {pager}
+            {footOutcome && !sheetBody && <div className="storage-foot">{footOutcome}</div>}
           </div>
-          {pager}
-          {footOutcome && !sheetBody && <div className="storage-foot">{footOutcome}</div>}
+          {listing && querySeed && (
+            <div className="storage-query-view" hidden={!queryOpen}>
+              <StorageQuery
+                storage={storage}
+                databases={listing.databases}
+                target={listing.target}
+                initialDatabase={querySeed.database}
+                initialTable={querySeed.table}
+                canWrite={canWrite}
+                isRunning={isRunning}
+                outcomes={outcomes}
+                onBusyChange={setQueryBusy}
+                onMutation={() => {
+                  begin();
+                  setLastWrite(null);
+                  setQueryChangedData(true);
+                }}
+              />
+            </div>
+          )}
         </div>
-        {sheetBody && (
+        {!queryOpen && sheetBody && (
           <div className="storage-sheet" role="dialog" aria-label={sheet?.store === 'db' ? 'Row' : 'Key'}>
             {sheetBody}
             {written?.write.op === 'updateRow' &&

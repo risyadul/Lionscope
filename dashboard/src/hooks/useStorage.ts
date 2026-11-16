@@ -3,6 +3,7 @@ import {
   STORAGE_TIMEOUT_MS,
   type ClientMessage,
   type StorageReadInput,
+  type StorageQueryInput,
   type StorageResponse,
   type StorageWriteInput,
 } from '@lionscope/protocol/wire';
@@ -19,6 +20,7 @@ export interface StorageRequests {
   list: () => Promise<StorageResponse>;
   read: (read: StorageReadInput) => Promise<StorageResponse>;
   write: (write: StorageWriteInput) => Promise<StorageResponse>;
+  query: (query: StorageQueryInput) => Promise<StorageResponse>;
   /** The server's write audit (no values). */
   audit: () => Promise<StorageResponse>;
 }
@@ -82,5 +84,9 @@ export function useStorage(
       [request],
     ),
     audit: useCallback(() => request((requestId) => ({ type: 'storageAudit', requestId })), [request]),
+    query: useCallback(
+      (query: StorageQueryInput) => request((requestId) => ({ type: 'storageQuery', requestId, query })),
+      [request],
+    ),
   };
 }
