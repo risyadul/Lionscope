@@ -4,6 +4,7 @@ import { MAX_STORAGE_QUERY_OFFSET, planStorageSql } from '@lionscope/protocol/st
 import type { StorageRequests } from '../../hooks/useStorage.ts';
 import { displayValue, outcomeText } from '../../lib/storage.ts';
 import type { StorageOutcomeNotice } from '../../lib/store.ts';
+import { Select } from '../ui/Select.tsx';
 
 interface Props {
   storage: StorageRequests;
@@ -142,8 +143,9 @@ export function StorageQuery({
       <div className="storage-query-toolbar">
         <label>
           Database{' '}
-          <select
+          <Select
             aria-label="Query database"
+            title={name}
             value={name}
             disabled={busy}
             onChange={(event) => {
@@ -160,7 +162,7 @@ export function StorageQuery({
                   {database.name}
                 </option>
               ))}
-          </select>
+          </Select>
         </label>
         <button
           type="button"

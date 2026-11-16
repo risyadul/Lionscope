@@ -44,6 +44,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Fixed
 
+- The Query database selector reuses the dashboard's inset chevron and reserves room for long database names.
+
 - Database row draft inputs keep their intended single-line height instead of inheriting a 120 px flex basis
   from the horizontal preference editor.
 
