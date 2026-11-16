@@ -1419,50 +1419,84 @@ function StorageTab({
       <div className="storage-workspace">
         {listing && (
           <nav className="storage-browser" aria-label="Storage sources">
-            <h3>Preferences</h3>
-            {listing.prefs.map((file) => (
-              <button
-                type="button"
-                className="storage-row"
-                key={`prefs:${file.name}`}
-                aria-label={`Open preferences ${file.name}`}
-                disabled={queryBusy}
-                aria-current={selected?.store === 'prefs' && selected.name === file.name ? 'page' : undefined}
-                onClick={() => void open({ store: 'prefs', name: file.name })}
-              >
-                {file.name}
-              </button>
-            ))}
-            <h3>Databases</h3>
-            {listing.databases.map((database) => (
-              <div key={database.name}>
-                <button
-                  type="button"
-                  className="storage-row"
-                  aria-label={`Open database ${database.name}`}
-                  disabled={queryBusy || database.status !== 'ok'}
-                  onClick={() => void open({ store: 'db', name: database.name })}
-                >
-                  {database.name}
-                </button>
-                {dbView?.name === database.name &&
-                  dbView.tables.map((table) => (
+            <section className="storage-source-group" aria-label="Preferences">
+              <h3>Preferences</h3>
+              <ul className="storage-source-list">
+                {listing.prefs.map((file) => (
+                  <li key={file.name}>
                     <button
                       type="button"
-                      key={table.name}
-                      className="storage-row storage-table-link"
-                      aria-label={`Open table ${table.name}`}
+                      className="storage-row"
+                      aria-label={`Open preferences ${file.name}`}
                       disabled={queryBusy}
-                      aria-current={dbView.table === table.name ? 'page' : undefined}
-                      title={table.readOnly ? readOnlyText(table.readOnly) : 'Editable table'}
-                      onClick={() => void openTable(table.name)}
+                      aria-current={
+                        selected?.store === 'prefs' && selected.name === file.name ? 'page' : undefined
+                      }
+                      title={file.name}
+                      onClick={() => void open({ store: 'prefs', name: file.name })}
                     >
-                      {table.name}
-                      {table.readOnly && ' · read-only'}
+                      <PrefsIcon />
+                      <span className="storage-source-name">{file.name}</span>
                     </button>
-                  ))}
-              </div>
-            ))}
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section className="storage-source-group" aria-label="Databases">
+              <h3>Databases</h3>
+              <ul className="storage-source-list">
+                {listing.databases.map((database) => (
+                  <li key={database.name}>
+                    <button
+                      type="button"
+                      className="storage-row"
+                      aria-label={`Open database ${database.name}`}
+                      aria-expanded={dbView?.name === database.name}
+                      disabled={queryBusy || database.status !== 'ok'}
+                      title={
+                        database.status === 'ok'
+                          ? database.name
+                          : `${database.name}: ${readOnlyText(database.status)}`
+                      }
+                      onClick={() => void open({ store: 'db', name: database.name })}
+                    >
+                      <DatabaseIcon />
+                      <span className="storage-source-name">{database.name}</span>
+                    </button>
+                    {dbView?.name === database.name && (
+                      <ul className="storage-source-tables" aria-label={`Tables in ${database.name}`}>
+                        {dbView.tables.map((table) => (
+                          <li key={table.name}>
+                            <button
+                              type="button"
+                              className="storage-row storage-table-link"
+                              aria-label={`Open table ${table.name}`}
+                              disabled={queryBusy}
+                              aria-current={dbView.table === table.name ? 'page' : undefined}
+                              title={
+                                table.readOnly
+                                  ? `${table.name}: read-only: ${readOnlyText(table.readOnly)}`
+                                  : table.name
+                              }
+                              onClick={() => void openTable(table.name)}
+                            >
+                              <TableIcon />
+                              <span className="storage-source-name">{table.name}</span>
+                              {table.readOnly && (
+                                <span className="storage-source-state">
+                                  <LockIcon />
+                                  <span className="sr-only">Read only</span>
+                                </span>
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
           </nav>
         )}
         <div className="storage-content">

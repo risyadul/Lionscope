@@ -1234,18 +1234,22 @@
   min-width: 0;
 }
 .storage-browser {
-  flex: 0 0 190px;
+  flex: 0 0 220px;
   overflow: auto;
   border-right: 1px solid var(--rule);
 }
 .storage-browser h3 {
-  padding: 0 12px;
+  margin: 0;
+  padding: 8px 10px 4px;
   font-size: var(--text-small);
   color: var(--ink-muted);
 }
 .storage-browser .storage-row {
   width: 100%;
-  overflow-wrap: anywhere;
+  min-height: var(--storage-control-height);
+  padding: 4px 10px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--rule);
   text-align: left;
 }
 .storage-browser [aria-current='page'] {
@@ -1253,8 +1257,39 @@
   font-weight: 600;
 }
 .storage-browser .storage-table-link {
-  padding-left: 26px;
+  padding-left: 10px;
   font-size: var(--text-small);
+}
+
+.storage-source-group + .storage-source-group {
+  margin-top: 8px;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.storage-source-list,
+.storage-source-tables {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-source-tables {
+  margin: 0 0 8px 18px;
+  border-left: 1px solid var(--rule-strong);
+}
+
+.storage-source-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-source-state {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-muted);
 }
 .storage-content {
   display: flex;
@@ -1306,7 +1341,7 @@
 }
 @media (max-width: 1200px) {
   .storage-browser {
-    flex-basis: 155px;
+    flex-basis: 190px;
   }
   .storage-workspace > .storage-sheet {
     position: absolute;

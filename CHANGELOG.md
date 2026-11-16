@@ -44,6 +44,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Fixed
 
+- Storage sources use separate preference/database groups and indented table lists, with row separators,
+  single-line names, full-name tooltips and read-only indicators.
+
 - The Query database selector reuses the dashboard's inset chevron and reserves room for long database names.
 
 - Database row draft inputs keep their intended single-line height instead of inheriting a 120 px flex basis

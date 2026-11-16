@@ -350,6 +350,32 @@ const OK = (opId: string, more: Partial<StorageWriteOutcome> = {}): StorageRespo
 });
 
 describe('Storage tab', () => {
+  it('groups source tables under their database and preserves full names and read-only descriptions', async () => {
+    const h = setup('read_write');
+    const preference = 'analytics_a_long_synthetic_preference_name';
+    const table = 'LongSyntheticTableNameForSourceNavigation';
+    fireEvent.click(screen.getByRole('button', { name: 'Load storage' }));
+    await h.answer(listOf([preference], ['shop.db']));
+    const sources = within(screen.getByRole('navigation', { name: 'Storage sources' }));
+    expect(
+      sources.getByRole('button', { name: `Open preferences ${preference}` }).getAttribute('title'),
+    ).toBe(preference);
+    fireEvent.click(sources.getByRole('button', { name: 'Open database shop.db' }));
+    const schema = schemaOf('shop.db', [table]) as Extract<StorageResponse, { kind: 'schema' }>;
+    schema.tables[0]!.readOnly = 'view';
+    await h.answer(schema);
+    expect(sources.getByRole('region', { name: 'Preferences' })).toBeTruthy();
+    expect(sources.getByRole('region', { name: 'Databases' })).toBeTruthy();
+    expect(sources.getByRole('button', { name: 'Open database shop.db' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+    const tables = within(sources.getByRole('list', { name: 'Tables in shop.db' }));
+    const entry = tables.getByRole('button', { name: `Open table ${table}` });
+    expect(entry.getAttribute('title')).toContain(table);
+    expect(entry.getAttribute('title')).toMatch(/read-only: a view/);
+    expect(entry.textContent).toContain('Read only');
+  });
+
   it('keeps Query beside Tables, blocks navigation while running and refreshes after SQL mutations', async () => {
     const h = setup('read_write');
     await openItem(h);
