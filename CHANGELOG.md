@@ -44,6 +44,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Fixed
 
+- Database row draft inputs keep their intended single-line height instead of inheriting a 120 px flex basis
+  from the horizontal preference editor.
+
 - Storage Query uses compact desktop controls, table rows and editor spacing while keeping 44 px controls on
   touch devices. Results fill the remaining workbench height instead of stopping at 55% of the viewport.
 
