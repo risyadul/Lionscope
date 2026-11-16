@@ -44,6 +44,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Fixed
 
+- Profiler readouts reflow by their panel width, and warning labels wrap inside their own metric instead of
+  overlapping adjacent panels.
+
 - Storage sources use separate preference/database groups and indented table lists, with row separators,
   single-line names, full-name tooltips and read-only indicators.
 

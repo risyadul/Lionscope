@@ -1,4 +1,5 @@
 .stat-strip {
+  container-type: inline-size;
   border-bottom: 1px solid var(--rule);
 }
 
@@ -82,21 +83,29 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 18px;
-  padding: 0 6px;
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-height: 18px;
+  padding: 2px 6px;
   border-radius: var(--radius-s);
   background: var(--jank-wash);
   color: var(--jank-text);
   font-size: var(--text-overline);
   font-weight: 600;
+  line-height: 1.25;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  white-space: nowrap;
   animation: flag-in var(--dur) var(--ease-out) both;
 }
 
 .readout-flag svg {
+  flex: none;
   color: var(--jank);
+}
+
+.readout-flag-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 @keyframes flag-in {
@@ -136,7 +145,7 @@
   }
 }
 
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .readouts {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -154,7 +163,7 @@
   }
 }
 
-@media (max-width: 420px) {
+@container (max-width: 420px) {
   .readouts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
