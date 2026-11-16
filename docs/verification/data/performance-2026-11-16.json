@@ -1,0 +1,434 @@
+{
+  "date": "2026-11-16",
+  "commitMeasured": "0f2f5a5",
+  "host": {
+    "cpu": "Apple M4 Pro",
+    "memoryGiB": 24,
+    "macOS": "27.2.1",
+    "node": "26.8.2",
+    "chromium": "147.0.0.0"
+  },
+  "ui": {
+    "desktop": {
+      "domNodes": 627,
+      "elapsedMs": 8762.59999999404,
+      "heapAfterMb": 4.420332908630371,
+      "heapBeforeMb": 2.97280216217041,
+      "longTasks": [],
+      "metrics": {
+        "editField": {
+          "maxMs": 33.400000005960464,
+          "medianMs": 33.29999999701977,
+          "p95Ms": 33.400000005960464,
+          "samples": 30
+        },
+        "openQuery": {
+          "maxMs": 33.5,
+          "medianMs": 33.30000001192093,
+          "p95Ms": 33.400000005960464,
+          "samples": 30
+        },
+        "openRow": {
+          "maxMs": 33.5,
+          "medianMs": 33.3999999910593,
+          "p95Ms": 33.5,
+          "samples": 30
+        },
+        "runQuery": {
+          "maxMs": 50.20000000298023,
+          "medianMs": 50,
+          "p95Ms": 50.1000000089407,
+          "samples": 30
+        }
+      },
+      "mode": "production fixture; 50 rows x 3 columns; 5 warmups then 30 samples per action; two requestAnimationFrame callbacks after settled DOM; no server/SDK roundtrip",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.0.0 Safari/537.36",
+      "viewport": {
+        "height": 900,
+        "width": 1440
+      }
+    },
+    "narrow": {
+      "domNodes": 617,
+      "elapsedMs": 8750.40000000596,
+      "heapAfterMb": 3.278000831604004,
+      "heapBeforeMb": 4.813250541687012,
+      "longTasks": [],
+      "metrics": {
+        "editField": {
+          "maxMs": 33.5,
+          "medianMs": 33.20000000298023,
+          "p95Ms": 33.400000005960464,
+          "samples": 30
+        },
+        "openQuery": {
+          "maxMs": 33.5,
+          "medianMs": 33.3999999910593,
+          "p95Ms": 33.5,
+          "samples": 30
+        },
+        "openRow": {
+          "maxMs": 33.5,
+          "medianMs": 33.3999999910593,
+          "p95Ms": 33.5,
+          "samples": 30
+        },
+        "runQuery": {
+          "maxMs": 50.1000000089407,
+          "medianMs": 50,
+          "p95Ms": 50.099999994039536,
+          "samples": 30
+        }
+      },
+      "mode": "production fixture; 50 rows x 3 columns; 5 warmups then 30 samples per action; two requestAnimationFrame callbacks after settled DOM; no server/SDK roundtrip",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.0.0 Safari/537.36",
+      "viewport": {
+        "height": 932,
+        "width": 430
+      }
+    },
+    "traceSummary": {
+      "rendererMainThreadTasks": 4130,
+      "tasksOver50Ms": 0,
+      "maxTaskMs": 13.547,
+      "scope": "Narrow interaction rerun after page load; trace itself retained in /tmp only."
+    }
+  },
+  "server": {
+    "passive": {
+      "mode": "passive current consumer session; no benchmark client mirror; other clients not controlled",
+      "elapsedSeconds": 30.294436124997446,
+      "cpuOneCorePercent": 0.39611234057917444,
+      "rssMedianMb": 52.46875,
+      "rssMaxMb": 65.734375
+    },
+    "additionalMirror": {
+      "mode": "one additional benchmark mirror client; 540px, 30fps cap; PNG bytes counted and discarded; browser decode not included; other clients uncontrolled",
+      "server": {
+        "elapsedSeconds": 29.286947083004634,
+        "cpuOneCorePercent": 6.316807261462766,
+        "rssMedianMb": 115.2734375,
+        "rssMaxMb": 125.875
+      },
+      "stream": {
+        "frames": 900,
+        "bytes": 260081976,
+        "elapsedSeconds": 30.006545792,
+        "fps": 29.993455635934865,
+        "mbPerSecond": 8.26597977623651,
+        "failure": null
+      }
+    }
+  },
+  "storage": {
+    "note": "Synthetic constant-only SQL through the existing consumer Room registration; no app tables read or written; includes server/SDK/encoding roundtrip; five warmups then thirty samples each; does not isolate whole-SDK overhead",
+    "results": [
+      {
+        "name": "typical-50x3",
+        "sampleCount": 30,
+        "actualRows": 50,
+        "truncated": false,
+        "roundtripMs": {
+          "median": 14.60550000000012,
+          "p95": 135.92229199999974,
+          "max": 152.71445799999992
+        },
+        "txMs": {
+          "median": 0,
+          "p95": 62,
+          "max": 62
+        },
+        "bytes": {
+          "median": 4829,
+          "p95": 4830,
+          "max": 4830
+        }
+      },
+      {
+        "name": "wide-200x32",
+        "sampleCount": 30,
+        "actualRows": 165,
+        "truncated": true,
+        "roundtripMs": {
+          "median": 15.963999999999942,
+          "p95": 80.68124999999964,
+          "max": 105.39458399999967
+        },
+        "txMs": {
+          "median": 6,
+          "p95": 29,
+          "max": 32
+        },
+        "bytes": {
+          "median": 163630,
+          "p95": 163631,
+          "max": 163631
+        }
+      }
+    ]
+  },
+  "android": {
+    "device": "emulator-5554",
+    "api": 36,
+    "clockTicksPerSecond": 100,
+    "note": "Same debug sample APK/configuration except real SDK vs no-op project substitution; normal List, slow binding disabled; three warm-up swipe pairs, 15s idle, ten measured swipe pairs; CPU/PSS compare operational profiling modes (ADB-only vs SDK), not isolated pure SDK cost. Frame sources differ and must not be numerically compared. Other host apps/clients uncontrolled",
+    "runs": [
+      {
+        "run": 1,
+        "mode": "noop",
+        "sdkConnected": false,
+        "sdkVersion": null,
+        "idle": {
+          "seconds": 15.118640833999962,
+          "cpuOneCorePercent": 0.33071755952794485
+        },
+        "pssBeforeScrollMb": 91.240234375,
+        "scroll": {
+          "seconds": 7.405937707997509,
+          "cpuOneCorePercent": 10.397062875218271
+        },
+        "pssAfterScrollMb": 102.1552734375,
+        "threads": 21,
+        "frames": {
+          "source": "gfxinfo",
+          "meanFps": 19.5,
+          "latestFps": 0,
+          "renderedFrames": 526,
+          "jankFrames": 11,
+          "jankPercent": 2.09,
+          "slowFrames": 495,
+          "slowPercent": 94.11,
+          "p50Ms": 17,
+          "p90Ms": 17.5,
+          "maxMs": 114.6,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 2.09,
+            "p90Ms": 17.5,
+            "renderedFrames": 526
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.2700343885539901,
+          "rssAfterMb": 54.734375
+        }
+      },
+      {
+        "run": 2,
+        "mode": "sdk",
+        "sdkConnected": true,
+        "sdkVersion": "0.12.0",
+        "idle": {
+          "seconds": 15.077004500009934,
+          "cpuOneCorePercent": 0.7959140690043631
+        },
+        "pssBeforeScrollMb": 89.42578125,
+        "scroll": {
+          "seconds": 7.372051333004492,
+          "cpuOneCorePercent": 10.987443839052638
+        },
+        "pssAfterScrollMb": 98.142578125,
+        "threads": 25,
+        "frames": {
+          "source": "sdk",
+          "meanFps": 21.2,
+          "latestFps": 60,
+          "renderedFrames": 540,
+          "jankFrames": 18,
+          "jankPercent": 3.33,
+          "slowFrames": 515,
+          "slowPercent": 95.37,
+          "p50Ms": 17,
+          "p90Ms": 19.6,
+          "maxMs": 232.1,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 3.33,
+            "p90Ms": 19.6,
+            "renderedFrames": 540
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.4069425069932953,
+          "rssAfterMb": 45.984375
+        }
+      },
+      {
+        "run": 3,
+        "mode": "sdk",
+        "sdkConnected": true,
+        "sdkVersion": "0.12.0",
+        "idle": {
+          "seconds": 15.075462832988705,
+          "cpuOneCorePercent": 0.5306636412179726
+        },
+        "pssBeforeScrollMb": 96.9248046875,
+        "scroll": {
+          "seconds": 7.370906208001543,
+          "cpuOneCorePercent": 10.175139648172864
+        },
+        "pssAfterScrollMb": 107.6787109375,
+        "threads": 25,
+        "frames": {
+          "source": "sdk",
+          "meanFps": 19.6,
+          "latestFps": 60,
+          "renderedFrames": 511,
+          "jankFrames": 10,
+          "jankPercent": 1.96,
+          "slowFrames": 510,
+          "slowPercent": 99.8,
+          "p50Ms": 17,
+          "p90Ms": 19.3,
+          "maxMs": 150.2,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 1.96,
+            "p90Ms": 19.3,
+            "renderedFrames": 511
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.27134323722282155,
+          "rssAfterMb": 52.1875
+        }
+      },
+      {
+        "run": 4,
+        "mode": "noop",
+        "sdkConnected": false,
+        "sdkVersion": null,
+        "idle": {
+          "seconds": 15.062677082998562,
+          "cpuOneCorePercent": 0.2655570439410702
+        },
+        "pssBeforeScrollMb": 87.9755859375,
+        "scroll": {
+          "seconds": 7.377574874990387,
+          "cpuOneCorePercent": 10.030396336722564
+        },
+        "pssAfterScrollMb": 99.3291015625,
+        "threads": 21,
+        "frames": {
+          "source": "gfxinfo",
+          "meanFps": 19.2,
+          "latestFps": 11.8,
+          "renderedFrames": 520,
+          "jankFrames": 11,
+          "jankPercent": 2.12,
+          "slowFrames": 513,
+          "slowPercent": 98.65,
+          "p50Ms": 16.9,
+          "p90Ms": 17.1,
+          "maxMs": 65.2,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 2.12,
+            "p90Ms": 17.1,
+            "renderedFrames": 520
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.2710652821415963,
+          "rssAfterMb": 56.046875
+        }
+      },
+      {
+        "run": 5,
+        "mode": "noop",
+        "sdkConnected": false,
+        "sdkVersion": null,
+        "idle": {
+          "seconds": 15.082784124999307,
+          "cpuOneCorePercent": 0.397804539949303
+        },
+        "pssBeforeScrollMb": 83.970703125,
+        "scroll": {
+          "seconds": 7.368831458996283,
+          "cpuOneCorePercent": 13.299259257769576
+        },
+        "pssAfterScrollMb": 92.0849609375,
+        "threads": 21,
+        "frames": {
+          "source": "gfxinfo",
+          "meanFps": 19.5,
+          "latestFps": 2,
+          "renderedFrames": 523,
+          "jankFrames": 13,
+          "jankPercent": 2.49,
+          "slowFrames": 518,
+          "slowPercent": 99.04,
+          "p50Ms": 17,
+          "p90Ms": 19.6,
+          "maxMs": 177.1,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 2.49,
+            "p90Ms": 19.6,
+            "renderedFrames": 523
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.40708934329170016,
+          "rssAfterMb": 50.390625
+        }
+      },
+      {
+        "run": 6,
+        "mode": "sdk",
+        "sdkConnected": true,
+        "sdkVersion": "0.12.0",
+        "idle": {
+          "seconds": 15.073988834003103,
+          "cpuOneCorePercent": 0.5307155317744449
+        },
+        "pssBeforeScrollMb": 91.3603515625,
+        "scroll": {
+          "seconds": 7.399607667000964,
+          "cpuOneCorePercent": 11.757380109216088
+        },
+        "pssAfterScrollMb": 99.828125,
+        "threads": 25,
+        "frames": {
+          "source": "sdk",
+          "meanFps": 21.4,
+          "latestFps": 60,
+          "renderedFrames": 546,
+          "jankFrames": 15,
+          "jankPercent": 2.75,
+          "slowFrames": 482,
+          "slowPercent": 88.28,
+          "p50Ms": 17,
+          "p90Ms": 20.6,
+          "maxMs": 151.9,
+          "frameIntervalMs": 16.67,
+          "last30s": {
+            "jankPercent": 2.75,
+            "p90Ms": 20.6,
+            "renderedFrames": 546
+          },
+          "comparability": "Diagnostic only: gfxinfo vs SDK sources; do not treat their difference as SDK overhead."
+        },
+        "serverScroll": {
+          "cpuOneCorePercent": 0.40540857153711385,
+          "rssAfterMb": 50.3125
+        }
+      }
+    ],
+    "restoredConsumer": true
+  },
+  "limitations": [
+    "Small local lab run; no confidence intervals or dedicated quiet host.",
+    "UI fixture excludes real server/SDK latency, live profiler updates and emulator decode; narrow layout is desktop Chromium resized, not a physical phone.",
+    "Two animation frames set a roughly 33ms floor on UI probes; these are not INP measurements.",
+    "CPU percentages are relative to one core. Memory is sampled PSS/RSS, not a leak test or isolated allocation cost.",
+    "Operational Android A/B uses ADB frame polling without SDK and SDK frame delivery with SDK, so it is not an isolated pure-SDK microbenchmark.",
+    "No data writes, heavy joins, large real databases, physical-device performance, long-running memory soak or frame-source-matched A/B were tested.",
+    "Android PSS probes used meminfo -s without --local and can induce GC; these are post-dump snapshots, not steady-state memory or allocations."
+  ]
+}
