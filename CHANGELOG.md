@@ -8,6 +8,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Dashboard design contract in `DESIGN.md`, with Chromium layout regressions for Storage controls, source
+  navigation, metric warning labels and device mirror defaults. CI retains screenshots and browser reports.
+
 - Database Query workbench with a SQL editor, database selector, session-only history, keyboard execution and
   paginated result grids. Device protocol 13 supports SELECT/WITH and explicit INSERT/UPDATE/DELETE through the
   registered Room transaction; mutations require write consent, report affected rows and preserve late outcomes

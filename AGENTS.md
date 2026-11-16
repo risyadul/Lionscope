@@ -37,6 +37,7 @@ npm run lint
 npm run format:check
 npm run docs:check
 npm test                # protocol, server, and dashboard tests
+npm run test:ui          # dashboard browser layout contracts; browser install in docs/development.md
 npm run build:cli       # production dashboard plus bundled npm CLI
 ```
 
@@ -113,6 +114,9 @@ Add or update focused regression tests for behavior changes, then run the releva
 spanning protocol, server, and dashboard, run the complete TypeScript checks and CLI build. Include Android
 checks when SDK code or its contract changes. A documentation-only change needs formatting and applicable
 documentation checks, not an unrelated full build.
+
+For dashboard layout changes, run the relevant `npm run test:ui` cases and inspect their screenshot artifacts.
+Update fixtures and assertions alongside deliberate changes to [DESIGN.md](DESIGN.md).
 
 Report the exact checks run and their outcomes. Distinguish a failed assertion from a timeout, an interrupted
 run, or an environment failure. A passing rerun does not erase an earlier failure: investigate or report it.

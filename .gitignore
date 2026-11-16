@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+test-results/
+playwright-report/
 # npm package build output (cli/dist is covered by dist/)
 cli/dashboard/
 cli/LICENSE
