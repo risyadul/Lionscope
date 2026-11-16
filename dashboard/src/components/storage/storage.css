@@ -3,6 +3,8 @@
    the data, not the explanations, gets the room. `.btn`, `.sr-only` and `.mono` come from the shared styles. */
 
 .storage {
+  --storage-control-height: 30px;
+  --storage-tab-height: 32px;
   position: relative;
   display: flex;
   flex: 1 1 auto;
@@ -36,7 +38,7 @@
 }
 
 .storage-workbench-tabs .btn {
-  min-height: 44px;
+  min-height: var(--storage-tab-height);
   border: 0;
   border-radius: 0;
   border-bottom: 2px solid transparent;
@@ -59,7 +61,7 @@
 
 .storage-query button,
 .storage-query select {
-  min-height: 44px;
+  min-height: var(--storage-control-height);
   cursor: pointer;
 }
 
@@ -79,7 +81,7 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-small);
   font-weight: 600;
 }
@@ -94,19 +96,20 @@
 }
 
 .storage-query-editor {
+  flex: none;
   box-sizing: border-box;
   width: 100%;
-  min-height: 150px;
+  min-height: 120px;
   max-height: 45vh;
   resize: vertical;
-  padding: var(--space-3);
+  padding: var(--space-2);
   border: 0;
   border-block: 1px solid var(--rule);
   border-radius: 0;
   background: var(--surface);
   color: var(--ink);
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.5;
   tab-size: 2;
 }
 
@@ -119,7 +122,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--rule);
 }
 
@@ -133,6 +136,7 @@
 }
 
 .storage-query-toolbar select {
+  height: var(--storage-control-height);
   width: 100%;
   min-width: 0;
   max-width: 300px;
@@ -145,17 +149,21 @@
 
 .storage-query-note {
   margin: 0;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   overflow-wrap: anywhere;
 }
 
 .storage-query-results {
+  display: flex;
+  flex: 1 0 160px;
+  flex-direction: column;
+  min-height: 160px;
   min-width: 0;
 }
 
 .storage-query-result-head {
   justify-content: space-between;
-  min-height: 44px;
+  min-height: 30px;
 }
 
 .storage-query-result-head span {
@@ -163,7 +171,8 @@
 }
 
 .storage-query-grid {
-  max-height: 55vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -176,7 +185,7 @@
 
 .storage-query-grid :is(th, td) {
   max-width: 320px;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   overflow: hidden;
   border-right: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
@@ -209,9 +218,9 @@
 .storage-query-history > button {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   border: 0;
   border-bottom: 1px solid var(--rule);
   background: var(--surface);
@@ -239,10 +248,17 @@
 
 .storage-query-error {
   margin: 0;
-  padding: var(--space-3);
+  padding: var(--space-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--ink);
+}
+
+@media (max-width: 640px), (any-pointer: coarse) {
+  .storage {
+    --storage-control-height: 44px;
+    --storage-tab-height: 44px;
+  }
 }
 
 @media (max-width: 640px) {

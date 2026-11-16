@@ -44,6 +44,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Fixed
 
+- Storage Query uses compact desktop controls, table rows and editor spacing while keeping 44 px controls on
+  touch devices. Results fill the remaining workbench height instead of stopping at 55% of the viewport.
+
 - Storage: rows with nullable, incomplete, redacted or non-unique primary keys open their own read-only sheet,
   without duplicate row identities or implicit rowid writes. A successful refresh that no longer contains the
   open row or prefs key closes its sheet and discards its draft, so a reused key cannot revive an old edit;

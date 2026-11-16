@@ -4,7 +4,32 @@ Scope: the Storage Query workbench and its integration with Tables. Direction fo
 reference and Lionscope's existing developer interface. ENERGY 1 / RHYTHM 1 / MOTION 1. Layout reasons and execution
 tradeoffs are recorded in [ADR 0003](../adr/0003-add-a-database-query-workbench.md).
 
-## Evidence
+## Density follow-up
+
+The desktop density audit found that touch-sized controls had been applied to every pointer type. This follow-up
+uses 30 px controls and 32 px tabs for mouse layouts; narrow windows and coarse-pointer devices keep 44 px targets.
+Cell padding is 4 px vertically and 8 px horizontally so results match the existing dashboard's compact density.
+The editor starts at 120 px and remains resizable; results fill the remaining height rather than a 55vh cap.
+The original direction and ENERGY 1 / RHYTHM 1 / MOTION 1 remain unchanged.
+
+- At 1440×900, browser measurements confirmed 30 px buttons/selects, 32 px tabs, a 120 px editor, 27.125 px rows,
+  and a result grid extending to its bottom pagination bar at viewport y=900. The desktop screenshot shows 20 full rows.
+- At 430×932 and 320×740, Query controls and tabs measured 44 px, document width matched viewport width, and
+  pagination remained reachable. At 768×1024 with a mouse, controls remained compact at 30 px. CDP touch emulation
+  at width 1024 confirmed `any-pointer: coarse` and 44 px controls/tabs while the emulation session was attached.
+- Light/dark screenshots were inspected at `/tmp/lionscope-density-desktop-light.png` and
+  `/tmp/lionscope-density-mobile-dark.png`. Existing text colors/contrast are unchanged.
+- Browser click-through covered Tables/Query, editor, Run, Ctrl+Enter, database selection, Next/Previous, History
+  and Clear history. Empty results and SQLite errors displayed correctly. History hit testing confirmed Clear
+  history remains exposed above the grid, including three entries in a 320 px window. Page errors were empty.
+- The synthetic browser harness was removed. This change only affects CSS; SDK/database execution is unchanged.
+- Checks: `npm test -- --project dashboard test/storage.test.tsx test/storageQuery.test.tsx --maxWorkers=2`
+  passed all 54 tests. `npm run typecheck -w @lionscope/dashboard`, `npm run lint`, `npm run format:check`,
+  `npm run docs:check`, `npm run build:cli` and `git diff --check` passed. The build retained its large-chunk advisory.
+  The four Delivery Gate blocks below remain PASS for this follow-up;
+  desktop target sizes are intentionally compact while mobile and coarse-pointer targets retain 44 px.
+
+## Original Query implementation evidence
 
 - `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run docs:check` and `git diff --check`:
   passed. Lint initially caught a ternary expression used as a statement in a navigation handler; replacing it
