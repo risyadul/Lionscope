@@ -403,7 +403,8 @@ export class SdkBridge {
           this.options.notify('sdk:dropped-http', droppedHttpMessage(this.droppedHttp));
         }
         const link = this.active?.link;
-        if (link) this.options.store.http.request(link, this.sessionTime(message.ts), message);
+        if (link)
+          this.options.store.http.request(link, this.sessionTime(message.ts), message, link.protocolVersion);
         return;
       }
       case 'httpResponse': {

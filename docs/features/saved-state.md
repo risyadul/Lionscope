@@ -30,7 +30,7 @@ an older one. `get_saved_state` answers both "what failed" and "which fragment m
   that goes to the background without being destroyed.
 - **The app's bundle is never changed.** The total is one `Parcel` write of the bundle; the breakdown writes copies
   (`Bundle(Bundle)`) key by key. Values are never read into the report: only keys, value class names and sizes.
-  Keys are strings the app chooses, so they are redacted like captured HTTP text, on the device and again on the
+  Keys are strings the app chooses, so they are redacted on the device and again on the
   server: a URL's query values and userinfo, sensitive `name=value` pairs and `Bearer …` credentials become
   `‹redacted›`; a plain key name such as `token` or `password` stays.
 - **Fragments.** With androidx.fragment 1.5+ each Fragment's state is a `fragment_<who>` Bundle; with 1.4 the SDK

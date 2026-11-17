@@ -14,7 +14,7 @@ internal class RawBody(
     val encoding: String? = null,
 )
 
-/** An `httpRequest` waiting to be encoded; [url] and [headers] as captured (redacted and cleaned when encoded). */
+/** An `httpRequest` waiting for negotiated redaction policy, text decoding and wire bounds on the link thread. */
 internal class HttpRequestRecord(
     val id: Int,
     val ts: Long,
@@ -40,7 +40,7 @@ internal class HttpResponseRecord(
     val durationMs: Double,
     val error: HttpFailure?,
 ) {
-    fun sizeHint(): Int = RECORD_OVERHEAD + headersSize(headers) + bodySize(body)
+    fun sizeHint(): Int = RECORD_OVERHEAD + headersSize(headers) + bodySize(body) + (error?.message?.length ?: 0) * ESCAPED_TEXT_FACTOR
 }
 
 private const val RECORD_OVERHEAD = 256
@@ -54,9 +54,9 @@ private fun bodySize(body: RawBody?): Int = ESCAPED_TEXT_FACTOR * (body?.bytes?.
 
 /**
  * Encoders for the v7 network lines (field order = protocol/src/wire.ts = the golden fixtures). They apply the
- * device-side redaction and every bound the server checks, so no line they produce is rejected: headers with names
+ * negotiated redaction policy and every bound the server checks: headers with names
  * that are not HTTP tokens are dropped, values have control / format characters replaced by spaces and are capped,
- * at most [MAX_HTTP_HEADERS] headers and [MAX_HTTP_HEADER_BYTES] per side; the URL is redacted and capped; a line
+ * at most [MAX_HTTP_HEADERS] headers and [MAX_HTTP_HEADER_BYTES] per side; the URL is capped; a line
  * that would exceed [MAX_HTTP_LINE_BYTES] has its body text cut further (`truncated`).
  */
 internal object HttpMessages {
@@ -68,17 +68,27 @@ internal object HttpMessages {
     private val URL_SCHEME = Regex("^https?://", RegexOption.IGNORE_CASE)
 
     /** Null when the method is not an HTTP token of at most [MAX_HTTP_METHOD_CHARS] or the URL is not http(s). */
-    fun httpRequest(record: HttpRequestRecord, maxLineBytes: Int = MAX_HTTP_LINE_BYTES): String? = httpRequest(
-        id = record.id,
-        ts = record.ts,
-        method = record.method,
-        url = record.url,
-        headers = record.headers,
-        body = record.body?.let(HttpBodies::decode),
-        mockId = record.mockId,
-        dropped = record.dropped,
-        maxLineBytes = maxLineBytes,
-    )
+    fun httpRequest(record: HttpRequestRecord, maxLineBytes: Int = MAX_HTTP_LINE_BYTES, originalValues: Boolean = false): String? {
+        val body = record.body?.let { HttpBodies.decode(it, originalValues) }
+        val raw = record.body
+        val bodyComplete = raw == null || (
+            raw.bytes != null && !raw.cut && raw.omitted == null && raw.encoding == null &&
+                body?.text != null && body.text.toByteArray(Charsets.UTF_8).contentEquals(raw.bytes)
+            )
+        return httpRequest(
+            id = record.id,
+            ts = record.ts,
+            method = record.method,
+            url = record.url,
+            headers = record.headers,
+            body = body,
+            mockId = record.mockId,
+            dropped = record.dropped,
+            maxLineBytes = maxLineBytes,
+            originalValues = originalValues,
+            bodyComplete = bodyComplete,
+        )
+    }
 
     fun httpRequest(
         id: Int,
@@ -90,10 +100,12 @@ internal object HttpMessages {
         mockId: String?,
         dropped: Int,
         maxLineBytes: Int = MAX_HTTP_LINE_BYTES,
+        originalValues: Boolean = false,
+        bodyComplete: Boolean = true,
     ): String? {
         if (method.length > MAX_HTTP_METHOD_CHARS || !HttpText.isToken(method)) return null
-        val wireUrl = wireUrl(url) ?: return null
-        val wireHeaders = wireHeaders(headers)
+        val wireUrl = wireUrl(url, originalValues) ?: return null
+        val wireHeaders = wireHeaders(headers, originalValues)
         return fitted(body, maxLineBytes) { fittedBody ->
             val json = JsonWriter().beginObject()
                 .name("type").value("httpRequest")
@@ -106,21 +118,30 @@ internal object HttpMessages {
             writeBody(json, fittedBody)
             json.name("mockId").value(mockId?.takeIf { MOCK_ID.matches(it) })
                 .name("dropped").value(dropped.coerceIn(0, MAX_HTTP_DROPPED))
-                .endObject().toString()
+            if (originalValues) {
+                val complete = wireUrl == url && wireHeaders == headers && bodyComplete &&
+                    (fittedBody == null || (!fittedBody.truncated && fittedBody.omitted == null &&
+                        fittedBody.text != null && '\u0000' !in fittedBody.text &&
+                        HttpText.contentType(fittedBody.contentType) == fittedBody.contentType &&
+                        StackFrames.utf8Length(fittedBody.text) <= MAX_HTTP_BODY_BYTES))
+                json.name("requestComplete").value(complete)
+            }
+            json.endObject().toString()
         }
     }
 
-    fun httpResponse(record: HttpResponseRecord, maxLineBytes: Int = MAX_HTTP_LINE_BYTES): String = httpResponse(
+    fun httpResponse(record: HttpResponseRecord, maxLineBytes: Int = MAX_HTTP_LINE_BYTES, originalValues: Boolean = false): String = httpResponse(
         id = record.id,
         ts = record.ts,
         status = record.status,
         protocol = record.protocol,
         headers = record.headers,
-        body = record.body?.let(HttpBodies::decode),
+        body = record.body?.let { HttpBodies.decode(it, originalValues) },
         headersMs = record.headersMs,
         durationMs = record.durationMs,
         error = record.error,
         maxLineBytes = maxLineBytes,
+        originalValues = originalValues,
     )
 
     fun httpResponse(
@@ -134,8 +155,9 @@ internal object HttpMessages {
         durationMs: Double,
         error: HttpFailure?,
         maxLineBytes: Int = MAX_HTTP_LINE_BYTES,
+        originalValues: Boolean = false,
     ): String {
-        val wireHeaders = wireHeaders(headers)
+        val wireHeaders = wireHeaders(headers, originalValues)
         return fitted(body, maxLineBytes) { fittedBody ->
             val json = JsonWriter().beginObject()
                 .name("type").value("httpResponse")
@@ -157,7 +179,10 @@ internal object HttpMessages {
             } else {
                 json.beginObject()
                     .name("kind").value(error.kind.wire)
-                    .name("message").value(WireText.clean(error.message, MAX_HTTP_ERROR_CHARS))
+                    .name("message").value(WireText.clean(
+                        if (originalValues) error.message else error.message?.let(HttpRedaction::redactFreeText),
+                        if (originalValues) MAX_HTTP_ERROR_CHARS else MAX_HTTP_LEGACY_FAILURE_CHARS,
+                    ))
                     .endObject()
             }
             json.endObject().toString()
@@ -172,16 +197,16 @@ internal object HttpMessages {
         .endObject().toString()
 
     /**
-     * Headers as sent: redacted (URL-valued ones as URLs), names that are not HTTP tokens (or too long) dropped, values cleaned and capped, and
+     * Headers as sent: legacy credentials redacted, invalid names dropped, values cleaned and capped, and
      * only the first ones that fit [MAX_HTTP_HEADERS] / [MAX_HTTP_HEADER_BYTES] (a header that doesn't fit is skipped).
      */
-    fun wireHeaders(headers: List<Pair<String, String>>): List<Pair<String, String>> {
+    fun wireHeaders(headers: List<Pair<String, String>>, originalValues: Boolean = false): List<Pair<String, String>> {
         val out = ArrayList<Pair<String, String>>(minOf(headers.size, MAX_HTTP_HEADERS))
         var bytes = 0
         for ((name, value) in headers) {
             if (out.size == MAX_HTTP_HEADERS) break
             if (name.length > MAX_HTTP_HEADER_NAME_CHARS || !HttpText.isToken(name)) continue
-            val redacted = HttpRedaction.redactHeaderValue(name, value)
+            val redacted = if (originalValues) value else HttpRedaction.redactHeaderValue(name, value)
             val wireValue = if (redacted === HTTP_REDACTED) {
                 redacted
             } else {
@@ -195,9 +220,9 @@ internal object HttpMessages {
         return out
     }
 
-    /** The URL as sent (redacted, cleaned, capped), or null when it is not http(s). */
-    fun wireUrl(url: String): String? {
-        val wire = capLength(HttpText.replaceControls(HttpRedaction.redactUrl(url)), MAX_HTTP_URL_CHARS)
+    /** The URL as sent (legacy credentials redacted, cleaned, capped), or null when it is not http(s). */
+    fun wireUrl(url: String, originalValues: Boolean = false): String? {
+        val wire = capLength(HttpText.replaceControls(if (originalValues) url else HttpRedaction.redactUrl(url)), MAX_HTTP_URL_CHARS)
         return wire.takeIf { URL_SCHEME.containsMatchIn(it) }
     }
 

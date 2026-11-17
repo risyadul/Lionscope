@@ -36,20 +36,35 @@ The response body is never read by Lionscope: it copies what the app reads, so t
 request ends (in the list) when the app finishes reading it. An error inside Lionscope never fails or changes the
 app's call. At most 20 requests per second are recorded; the rest are counted.
 
-**Privacy.** Values are replaced with `‹redacted›` on the device, and again by the server: `Authorization`,
-`Proxy-Authorization`, `Cookie` and `Set-Cookie`, and every header, query or fragment parameter, form field, JSON key
-(at any depth) and XML element or attribute whose name contains `token`, `secret`, `api-key` / `api_key` / `apikey`,
-`auth`, `session`, `password` / `passwd`, `credential`, `signature`, `jwt` or `appcheck`, is `key`, `code`, `sig`,
-`pass` or `pwd`, or ends in `-key`, `_key`, `Key` (and the like for `sig`, `pass`, `pwd`). User names and passwords
-in URLs (`user:pass@`) and the query of URLs in `Location`, `Content-Location`, `Referer` and `Link` headers are
-redacted too, and so are URLs and such pairs inside error messages. `search_logcat` redacts log messages the same
-way before it matches or returns them (header lines, JSON, `name=value` pairs, URLs, plus `Bearer` values and JWTs);
-the dashboard's Logcat panel shows lines as logged. For `get_crashes` the server reads the crash buffer of the whole
-device: crash lines of other apps are passed over and never stored, and the app's own are stored redacted. Redaction
-goes by name: a secret under an
-innocent name (`"data": "<token>"`) or in a GraphQL query's text is not caught. Requests stay in the server's
-memory only (the last 10 minutes, at most 5000 requests or 32 MB) and are never written to disk. AI agents get the list, headers and timings, but bodies only when you opt in
-with `--allow-network-bodies` (see [Use with AI agents](../agents.md)).
+**Original debug data.** With negotiated device protocol 14, Network keeps the original captured URLs,
+headers (including Authorization, Cookie and Set-Cookie), request/response body text and failure messages.
+No credential censoring is applied to this stream. Capture still requires an active profiling session and the
+SDK link proof. Size, rate, text-type and streaming limits above still apply. An older SDK or server negotiating
+protocol 13 or below retains its legacy credential redaction policy; update both and capture new requests.
+Previously redacted data cannot be recovered.
+
+**Copy cURL.** The selected request has a **Copy cURL** action. It copies a POSIX-shell command, including
+captured authentication headers and body text, without executing it. Values are quoted as literal arguments;
+`--data-raw` preserves a leading `@` as data. cURL supplies Content-Length/Transfer-Encoding framing itself;
+other captured headers, including repeated and empty headers, are retained. The body’s Content-Type is added
+when the interceptor’s header snapshot does not yet include it. Redirect following and retries are not enabled.
+This replays the interceptor’s captured request, rather than reproducing TLS settings or headers added by later
+interceptors, OkHttp’s cookie jar or transport. It does not refresh an expired token.
+
+Copy is disabled with a visible reason for legacy captures, missing details, shortened URLs/headers, omitted or
+truncated bodies, NUL bytes, compressed request bodies or a body whose bytes do not round-trip as UTF-8.
+Decoded non-UTF-8 and compressed response text remains viewable. A complete request can be copied while its
+response is still pending. The command targets macOS/Linux POSIX shells, not PowerShell or Windows cmd.
+See the [cURL manual](https://curl.se/docs/manpage.html#--data-raw) for the command’s data and header syntax.
+
+Requests stay in server memory only (the last 10 minutes, at most 5000 requests or 32 MB). Copying explicitly
+puts the command and its credentials on the system clipboard. AI agents get original URLs, headers and timings;
+body text still requires `--allow-network-bodies` (see [Use with AI agents](../agents.md)). App data stays marked
+as untrusted in tool results.
+
+**Other redaction policies.** `search_logcat` still redacts log messages before matching or returning them;
+the dashboard Logcat panel shows lines as logged. `get_crashes` still excludes other apps and redacts the
+selected app’s crash lines. Network’s original-value policy does not change either policy.
 
 **Mocks.** **Mock this response** on a request (or **New mock** in the Mocks list) opens the mock editor: a method
 (or any), a URL pattern (**exact**, **prefix**, or a **glob** where `*` matches anything, `/` included; the query is

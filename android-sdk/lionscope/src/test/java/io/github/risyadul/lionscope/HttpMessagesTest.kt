@@ -10,6 +10,47 @@ import java.util.zip.GZIPOutputStream
 
 /** The v7 encoders keep every line inside the server's bounds; bodies decode as the spec says. */
 class HttpMessagesTest {
+    @Test
+    fun originalRequestsKeepCredentialsAndReportLosslessUtf8Capture() {
+        fun encode(raw: RawBody?, headers: List<Pair<String, String>> = listOf("Authorization" to "Bearer synthetic"), url: String = "https://user:synthetic@example.test/?token=synthetic", limit: Int = MAX_HTTP_LINE_BYTES, original: Boolean = true): Map<*, *> {
+            val record = HttpRequestRecord(14, 1_000, "POST", url, headers, raw, null, 0)
+            return TestJson.parse(checkNotNull(HttpMessages.httpRequest(record, limit, original))) as Map<*, *>
+        }
+        val text = "{\"token\":\"synthetic\",\"password\":\"synthetic\"}"
+        val raw = RawBody(text.toByteArray().size.toLong(), "application/json", text.toByteArray(), false, null)
+        val actual = encode(raw)
+        assertEquals(true, actual["requestComplete"])
+        assertEquals(text, (actual["body"] as Map<*, *>)["text"])
+        assertTrue(actual["url"].toString().contains("token=synthetic"))
+        assertEquals(listOf(listOf("Authorization", "Bearer synthetic")), actual["headers"])
+        val legacy = encode(raw, original = false)
+        assertFalse(legacy.containsKey("requestComplete"))
+        assertTrue(legacy["url"].toString().contains(HTTP_REDACTED))
+        assertFalse((legacy["body"] as Map<*, *>)["text"].toString().contains("synthetic"))
+        assertEquals(true, encode(null)["requestComplete"])
+        assertEquals(false, encode(RawBody(100, "text/plain", byteArrayOf(97), true, null))["requestComplete"])
+        assertEquals(false, encode(RawBody(1, "application/octet-stream", null, false, HttpBodyOmission.TYPE))["requestComplete"])
+        assertEquals(false, encode(RawBody(1, "text/plain; charset=iso-8859-1", byteArrayOf(-23), false, null))["requestComplete"])
+        assertEquals(false, encode(RawBody(1, "text/plain", byteArrayOf(0), false, null))["requestComplete"])
+        assertEquals(false, encode(null, headers = listOf("Authorization" to "x".repeat(5000)))["requestComplete"])
+        assertEquals(false, encode(null, url = "https://example.test/" + "a".repeat(5000))["requestComplete"])
+        assertEquals(false, encode(RawBody(10_000, "text/plain", "x".repeat(10_000).toByteArray(), false, null), limit = 1000)["requestComplete"])
+    }
+
+    @Test
+    fun originalResponsesKeepCookiesBodyAndErrorWhileLegacyStillRedacts() {
+        val text = "{\"token\":\"synthetic\"}"
+        val record = HttpResponseRecord(14, 1_000, 200, "h2", listOf("Set-Cookie" to "token=synthetic"),
+            RawBody(text.length.toLong(), "application/json", text.toByteArray(), false, null), 1.0, 2.0,
+            HttpFailure(HttpFailureKind.IO, "IOException: token=synthetic"))
+        val original = TestJson.parse(HttpMessages.httpResponse(record, originalValues = true)) as Map<*, *>
+        assertEquals(text, (original["body"] as Map<*, *>)["text"])
+        assertEquals(listOf(listOf("Set-Cookie", "token=synthetic")), original["headers"])
+        assertEquals("IOException: token=synthetic", (original["error"] as Map<*, *>)["message"])
+        val legacy = TestJson.parse(HttpMessages.httpResponse(record)) as Map<*, *>
+        assertFalse(legacy.toString().contains("synthetic"))
+    }
+
     private val r = HTTP_REDACTED
     private val badChars = Regex("[\\p{Cc}\\p{Cf}]")
     private val token = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")

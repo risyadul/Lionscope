@@ -21,6 +21,7 @@ import {
   truncatedNote,
 } from '../../lib/network.ts';
 import { CopyButton } from '../stalls/CopyButton.tsx';
+import { curlBlocker, requestCurl } from '../../lib/curl.ts';
 
 type DetailTab = 'overview' | 'headers' | 'request' | 'response' | 'timing';
 
@@ -70,7 +71,15 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Headers({ title, headers }: { title: string; headers: readonly HttpHeader[] | null }) {
+function Headers({
+  title,
+  headers,
+  originalValues,
+}: {
+  title: string;
+  headers: readonly HttpHeader[] | null;
+  originalValues?: boolean;
+}) {
   return (
     <section className="net-headers" aria-label={title}>
       <h4 className="overline">{title}</h4>
@@ -83,7 +92,7 @@ function Headers({ title, headers }: { title: string; headers: readonly HttpHead
           {headers.map(([name, value], i) => (
             <div key={i} className="net-header">
               <dt>{name}</dt>
-              {value === HTTP_REDACTED ? (
+              {!originalValues && value === HTTP_REDACTED ? (
                 <dd data-redacted title="Hidden by Lionscope: a sensitive header">
                   {HTTP_REDACTED}
                 </dd>
@@ -195,6 +204,10 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
   const full = detail.detail;
   // The summary's URL may be cut (MAX_HTTP_SUMMARY_URL_CHARS); the detail's is whole.
   const url = full?.url ?? exchange.url;
+  let copyBlocker: string | null;
+  if (full) copyBlocker = curlBlocker(full);
+  else if (detail.status === 'gone') copyBlocker = 'Copy cURL unavailable: this request is no longer kept.';
+  else copyBlocker = 'Loading request data for Copy cURL…';
 
   const handleTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = TABS.findIndex((t) => t.id === tab);
@@ -273,10 +286,15 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
           <Pending detail={detail} />
         ) : (
           <>
-            <Headers title="Request headers" headers={full.requestHeaders} />
+            <Headers
+              title="Request headers"
+              headers={full.requestHeaders}
+              originalValues={full.originalValues}
+            />
             <Headers
               title="Response headers"
               headers={exchange.state === 'pending' ? null : full.responseHeaders}
+              originalValues={full.originalValues}
             />
           </>
         );
@@ -321,6 +339,13 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
         </p>
         <p className="net-detail-host">{host}</p>
         <div className="net-detail-actions">
+          <CopyButton
+            key={exchange.id}
+            text={() => (full ? requestCurl(full) : '')}
+            label="Copy cURL"
+            disabled={copyBlocker !== null}
+            describedBy={copyBlocker === null ? undefined : `${id}-curl-note`}
+          />
           <button
             type="button"
             className="btn net-mock-this"
@@ -343,6 +368,11 @@ export function ExchangeDetail({ exchange, detail, rule, now, onClose, onMockThi
           </button>
         </div>
       </header>
+      {copyBlocker !== null && (
+        <p className="net-note net-curl-note" id={`${id}-curl-note`}>
+          {copyBlocker}
+        </p>
+      )}
       <div className="net-detail-tabs" role="tablist" aria-label="Request details" onKeyDown={handleTabKey}>
         {TABS.map((t) => (
           <button

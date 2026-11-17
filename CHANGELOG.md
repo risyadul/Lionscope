@@ -8,6 +8,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Copy cURL replays complete Network captures with literal shell quoting, original auth headers and body text;
+  incomplete and legacy captures explain why copying is unavailable.
+
 - Dashboard design contract in `DESIGN.md`, with Chromium layout regressions for Storage controls, source
   navigation, metric warning labels and device mirror defaults. CI retains screenshots and browser reports.
 
@@ -28,6 +31,10 @@ All notable changes to Lionscope are documented here. The format is based on
   [Storage](docs/features/storage.md).
 
 ### Changed
+
+- **Breaking:** Network capture on negotiated device protocol 14 preserves original debug data, including auth
+  headers, URL credentials, request/response text and failure messages. Older negotiated links retain credential
+  redaction. Capture bounds, link proof and AI body opt-in remain enforced.
 
 - Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
   and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network

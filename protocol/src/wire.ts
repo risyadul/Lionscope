@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -925,9 +925,9 @@ export interface InspectorSelection {
 // ---------------------------------------------------------------------------
 // Network (0.7.0): HTTP exchanges captured by the SDK's OkHttp interceptor, and mock rules
 //
-// Captured only during a profiling session (device protocol v7 session links). Header values, query parameters and
-// form fields with sensitive names are redacted on the device and again by the server (`HTTP_REDACTED`); bodies are
-// captured for text types only, up to MAX_HTTP_BODY_BYTES. Everything stays in the server's memory.
+// Captured only during a proven profiling session. Protocol 14 preserves original Network values; legacy links
+// redact credentials on the device and server (`HTTP_REDACTED`). Bodies are captured for text types only,
+// up to MAX_HTTP_BODY_BYTES. Everything stays in the server's memory.
 // ---------------------------------------------------------------------------
 
 /** One header as sent or received, in order: `[name, value]`. Repeated headers are separate entries. */
@@ -995,7 +995,7 @@ export interface HttpExchange {
   /** ts + durationMs once it ended, null while pending. */
   endTs: number | null;
   method: string;
-  /** Redacted; cut to MAX_HTTP_SUMMARY_URL_CHARS (ending in `…`) here, whole in HttpExchangeDetail. */
+  /** Captured URL (legacy links redact); cut to MAX_HTTP_SUMMARY_URL_CHARS here, whole in HttpExchangeDetail. */
   url: string;
   state: HttpExchangeState;
   /** HTTP status, null while pending or when it failed before a response. */
@@ -1017,8 +1017,12 @@ export interface HttpExchange {
 
 /** An exchange with its headers and bodies (`httpExchange`, get_network_request). */
 export interface HttpExchangeDetail extends HttpExchange {
-  /** The whole (redacted) URL. */
+  /** The captured URL within the wire limit; legacy links redact credentials. */
   url: string;
+  /** Negotiated device protocol 14: values were captured without credential redaction. */
+  originalValues?: true;
+  /** URL, headers and request body survived capture and encoding without loss (v14). */
+  requestComplete?: boolean;
   /** `http/1.1`, `h2`, … as OkHttp names it; null for mocks and failures. */
   protocol: string | null;
   requestHeaders: HttpHeader[];
@@ -1968,7 +1972,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 13;
+export const DEVICE_PROTOCOL_VERSION = 14;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -2020,6 +2024,8 @@ export const DEVICE_PROTOCOL_V11 = 11;
 export const DEVICE_PROTOCOL_V12 = 12;
 /** SQL console on the registered Room connection. */
 export const DEVICE_PROTOCOL_V13 = 13;
+/** Original Network values and request completeness for copying a captured request as cURL. */
+export const DEVICE_PROTOCOL_V14 = 14;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -2196,7 +2202,7 @@ export type DeviceMessage =
   /**
    * v7. A call entered the SDK's OkHttp interceptor (`ts`); its `httpResponse` with the same `id` follows when it
    * ends. `id` is unique per SDK process. `dropped`: calls not recorded since the previous `httpRequest` (over
-   * HTTP_EXCHANGES_PER_SECOND). `mockId`: the rule that answers it. Redacted on the device.
+   * HTTP_EXCHANGES_PER_SECOND). `mockId`: the rule that answers it. Original values on v14, redacted below it.
    */
   | {
       type: 'httpRequest';
@@ -2208,6 +2214,8 @@ export type DeviceMessage =
       body: HttpBody | null;
       mockId: string | null;
       dropped: number;
+      /** v14 only; false for omitted, transformed or truncated request data. */
+      requestComplete?: boolean;
     }
   /**
    * v7. The call ended at `ts`: its response body was read to the end or closed, or (bodiless, streaming) its

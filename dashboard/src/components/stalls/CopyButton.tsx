@@ -11,10 +11,12 @@ type Props = {
   label: string;
   /** Accessible name when `label` alone is ambiguous (e.g. "Copy stack"). */
   ariaLabel?: string;
+  disabled?: boolean;
+  describedBy?: string;
 };
 
 /** Copies `text()` to the clipboard and confirms in place; a refusal is announced, not swallowed. */
-export function CopyButton({ text, label, ariaLabel }: Props) {
+export function CopyButton({ text, label, ariaLabel, disabled, describedBy }: Props) {
   const [state, setState] = useState<CopyState>('idle');
 
   useEffect(() => {
@@ -41,6 +43,8 @@ export function CopyButton({ text, label, ariaLabel }: Props) {
         className="btn stall-copy"
         data-state={state === 'idle' ? undefined : state}
         aria-label={ariaLabel}
+        disabled={disabled}
+        aria-describedby={describedBy}
         onClick={copy}
       >
         <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">

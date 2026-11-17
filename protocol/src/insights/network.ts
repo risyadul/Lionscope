@@ -1,6 +1,6 @@
 /**
- * The network inspector's shared rules: redaction (the SDK applies the same on the device; the server re-applies it to
- * whatever an SDK sends), status classes and filtering (the dashboard's Network tab and the agent's get_network), and
+ * The network inspector's shared rules: legacy redaction (SDK and server on negotiated links below v14),
+ * status classes and filtering (the dashboard's Network tab and the agent's get_network), and
  * mock rule normalisation, precedence and matching (the server orders rules this way; the SDK takes the first match,
  * with the same matching as `mockMatches`).
  */

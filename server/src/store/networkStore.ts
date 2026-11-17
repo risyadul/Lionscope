@@ -1,4 +1,4 @@
-import { MAX_HTTP_SUMMARY_URL_CHARS } from '@lionscope/protocol';
+import { DEVICE_PROTOCOL_V7, DEVICE_PROTOCOL_V14, MAX_HTTP_SUMMARY_URL_CHARS } from '@lionscope/protocol';
 import { redactBodyText, redactFreeText, redactHeaders, redactUrl } from '@lionscope/protocol/insights';
 import type {
   DeviceMessage,
@@ -96,6 +96,8 @@ export function summaryOf(detail: HttpExchangeDetail): HttpExchange {
     responseHeaders: _responseHeaders,
     requestBody: _requestBody,
     responseBody: _responseBody,
+    originalValues: _originalValues,
+    requestComplete: _requestComplete,
     ...summary
   } = detail;
   return { ...summary, url: summaryUrl(summary.url) };
@@ -104,8 +106,8 @@ export function summaryOf(detail: HttpExchangeDetail): HttpExchange {
 /**
  * The HTTP exchanges of one profiling session, as the SDK's OkHttp interceptor reports them (device protocol v7):
  * an `httpRequest` opens a pending exchange under a new server id, the `httpResponse` with the same SDK id on the
- * same link completes or fails it. Redaction (headers, URLs, form / JSON / XML bodies, error messages) is applied
- * again to whatever arrives; summaries carry the URL cut to MAX_HTTP_SUMMARY_URL_CHARS, details whole. Bounded like the other streams: the window (by start), MAX_HTTP_EXCHANGES and MAX_HTTP_STORE_BYTES,
+ * same link completes or fails it. Protocol 14 retains original values; legacy links redact credentials.
+ * Summaries carry the URL cut to MAX_HTTP_SUMMARY_URL_CHARS, details whole. Bounded like the other streams: the window (by start), MAX_HTTP_EXCHANGES and MAX_HTTP_STORE_BYTES,
  * oldest first. Every change is announced as an `http` message (the summary); details are read on demand.
  */
 export class NetworkStore {
@@ -153,17 +155,18 @@ export class NetworkStore {
   }
 
   /** A call started at `ts` (laptop clock, already clamped into the session). */
-  request(link: object, ts: number, message: SdkHttpRequest): void {
+  request(link: object, ts: number, message: SdkHttpRequest, protocolVersion = DEVICE_PROTOCOL_V7): void {
     if (this.ended) return;
     let ids = this.links.get(link);
     if (ids?.has(message.id)) return this.duplicate('httpRequest');
     this.seen += 1;
+    const originalValues = protocolVersion >= DEVICE_PROTOCOL_V14;
     const detail: HttpExchangeDetail = {
       id: ++lastExchangeId,
       ts,
       endTs: null,
       method: message.method,
-      url: redactUrl(message.url),
+      url: originalValues ? message.url : redactUrl(message.url),
       state: 'pending',
       status: null,
       headersMs: null,
@@ -175,10 +178,13 @@ export class NetworkStore {
       error: null,
       screen: this.options.topScreenAt(ts),
       protocol: null,
-      requestHeaders: redactHeaders(message.headers),
+      requestHeaders: originalValues ? message.headers : redactHeaders(message.headers),
       responseHeaders: [],
-      requestBody: redactBody(message.body),
+      requestBody: originalValues ? message.body : redactBody(message.body),
       responseBody: null,
+      ...(originalValues
+        ? { originalValues: true as const, requestComplete: message.requestComplete === true }
+        : {}),
     };
     if (!ids) {
       ids = new Map();
@@ -205,8 +211,9 @@ export class NetworkStore {
       return;
     }
     if (entry.detail.state !== 'pending') return this.duplicate('httpResponse');
-    const headers = redactHeaders(message.headers);
-    const body = redactBody(message.body);
+    const originalValues = entry.detail.originalValues === true;
+    const headers = originalValues ? message.headers : redactHeaders(message.headers);
+    const body = originalValues ? message.body : redactBody(message.body);
     // The SDK's duration is kept as reported; its end can't lie in the future.
     this.replace(entry, {
       ...entry.detail,
@@ -217,7 +224,7 @@ export class NetworkStore {
       durationMs: message.durationMs,
       responseSize: body?.size ?? null,
       responseType: body?.contentType ?? headerValue(headers, 'content-type'),
-      error: redactError(message.error),
+      error: originalValues ? message.error : redactError(message.error),
       protocol: message.protocol,
       responseHeaders: headers,
       responseBody: body,

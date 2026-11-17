@@ -392,7 +392,7 @@ describe('golden device messages through the gateway', () => {
     await waitUntil(() => manager.getNetworkMocks().appliedRev === 3);
     const http = manager.getSnapshot().http ?? [];
     // Responses 3 and 4 have no request in the fixture: dropped.
-    expect(http).toHaveLength(2);
+    expect(http).toHaveLength(3);
     expect(http[0]).toMatchObject({
       ts: laptop(1792516381000),
       endTs: laptop(1792516381000) + 182.7,
@@ -406,6 +406,15 @@ describe('golden device messages through the gateway', () => {
       mockId: null,
     });
     expect(http[1]).toMatchObject({ method: 'POST', status: 503, mockId: 'm1', requestSize: 21 });
+    // A v14-shaped capture on this v7 link still receives the legacy policy.
+    expect(manager.getHttpExchange(http[2]?.id ?? -1)).toMatchObject({
+      requestHeaders: [
+        ['Authorization', '‹redacted›'],
+        ['Cookie', '‹redacted›'],
+      ],
+      requestBody: { text: '{"token":"‹redacted›"}' },
+    });
+    expect(manager.getHttpExchange(http[2]?.id ?? -1)).not.toHaveProperty('originalValues');
     expect(manager.getHttpExchange(http[0]?.id ?? -1)).toMatchObject({
       protocol: 'h2',
       requestHeaders: [

@@ -42,7 +42,8 @@ temporary either way; see [Editing views live](features/layout-inspector.md#edit
 
 **"Why does checkout fail?"** With the interceptor in the app, `get_network` lists the requests around it
 (`status: "5xx"` or `"failed"`) and `get_network_request` gives one request's headers, timing and error. Header
-values that look like credentials are already redacted. Bodies stay out of tool results unless the server or the
+values and URLs are original on device protocol 14, including credentials; older links retain redaction.
+Bodies stay out of tool results unless the server or the
 MCP client runs with `--allow-network-bodies` (e.g. `npx -y lionscope mcp --allow-network-bodies`, or
 `lionscope query network-request --id 12 --allow-network-bodies`); with it, they are marked as untrusted data like
 other app strings. With device control on, `set_network_mock` answers a URL with a canned response, an error status
@@ -315,7 +316,7 @@ holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` 
   marked **AI** in the dashboard) gives it structure only: class, id, layout source, owner and bounds. Password
   fields are never read, and screenshots are never cached by the browser.
 - URLs, headers and bodies of HTTP requests come from the app and its servers and are marked as untrusted data too.
-  Credential-looking values in headers, URLs, forms, JSON and XML are redacted before they leave the device; bodies
+  Device protocol 14 preserves original values, including credentials; older links retain redaction. Bodies
   reach an agent only with `--allow-network-bodies`.
 - `--allow-device-control` keeps an AI from operating a device unasked; it is not a security boundary, since
   any local process can already use adb. The same goes for `--allow-network-bodies` (any local process can read
