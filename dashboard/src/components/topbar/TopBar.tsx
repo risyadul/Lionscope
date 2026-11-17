@@ -26,6 +26,7 @@ type Props = {
   viewSwitch: ReactNode;
   /** "N mocks active", after the SDK pill (every view), while enabled mock rules exist. */
   mocksIndicator?: ReactNode;
+  permissionsAction?: ReactNode;
   onRefreshDevices: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
@@ -56,6 +57,7 @@ export function TopBar({
   deviceToggle,
   viewSwitch,
   mocksIndicator,
+  permissionsAction,
   onRefreshDevices,
   apps,
   packageName,
@@ -127,6 +129,7 @@ export function TopBar({
         </div>
       </div>
       {viewSwitch}
+      {permissionsAction}
       <div className="topbar-link" data-state={connection} title={`Server connection: ${connection}`}>
         <span className="link-dot" aria-hidden="true" />
         <span className="link-label">{connection === 'open' ? 'Connected' : 'Offline'}</span>

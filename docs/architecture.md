@@ -42,7 +42,9 @@ the interceptor stays a pass-through, and an older SDK simply sends no requests.
 may be up to 256 KiB; Storage result lines also have a 256 KiB cap, with a 240 KiB SDK reply budget. Other SDK
 lines keep the 64 KiB cap. The server's mock rules reach the SDK as flat lines of at most 512 KiB.
 
-Storage begins at device protocol 11 and requires explicit server consent plus a proven profiling link.
+Storage begins at device protocol 11 and requires enabled server consent plus a proven profiling link.
+All four permissions default on, with persistent per-port runtime settings. The SDK starts with Storage off
+until its existing version-gated config arrives; permission changes push that config without replacing links.
 Protocol 12 adds original Storage values and primary-key row edits; protocol 13 adds SQL on the registered
 app-owned Room connection. The dashboard Query console and MCP/CLI SQL tools share the same Storage service,
 validation and consent checks; the agent entry points add no wire messages. Protocol 14 preserves original captured Network values

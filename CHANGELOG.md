@@ -6,6 +6,13 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- All four debugging permissions start enabled. Dashboard Permissions and `lionscope permissions` change
+  them without restarting, saving choices locally per server port. New `--disable-*` flags and existing
+  `--allow-*` aliases also update a running server. Storage read-off disables writes; enabling writes enables
+  reads. MCP/CLI clients cannot override disabled server settings. Already running actions may finish.
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

@@ -140,7 +140,7 @@ interface Reached {
 }
 
 export class StorageService {
-  readonly consent: StorageConsent;
+  private currentConsent: StorageConsent;
   private readonly now: () => number;
   private readonly newOpId: () => string;
   private readonly inFlight = new Set<string>();
@@ -152,9 +152,17 @@ export class StorageService {
   private nextLinkId = 1;
 
   constructor(private readonly options: StorageServiceOptions) {
-    this.consent = options.consent;
+    this.currentConsent = options.consent;
     this.now = options.now ?? Date.now;
     this.newOpId = options.newOpId ?? randomUUID;
+  }
+
+  get consent(): StorageConsent {
+    return this.currentConsent;
+  }
+
+  setConsent(consent: StorageConsent): void {
+    this.currentConsent = consent;
   }
 
   /** The prefs files and registered databases of the session's app. */

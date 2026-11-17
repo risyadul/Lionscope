@@ -30,6 +30,7 @@ import { Timeline } from './components/timeline/Timeline.tsx';
 import { EmulatorActions } from './components/topbar/EmulatorActions.tsx';
 import { MocksIndicator } from './components/topbar/MocksIndicator.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
+import { PermissionsMenu } from './components/topbar/PermissionsMenu.tsx';
 import { ViewSwitch } from './components/topbar/ViewSwitch.tsx';
 import { useAppList } from './hooks/useAppList.ts';
 import { useDeviceColumn } from './hooks/useDeviceColumn.ts';
@@ -400,6 +401,7 @@ export function App() {
       <LocationContext.Provider value={locations}>
         <div className="app">
           <TopBar
+            permissionsAction={<PermissionsMenu permissions={state.permissions} isOnline={isOpen} />}
             connection={state.connection.status}
             serverVersion={state.server?.serverVersion ?? null}
             devices={state.devices}
@@ -601,6 +603,7 @@ export function App() {
                     inspector={<InspectorPanel />}
                     storage={
                       <StoragePanel
+                        key={`storage-${state.permissions?.storageRead ?? false}`}
                         consent={state.storageConsent}
                         rowEditing={(sdk?.protocolVersion ?? 0) >= 12}
                         queryEnabled={(sdk?.protocolVersion ?? 0) >= 13}

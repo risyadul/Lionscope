@@ -139,6 +139,7 @@ describe('WebSocket gateway back-pressure', () => {
       'inspectorSelection',
       'locations',
       'networkMocks',
+      'permissions',
       'session',
       'snapshot',
       'storage',

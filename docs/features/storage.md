@@ -13,16 +13,22 @@ on both sides. SQL through the dashboard, MCP or CLI requires device protocol 13
 
 ## Turning it on
 
-Storage is off unless the server starts with it:
+Storage read and write are enabled by default on a fresh installation. Open **Permissions** in the dashboard
+or use the CLI to disable/re-enable them without restarting:
 
 ```sh
-npx lionscope --allow-storage-read                        # read only
-npx lionscope --allow-storage-read --allow-storage-write  # read and edit
+lionscope permissions --disable-storage-write # read only
+lionscope permissions --disable-storage-read  # Storage off (also disables writes)
+lionscope permissions --allow-storage-write   # read and write
 ```
 
-Without `--allow-storage-read` the agent tools are not registered and the tab says how to turn it on; nothing is
-sent to the device. It works through the profiling session's SDK link, so start a session first. A link without
-its link proof is refused (`unauthenticated`) before anything is sent.
+Choices are saved locally per server port and survive restart. Startup flags such as
+`lionscope --disable-storage-read` also apply to an already running server. See
+[Configuration](../configuration.md#permissions) for scope, persistence and client restrictions.
+
+When Storage read is disabled, agent Storage calls are refused and the tab points to Permissions. It works
+through the profiling session's SDK link, so start a session first. A link without its link proof is refused
+(`unauthenticated`) before anything is sent. Changes do not cancel an operation already running or undo a write.
 
 ## Registering a database
 
@@ -98,12 +104,9 @@ lionscope query query-storage-sql --json '{"name":"shop.db","sql":"SELECT id, qt
 lionscope query execute-storage-sql --json '{"name":"shop.db","sql":"UPDATE item SET qty=2 WHERE id=7","target":{"serial":"emulator-5554","packageName":"com.example.shop","link":1}}'
 ```
 
-Start the server with the required Storage permissions. For MCP stdio, also pass the corresponding flags to
-the MCP command; an attached server must already allow the operation:
-
-```sh
-lionscope mcp --allow-storage-read --allow-storage-write
-```
+MCP stdio also follows the server's current permissions. All client permissions start enabled; use
+`lionscope mcp --disable-storage-write` for a client restricted to reads. Re-enabling a client permission
+cannot override a server setting that is disabled.
 
 Results contain untrusted typed data under `outcome.query` for reads, plus `outcome.opId`, `code` and `phase`.
 Check `outcome.code` even if the tool call succeeded. A timeout/disconnect may mean a mutation committed; neither

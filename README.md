@@ -14,7 +14,7 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   time axis, copy complete requests as cURL, and mock responses or failures. Protocol 14 preserves original
   captured values, including auth credentials.
 - **Storage**: browse SharedPreferences and registered Room databases, edit row drafts including primary keys,
-  and run SQL in the Query console or through MCP/CLI tools. Storage reads and writes require explicit server permissions.
+  and run SQL in the Query console or through MCP/CLI tools. Permissions start enabled and can be changed live from the dashboard or CLI.
 - **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
   charts, and move them to another location on a map.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
@@ -83,9 +83,10 @@ to this terminal, run `lionscope --foreground`. It starts on demand; run it agai
 
 For a one-off run without global installation, use `npx lionscope@latest`.
 
-To enable Storage on a new server, run `lionscope --allow-storage-read`; add `--allow-storage-write` for edits
-and SQL mutations. A running server retains its startup permissions, so stop it through its owning terminal or
-background lifecycle command before changing them. See [Storage setup](docs/features/storage.md#turning-it-on).
+All four permissions start enabled: agent device control, Network bodies for agents, Storage read and Storage
+write. Open **Permissions** in the dashboard to turn any off without restarting. CLI equivalents include
+`lionscope permissions --disable-storage-write` and `lionscope --disable-device-control`; flags also update a
+running server. Choices are saved locally per server port. See [Configuration](docs/configuration.md).
 
 `@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
 earlier.
@@ -132,8 +133,7 @@ builds. That, screen names, Navigation Compose, the Network interceptor and what
 ## Use with AI agents
 
 AI coding agents (Claude Code, Cursor, VS Code, Codex, …) get the dashboard's data as tools, over MCP
-(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Tools that operate the device stay off unless
-you add `--allow-device-control`. Setup for each client, the tools, the agent skill and the safety notes
+(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Device tools follow the enabled-by-default device-control permission and any client restrictions. Setup for each client, the tools, the agent skill and the safety notes
 are in [Use with AI agents](docs/agents.md).
 
 ## Architecture

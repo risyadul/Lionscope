@@ -16,13 +16,14 @@ import { createAgentMcpServer, MAX_MCP_SUBSCRIPTIONS } from './mcpServer.ts';
 import { availableTools, callTool } from './registry.ts';
 import type { ToolFailure } from './registry.ts';
 import type { AgentBaseContext } from './tool.ts';
+import type { Permissions } from '@lionscope/protocol';
 
 export const MCP_PATH = '/mcp';
 export const AGENT_API_PREFIX = '/api/agent/';
 export const AGENT_HEADER = 'x-lionscope-agent';
-/** Per-request device-control opt-in, honoured by the JSON API only (it is what `lionscope mcp --allow-device-control` sends). */
+/** JSON API client restriction: `0` disables device control for this call; `1` cannot override the server. */
 export const DEVICE_CONTROL_HEADER = 'x-lionscope-device-control';
-/** Per-request network-bodies opt-in, honoured by the JSON API only (what `--allow-network-bodies` clients send). */
+/** JSON API client restriction: `0` hides bodies for this call; `1` cannot override the server. */
 export const NETWORK_BODIES_HEADER = 'x-lionscope-network-bodies';
 export const MAX_MCP_BODY_BYTES = 1024 * 1024;
 /** As large as /mcp: a set_network_mock body (up to 256 KB of text, JSON-escaped) comes through here too. */
@@ -147,6 +148,7 @@ async function sendWebResponse(res: ServerResponse, response: Response): Promise
 }
 
 export interface AgentHttpOptions {
+  permissions?: () => Readonly<Permissions>;
   ctx: AgentBaseContext;
   /** --allow-device-control: device tools on both endpoints (the JSON API's header can also enable them). */
   deviceControl: boolean;
@@ -165,14 +167,17 @@ export interface AgentHttp {
 export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
   const { ctx, deviceControl } = options;
   const networkBodies = options.networkBodies ?? false;
+  const currentDevice = () => options.permissions?.().deviceControl ?? deviceControl;
+  const currentBodies = () => options.permissions?.().networkBodies ?? networkBodies;
   // Stateless per request: a fresh MCP server over the same tool layer each time.
   const mcp = createMcpHandler(
     () =>
       createAgentMcpServer({
         version: ctx.serverVersion,
-        tools: availableTools(deviceControl, ctx.storage?.consent ?? 'off'),
-        deviceControl,
-        invoke: (name, args) => callTool(ctx, name, args, deviceControl, { networkBodies }),
+        tools: availableTools(currentDevice(), ctx.storage?.consent ?? 'off'),
+        deviceControl: currentDevice(),
+        invoke: (name, args) =>
+          callTool(ctx, name, args, currentDevice(), { networkBodies: currentBodies() }),
       }),
     { maxSubscriptions: MAX_MCP_SUBSCRIPTIONS },
   );
@@ -202,8 +207,8 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
     const name = pathname.slice(AGENT_API_PREFIX.length);
     if (!TOOL_NAME.test(name)) throw new HttpError(404, 'Unknown tool');
     const args = parseArguments(await readBody(req, MAX_AGENT_BODY_BYTES));
-    const allowDevice = deviceControl || req.headers[DEVICE_CONTROL_HEADER] === '1';
-    const allowBodies = networkBodies || req.headers[NETWORK_BODIES_HEADER] === '1';
+    const allowDevice = currentDevice() && req.headers[DEVICE_CONTROL_HEADER] !== '0';
+    const allowBodies = currentBodies() && req.headers[NETWORK_BODIES_HEADER] !== '0';
     const outcome = await callTool(ctx, name, args, allowDevice, { networkBodies: allowBodies });
     sendJson(res, outcome.ok ? 200 : FAILURE_STATUS[outcome.code], outcome);
   };

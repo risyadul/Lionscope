@@ -1,3 +1,4 @@
+import type { Permissions } from '@lionscope/protocol';
 /**
  * The agent tool layer: one typed definition per tool, served over MCP (HTTP and stdio) and the JSON tool API
  * (`lionscope query`). Handlers only read the session store / device lists and call the same session, emulator
@@ -101,6 +102,7 @@ export interface ActivityInstance {
 }
 
 export interface AgentContext {
+  permissions?: () => Readonly<Permissions>;
   sessions: AgentSessions;
   emulators: AgentEmulators;
   inspector: AgentInspector;

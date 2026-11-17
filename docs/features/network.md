@@ -59,7 +59,7 @@ See the [cURL manual](https://curl.se/docs/manpage.html#--data-raw) for the comm
 
 Requests stay in server memory only (the last 10 minutes, at most 5000 requests or 32 MB). Copying explicitly
 puts the command and its credentials on the system clipboard. AI agents get original URLs, headers and timings;
-body text still requires `--allow-network-bodies` (see [Use with AI agents](../agents.md)). App data stays marked
+body text follows the enabled-by-default Network bodies permission and client restrictions (see [Use with AI agents](../agents.md)). App data stays marked
 as untrusted in tool results.
 
 **Other redaction policies.** `search_logcat` still redacts log messages before matching or returning them;

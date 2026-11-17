@@ -109,15 +109,15 @@ describe('agent HTTP endpoints', () => {
     expect(mcp.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('keeps device tools off, except for an explicit JSON API opt-in', async () => {
+  it('keeps disabled device tools off even with an explicit JSON API allow header', async () => {
     expect(await callRemoteTool(port, 'press_key', { key: 'home' })).toMatchObject({
       ok: false,
       code: 'forbidden',
     });
-    // The opt-in reaches the tool: it then fails on the device, not on the gate.
+    // A legacy allow header cannot override the disabled server permission.
     expect(
       await callRemoteTool(port, 'press_key', { key: 'home', serial: 'R58M123ABC' }, { deviceControl: true }),
-    ).toMatchObject({ ok: false, code: 'failed' });
+    ).toMatchObject({ ok: false, code: 'forbidden' });
     const client = await mcpClient(port);
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     expect(names).toContain('get_summary');
@@ -125,7 +125,7 @@ describe('agent HTTP endpoints', () => {
     await client.close();
   });
 
-  it('keeps network bodies off, except for an explicit JSON API opt-in', async () => {
+  it('keeps disabled network bodies off even with an explicit JSON API allow header', async () => {
     const bodies = async (options: { networkBodies?: boolean }) => {
       const outcome = await callRemoteTool(port, 'status', {}, options);
       return outcome.ok
@@ -133,7 +133,7 @@ describe('agent HTTP endpoints', () => {
         : null;
     };
     expect(await bodies({})).toBe(false);
-    expect(await bodies({ networkBodies: true })).toBe(true);
+    expect(await bodies({ networkBodies: true })).toBe(false);
     const client = await mcpClient(port);
     const status = await client.callTool({ name: 'status', arguments: {} });
     expect(status.structuredContent).toMatchObject({ server: { networkBodies: false } });

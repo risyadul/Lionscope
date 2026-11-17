@@ -86,7 +86,7 @@ describe('background CLI lifecycle', () => {
     });
     expect(await response.json()).toMatchObject({
       ok: true,
-      result: { server: { deviceControl: false }, devices: [] },
+      result: { server: { deviceControl: true, networkBodies: true }, devices: [] },
     });
     expect(await command(['stop'])).toMatchObject({ code: 0, stdout: expect.stringContaining('stopped') });
     expect((await probeServer(port)).kind).toBe('none');
@@ -94,20 +94,18 @@ describe('background CLI lifecycle', () => {
     expect((await command(['stop'])).code).toBe(0);
   }, 60_000);
 
-  it('concurrent starts have one owner and permission changes require a restart', async () => {
+  it('concurrent starts have one owner and permission changes apply now and survive restart', async () => {
     const results = await Promise.all([command(), command()]);
     expect(results.map((result) => result.code)).toEqual([0, 0]);
     const own = await state();
     for (const result of results) expect(result.stdout).toContain(`PID ${own.pid}`);
-    expect(await command(['--allow-storage-read'])).toMatchObject({
-      code: 1,
-      stderr: expect.stringContaining('different startup permissions'),
-    });
+    expect((await command(['--disable-storage-read'])).code).toBe(0);
     expect((await state()).pid).toBe(own.pid);
+    expect((await command(['status'])).stdout).toContain('Storage: off');
     expect((await command(['stop'])).code).toBe(0);
-    expect(
-      (await command(['--allow-storage-read', '--allow-storage-write', '--allow-device-control'])).code,
-    ).toBe(0);
+    expect((await command()).code).toBe(0);
+    expect((await command(['status'])).stdout).toContain('Storage: off');
+    expect((await command(['permissions', '--allow-storage-write'])).code).toBe(0);
     expect((await command(['status'])).stdout).toContain('Storage: read/write');
   }, 60_000);
 
@@ -197,6 +195,11 @@ describe('background CLI lifecycle', () => {
         .poll(async () => (await probeServer(port, 200)).kind, { timeout: 15_000 })
         .toBe('lionscope');
       expect((await command()).stdout).toContain('started elsewhere');
+      expect((await command(['--disable-storage-write'])).code).toBe(0);
+      expect(JSON.parse((await command(['permissions'])).stdout)).toMatchObject({
+        storageRead: true,
+        storageWrite: false,
+      });
       expect((await command(['stop'])).code).toBe(1);
       await expect(readFile(path.join(directory, `${port}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {

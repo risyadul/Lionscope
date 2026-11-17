@@ -24,23 +24,20 @@ export const MCP_USAGE = `Usage: lionscope mcp [--port <port>] [--device-port <p
 
 MCP server on stdin/stdout for AI agents (Claude Code, Cursor, VS Code, Codex, Gemini CLI, ...). Uses the
 Lionscope server running on --port, or starts one in this process (dashboard at http://localhost:<port>)
-that stops when the MCP client disconnects; if the server it uses goes away, it starts one. Logs go to stderr.
+that stops when the MCP client disconnects; if the server it uses goes away, a read may reconnect. Logs go to stderr.
 
 Options:
   --port <port>           Dashboard port (LIONSCOPE_PORT, default 8701)
   --device-port <port>    In-app SDK gateway port, when it starts a server (LIONSCOPE_DEVICE_PORT, default 8700)
   --adb <path>            adb binary, when it starts a server (LIONSCOPE_ADB)
-  --allow-device-control  Offer the device tools (get_ui_tree, inspect_screen, tap_element, wait_for,
-                          scroll_to, screenshot, tap, swipe, type_text, press_key, run_inputs,
-                          launch_app, stop_app, get_activity_instance, set_dont_keep_activities,
-                          simulate_process_death, bring_to_front, set_network_mock, clear_network_mocks,
-                          set_location, clear_location, boot_emulator, shutdown_emulator) to this client
-  --allow-network-bodies  Let this client read captured HTTP body texts (get_network_request)
-  --allow-storage-read    Offer list_storage, read_storage, query_storage_sql and get_storage_audit; a server
-                          this command starts lets its dashboard read app storage too. An attached server
-                          answers only if it was itself started with the flag
-  --allow-storage-write   Offer write_storage and execute_storage_sql too (with --allow-storage-read;
-                          same rule for an attached server). Storage writes are never replayed on reconnect.
+  All four client permissions are enabled by default. The attached server's settings are always enforced.
+  --disable-device-control  Do not offer device-control tools to this client
+  --disable-network-bodies  Hide Network bodies from this client
+  --disable-storage-read    Do not offer Storage tools to this client
+  --disable-storage-write   Offer Storage reads only
+  --allow-device-control / --allow-network-bodies / --allow-storage-read / --allow-storage-write
+                            Explicit enable aliases; cannot override disabled permissions on an attached server
+  Storage writes are never replayed on reconnect. Use lionscope permissions to change the server's settings.
   -h, --help              Show this help
   -v, --version           Print the version
 `;
@@ -86,12 +83,8 @@ class McpBackend {
         return;
       }
       try {
-        // Device control and bodies stay off on this server's HTTP endpoints: the flags are for this client only.
-        const server = await startLionscope({
-          ...this.config,
-          allowDeviceControl: false,
-          allowNetworkBodies: false,
-        });
+        // Client flags restrict this client; a server it starts still uses the saved server permissions.
+        const server = await startLionscope({ ...this.config, permissionOverrides: {} });
         this.server = server;
         this.stop = exitOnShutdown(server);
         return;

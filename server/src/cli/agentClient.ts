@@ -43,8 +43,12 @@ async function post(
     headers: {
       'Content-Type': 'application/json',
       [AGENT_HEADER]: '1',
-      ...(permissions.deviceControl ? { [DEVICE_CONTROL_HEADER]: '1' } : {}),
-      ...(permissions.networkBodies ? { [NETWORK_BODIES_HEADER]: '1' } : {}),
+      ...(permissions.deviceControl !== undefined
+        ? { [DEVICE_CONTROL_HEADER]: permissions.deviceControl ? '1' : '0' }
+        : {}),
+      ...(permissions.networkBodies !== undefined
+        ? { [NETWORK_BODIES_HEADER]: permissions.networkBodies ? '1' : '0' }
+        : {}),
     },
     body: JSON.stringify(args ?? {}),
     signal: AbortSignal.timeout(timeoutMs),

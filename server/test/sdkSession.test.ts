@@ -34,6 +34,22 @@ afterEach(() => {
 });
 
 describe('ProfilingSession SDK link', () => {
+  it('updates Storage consent on existing links and future links without replacing the session', async () => {
+    const { session, connect } = await setup();
+    session.setStorageConsent('read_write');
+    const { link } = await connect({ ...HELLO, protocolVersion: 13 });
+    expect(link.storageConsents.at(-1)).toBe('read_write');
+    const generation = session.state.sdk?.linkGeneration;
+    session.setStorageConsent('off');
+    expect(link.storageConsents.at(-1)).toBe('off');
+    expect(link.closedWith).toBeNull();
+    expect(session.state.sdk?.linkGeneration).toBe(generation);
+    const next = await connect({ ...HELLO, protocolVersion: 13 });
+    expect(next.link.storageConsents.at(-1)).toBe('off');
+    session.setStorageConsent('read');
+    expect(next.link.storageConsents.at(-1)).toBe('read');
+    session.stop();
+  });
   it('is ready only once the device probe is done; refreshPid is a no-op before', async () => {
     const device = new FakeDevice();
     const original = device.handle.bind(device);

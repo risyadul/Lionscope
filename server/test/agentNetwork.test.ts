@@ -102,7 +102,7 @@ describe('network tool definitions', () => {
         'HTTP URLs, headers and bodies',
       );
     }
-    expect(mcpInstructions(false)).toContain('--allow-network-bodies');
+    expect(mcpInstructions(false)).toContain('Network bodies permission (enabled by default)');
     expect(mcpInstructions(false)).not.toContain('set_network_mock');
     expect(mcpInstructions(true)).toContain('clear them when you are done');
   });

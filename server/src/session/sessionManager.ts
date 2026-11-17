@@ -120,7 +120,7 @@ export class SessionManager implements SdkLinkTarget {
   private readonly linkErrors: ErrorThrottle;
   private readonly refusals: ErrorThrottle;
   private readonly inspectLinks: InspectLinks | undefined;
-  private readonly storageConsent: StorageConsent;
+  private storageConsent: StorageConsent;
   private readonly onStorageWriteResult: SessionManagerOptions['onStorageWriteResult'];
   private gatewayDownReported = false;
   private staleChecked = false;
@@ -271,6 +271,11 @@ export class SessionManager implements SdkLinkTarget {
     if (!session || session.isStopped) return false;
     session.setSdkOptions(changes);
     return true;
+  }
+
+  setStorageConsent(consent: StorageConsent): void {
+    this.storageConsent = consent;
+    this.session?.setStorageConsent(consent);
   }
 
   /** Headers and bodies of one HTTP exchange of the current (or last) session; null when it is not kept. */

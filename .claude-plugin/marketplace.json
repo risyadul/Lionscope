@@ -9,7 +9,7 @@
     {
       "name": "lionscope",
       "source": "./",
-      "description": "Profile and inspect an Android app: the Lionscope MCP server (read tools and sessions) and its skill",
+      "description": "Profile and inspect an Android app: the Lionscope MCP server with configurable debugging permissions and its skill",
       "version": "0.13.0",
       "author": {
         "name": "risyadul"
@@ -29,7 +29,7 @@
     {
       "name": "lionscope-device-control",
       "source": "./",
-      "description": "The same, plus the device tools: taps, screenshots, Inspector snapshots, live view edits, HTTP mocks, emulators",
+      "description": "Compatibility alias for Lionscope with agent device control requested; disabled server permissions still apply",
       "version": "0.13.0",
       "author": {
         "name": "risyadul"

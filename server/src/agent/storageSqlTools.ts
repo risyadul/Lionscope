@@ -58,7 +58,7 @@ async function runSql(args: StorageQueryInput, ctx: AgentContext, readOnly: bool
 export const queryStorageSqlTool = defineTool({
   name: 'query_storage_sql',
   title: 'Query registered database with SQL',
-  description: `Runs one SELECT/WITH read against a registered Room database; requires --allow-storage-read. Returns exact typed rows/column labels in outcome.query, pagination/truncation flags and an operation outcome. At most 200 rows, 256 columns and the 240 KiB reply budget; cells/labels may be shortened. Pass limit/offset to page; pages do not share a snapshot. Read code failures from outcome.code, not just the tool envelope. ${CONTRACT}`,
+  description: `Runs one SELECT/WITH read against a registered Room database; requires enabled Storage read permission (on by default). Returns exact typed rows/column labels in outcome.query, pagination/truncation flags and an operation outcome. At most 200 rows, 256 columns and the 240 KiB reply budget; cells/labels may be shortened. Pass limit/offset to page; pages do not share a snapshot. Read code failures from outcome.code, not just the tool envelope. ${CONTRACT}`,
   access: 'storage_read',
   input,
   annotations: READ_ONLY,
@@ -68,7 +68,7 @@ export const queryStorageSqlTool = defineTool({
 export const executeStorageSqlTool = defineTool({
   name: 'execute_storage_sql',
   title: 'Mutate registered database with SQL',
-  description: `Executes one INSERT/UPDATE/DELETE, including supported WITH mutations; requires --allow-storage-read and --allow-storage-write. Changes matching rows directly, without row-editor compare-and-set or undo. Preserves technical table restrictions. Returns affected rows and outcome.opId/code/phase; inspect outcome.code even when the tool envelope succeeds. Never automatically retry after any timeout, disconnect or uncertain failure: it may have committed. Use get_storage_audit with opId for late final outcomes, then reread. ${CONTRACT}`,
+  description: `Executes one INSERT/UPDATE/DELETE, including supported WITH mutations; requires enabled Storage read and write permissions (on by default). Changes matching rows directly, without row-editor compare-and-set or undo. Preserves technical table restrictions. Returns affected rows and outcome.opId/code/phase; inspect outcome.code even when the tool envelope succeeds. Never automatically retry after any timeout, disconnect or uncertain failure: it may have committed. Use get_storage_audit with opId for late final outcomes, then reread. ${CONTRACT}`,
   access: 'storage_write',
   input: input.omit({ limit: true, offset: true }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },

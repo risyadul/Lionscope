@@ -15,6 +15,7 @@ import { DeviceColumn, DeviceToggle } from '../../src/components/device/DeviceCo
 import { useDeviceColumn } from '../../src/hooks/useDeviceColumn.ts';
 import { createFixtureServices, stats } from './data.ts';
 import { NetworkFixture } from './NetworkFixture.tsx';
+import { PermissionsFixture } from './PermissionsFixture.tsx';
 
 const services = createFixtureServices();
 const query = new URLSearchParams(location.search);
@@ -98,6 +99,8 @@ if (!container) throw new Error('Fixture root is missing');
 const root = createRoot(container);
 function Fixture() {
   switch (query.get('scenario')) {
+    case 'permissions':
+      return <PermissionsFixture />;
     case 'network':
       return <NetworkFixture state={query.get('state')} />;
     case 'stats':

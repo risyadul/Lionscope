@@ -234,6 +234,10 @@ export class ProfilingSession {
     this.sdk.setOptions(changes);
   }
 
+  setStorageConsent(consent: StorageConsent): void {
+    this.sdk.setStorageConsent(consent);
+  }
+
   /** Network messages dropped because their link had no link proof. */
   get unprovenNetworkMessages(): number {
     return this.sdk.unprovenNetworkMessages;

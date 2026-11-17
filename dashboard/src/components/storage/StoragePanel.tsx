@@ -636,11 +636,12 @@ function StorageTab({
         <div className="storage-empty" data-testid="storage-consent-off">
           <p className="storage-empty-title">Storage is off</p>
           <p>
-            Start Lionscope with <code>--allow-storage-read</code> to read the app’s SharedPreferences and the
-            Room databases it registers (<code>Lionscope.trackDatabase</code>), and add{' '}
-            <code>--allow-storage-write</code> to edit them.
+            Enable Storage read in the Permissions menu to browse preferences and registered Room databases.
+            Enable Storage write there to edit data or run SQL mutations.
           </p>
-          <pre className="storage-snippet mono">npx lionscope --allow-storage-read --allow-storage-write</pre>
+          <pre className="storage-snippet mono">
+            lionscope permissions --allow-storage-read --allow-storage-write
+          </pre>
         </div>
       </section>
     );

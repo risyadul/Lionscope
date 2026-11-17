@@ -23,8 +23,9 @@ Options:
   --list                  Print every tool with its description and input schema
   --json '<object>'       Tool arguments as JSON (flags given next to it win)
   --port <port>           Dashboard port (LIONSCOPE_PORT, default 8701)
-  --allow-device-control  Allow a device-control tool for this call
-  --allow-network-bodies  Return HTTP body texts (get_network_request) for this call
+  --disable-device-control  Restrict this call to read tools
+  --disable-network-bodies  Hide HTTP body texts for this call
+  --allow-device-control / --allow-network-bodies are compatibility aliases; server permissions still apply.
   --out <file>            Write a screenshot's PNG to this file instead of printing it as base64
 `;
 
@@ -79,8 +80,8 @@ function parseQueryArgs(argv: readonly string[], env: NodeJS.ProcessEnv): QueryA
     help: false,
     tool: null,
     port: parsePort(env.LIONSCOPE_PORT),
-    deviceControl: false,
-    networkBodies: false,
+    deviceControl: true,
+    networkBodies: true,
     out: null,
     json: null,
     flags: new Map(),
@@ -107,6 +108,8 @@ function parseQueryArgs(argv: readonly string[], env: NodeJS.ProcessEnv): QueryA
     else if (name === 'help' || name === 'h') args.help = true;
     else if (name === 'allow-device-control') args.deviceControl = true;
     else if (name === 'allow-network-bodies') args.networkBodies = true;
+    else if (name === 'disable-device-control') args.deviceControl = false;
+    else if (name === 'disable-network-bodies') args.networkBodies = false;
     else if (name === 'port') args.port = parsePort(value(), '--port');
     else if (name === 'out') args.out = value();
     else if (name === 'json') args.json = value();
@@ -184,7 +187,7 @@ function listing(): unknown {
     name: tool.name,
     title: tool.title,
     access: tool.access,
-    ...(tool.access === 'device' ? { requires: '--allow-device-control' } : {}),
+    ...(tool.access === 'device' ? { requires: 'enabled device-control permission' } : {}),
     annotations: tool.annotations,
     description: tool.description,
     inputSchema: inputJsonSchema(tool),

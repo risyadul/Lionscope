@@ -111,6 +111,7 @@ import {
 export * from './wire.ts';
 export * from './storage.ts';
 export * from './storageSql.ts';
+export * from './permissions.ts';
 import {
   ROW_DIGEST_PATTERN,
   storageReadInputSchema,

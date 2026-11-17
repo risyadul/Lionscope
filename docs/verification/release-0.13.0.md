@@ -52,7 +52,7 @@ Artifacts are local under `/tmp/lionscope-release-artifacts/`:
 
 | Artifact                  | SHA-256                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
-| lionscope-0.13.0.tgz      | 73afa0ed70f764e728fb690d27a1a120aacdd7eccfbaa542369cda9abcfbcdf9 |
+| lionscope-0.13.0.tgz      | ad966ccad7435f7c2eed619c6cc349a4c161da9a321821f5fcc4f143ddcc6b4c |
 | lionscope-0.13.0.aar      | 70e5addb8b681a7b60dc0714e8916810d69507c21bb597c58e00239c678a0546 |
 | lionscope-noop-0.13.0.aar | b158a84d3789c55b2a462c6077b9b0d1ac55f7a5a877e81eab8503661cf27b5e |
 
@@ -109,6 +109,17 @@ layout checks above were not repeated for unchanged SDK/dashboard code; this add
    provided the runtime used for the successful installed-tarball smoke. This was an environment/install failure,
    not a failed Lionscope runtime test.
 
+## Runtime permissions follow-up
+
+The runtime-permissions follow-up adds enabled defaults, live dashboard/CLI changes and private per-port
+persistence. Its complete TypeScript run passed **2,459 tests / 148 files**, all static checks and the CLI build
+passed, and the complete browser run passed **48 cases**. The six Permissions browser cases passed again after
+focus restoration refinement. Android StorageRequests passed **16 JVM tests**; there is no new device runtime
+claim. The rebuilt 29-file npm tarball passed isolated installed-package checks on Node 22.12.0, including
+same-PID changes, persistence/restart, MCP stdio and dashboard WebSocket updates. Its current hash is in the
+table above; AARs are unchanged. See [permission verification](runtime-permissions-2026-11-17.md) for exact checks,
+failures investigated and limitations. Builds ran in `/tmp/lionscope-runtime-permissions`.
+
 ## Publication prerequisites still open
 
 - PR #34 is open with passing CI. PR #36 and #37 are drafts based on its branch. Merge #34, retarget/rebase
@@ -116,6 +127,8 @@ layout checks above were not repeated for unchanged SDK/dashboard code; this add
   branch just to collect the release.
 - Review and merge the local SQL agent-tools feature and gateway test synchronization fix as separate scopes.
   They are included in the local candidate only; the feature adds no protocol or Android implementation changes.
+- Review the runtime-permissions follow-up before release. It changes default access and blocks legacy client
+  allow headers from overriding server restrictions; release notes describe the new saved settings and defaults.
 - Reapply the separate version-preparation, documentation and SQL follow-up commits to the final reviewed `main`
   tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains those candidate follow-ups.
   The current local integration branch is not an approved release target by itself.

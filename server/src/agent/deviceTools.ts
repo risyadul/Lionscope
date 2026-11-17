@@ -1,5 +1,5 @@
 /**
- * Device control (only with --allow-device-control): one-shot screenshots and input over adb (`screencap`,
+ * Device control (requires enabled server permission): one-shot screenshots and input over adb (`screencap`,
  * `input`), which works the same on emulators and physical devices, mirrored or not; emulators boot and shut
  * down through the dashboard's emulator manager. Power, sleep and lock keys are deliberately not offered.
  */

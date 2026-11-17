@@ -90,8 +90,10 @@ the CLI smoke test and rebuilding/comparing the UI helper jar.
 
 Read `docs/features/storage.md` before changing storage behavior.
 
-- Storage starts off. Reads require `--allow-storage-read`; writes also require `--allow-storage-write`,
-  an active profiling session, and its authenticated SDK link. Retain enforcement on both server and SDK.
+- Permissions start enabled and can be disabled live from the dashboard or CLI, with choices saved per server port.
+  Storage reads require enabled read permission; writes also require enabled write permission, an active profiling
+  session and its authenticated SDK link. Retain enforcement on both server and SDK; client flags cannot override
+  disabled server settings. SDK consent still starts off until an authenticated link receives its config.
 - Database access uses the registered app-owned Room instance and its transactions. Do not open a second
   SQLite connection. The protocol 13 Query console accepts one validated SELECT/WITH or INSERT/UPDATE/DELETE
   statement; keep its statement, target-table, transaction-control, consent and result-size checks on both sides.

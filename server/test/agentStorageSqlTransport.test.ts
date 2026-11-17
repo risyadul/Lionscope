@@ -109,7 +109,7 @@ describe('SQL over MCP and CLI against a running server', () => {
   }, 30_000);
 
   it('keeps a read-only MCP client from listing or invoking the mutation tool', async () => {
-    const { client } = await connectStdio(['--port', String(port), '--allow-storage-read']);
+    const { client } = await connectStdio(['--port', String(port), '--disable-storage-write']);
     try {
       const names = (await client.listTools()).tools.map((t) => t.name);
       expect(names).toContain('query_storage_sql');
