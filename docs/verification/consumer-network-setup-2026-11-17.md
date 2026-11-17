@@ -3,6 +3,10 @@
 The local Consumer ID development app now runs with the original-value Network capture from Lionscope commit
 `550e593`. The dashboard/server uses the bundled local CLI, and the app negotiates device protocol 14.
 
+This runtime check used the combined local workspace before splitting the PRs. The background CLI is a separate
+change, not part of the Network PR. Commit `1e4127f` preserves the same Android/protocol implementation; this
+report records the installed combined setup rather than claiming a second device run of the isolated branch.
+
 ## Build and installation
 
 The Consumer checkout is `/Volumes/TopraxSSD/StudioProjects/android-consumer`, HEAD `fe987edbff`, with existing

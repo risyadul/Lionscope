@@ -1,5 +1,10 @@
 # Original Network values and Copy cURL, 17 November 2026
 
+This report records verification of the combined local workspace before the PR split. Commit `1e4127f`
+preserves the Network implementation from `550e593`; its Android and protocol trees are identical. The
+background CLI is reviewed separately and is absent from this PR. Full-suite counts below include that earlier
+combined workspace; the Network PR also records checks rerun on its isolated branch.
+
 The user approved original Network data for debug inspection, including authentication. Negotiated device
 protocol 14 preserves captured URLs, headers, text bodies and failure messages on the SDK and server. Links
 below 14 retain credential redaction. SDK link proof, session gating, wire validation, capture limits,
