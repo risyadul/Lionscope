@@ -10,9 +10,31 @@ operated from the dashboard, and AI agents get the same data as tools over MCP (
 (`lionscope query`). No Android Studio needed.
 
 ```bash
-npx lionscope@latest
+npm install -g lionscope@latest
+lionscope
 # open http://localhost:8701, pick the device and the app, press Start
 ```
+
+The server runs in the background and returns the terminal after startup succeeds. It stays running when the
+terminal closes. Repeating `lionscope` reuses the server on that port; it does not start another copy or change
+the running instance's options. Start it again after a reboot.
+
+```bash
+lionscope status
+lionscope logs --follow
+lionscope stop
+lionscope --foreground       # attached to this terminal, Ctrl+C to stop
+```
+
+`lionscope start` is an explicit alias for the default command. Server instances are selected by `--port` (or
+`LIONSCOPE_PORT`), so use the same port for start, status, logs and stop. Stop performs normal session/device
+cleanup, including shutting down emulators this server booted. An instance started elsewhere is reported but
+is not stopped by these commands; use its original terminal or process manager.
+
+State and operational logs are private files in `~/.lionscope` (`LIONSCOPE_STATE_DIR` overrides it). Logs remain
+readable after stop. See the repository's Configuration page for lifecycle and log-retention details.
+
+For a one-off run, `npx lionscope@latest` works without global installation.
 
 `@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
 earlier.
@@ -22,6 +44,7 @@ on Android 7.0 (API 24) or newer. Everything listens on 127.0.0.1 only.
 
 ```text
 Options:
+  --foreground         Run attached to this terminal instead of in background
   --port <port>         Dashboard port (LIONSCOPE_PORT, default 8701)
   --device-port <port>  In-app SDK gateway port (LIONSCOPE_DEVICE_PORT, default 8700)
   --adb <path>          adb binary (LIONSCOPE_ADB; default: $ANDROID_HOME, the usual SDK location, then PATH)

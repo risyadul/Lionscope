@@ -68,9 +68,16 @@ Inspector, Network, Storage and Device. See [What the dashboard shows](docs/dash
 ## Quick start
 
 ```bash
-npx lionscope@latest
+npm install -g lionscope@latest
+lionscope
 # open http://localhost:8701
 ```
+
+`lionscope` starts the server in the background and returns your terminal. Closing the terminal leaves it
+running. Use `lionscope status`, `lionscope logs --follow` and `lionscope stop` to manage it. For a server attached
+to this terminal, run `lionscope --foreground`. It starts on demand; run it again after a reboot.
+
+For a one-off run without global installation, use `npx lionscope@latest`.
 
 `@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
 earlier.

@@ -8,6 +8,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- CLI background lifecycle with `start`, `stop`, `status`, bounded log tails and `logs --follow`. Private
+  per-instance control keys verify ownership for graceful shutdown; stale state never authorizes a PID kill.
+
 - Dashboard design contract in `DESIGN.md`, with Chromium layout regressions for Storage controls, source
   navigation, metric warning labels and device mirror defaults. CI retains screenshots and browser reports.
 
@@ -28,6 +31,9 @@ All notable changes to Lionscope are documented here. The format is based on
   [Storage](docs/features/storage.md).
 
 ### Changed
+
+- **Breaking:** `lionscope` now starts in the background and returns the terminal. Use `--foreground` for the
+  previous attached-server behavior. Development scripts and MCP stdio retain their existing lifecycle.
 
 - Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
   and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network

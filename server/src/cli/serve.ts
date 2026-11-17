@@ -6,6 +6,7 @@ import type { LionscopeConfig } from '../config.ts';
 import { errorMessage, log } from '../log.ts';
 import { createLionscopeServer } from '../server.ts';
 import type { LionscopeServer } from '../server.ts';
+import type { DaemonControl } from '../http/daemonControl.ts';
 
 /**
  * Hard cap for a clean exit. Shutting down the emulators this server booted takes up to ~5 s (1 s for a boot or
@@ -14,7 +15,10 @@ import type { LionscopeServer } from '../server.ts';
 const SHUTDOWN_DEADLINE_MS = 10_000;
 
 /** Checks adb, then listens; rejects when the dashboard port cannot be bound. */
-export async function startLionscope(config: LionscopeConfig): Promise<LionscopeServer> {
+export async function startLionscope(
+  config: LionscopeConfig,
+  daemon?: DaemonControl,
+): Promise<LionscopeServer> {
   if (config.dev && IS_BUNDLE) {
     log.warn('Dev mode widens the WebSocket origin allowlist to the Vite dev server (localhost:5173)');
   }
@@ -38,6 +42,7 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
     allowNetworkBodies: config.allowNetworkBodies,
     allowStorageRead: config.allowStorageRead,
     allowStorageWrite: config.allowStorageWrite,
+    daemon,
   });
   try {
     const address = await server.listen();
@@ -69,7 +74,10 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
  * Close the server on SIGINT / SIGTERM / SIGHUP, an uncaught exception, or when `shutdown()` is called, then
  * exit. Every exit path goes through close(), which also removes the session's `adb reverse` mapping.
  */
-export function exitOnShutdown(server: LionscopeServer): (reason: string) => void {
+export function exitOnShutdown(
+  server: LionscopeServer,
+  afterClose?: () => Promise<void>,
+): (reason: string) => void {
   let shuttingDown = false;
   const shutdown = (reason: string): void => {
     if (shuttingDown) process.exit(1);
@@ -77,7 +85,11 @@ export function exitOnShutdown(server: LionscopeServer): (reason: string) => voi
     log.info(`${reason}, shutting down`);
     const force = setTimeout(() => process.exit(1), SHUTDOWN_DEADLINE_MS);
     force.unref();
-    server.close().then(
+    const close = async () => {
+      await server.close();
+      await afterClose?.();
+    };
+    close().then(
       () => process.exit(0),
       (error: unknown) => {
         log.error('Shutdown failed:', errorMessage(error));
