@@ -126,27 +126,42 @@ same-PID changes, persistence/restart, MCP stdio and dashboard WebSocket updates
 table above; AARs are unchanged. See [permission verification](runtime-permissions-2026-11-17.md) for exact checks,
 failures investigated and limitations. Builds ran in `/tmp/lionscope-runtime-permissions`.
 
-## Publication prerequisites still open
+## Merge handoff and manual publication
 
-Permissions are included in the versioned **0.13.0** changelog and release notes, rather than left under
-Unreleased. This release-scope follow-up changes documentation only. Its formatting, documentation links,
-release metadata and artifact-integrity checks passed; runtime suites and package builds were not repeated.
-The npm tarball and AARs are byte-identical to the verified runtime-permissions candidate.
+The release-scope follow-up moved permissions into the versioned **0.13.0** changelog and release notes.
+Its formatting, documentation links, release metadata and artifact-integrity checks passed. The tested npm
+tarball and AARs remain byte-identical; their checksums are in the artifact table.
 
-- PR #34 is open with passing CI. PR #36 and #37 are drafts based on its branch. Merge #34, retarget/rebase
-  the two feature PRs onto `main`, and require their CI before merging them. Do not merge them into the Storage
-  branch just to collect the release. Status and the three unchanged feature heads were rechecked during this
-  release-scope follow-up; #36 and #37 have no check runs yet.
-- Review and merge the local SQL agent-tools feature and gateway test synchronization fix as separate scopes.
-  They are included in the local candidate only; the feature adds no protocol or Android implementation changes.
-- Review the runtime-permissions follow-up before release. It changes default access and blocks legacy client
-  allow headers from overriding server restrictions; release notes describe the new saved settings and defaults.
-- Reapply the separate version-preparation, documentation, SQL and runtime-permissions follow-up commits to the final reviewed `main`
-  tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains those candidate follow-ups.
-  The current local integration branch is not an approved release target by itself.
-- At initial preparation, npm's public registry listed **0.12.0** as latest and did not list 0.13.0; the remote
-  0.13.0 tag was absent. `npm whoami` returned **E401 Unauthorized**. Recheck registry/tag availability and
-  npm publishing authentication before publication;
-  the failure was not bypassed and no login credentials were changed.
-- Approve the final release commit/date and publication. No annotated tag, GitHub release, npm publish,
-  JitPack remote build or MCP registry update has been performed. Follow the [release procedure](../releasing.md).
+During the merge handoff, PR #34 (Storage) merged as `92a59bc` and PR #36 (background CLI) merged as `78b5e3f`,
+after their required GitHub checks passed. Network PR #37 was updated against `main`; its only conflict was
+CHANGELOG.md. The resolved combined feature tree exactly matches the previously verified `b92f99a` tree.
+Its new head `aabe3fe` runs CI again. The release follow-up is stacked on that head as a Draft while CI runs;
+it must merge after #37, with its own required checks green. The final source branch carries the six prepared
+follow-up commits, rebased without importing the old local integration merge.
+
+Fresh local verification during this handoff passed:
+
+- `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run docs:check`, `npm run release:check`;
+- `npm test -- --maxWorkers=2`: **2,459 tests / 148 files**;
+- `./gradlew :lionscope:test :lionscope-noop:assemble :sample:assembleDebug :ui-helper:test :ui-helper:helperJar --max-workers=2`:
+  passed in 6m53s with JDK 17. SDK debug, release and OkHttp 5 each passed **646 tests**, UI-helper passed **9**,
+  and sample/no-op assembly passed. The helper SHA-256 still matches the vendored jar.
+
+The rebase preserved the entire verified candidate tree before this documentation update. The earlier
+**48 browser cases**, focused permission rerun and Node 22.12 installed-package evidence therefore apply to
+unchanged runtime sources. Full Android verification ran in `/tmp/lionscope-runtime-permissions`; final
+TypeScript verification ran in `/tmp/lionscope-release-final`. No active app session was replaced, and these
+checks add no new device/API runtime claim.
+
+The maintainer requested **merge only** and will publish npm and MCP metadata themselves. Before publishing:
+
+1. Confirm #34, #36, #37 and the release follow-up have merged into `main` with required CI green. Use the final
+   reviewed main commit, not the earlier local integration branch.
+2. Check the final tree and artifact checksums. The prepared tarball was smoke-tested on Node 22.12.0 and must
+   be published unchanged. Rebuild/retest if runtime or packaged files change; npm versions are immutable.
+3. Set the actual release date; recheck that npm version and tag `0.13.0` are unused. At the authentication
+   check during this handoff, `npm whoami` returned **E401 Unauthorized** and npm latest was **0.12.0**.
+   The maintainer will handle npm login; no credentials were changed by this task.
+4. Create the annotated `0.13.0` tag, publish the tested npm tarball, verify both JitPack coordinates, create
+   the GitHub release and publish `server.json` through MCP Publisher. These publication steps were not run
+   during the merge-only handoff. Follow the [release procedure](../releasing.md).
