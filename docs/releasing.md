@@ -25,7 +25,8 @@ Run `npm run release:check` to check package/lockfile versions and active instal
 ## Publish after approval
 
 Use the final reviewed `main` commit, not an integration candidate whose feature PRs are still open. Reapply
-the prepared release commit after those PRs merge if needed, resolve conflicts, and rerun affected checks.
+all prepared release commits, including documentation follow-ups, after those PRs merge if needed. Resolve
+conflicts and rerun affected checks; do not carry over the local integration merge as a substitute for the PRs.
 
 For 0.13.0, the tag convention is `0.13.0` (no `v` prefix), matching existing releases. Confirm that npm has not
 already published it and that the tag is unused. Once publication is authorized:

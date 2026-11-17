@@ -51,7 +51,7 @@ Artifacts are local under `/tmp/lionscope-release-artifacts/`:
 
 | Artifact                  | SHA-256                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
-| lionscope-0.13.0.tgz      | d2847895fe27f8f8cccea733110661da32ba7b76373232cb21de438b9c942e3a |
+| lionscope-0.13.0.tgz      | 16cf67f8bb56c478b460ac12db0c1dc45e4b7cd22705d35fd2a8d355061f3e02 |
 | lionscope-0.13.0.aar      | 70e5addb8b681a7b60dc0714e8916810d69507c21bb597c58e00239c678a0546 |
 | lionscope-noop-0.13.0.aar | b158a84d3789c55b2a462c6077b9b0d1ac55f7a5a877e81eab8503661cf27b5e |
 
@@ -59,6 +59,24 @@ The existing Vite large-chunk advisory remains. Android lint emits warnings, rec
 prove remote JitPack resolution, Windows/Linux installed-package behavior, physical-device behavior or a new
 runtime deployment of this candidate into Consumer. Earlier API 28/Room 2.7.2 Storage and API 36 Consumer Network
 evidence remains scoped as described in the [release notes](../releases/0.13.0.md).
+
+## Documentation audit follow-up
+
+A follow-up audit completed the root/npm README feature summaries and flags, Room registration/no-op guidance,
+the Storage agent-tool inventory and packaged-skill playbook, Query console discoverability, and protocol/line-cap
+architecture notes. General CPU-overhead claims now point to the measured baseline and its limits. Android
+requirements describe API 23 profiling with API 24 feature boundaries; the obsolete API 23 PID/logcat limitation
+was replaced after checking `appPids`, the legacy log stream and UI-helper guards.
+
+The follow-up changed documentation plus the skill contract assertions, not runtime code. Its checks passed:
+23 tests across `agentSkill`, `appPids` and `logcatStreamLegacy`; typecheck, lint, formatting, documentation links,
+release metadata and MCP schema validation. The full suites above belong to the preceding preparation run and
+were not repeated for this documentation change.
+
+Because the npm README ships in the package, the CLI was rebuilt/repacked and the tarball checksum in the table
+updated. A fresh offline consumer installed it on Node 22.12.0 and verified the new README, help/version, Storage
+read/write startup permissions, background lifecycle/query/logs and foreground HTTP. No real app/session was
+used in that smoke. The AARs and their checksums are unchanged.
 
 ## Failures found during preparation
 
@@ -79,7 +97,8 @@ evidence remains scoped as described in the [release notes](../releases/0.13.0.m
 - PR #34 is open with passing CI. PR #36 and #37 are drafts based on its branch. Merge #34, retarget/rebase
   the two feature PRs onto `main`, and require their CI before merging them. Do not merge them into the Storage
   branch just to collect the release.
-- Reapply the separate version-preparation commit to the final reviewed `main` tree and rerun affected checks.
+- Reapply the separate version-preparation and documentation follow-up commits to the final reviewed `main`
+  tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains both preparation commits.
   The current local integration branch is not an approved release target by itself.
 - npm's public registry still listed **0.12.0** as latest and did not list 0.13.0; the remote 0.13.0 tag was absent.
   `npm whoami` returned **E401 Unauthorized**. Refresh npm publishing authentication before requesting publication;

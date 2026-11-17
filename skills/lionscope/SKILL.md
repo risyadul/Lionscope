@@ -4,12 +4,13 @@ description: >-
   Profile and inspect an Android app with Lionscope: CPU, memory, frames and jank per screen, main-thread stalls
   with the line that blocked and where the work came from (RxJava, coroutine, Handler, click), layout inflation,
   logcat, saved-state size and TransactionTooLargeException, the Layout Inspector (XML layout sources, Compose call
-  sites, live View edits) and the app's HTTP requests with mock responses. Use it when the user asks why an Android
+  sites, live View edits), HTTP requests with mock responses, and SharedPreferences or registered Room data.
+  Use it when the user asks why an Android
   screen is slow, janky or frozen, what blocks the main thread, which layout is expensive, why the app crashes with
   TransactionTooLargeException, what a view on screen is or where it comes from, what
-  requests the app makes, or wants to test an error or slow-network state, or to operate an emulator or device.
+  requests the app makes, wants to inspect or edit app storage, test an error or slow-network state, or operate a device.
 license: Apache-2.0
-compatibility: Needs Node.js 22.12+, adb (Android SDK platform-tools) and an Android 7.0+ device or emulator.
+compatibility: Needs Node.js 22.12+, adb and Android 6.0+ (API 23) for profiling; FrameMetrics and UI-helper tree operations need API 24.
 metadata:
   version: 0.13.0
   homepage: https://github.com/risyadul/Lionscope
@@ -143,6 +144,31 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.13.0")
 4. Negotiated device protocol 14 preserves original Network values, including auth and cookie headers, URL
    credentials and captured body text; older links retain redaction. Bodies still need `--allow-network-bodies`
    for agent access. The dashboard can copy complete captured requests as cURL; it explains unavailable captures.
+
+### Storage: inspect or edit app data
+
+1. Use an active profiling session with SDK 0.13.0+. Preferences are discovered automatically; Room databases
+   must be registered with `Lionscope.trackDatabase(name, db)`. Storage tools require server read consent;
+   writes also require write consent. When authorized, start a new server with the required permissions:
+
+   ```sh
+   lionscope --allow-storage-read
+   lionscope --allow-storage-read --allow-storage-write
+   ```
+
+   A running server keeps its startup permissions. Do not replace a user's session to change them without
+   authorization. See the repository's `docs/features/storage.md` for setup and technical read-only boundaries.
+
+2. Call `list_storage` for names, then `read_storage --store prefs --name <file>` for preferences or
+   `read_storage --store db --name <database>` for schema. For row pages, pass the tool's structured `pages`
+   argument; pass returned cursors back unchanged. Preserve the read answer's app/link `target`.
+3. Use `write_storage` only for a requested data change. Pass the original target and typed expected values
+   from that read; primary-key edits still obey database constraints. After timeout or disconnect, a write may
+   already have committed: do not automatically retry or promise undo. Inspect `get_storage_audit` and reread
+   before proposing a further change. Preference comparisons are not atomic against app writes.
+4. SQL runs through the dashboard's Query console on protocol 13, not a SQL agent tool. Explicit SQL mutations
+   have no row-editor compare-and-set or undo. Storage values on protocol 12+ include original credentials;
+   summarize findings without quoting secrets.
 
 ### Repeated runs: "does it fail every time?"
 

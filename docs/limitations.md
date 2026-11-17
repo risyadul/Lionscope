@@ -56,9 +56,9 @@
   is a little larger than the report (the call's own fields). The breakdown lists at most 30 keys of 1 KB or more,
   12 levels deep. Fragment classes come from androidx.fragment's state; a state that another library parcels
   as its own type is listed as one value. The SDK's posted measurement before API 29 was checked on API 23 and 28
-  (not 24-27): it runs after the save and before the stop is reported. On API 23 the server's profiling session does
-  not reach the app's process yet (it waits for a process ID and reads no logcat), so failures there are neither read
-  from logcat nor joined with the SDK's reports, which still arrive.
+  (not 24-27): it runs after the save and before the stop is reported. API 23 profiling uses a `ps` fallback for
+  process discovery and legacy `threadtime` logcat with a device-clock probe; newer APIs use epoch/PID filtering.
+  SDK FrameMetrics and UI-helper tree operations require API 24.
 - **Network capture needs OkHttp.** Only requests made through an `OkHttpClient` with `Lionscope.okHttpInterceptor()`
   are seen (Retrofit, Ktor's OkHttp engine, Coil/Glide's OkHttp integrations); `HttpURLConnection`, Ktor's CIO
   engine, WebView, gRPC's own transports and native code are not. OkHttp 4.x and 5.x are supported (tested with
