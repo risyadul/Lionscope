@@ -95,6 +95,7 @@ describe('command-line flags', () => {
     expect(NO_ARGS).toEqual({
       help: false,
       version: false,
+      foreground: false,
       dev: false,
       port: undefined,
       devicePort: undefined,
@@ -122,6 +123,7 @@ describe('command-line flags', () => {
     ).toEqual({
       help: true,
       version: true,
+      foreground: false,
       dev: true,
       port: '9000',
       devicePort: '9001',
@@ -133,6 +135,7 @@ describe('command-line flags', () => {
     });
     expect(parseCliArgs(['--help']).help).toBe(true);
     expect(parseCliArgs(['--version']).version).toBe(true);
+    expect(parseCliArgs(['--foreground']).foreground).toBe(true);
   });
 
   it('trims --adb and treats a blank one as absent', () => {

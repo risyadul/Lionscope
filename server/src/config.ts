@@ -57,20 +57,29 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 export const USAGE = `Usage: lionscope [options]
+       lionscope start [options]
+       lionscope stop|status [--port <port>]
+       lionscope logs [--port <port>] [--follow]
        lionscope mcp [options]
        lionscope query <tool> [--<arg> <value> ...] [--json '<arguments>'] [--port <port>]
 
-Starts the Lionscope server, which serves the dashboard at http://localhost:<port>, an MCP endpoint for
-AI agents at http://localhost:<port>/mcp and a JSON tool API for \`lionscope query\`.
+Starts Lionscope in the background and returns the terminal. The server serves the dashboard at
+http://localhost:<port>, an MCP endpoint for AI agents at http://localhost:<port>/mcp and a JSON tool API
+for \`lionscope query\`.
 Everything listens on 127.0.0.1 only.
 
 Commands:
+  start                 Start in background (the default); reuse an instance already running on the port
+  stop                  Gracefully stop this user's managed background instance on --port
+  status                Show whether the server is running and where its logs are
+  logs                  Show the last 100 log lines; --follow (-f) watches new output
   mcp                   MCP server on stdin/stdout for AI agents: uses the Lionscope server running on
                         --port, or starts one in this process (the dashboard stays at http://localhost:<port>)
   query <tool>          Run one agent tool against the running server and print its JSON result
                         (\`lionscope query --list\` lists the tools)
 
 Options:
+  --foreground         Keep the server in this terminal; Ctrl+C stops it
   --port <port>         Dashboard port (LIONSCOPE_PORT, default ${DEFAULT_DASHBOARD_PORT})
   --device-port <port>  In-app SDK gateway port (LIONSCOPE_DEVICE_PORT, default ${DEVICE_LINK_PORT})
   --adb <path>          adb binary (LIONSCOPE_ADB; default: $ANDROID_HOME, the usual SDK location, then PATH)
@@ -96,6 +105,7 @@ Options:
 export interface CliArgs {
   help: boolean;
   version: boolean;
+  foreground: boolean;
   dev: boolean;
   port: string | undefined;
   devicePort: string | undefined;
@@ -124,6 +134,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       options: {
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
+        foreground: { type: 'boolean' },
         dev: { type: 'boolean' },
         port: { type: 'string' },
         'device-port': { type: 'string' },
@@ -150,6 +161,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   return {
     help: values.help === true,
     version: values.version === true,
+    foreground: values.foreground === true,
     dev: values.dev === true,
     port: values.port,
     devicePort: values['device-port'],

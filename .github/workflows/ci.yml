@@ -52,12 +52,23 @@ jobs:
           node cli/dist/lionscope.mjs --help
           # No absolute build paths in the bundle (`! grep` would not fail the step under bash -e).
           if grep -q "/Users/\|/home/runner" cli/dist/lionscope.mjs; then echo "absolute path in bundle"; exit 1; fi
-          node cli/dist/lionscope.mjs --port 8799 --device-port 8798 --adb /nonexistent &
+          node cli/dist/lionscope.mjs --foreground --port 8799 --device-port 8798 --adb /nonexistent &
           server=$!
           for _ in $(seq 1 50); do curl -sf -o /dev/null http://localhost:8799/ && break; sleep 0.2; done
           curl -sf http://localhost:8799/ | grep -q Lionscope
           kill "$server"
           cd cli && npm pack --dry-run --ignore-scripts
+
+      - name: Smoke-test the background CLI
+        run: |
+          lionscope_smoke_state=$(mktemp -d)
+          export LIONSCOPE_STATE_DIR="$lionscope_smoke_state"
+          trap 'node cli/dist/lionscope.mjs stop --port 8797; rm -rf "$lionscope_smoke_state"' EXIT
+          node cli/dist/lionscope.mjs --port 8797 --device-port 0 --adb /nonexistent
+          node cli/dist/lionscope.mjs status --port 8797
+          curl -sf http://localhost:8797/ | grep -q Lionscope
+          node cli/dist/lionscope.mjs logs --port 8797
+          node cli/dist/lionscope.mjs stop --port 8797
 
   android:
     name: Android SDK

@@ -8,6 +8,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- CLI background lifecycle with `start`, `stop`, `status`, bounded log tails and `logs --follow`. Private
+  per-instance control keys verify ownership for graceful shutdown; stale state never authorizes a PID kill.
+
 - Copy cURL replays complete Network captures with literal shell quoting, original auth headers and body text;
   incomplete and legacy captures explain why copying is unavailable.
 
@@ -31,6 +34,9 @@ All notable changes to Lionscope are documented here. The format is based on
   [Storage](docs/features/storage.md).
 
 ### Changed
+
+- **Breaking:** `lionscope` now starts in the background and returns the terminal. Use `--foreground` for the
+  previous attached-server behavior. Development scripts and MCP stdio retain their existing lifecycle.
 
 - **Breaking:** Network capture on negotiated device protocol 14 preserves original debug data, including auth
   headers, URL credentials, request/response text and failure messages. Older negotiated links retain credential

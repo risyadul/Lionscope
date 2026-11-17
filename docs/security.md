@@ -1,5 +1,11 @@
 # Security model
 
+- Background CLI instances additionally expose `/api/daemon/status` and `/api/daemon/stop`. They require an
+  exact loopback Host/port, a POST with JSON content type, no Origin header and the instance's random control
+  key from its private ownership record. The key is not returned by status or placed in process arguments.
+  Foreground and MCP-owned servers do not expose these controls. The CLI verifies live ownership rather than
+  signaling a stored PID, so stale metadata does not authorize stopping another process. State/log files are
+  created with POSIX mode 0600 under a new mode-0700 directory; Windows uses the account's filesystem ACLs.
 - The server listens on `127.0.0.1` only. WebSocket upgrades are accepted only from a loopback Host/Origin
   (blocks cross-site WebSocket hijacking and DNS rebinding). Every dashboard message is validated.
 - The AI agent endpoints (`/mcp`, `/api/agent/<tool>`) refuse a Host other than `localhost` / `127.0.0.1` at
