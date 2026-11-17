@@ -49,7 +49,7 @@ cd android-sdk
 ./gradlew :lionscope:publishToMavenLocal :lionscope-noop:publishToMavenLocal   # same coordinates as JitPack
 ```
 
-The published version comes from the `lionscopeVersion` Gradle property (default `0.12.0`); on JitPack it is
+The published version comes from the `lionscopeVersion` Gradle property (default `0.13.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to contribute.
 
 ## Local CLI installation

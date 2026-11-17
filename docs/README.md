@@ -24,3 +24,5 @@ Start with the [README](../README.md): what Lionscope is, requirements, quick st
 | [Development](development.md)                                                         | Building and testing from source                                                   |
 
 <!-- /docs:added -->
+
+Release maintenance: [procedure](releasing.md) and [0.13.0 notes](releases/0.13.0.md).

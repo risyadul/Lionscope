@@ -6,6 +6,8 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-17
+
 ### Added
 
 - CLI background lifecycle with `start`, `stop`, `status`, bounded log tails and `logs --follow`. Private
@@ -764,7 +766,8 @@ Initial open-source release.
 - SDK gateway over `adb reverse` (NDJSON over TCP): hello timeout, rate limits, line and connection caps, and
   PID verification against the session's device before any data is accepted.
 
-[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/risyadul/Lionscope/compare/0.13.0...HEAD
+[0.13.0]: https://github.com/risyadul/Lionscope/compare/0.12.0...0.13.0
 [0.12.0]: https://github.com/risyadul/Lionscope/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/risyadul/Lionscope/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/risyadul/Lionscope/compare/0.9.0...0.10.0

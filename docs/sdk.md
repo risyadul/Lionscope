@@ -61,7 +61,7 @@ Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`
 same API (its interceptor only passes requests on):
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.12.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.13.0"
 ```
 
 ## Cost when no dashboard is connected
