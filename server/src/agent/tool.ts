@@ -76,7 +76,10 @@ export type AgentInspector = Pick<InspectorService, 'inspect' | 'select' | 'curr
 export type AgentViewEdits = Pick<ViewEdits, 'set' | 'setAll' | 'revert'>;
 
 /** The storage inspector: the same one the dashboard's Storage tab uses (its consent is the server's flags). */
-export type AgentStorage = Pick<StorageService, 'consent' | 'list' | 'read' | 'write' | 'auditEntries'>;
+export type AgentStorage = Pick<
+  StorageService,
+  'consent' | 'list' | 'read' | 'write' | 'query' | 'auditEntries'
+>;
 
 /** Device locations: the same ones the dashboard's Location panel shows and sets. */
 export type AgentLocations = Pick<

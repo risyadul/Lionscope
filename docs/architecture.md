@@ -43,8 +43,9 @@ may be up to 256 KiB; Storage result lines also have a 256 KiB cap, with a 240 K
 lines keep the 64 KiB cap. The server's mock rules reach the SDK as flat lines of at most 512 KiB.
 
 Storage begins at device protocol 11 and requires explicit server consent plus a proven profiling link.
-Protocol 12 adds original Storage values and primary-key row edits; protocol 13 adds the dashboard's SQL Query
-console on the registered app-owned Room connection. Protocol 14 preserves original captured Network values
+Protocol 12 adds original Storage values and primary-key row edits; protocol 13 adds SQL on the registered
+app-owned Room connection. The dashboard Query console and MCP/CLI SQL tools share the same Storage service,
+validation and consent checks; the agent entry points add no wire messages. Protocol 14 preserves original captured Network values
 and reports request completeness for Copy cURL. Older negotiated links retain their earlier behavior. See
 [Storage](features/storage.md) and [Network](features/network.md) for bounds and write contracts.
 

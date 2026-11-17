@@ -16,7 +16,8 @@ expected; the original file was restored and the positive check passed.
 
 Protocol and Android implementation sources match the reviewed Network branch. No raw screen transport or
 research files are in the candidate. The primary workspace, its unfinished edits and active Consumer session
-were left in place; all release builds ran in `/tmp/lionscope-release-0.13.0`.
+were left in place; initial release builds ran in `/tmp/lionscope-release-0.13.0`, and the SQL agent-tools
+follow-up was built in `/tmp/lionscope-storage-sql-agent-tools` before integration into the candidate.
 
 ## Checks and artifacts
 
@@ -51,7 +52,7 @@ Artifacts are local under `/tmp/lionscope-release-artifacts/`:
 
 | Artifact                  | SHA-256                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
-| lionscope-0.13.0.tgz      | 16cf67f8bb56c478b460ac12db0c1dc45e4b7cd22705d35fd2a8d355061f3e02 |
+| lionscope-0.13.0.tgz      | 73afa0ed70f764e728fb690d27a1a120aacdd7eccfbaa542369cda9abcfbcdf9 |
 | lionscope-0.13.0.aar      | 70e5addb8b681a7b60dc0714e8916810d69507c21bb597c58e00239c678a0546 |
 | lionscope-noop-0.13.0.aar | b158a84d3789c55b2a462c6077b9b0d1ac55f7a5a877e81eab8503661cf27b5e |
 
@@ -78,6 +79,22 @@ updated. A fresh offline consumer installed it on Node 22.12.0 and verified the 
 read/write startup permissions, background lifecycle/query/logs and foreground HTTP. No real app/session was
 used in that smoke. The AARs and their checksums are unchanged.
 
+## SQL agent-tools follow-up
+
+The candidate now exposes `query_storage_sql` and `execute_storage_sql` through MCP HTTP, MCP stdio and CLI.
+Both share the existing validated Room execution path. The final complete rerun of
+`npm test -- --maxWorkers=2` passed **2,440 tests / 145 files**, including 21 new SQL tool/transport cases.
+Typecheck, lint, formatting, documentation links, release metadata, CLI build and diff whitespace checks passed.
+The rebuilt 29-file npm tarball passed installed-package smoke checks on Node 22.12.0, including MCP SQL
+discovery. The tarball checksum above is for this follow-up; AARs are unchanged.
+
+The first complete run had one pre-existing gateway fixture assertion failure and 2,439 passes. Delaying client
+reception reproduced a missing handshake receipt wait; the separate `78c6d30` test fix awaits config before
+inspecting raw lines. The delayed reproduction then passed, temporary instrumentation was removed, all eight
+fixture cases passed, and the final complete rerun passed. The initial failure is not counted as a clean run.
+See [SQL verification](storage-sql-agent-tools-2026-11-17.md) for transport evidence and limitations. Android and
+layout checks above were not repeated for unchanged SDK/dashboard code; this adds no device runtime claim.
+
 ## Failures found during preparation
 
 1. The new metadata checker initially failed ESLint for missing `URL` import and a two-space regex. Importing
@@ -97,8 +114,10 @@ used in that smoke. The AARs and their checksums are unchanged.
 - PR #34 is open with passing CI. PR #36 and #37 are drafts based on its branch. Merge #34, retarget/rebase
   the two feature PRs onto `main`, and require their CI before merging them. Do not merge them into the Storage
   branch just to collect the release.
-- Reapply the separate version-preparation and documentation follow-up commits to the final reviewed `main`
-  tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains both preparation commits.
+- Review and merge the local SQL agent-tools feature and gateway test synchronization fix as separate scopes.
+  They are included in the local candidate only; the feature adds no protocol or Android implementation changes.
+- Reapply the separate version-preparation, documentation and SQL follow-up commits to the final reviewed `main`
+  tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains those candidate follow-ups.
   The current local integration branch is not an approved release target by itself.
 - npm's public registry still listed **0.12.0** as latest and did not list 0.13.0; the remote 0.13.0 tag was absent.
   `npm whoami` returned **E401 Unauthorized**. Refresh npm publishing authentication before requesting publication;

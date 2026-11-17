@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { createAgentMcpServer, MAX_MCP_SUBSCRIPTIONS } from '../agent/mcpServer.ts';
 import type { ToolInvoker } from '../agent/mcpServer.ts';
-import { availableTools, callTool } from '../agent/registry.ts';
+import { availableTools, callTool, findTool } from '../agent/registry.ts';
 import { storageConsentOf } from '../storage/consent.ts';
 import { loadConfig, parseCliArgs, SERVER_VERSION } from '../config.ts';
 import type { LionscopeConfig } from '../config.ts';
@@ -36,10 +36,11 @@ Options:
                           simulate_process_death, bring_to_front, set_network_mock, clear_network_mocks,
                           set_location, clear_location, boot_emulator, shutdown_emulator) to this client
   --allow-network-bodies  Let this client read captured HTTP body texts (get_network_request)
-  --allow-storage-read    Offer the storage tools (list_storage, read_storage, get_storage_audit); a server
+  --allow-storage-read    Offer list_storage, read_storage, query_storage_sql and get_storage_audit; a server
                           this command starts lets its dashboard read app storage too. An attached server
                           answers only if it was itself started with the flag
-  --allow-storage-write   Offer write_storage too (with --allow-storage-read; same rule for an attached server)
+  --allow-storage-write   Offer write_storage and execute_storage_sql too (with --allow-storage-read;
+                          same rule for an attached server). Storage writes are never replayed on reconnect.
   -h, --help              Show this help
   -v, --version           Print the version
 `;
@@ -113,6 +114,12 @@ class McpBackend {
       networkBodies: this.networkBodies,
     });
     if (outcome.ok || outcome.code !== 'unreachable') return outcome;
+    if (findTool(name)?.access === 'storage_write') {
+      return {
+        ...outcome,
+        error: `${outcome.error} Storage writes are not replayed automatically. Reconnect and reread before a deliberate retry.`,
+      };
+    }
     log.info('The Lionscope server this command used went away: reconnecting');
     try {
       await (this.reconnecting ??= this.connect().finally(() => {

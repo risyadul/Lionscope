@@ -34,6 +34,7 @@ import {
 } from './restoreTools.ts';
 import { savedStateTool } from './savedStateTools.ts';
 import { listStorageTool, readStorageTool, storageAuditTool, writeStorageTool } from './storageTools.ts';
+import { executeStorageSqlTool, queryStorageSqlTool } from './storageSqlTools.ts';
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
@@ -91,6 +92,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   readStorageTool,
   writeStorageTool,
   storageAuditTool,
+  queryStorageSqlTool,
+  executeStorageSqlTool,
 ];
 
 export const DEVICE_CONTROL_DISABLED =

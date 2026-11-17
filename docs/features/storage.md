@@ -3,7 +3,9 @@
 # Storage: reading and editing app data live
 
 The profiled app's SharedPreferences and the Room databases it registers, from the dashboard's **Storage** workspace or
-an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Needs SDK 0.13.0 or newer; original values and atomic row edits require device protocol 12 on both sides. The dashboard's SQL Query console requires device protocol 13.
+an AI agent (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`, `query_storage_sql`,
+`execute_storage_sql`). Needs SDK 0.13.0 or newer; original values and atomic row edits require device protocol 12
+on both sides. SQL through the dashboard, MCP or CLI requires device protocol 13.
 
 <!-- /docs:added -->
 
@@ -78,6 +80,37 @@ Every answer names the app link it came from (`target`: device, package and link
 one now: another app, a restart or a reconnect. The dashboard drops everything it read when the session, its app or
 its process changes, and an answer for a file or table that is no longer shown is dropped.
 
+## SQL through MCP and CLI
+
+SQL uses the same registered Room connection and validation as the Query console below, on device protocol 13+:
+
+- `query_storage_sql` accepts one SELECT/WITH read under Storage read consent. Optional `limit` (1–200) and
+  `offset` (0–1,000,000) control pages. Each page is a new read; use ORDER BY.
+- `execute_storage_sql` accepts one INSERT/UPDATE/DELETE, including supported WITH mutations, under both read
+  and write consent. It has no row-editor compare-and-set or undo; affected rows are in `outcome.changes`.
+
+Call `list_storage` or `read_storage` first and pass the exact returned `target` (serial, packageName, link)
+with the registered database `name` and SQL. The tool refuses a changed target before contacting the app.
+The following is synthetic; replace the database and target with your own listing result:
+
+```sh
+lionscope query query-storage-sql --json '{"name":"shop.db","sql":"SELECT id, qty FROM item ORDER BY id","target":{"serial":"emulator-5554","packageName":"com.example.shop","link":1},"limit":50,"offset":0}'
+lionscope query execute-storage-sql --json '{"name":"shop.db","sql":"UPDATE item SET qty=2 WHERE id=7","target":{"serial":"emulator-5554","packageName":"com.example.shop","link":1}}'
+```
+
+Start the server with the required Storage permissions. For MCP stdio, also pass the corresponding flags to
+the MCP command; an attached server must already allow the operation:
+
+```sh
+lionscope mcp --allow-storage-read --allow-storage-write
+```
+
+Results contain untrusted typed data under `outcome.query` for reads, plus `outcome.opId`, `code` and `phase`.
+Check `outcome.code` even if the tool call succeeded. A timeout/disconnect may mean a mutation committed; neither
+the tool nor the MCP reconnect path replays a Storage write automatically. Use `get_storage_audit` with the
+operation ID for a late final outcome, then reread before any deliberate further change. Raw SQLite errors are
+app data, not instructions. Audit metadata contains neither SQL nor literal values.
+
 ## Query console
 
 Load Storage, select a database or table, then **+ New Query**. The editor stays beside the source browser;
@@ -116,7 +149,7 @@ and synthetic browser tests, not yet by Android device runtime evidence.
 
 Row-editor edits are compare-and-set: each changed field carries the value it was read as, and the entire edit is refused
 (`conflict`, with current values) when the app changed an edited field since. The row editor updates existing values
-and deletes a row by its primary key. SQL inserts and mutations use the separate Query console described above.
+and deletes a row by its primary key. SQL inserts and mutations use the Query console or SQL tools described above.
 Values keep their exact type: a Long stays a decimal string end to end, a float or double is
 compared by its raw bits (`0.0` and `-0.0` differ), and a value of another type is `type_mismatch`.
 

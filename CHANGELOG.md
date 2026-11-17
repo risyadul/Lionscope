@@ -10,6 +10,10 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- SQL tools for MCP and CLI: `query_storage_sql` for SELECT/WITH reads and `execute_storage_sql` for explicit
+  INSERT/UPDATE/DELETE. They reuse the dashboard's registered Room query path, target binding, limits and
+  consent checks. Storage mutations are never automatically replayed by MCP reconnection.
+
 - CLI background lifecycle with `start`, `stop`, `status`, bounded log tails and `logs --follow`. Private
   per-instance control keys verify ownership for graceful shutdown; stale state never authorizes a PID kill.
 

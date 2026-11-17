@@ -92,7 +92,7 @@ Options:
   --allow-storage-read  Let the dashboard and AI agents read the profiled app's SharedPreferences and the
                         Room databases it registers (Lionscope.trackDatabase), through its SDK link; values
                         are original on device protocol 12+ links (off by default)
-  --allow-storage-write Also allow conditional row edits and explicit SQL mutations in the Query console
+  --allow-storage-write Also allow conditional row edits and explicit SQL mutations via dashboard, MCP and CLI
                         (needs --allow-storage-read; off by default)
   -h, --help            Show this help
   -v, --version         Print the version

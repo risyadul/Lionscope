@@ -10,7 +10,8 @@ operated from the dashboard, and AI agents get the same data as tools over MCP (
 (`lionscope query`). No Android Studio needed.
 
 The SDK also exposes SharedPreferences and registered Room databases through Storage: typed row edits,
-primary-key edits and a SQL Query console. Complete captured Network requests can be copied as cURL; protocol
+primary-key edits and SQL through the Query console or `query_storage_sql` / `execute_storage_sql` tools.
+Complete captured Network requests can be copied as cURL; protocol
 14 preserves original auth headers and other captured values. Agent access to Network body text remains opt-in.
 
 ```bash

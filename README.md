@@ -14,7 +14,7 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   time axis, copy complete requests as cURL, and mock responses or failures. Protocol 14 preserves original
   captured values, including auth credentials.
 - **Storage**: browse SharedPreferences and registered Room databases, edit row drafts including primary keys,
-  and run SQL in the Query console. Storage reads and writes require explicit server permissions.
+  and run SQL in the Query console or through MCP/CLI tools. Storage reads and writes require explicit server permissions.
 - **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
   charts, and move them to another location on a map.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view

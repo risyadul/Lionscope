@@ -161,7 +161,7 @@ export const storageAuditTool = defineTool({
   name: 'get_storage_audit',
   title: 'Storage edit audit',
   description:
-    'Every storage edit this server sent or refused (newest last, at most 1000), WITHOUT values: time, opId, device, app, prefs file / database, table, key or column (credential-looking names as [redacted-name]), primary key digest, op, code, phase, late, persisted, changes. A late:true entry is a final answer that came after its write timed out: use it (by opId) to learn whether a timed-out edit was applied. Needs --allow-storage-read.',
+    'Every storage edit or SQL mutation this server sent or refused (newest last, at most 1000), WITHOUT values or SQL text: time, opId, device, app, prefs file / database, table, key or column (credential-looking names as [redacted-name]), primary key digest, op, code, phase, late, persisted, changes. A late:true entry is a final answer that came after its write timed out: use it (by opId) to learn whether a timed-out edit was applied. Needs --allow-storage-read.',
   access: 'storage_read',
   input: z.object({
     opId: z.string().max(64).optional().describe("Only this write's entries"),
