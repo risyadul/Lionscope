@@ -129,7 +129,7 @@ const headerLines = (headers: readonly HttpHeader[]): string[] =>
 export const networkTool = defineTool({
   name: 'get_network',
   title: 'HTTP requests',
-  description: `HTTP requests the app made through OkHttp (Retrofit, Ktor's OkHttp engine) in the window, as the dashboard's Network tab lists them, captured by the in-app SDK's interceptor (SDK 0.9.0+, Lionscope.okHttpInterceptor()): counts per status class, then the newest exchanges first with id, start time, method, URL (sensitive query values redacted), host, path, state (pending/complete/failed), status, time to headers and total duration in ms, request/response sizes in bytes, response type, the mock rule that answered it (mockId) and the failure (error). Filters: method, status class, host or URL substring, mocked. Also the active mock rules; a note says when capture is on but the session has seen no request at all. Read headers and timings of one exchange with get_network_request; body texts need --allow-network-bodies (bodiesAvailable). ${UNTRUSTED_DESCRIPTION}`,
+  description: `HTTP requests the app made through OkHttp (Retrofit, Ktor's OkHttp engine) in the window, as the dashboard's Network tab lists them, captured by the in-app SDK's interceptor (SDK 0.9.0+, Lionscope.okHttpInterceptor()): counts per status class, then the newest exchanges first with id, start time, method, URL (original values on device protocol 14; credential redaction on older links), host, path, state (pending/complete/failed), status, time to headers and total duration in ms, request/response sizes in bytes, response type, the mock rule that answered it (mockId) and the failure (error). Filters: method, status class, host or URL substring, mocked. Also the active mock rules; a note says when capture is on but the session has seen no request at all. Read headers and timings of one exchange with get_network_request; body texts need --allow-network-bodies (bodiesAvailable). ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     window: z
@@ -205,7 +205,7 @@ export const networkTool = defineTool({
 export const networkRequestTool = defineTool({
   name: 'get_network_request',
   title: 'One HTTP request',
-  description: `One HTTP exchange by its id from get_network: method, full URL, status, protocol (http/1.1, h2), timings (start, end, time to headers, duration in ms), request and response headers (Authorization, Cookie and other sensitive values redacted), and for each body its size, content type, whether it was cut (truncated, 64 KB) or not captured (omitted: type, streaming, encoding, one_shot, error). Body texts only when Lionscope runs with --allow-network-bodies; otherwise a note says how to enable them. Fails for an id that is unknown or no longer kept (10-minute window). ${UNTRUSTED_DESCRIPTION}`,
+  description: `One HTTP exchange by its id from get_network: method, full URL, status, protocol (http/1.1, h2), timings (start, end, time to headers, duration in ms), request and response headers (original values, including Authorization and Cookie, on device protocol 14; credential redaction on older links), and for each body its size, content type, whether it was cut (truncated, 64 KB) or not captured (omitted: type, streaming, encoding, one_shot, error). Body texts only when Lionscope runs with --allow-network-bodies; otherwise a note says how to enable them. Fails for an id that is unknown or no longer kept (10-minute window). ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({
     id: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).describe('Exchange id from get_network.'),
@@ -225,6 +225,8 @@ export const networkRequestTool = defineTool({
         ...exchangeView(detail, MAX_HTTP_URL_CHARS),
         endedAt: detail.endTs === null ? null : iso(detail.endTs),
         protocol: detail.protocol,
+        originalValues: detail.originalValues === true,
+        requestComplete: detail.requestComplete === true,
         requestHeaders: headerLines(detail.requestHeaders),
         responseHeaders: headerLines(detail.responseHeaders),
         requestBody: bodyView(detail.requestBody, show),

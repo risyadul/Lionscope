@@ -21,7 +21,7 @@ class GatewayNetworkMessagesTest {
 
     @Test
     fun parsesEveryGoldenLine() {
-        assertEquals(5, goldenLines.size)
+        assertEquals(6, goldenLines.size)
         val all = goldenLines.map { checkNotNull(GatewayMessage.parse(it)) { "not parsed: $it" } }
 
         val welcome = all[0] as GatewayMessage.Welcome
@@ -68,6 +68,8 @@ class GatewayNetworkMessagesTest {
         val cleared = messages[3] as GatewayMessage.Mocks
         assertEquals(4, cleared.rev)
         assertEquals(0, cleared.count)
+        assertEquals(14, (all.last() as GatewayMessage.Welcome).protocolVersion)
+        assertEquals(LinkProof.proof(TEST_LINK_KEY, GOLDEN_NONCE, 14, "session"), (all.last() as GatewayMessage.Welcome).proof)
     }
 
     @Test
@@ -75,7 +77,7 @@ class GatewayNetworkMessagesTest {
         val bytes = goldenLines.joinToString("\n", postfix = "\n").toByteArray(Charsets.UTF_8)
         val messages = ArrayList<GatewayMessage>()
         GatewayReader(java.io.ByteArrayInputStream(bytes), onMessage = { messages += it }, onClosed = {}).readLoop()
-        assertEquals(listOf("Welcome", "Mocks", "Mock", "Mock", "Mocks"), messages.map { it.javaClass.simpleName })
+        assertEquals(listOf("Welcome", "Mocks", "Mock", "Mock", "Mocks", "Welcome"), messages.map { it.javaClass.simpleName })
     }
 
     private fun mockLine(vararg changes: Pair<String, String>): String {

@@ -76,6 +76,9 @@ because navigation, the emulator and a row editor are visible together.
 - Network and Storage start with the emulator shown and retain independent hide/show choices for the page.
   On narrow windows the device is a closable overlay. Preserve the behavior in
   [ADR 0002](docs/adr/0002-organize-navigation-by-debugging-workflow.md#navigation-and-context).
+- Network detail actions wrap and move below the request title when their container is 520 px or narrower.
+  Copy cURL reuses the shared copy control, with a visible, accessible reason when unavailable; action targets
+  are at least 44 px below 640 px or with a coarse pointer.
 - Keep empty, loading, error, disabled and success states readable at the same panel widths as populated data.
 
 ## Themes and interaction

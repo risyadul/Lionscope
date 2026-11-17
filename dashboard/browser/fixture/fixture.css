@@ -5,6 +5,20 @@
   min-width: 0;
 }
 
+.fixture-network {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 700px;
+  height: 100dvh;
+  margin: 0 auto;
+}
+
+.fixture-network h1 {
+  padding: 8px 16px;
+  font-size: var(--text-body);
+}
+
 .fixture-header {
   display: flex;
   flex: none;

@@ -56,6 +56,34 @@ afterEach(() => {
 });
 
 describe('ProfilingSession network capture', () => {
+  it.each([13, 14])(
+    'applies the negotiated v%i credential policy through the proven gateway link',
+    async (protocolVersion) => {
+      const { session, connect } = await setup();
+      const { handler } = await connect({ ...HELLO, protocolVersion }, undefined, true);
+      handler.onMessage(
+        request(1, deviceNow(), { headers: [['Authorization', 'Bearer synthetic']], requestComplete: true }),
+      );
+      const summary = session.snapshot().http?.[0];
+      const detail = session.httpExchange(summary?.id ?? -1);
+      expect(detail?.requestHeaders).toEqual([
+        ['Authorization', protocolVersion === 14 ? 'Bearer synthetic' : '‹redacted›'],
+      ]);
+      expect(detail?.originalValues).toBe(protocolVersion === 14 ? true : undefined);
+      session.stop();
+    },
+  );
+
+  it('drops original v14 captures until the SDK link is proven', async () => {
+    const { session, connect } = await setup();
+    const { handler } = await connect({ ...HELLO, protocolVersion: 14 });
+    handler.onMessage(
+      request(1, deviceNow(), { headers: [['Authorization', 'Bearer synthetic']], requestComplete: true }),
+    );
+    expect(session.snapshot().http ?? []).toEqual([]);
+    expect(session.unprovenNetworkMessages).toBe(1);
+    session.stop();
+  });
   it('records the live link’s exchanges on the laptop clock, clamped into the session', async () => {
     const { session, connect } = await setup();
     await vi.advanceTimersByTimeAsync(5000);

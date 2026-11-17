@@ -362,6 +362,7 @@
 /* Detail --------------------------------------------------------------------- */
 
 .net-detail {
+  container-type: inline-size;
   display: flex;
   flex: 1.4 1 0;
   flex-direction: column;
@@ -423,6 +424,35 @@
   grid-column: 2;
   align-items: center;
   gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.net-curl-note {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 520px) {
+  .net-detail-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .net-detail-actions {
+    grid-row: 3;
+    grid-column: 1;
+    margin-top: var(--space-2);
+  }
+}
+
+@media (max-width: 640px), (any-pointer: coarse) {
+  .net-detail-actions .btn {
+    min-height: 44px;
+  }
+
+  .net-detail-actions .net-detail-close {
+    min-width: 44px;
+  }
 }
 
 .net-mock-this,

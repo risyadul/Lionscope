@@ -48,6 +48,15 @@ const errorOf = (value: object, version = DEVICE_PROTOCOL_V7) => {
 };
 
 describe('v7 network messages', () => {
+  it('accepts v14 original-value golden captures and validates completeness', () => {
+    const raw = DEVICE_LINES.find((line) => line.includes('"requestComplete":true'));
+    expect(raw).toBeDefined();
+    if (!raw) throw new Error('Missing v14 golden');
+    const result = parseDeviceMessage(raw, 14);
+    expect(result.ok).toBe(true);
+    expect(raw).toContain('Bearer synthetic');
+    expect(errorOf({ ...JSON.parse(raw), requestComplete: 'yes' }, 14)).not.toBeNull();
+  });
   const request = golden('httpRequest');
   const response = golden('httpResponse');
   const posted = golden('httpRequest', 1);

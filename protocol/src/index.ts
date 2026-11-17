@@ -945,6 +945,7 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       body: httpBodySchema.nullable(),
       mockId: z.string().regex(MOCK_ID_PATTERN, 'invalid mock id').nullable(),
       dropped: z.number().int().min(0).max(MAX_HTTP_DROPPED),
+      requestComplete: z.boolean().optional(),
     })
     .strip(),
   z

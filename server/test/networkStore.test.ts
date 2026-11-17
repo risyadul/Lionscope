@@ -67,6 +67,72 @@ function setup(limits: { maxExchanges?: number; maxBytes?: number } = {}) {
   };
 }
 
+describe('original Network values (protocol 14)', () => {
+  it('keeps credentials in URLs, both header sets, bodies and failures; summaries stay small', () => {
+    const { store, announced } = setup();
+    const link = {};
+    const body = {
+      size: 20,
+      contentType: 'application/json',
+      text: '{"token":"synthetic"}',
+      truncated: false,
+      omitted: null,
+    };
+    const req = request(14, {
+      url: 'https://user:synthetic@example.test/?token=synthetic',
+      headers: [['Authorization', 'Bearer synthetic']],
+      body,
+      requestComplete: true,
+    });
+    store.request(link, T0, req, 14);
+    store.response(
+      link,
+      response(14, {
+        headers: [['Set-Cookie', 'token=synthetic']],
+        body,
+        error: { kind: 'io', message: 'token=synthetic Bearer synthetic' },
+      }),
+    );
+    const id = announced()[0]!.id;
+    expect(store.detail(id)).toMatchObject({
+      originalValues: true,
+      requestComplete: true,
+      url: req.url,
+      requestHeaders: req.headers,
+      requestBody: body,
+      responseHeaders: [['Set-Cookie', 'token=synthetic']],
+      responseBody: body,
+      error: { message: 'token=synthetic Bearer synthetic' },
+    });
+    expect(announced()[0]).not.toHaveProperty('requestComplete');
+    expect(announced()[0]).not.toHaveProperty('originalValues');
+    expect(announced()[0]).not.toHaveProperty('requestBody');
+  });
+
+  it('uses negotiated link version, ignoring completeness claims on legacy links', () => {
+    const { store, announced } = setup();
+    store.request(
+      {},
+      T0,
+      request(1, { headers: [['Authorization', 'Bearer synthetic']], requestComplete: true }),
+      13,
+    );
+    const detail = store.detail(announced()[0]!.id);
+    expect(detail?.requestHeaders).toEqual([['Authorization', HTTP_REDACTED]]);
+    expect(detail).not.toHaveProperty('originalValues');
+    expect(detail).not.toHaveProperty('requestComplete');
+  });
+
+  it('defaults missing v14 completeness to false and still enforces the byte budget', () => {
+    const { store, announced } = setup({ maxBytes: 200 });
+    store.request({}, T0, request(1), 14);
+    expect(store.detail(announced()[0]!.id)?.requestComplete).toBe(false);
+    store.request({}, T0, request(2, { headers: [['Authorization', 'x'.repeat(201)]] }), 14);
+    expect(store.size).toBe(0);
+    expect(store.totalBytes).toBe(0);
+  });
+});
+
 describe('NetworkStore', () => {
   it('opens a pending exchange on a request and completes it on its response, announcing both', () => {
     const { store, announced, advance } = setup();

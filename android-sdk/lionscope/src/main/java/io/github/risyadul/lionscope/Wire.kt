@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 13
+internal const val DEVICE_PROTOCOL_VERSION = 14
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -51,6 +51,10 @@ internal const val DEVICE_PROTOCOL_V11 = 11
 /** Original Storage values and atomic row edits, including primary keys. */
 internal const val DEVICE_PROTOCOL_V12 = 12
 internal const val DEVICE_PROTOCOL_V13 = 13
+/** Original Network values and lossless request capture metadata. */
+internal const val DEVICE_PROTOCOL_V14 = 14
+/** Failure messages were capped at 160 chars after redaction on legacy Network links. */
+internal const val MAX_HTTP_LEGACY_FAILURE_CHARS = 160
 /** Which lifecycle point saw the complete bundle: `onActivityPostSaveInstanceState` (API 29+), or a main-thread post. */
 internal enum class SavedStateHook(val wire: String) {
     POST_SAVE("post_save"),

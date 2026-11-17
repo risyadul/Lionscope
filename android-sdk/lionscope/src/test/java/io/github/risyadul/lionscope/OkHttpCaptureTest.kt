@@ -31,6 +31,29 @@ class OkHttpCaptureTest {
     private val r = HTTP_REDACTED
     private val json = "application/json".toMediaType()
 
+    @Test
+    fun protocol14CapturesOriginalValuesThroughTheInterceptorAndLinkQueue() {
+        net.session(version = DEVICE_PROTOCOL_V14)
+        val text = "{\"token\":\"synthetic\"}"
+        net.server.enqueue(MockResponse().setBody(text).setHeader("Content-Type", "application/json").addHeader("Set-Cookie", "sid=synthetic"))
+        val request = Request.Builder().url(net.url("/items?token=synthetic"))
+            .header("Authorization", "Bearer synthetic").post(text.toRequestBody(json)).build()
+        net.client().newCall(request).execute().use { assertEquals(text, it.body!!.string()) }
+        assertTrue(net.request()["url"].toString().endsWith("token=synthetic"))
+        assertEquals(true, net.request()["requestComplete"])
+        assertTrue(net.request().headers().contains("Authorization" to "Bearer synthetic"))
+        assertEquals(text, net.request().body()["text"])
+        assertTrue(net.response().headers().contains("Set-Cookie" to "sid=synthetic"))
+        assertEquals(text, net.response().body()["text"])
+
+        val thrown = IOException("token=synthetic Bearer synthetic")
+        try {
+            net.client { addNetworkInterceptor { throw thrown } }.newCall(request).execute()
+            fail("expected the app's exception")
+        } catch (e: IOException) { assertSame(thrown, e) }
+        assertEquals("IOException: token=synthetic Bearer synthetic", (net.messages("httpResponse").last()["error"] as Map<*, *>)["message"])
+    }
+
     @After
     fun tearDown() = net.close()
 

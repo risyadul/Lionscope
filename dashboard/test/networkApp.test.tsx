@@ -443,6 +443,36 @@ describe('Mock editor', () => {
     }
   });
 
+  it('copies the original full request as cURL and reports clipboard refusals', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      const now = Date.now();
+      const summary = exchange(14, now - 5000, { url: 'https://example.test/summary…' });
+      const { push } = setup(running(SDK_V7, now, http(summary)));
+      openNetwork();
+      fireEvent.click(row(14));
+      const detail = exchangeDetail(summary, {
+        url: 'https://example.test/full?token=synthetic',
+        originalValues: true,
+        requestComplete: true,
+        requestHeaders: [['Authorization', 'Bearer synthetic']],
+        requestBody: null,
+      });
+      await push({ type: 'httpExchange', id: 14, exchange: detail });
+      await act(async () => fireEvent.click(within(netPanel()).getByRole('button', { name: 'Copy cURL' })));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('Authorization: Bearer synthetic'));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining(detail.url));
+      expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining('summary…'));
+      expect(within(netPanel()).getByRole('button', { name: 'Copied' })).toBeTruthy();
+      writeText.mockRejectedValueOnce(new Error('Synthetic clipboard refusal'));
+      await act(async () => fireEvent.click(within(netPanel()).getByRole('button', { name: 'Copied' })));
+      expect(within(netPanel()).getByRole('button', { name: 'Can’t copy' })).toBeTruthy();
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it('a re-open while open starts from the new draft', async () => {
     const now = Date.now();
     const first = exchange(4, now - 5000, { url: 'https://api.example.com/v1/items' });

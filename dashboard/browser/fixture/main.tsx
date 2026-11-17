@@ -14,6 +14,7 @@ import { StatStrip } from '../../src/components/stats/StatStrip.tsx';
 import { DeviceColumn, DeviceToggle } from '../../src/components/device/DeviceColumn.tsx';
 import { useDeviceColumn } from '../../src/hooks/useDeviceColumn.ts';
 import { createFixtureServices, stats } from './data.ts';
+import { NetworkFixture } from './NetworkFixture.tsx';
 
 const services = createFixtureServices();
 const query = new URLSearchParams(location.search);
@@ -95,9 +96,19 @@ function StatsFixture() {
 const container = document.getElementById('root');
 if (!container) throw new Error('Fixture root is missing');
 const root = createRoot(container);
+function Fixture() {
+  switch (query.get('scenario')) {
+    case 'network':
+      return <NetworkFixture state={query.get('state')} />;
+    case 'stats':
+      return <StatsFixture />;
+    default:
+      return <StorageFixture />;
+  }
+}
 root.render(
   <ServicesContext.Provider value={services}>
-    {query.get('scenario') === 'stats' ? <StatsFixture /> : <StorageFixture />}
+    <Fixture />
   </ServicesContext.Provider>,
 );
 if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

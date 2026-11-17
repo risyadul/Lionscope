@@ -72,12 +72,14 @@ internal class NetworkCapture(
 
     fun sendRequest(recording: Recording, record: HttpRequestRecord) {
         val link = linkFor(recording) ?: return
-        link.sendV7(record.sizeHint()) { HttpMessages.httpRequest(record) }
+        val originalValues = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V14)
+        link.sendV7(record.sizeHint()) { HttpMessages.httpRequest(record, originalValues = originalValues) }
     }
 
     fun sendResponse(recording: Recording, record: HttpResponseRecord) {
         val link = linkFor(recording) ?: return
-        link.sendV7(record.sizeHint()) { HttpMessages.httpResponse(record) }
+        val originalValues = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V14)
+        link.sendV7(record.sizeHint()) { HttpMessages.httpResponse(record, originalValues = originalValues) }
     }
 
     /** The first active rule that matches, or null. */

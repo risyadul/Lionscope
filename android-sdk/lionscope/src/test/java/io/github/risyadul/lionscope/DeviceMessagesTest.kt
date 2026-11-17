@@ -63,9 +63,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionThirteen() {
-        assertEquals(13, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V13, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionFourteen() {
+        assertEquals(14, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V14, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -651,6 +651,8 @@ class DeviceMessagesTest {
                 body = (message["body"] as Map<*, *>?)?.toHttpBody(),
                 mockId = message["mockId"] as String?,
                 dropped = message.num("dropped").toInt(),
+                originalValues = message.containsKey("requestComplete"),
+                bodyComplete = message["requestComplete"] != false,
             ),
         )
         "httpResponse" -> HttpMessages.httpResponse(
@@ -665,6 +667,7 @@ class DeviceMessagesTest {
             error = (message["error"] as Map<*, *>?)?.let { error ->
                 HttpFailure(HttpFailureKind.values().single { it.wire == error.str("kind") }, error["message"] as String?)
             },
+            originalValues = message.num("id").toInt() == 14,
         )
         "mocksApplied" -> HttpMessages.mocksApplied(message.num("rev").toInt(), message.num("count").toInt())
         "viewPropertyResult" -> DeviceMessages.viewPropertyResult(

@@ -51,7 +51,7 @@ internal object HttpBodies {
         else -> null
     }
 
-    fun decode(raw: RawBody): HttpBody {
+    fun decode(raw: RawBody, originalValues: Boolean = false): HttpBody {
         val bytes = raw.bytes
         if (raw.omitted != null || bytes == null) {
             return HttpBody(raw.size, raw.contentType, null, truncated = false, omitted = raw.omitted)
@@ -66,7 +66,7 @@ internal object HttpBodies {
             bytes
         }
         val decoded = decodeText(plain, charsetOf(raw.contentType), complete = !cut)
-        val text = HttpRedaction.redactBodyText(raw.contentType, decoded)
+        val text = if (originalValues) decoded else HttpRedaction.redactBodyText(raw.contentType, decoded)
         val capped = HttpText.capUtf8(text, MAX_HTTP_BODY_BYTES)
         return HttpBody(raw.size, raw.contentType, capped, truncated = cut || capped.length != text.length, omitted = null)
     }

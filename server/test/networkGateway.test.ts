@@ -122,7 +122,8 @@ describe('welcome and mock rule lines for the SDK', () => {
         body: 'ignored',
       }),
     ];
-    expect(welcome + encodeMocks(3, rules) + encodeMocks(4, [])).toBe(GATEWAY_GOLDEN);
+    const v14 = encodeWelcome(14, 'session', linkProof(TEST_KEY, GOLDEN_NONCE ?? '', 14, 'session'));
+    expect(welcome + encodeMocks(3, rules) + encodeMocks(4, []) + v14).toBe(GATEWAY_GOLDEN);
   });
 
   it('puts a proof only into the welcome of a v7 session link', () => {

@@ -220,9 +220,8 @@ private class OkHttpExchange(
         private const val MAX_SNAPSHOT_HEADERS = 2 * MAX_HTTP_HEADERS
         /** A request body is written once more for the capture only when it is known to be at most this long. */
         private const val MAX_REWRITTEN_REQUEST_BYTES = 1024L * 1024
-        /** Raw exception message chars redacted for [failureOf] (it keeps [MAX_FAILURE_MESSAGE_CHARS] of them). */
+        /** Snapshot a bounded message; the link-thread encoder applies the negotiated policy and wire limit. */
         private const val MAX_RAW_FAILURE_CHARS = 1024
-        private const val MAX_FAILURE_MESSAGE_CHARS = 160
 
         /** Null when there is nothing to do: not recorded (rate cap) and no mock answers it. */
         fun begin(capture: NetworkCapture, chain: Interceptor.Chain): OkHttpExchange? {
@@ -323,8 +322,8 @@ private class OkHttpExchange(
         fun endTs(recording: NetworkCapture.Recording, durationMs: Double): Long = recording.ts + Math.round(durationMs)
 
         /**
-         * `timeout`, `connection`, `canceled` or `io`, with `SimpleClassName: message`, the message redacted as free
-         * text ([HttpRedaction.redactFreeText]) and capped. A timeout (also OkHttp's call timeout, which cancels the
+         * `timeout`, `connection`, `canceled` or `io`, with a bounded `SimpleClassName: message` snapshot.
+         * A timeout (also OkHttp's call timeout, which cancels the
          * call) is `timeout` even when the call reads as canceled.
          */
         fun failureOf(e: Throwable, canceled: Boolean): HttpFailure {
@@ -337,9 +336,9 @@ private class OkHttpExchange(
                 else -> HttpFailureKind.IO
             }
             val name = e.javaClass.simpleName.ifEmpty { e.javaClass.name }
-            val text = e.message?.let { HttpRedaction.redactFreeText(capLength(it, MAX_RAW_FAILURE_CHARS)) }
+            val text = e.message?.let { capLength(it, MAX_RAW_FAILURE_CHARS) }
             val message = text?.let { "$name: $it" } ?: name
-            return HttpFailure(kind, capLength(message, MAX_FAILURE_MESSAGE_CHARS))
+            return HttpFailure(kind, capLength(message, MAX_RAW_FAILURE_CHARS))
         }
 
         private fun reasonPhrase(status: Int): String = REASONS[status] ?: ""

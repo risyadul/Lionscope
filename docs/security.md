@@ -51,8 +51,10 @@
 - During a profiling session the SDK sends each Activity's saved-state size and, from 64 KB, the keys of its largest
   entries, the class names of their values and of the Fragments they belong to: never the values themselves.
 - With `Lionscope.okHttpInterceptor()` in the app, the SDK also sends, during a profiling session only, each HTTP
-  request's method, URL, headers, timings and up to 64 KB of each text body, after redacting credential-looking
-  values (see [Network](features/network.md)). The server checks every field's size and redacts again.
+  request's method, URL, headers, timings and up to 64 KB of each text body. Negotiated device protocol 14
+  preserves original Network values, including credentials; older links retain credential redaction
+  (see [Network](features/network.md)). The server still validates every field and its size. Copy cURL explicitly
+  places the captured request, including credentials, on the clipboard; it never executes it.
   Unlike the other SDK data, network capture and mocks need proof that the listener on `127.0.0.1:8700` is the
   Lionscope server adb trusts: before welcoming the session's link, the server makes a random key for that app
   process and hands it over with `adb shell am broadcast` to the SDK's `LinkKeyReceiver`, which is guarded by
