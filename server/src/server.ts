@@ -23,6 +23,8 @@ import { cleanupScrcpyLeftovers } from './scrcpy/scrcpyServer.ts';
 import { errorMessage, log } from './log.ts';
 import { INSPECTOR_PATH_PREFIX, serveInspectorPng } from './http/inspectorFiles.ts';
 import { applySecurityHeaders } from './http/securityHeaders.ts';
+import { DAEMON_PATH, handleDaemonControl } from './http/daemonControl.ts';
+import type { DaemonControl } from './http/daemonControl.ts';
 import { InspectorService } from './inspector/inspectorService.ts';
 import { ViewEdits } from './inspector/viewEdits.ts';
 import { TokenBucket } from './net/tokenBucket.ts';
@@ -35,6 +37,8 @@ import { storageConsentOf } from './storage/consent.ts';
 import type { CollectorIntervals } from './session/profilingSession.ts';
 
 export interface LionscopeServerOptions {
+  /** Private CLI lifecycle control; absent on foreground and MCP-owned servers. */
+  daemon?: DaemonControl;
   /** 0 picks a free port (tests). */
   port: number;
   /** In-app SDK gateway port (`adb reverse` target); 0 picks a free port. */
@@ -225,6 +229,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     } catch {
       sendPlain(res, 400, 'Bad request\n');
+      return;
+    }
+    if (options.daemon && pathname.startsWith(DAEMON_PATH)) {
+      handleDaemonControl(req, res, pathname, address?.port ?? 0, options.daemon);
       return;
     }
     if (agentHttp.handles(pathname)) {

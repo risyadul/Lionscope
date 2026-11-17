@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts --dev",
+    "start": "tsx src/main.ts --foreground",
+    "dev": "tsx watch src/main.ts --dev --foreground",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

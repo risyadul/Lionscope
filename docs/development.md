@@ -51,3 +51,18 @@ cd android-sdk
 
 The published version comes from the `lionscopeVersion` Gradle property (default `0.12.0`); on JitPack it is
 the git tag. See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to contribute.
+
+## Local CLI installation
+
+To use the checkout's CLI from any terminal directory, build it and create a global npm link:
+
+```bash
+npm run build:cli
+npm link --workspace lionscope --ignore-scripts
+lionscope --version
+lionscope
+```
+
+The npm global bin directory must be on `PATH`. The link uses this checkout's built files, so rebuild after
+CLI/dashboard changes. For an independent installed release, use `npm install -g lionscope@latest` instead.
+See [Configuration](configuration.md#background-lifecycle) for background commands and operational logs.
