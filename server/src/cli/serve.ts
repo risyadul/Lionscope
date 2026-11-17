@@ -36,6 +36,8 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
     dev: config.dev,
     allowDeviceControl: config.allowDeviceControl,
     allowNetworkBodies: config.allowNetworkBodies,
+    allowStorageRead: config.allowStorageRead,
+    allowStorageWrite: config.allowStorageWrite,
   });
   try {
     const address = await server.listen();
@@ -45,6 +47,15 @@ export async function startLionscope(config: LionscopeConfig): Promise<Lionscope
       log.info('Dev mode: accepting WebSocket connections from the Vite dev server (port 5173)');
     if (config.allowDeviceControl) log.info('Device control is enabled for AI agents');
     if (config.allowNetworkBodies) log.info('HTTP bodies are readable by AI agents');
+    if (config.allowStorageWrite && !config.allowStorageRead) {
+      log.warn('--allow-storage-write needs --allow-storage-read as well: the storage inspector stays off');
+    } else if (config.allowStorageRead) {
+      log.info(
+        config.allowStorageWrite
+          ? 'Storage inspector: the app storage is readable and editable (dashboard and AI agents)'
+          : 'Storage inspector: the app storage is readable (dashboard and AI agents)',
+      );
+    }
   } catch (error) {
     await server.close().catch(() => undefined);
     throw new Error(`Cannot listen on ${config.host}:${config.port}: ${errorMessage(error)}`, {

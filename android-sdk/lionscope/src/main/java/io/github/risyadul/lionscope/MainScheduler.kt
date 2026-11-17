@@ -94,4 +94,19 @@ internal interface LinkPort {
 
     /** [sendV2] for v10 messages: dropped unless the connection negotiated v10. */
     fun sendV10(sizeHint: Int, encode: () -> String?)
+
+    /**
+     * Each v11 `storageList` / `storageRead` / `storageWrite` ([GatewayMessage.StorageList] …) on a link negotiated at
+     * v11; called on a link thread, it must only hand off (the listener checks the link proof and the consent).
+     */
+    fun addStorageListener(listener: (GatewayMessage) -> Unit)
+
+    /** [sendV8] for v11 messages: dropped unless the connection negotiated v11; held back without the link proof. */
+    fun sendV11(sizeHint: Int, encode: () -> String?)
+
+    /**
+     * Closes the current connection (the link connects again by itself), as when the network breaks. Only for
+     * runtime proofs ([StorageTestHooks.disconnectAfterNextCommit]).
+     */
+    fun dropConnection() = Unit
 }

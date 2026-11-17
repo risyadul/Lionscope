@@ -110,6 +110,7 @@ describe('golden device messages through the gateway', () => {
     await waitUntil(() => ofType('breakdown').length > 0);
     expect(manager.getSessionState().sdk).toEqual({
       connected: true,
+      linkGeneration: 1,
       sdkVersion: '0.1.0',
       processName: HELLO.processName,
       apiLevel: 35,

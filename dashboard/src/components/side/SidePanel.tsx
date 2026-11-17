@@ -1,17 +1,20 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
 import './side.css';
 
-export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'state' | 'inspector';
+export type SideTab = 'screens' | 'stalls' | 'layouts' | 'network' | 'state' | 'storage' | 'inspector';
 
 const TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'screens', label: 'Screens' },
   { id: 'stalls', label: 'Stalls' },
   { id: 'layouts', label: 'Layouts' },
   { id: 'network', label: 'Network' },
-  { id: 'state', label: 'State' },
-  { id: 'inspector', label: 'Inspector' },
+  { id: 'state', label: 'Saved State' },
+  { id: 'storage', label: 'Storage' },
+  { id: 'inspector', label: 'Layout Inspector' },
 ];
+
+const PROFILER_TABS = TABS.filter((tab) => ['screens', 'stalls', 'layouts', 'state'].includes(tab.id));
 
 type Props = {
   tab: SideTab;
@@ -33,9 +36,12 @@ type Props = {
   layouts: ReactNode;
   network: ReactNode;
   state: ReactNode;
+  /** The storage inspector (0.13.0); no count on its tab. */
+  storage: ReactNode;
   inspector: ReactNode;
   /** Only this tab, under a heading instead of the tab list (the Inspector view); the others stay mounted. */
   lockedTab?: SideTab;
+  contextAction?: ReactNode;
 };
 
 /** The right-hand column: the per-screen table and stalls share it as tabs (both stay mounted). */
@@ -53,8 +59,10 @@ export function SidePanel({
   layouts,
   network,
   state,
+  storage,
   inspector,
   lockedTab,
+  contextAction,
 }: Props) {
   const counts: Record<SideTab, number> = {
     screens: screenCount,
@@ -62,19 +70,27 @@ export function SidePanel({
     layouts: layoutCount,
     network: networkCount,
     state: stateCount,
+    storage: 0,
     inspector: inspectorCount,
   };
-  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, inspector };
+  const panels: Record<SideTab, ReactNode> = { screens, stalls, layouts, network, state, storage, inspector };
+  // The strip scrolls when the column is narrow: the selected tab is kept in view (its label never ends up cut off).
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    strip.current
+      ?.querySelector<HTMLElement>(`#side-tab-${tab}`)
+      ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [tab]);
   // WAI-ARIA tabs: arrows wrap, Home/End jump to the ends; selection follows focus.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const at = TABS.findIndex((t) => t.id === tab);
+    const at = PROFILER_TABS.findIndex((t) => t.id === tab);
     let index: number;
-    if (event.key === 'ArrowRight') index = (at + 1) % TABS.length;
-    else if (event.key === 'ArrowLeft') index = (at - 1 + TABS.length) % TABS.length;
+    if (event.key === 'ArrowRight') index = (at + 1) % PROFILER_TABS.length;
+    else if (event.key === 'ArrowLeft') index = (at - 1 + PROFILER_TABS.length) % PROFILER_TABS.length;
     else if (event.key === 'Home') index = 0;
-    else if (event.key === 'End') index = TABS.length - 1;
+    else if (event.key === 'End') index = PROFILER_TABS.length - 1;
     else return;
-    const next = TABS[index];
+    const next = PROFILER_TABS[index];
     if (!next) return;
     event.preventDefault();
     onTabChange(next.id);
@@ -94,9 +110,17 @@ export function SidePanel({
               </span>
             )}
           </h2>
+          {contextAction}
         </div>
         {TABS.map((t) => (
-          <div key={t.id} id={`side-panel-${t.id}`} className="side-panel" hidden={t.id !== lockedTab}>
+          <div
+            key={t.id}
+            id={`side-panel-${t.id}`}
+            role="region"
+            aria-label={`${t.label} workspace`}
+            className="side-panel"
+            hidden={t.id !== lockedTab}
+          >
             {panels[t.id]}
           </div>
         ))}
@@ -105,9 +129,9 @@ export function SidePanel({
   }
 
   return (
-    <aside className="side" aria-label="Screens, stalls, layouts, network, state and inspector">
-      <div className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
-        {TABS.map((t) => (
+    <aside className="side" aria-label="Performance analysis">
+      <div ref={strip} className="side-tabs" role="tablist" aria-label="Side panel" onKeyDown={handleKeyDown}>
+        {PROFILER_TABS.map((t) => (
           <button
             key={t.id}
             id={`side-tab-${t.id}`}

@@ -9,6 +9,8 @@ export default defineConfig(
       '**/dist/**',
       'cli/dashboard/**',
       '**/coverage/**',
+      '**/test-results/**',
+      '**/playwright-report/**',
       '**/node_modules/**',
       '.omc/**',
       'android-sdk/**',

@@ -25,6 +25,9 @@ import type {
   SessionState,
   Snapshot,
   StallSample,
+  StorageConsent,
+  StorageResponse,
+  StorageWriteOutcome,
   StrictModeSample,
   TimelineEvent,
   TransactionFailure,
@@ -136,6 +139,12 @@ export interface DashboardState {
   viewEditAnswers: ViewEditAnswer[];
   /** Count of `viewEdit` messages: the answers past the one a reader saw last are the newest ones. */
   viewEditSeq: number;
+  /** What the server's storage flags allow (0.13.0; `off` until its hello says otherwise, and from older servers). */
+  storageConsent: StorageConsent;
+  /** The latest answers to this client's storage requests, oldest first (at most MAX_STORAGE_ANSWERS). */
+  storageAnswers: StorageAnswer[];
+  /** Final outcomes of writes that came after their answer (late, or after `provisional`), oldest first. */
+  storageOutcomes: StorageOutcomeNotice[];
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
@@ -155,6 +164,18 @@ export interface DashboardState {
    * port (`adb reverse`), so the app's SDK can't reach it.
    */
   sdkLinkError: string | null;
+}
+
+/** The answer to one of this client's storage requests (`requestId` is the client's own). */
+export interface StorageAnswer {
+  requestId: number;
+  response: StorageResponse;
+}
+
+/** A write's final outcome that came after its answer, for the device `serial`. */
+export interface StorageOutcomeNotice {
+  serial: string;
+  outcome: StorageWriteOutcome;
 }
 
 export interface HttpDetailAnswer {
@@ -185,6 +206,9 @@ export const MAX_TRANSACTION_FAILURES = 50;
 export const MAX_HTTP = 5000;
 /** More than the edits one client can have in flight (the socket allows 20 messages a second). */
 export const MAX_VIEW_EDIT_ANSWERS = 64;
+/** Storage answers kept for their readers (one request per device runs at a time). */
+export const MAX_STORAGE_ANSWERS = 16;
+export const MAX_STORAGE_OUTCOMES = 50;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -231,6 +255,9 @@ export function createInitialState(): DashboardState {
     locationError: null,
     viewEditAnswers: [],
     viewEditSeq: 0,
+    storageConsent: 'off',
+    storageAnswers: [],
+    storageOutcomes: [],
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -706,6 +733,7 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
         ...state,
         server: { protocolVersion: msg.protocolVersion, serverVersion: msg.serverVersion },
         bufferWindowMs,
+        storageConsent: msg.storageConsent ?? 'off',
       });
     }
     case 'devices':
@@ -791,6 +819,22 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
         viewEditSeq: state.viewEditSeq + 1,
       };
     }
+    case 'storage':
+      return {
+        ...state,
+        storageAnswers: capTail(
+          [...state.storageAnswers, { requestId: msg.requestId, response: msg.response }],
+          MAX_STORAGE_ANSWERS,
+        ),
+      };
+    case 'storageOutcome':
+      return {
+        ...state,
+        storageOutcomes: capTail(
+          [...state.storageOutcomes, { serial: msg.serial, outcome: msg.outcome }],
+          MAX_STORAGE_OUTCOMES,
+        ),
+      };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

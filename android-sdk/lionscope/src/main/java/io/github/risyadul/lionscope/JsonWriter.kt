@@ -83,7 +83,9 @@ internal class JsonWriter {
 
     private fun writeString(value: String) {
         out.append('"')
-        for (c in value) {
+        var i = 0
+        while (i < value.length) {
+            val c = value[i]
             when {
                 c == '"' -> out.append("\\\"")
                 c == '\\' -> out.append("\\\\")
@@ -93,8 +95,15 @@ internal class JsonWriter {
                 c == '\b' -> out.append("\\b")
                 c == '\u000C' -> out.append("\\f")
                 c < ' ' || c == '\u2028' || c == '\u2029' -> appendUnicodeEscape(c)
+                // A pair goes out as is; a lone surrogate (no UTF-8 for it) as an escape, so it arrives unchanged.
+                Character.isHighSurrogate(c) && i + 1 < value.length && Character.isLowSurrogate(value[i + 1]) -> {
+                    out.append(c).append(value[i + 1])
+                    i++
+                }
+                Character.isSurrogate(c) -> appendUnicodeEscape(c)
                 else -> out.append(c)
             }
+            i++
         }
         out.append('"')
     }

@@ -30,10 +30,13 @@
     "format:check": "prettier --check .",
     "docs:check": "node scripts/check-docs.mjs",
     "test": "vitest run",
+    "test:ui": "playwright test --config dashboard/browser/playwright.config.ts",
+    "test:ui:report": "playwright show-report",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.65.1",
     "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.0.5",
     "concurrently": "^10.0.6",

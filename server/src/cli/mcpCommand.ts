@@ -11,6 +11,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { createAgentMcpServer, MAX_MCP_SUBSCRIPTIONS } from '../agent/mcpServer.ts';
 import type { ToolInvoker } from '../agent/mcpServer.ts';
 import { availableTools, callTool } from '../agent/registry.ts';
+import { storageConsentOf } from '../storage/consent.ts';
 import { loadConfig, parseCliArgs, SERVER_VERSION } from '../config.ts';
 import type { LionscopeConfig } from '../config.ts';
 import { errorMessage, log, logInfoToStderr } from '../log.ts';
@@ -19,7 +20,7 @@ import { callRemoteTool, probeServer } from './agentClient.ts';
 import { exitOnShutdown, startLionscope } from './serve.ts';
 
 export const MCP_USAGE = `Usage: lionscope mcp [--port <port>] [--device-port <port>] [--adb <path>] [--allow-device-control]
-                     [--allow-network-bodies]
+                     [--allow-network-bodies] [--allow-storage-read] [--allow-storage-write]
 
 MCP server on stdin/stdout for AI agents (Claude Code, Cursor, VS Code, Codex, Gemini CLI, ...). Uses the
 Lionscope server running on --port, or starts one in this process (dashboard at http://localhost:<port>)
@@ -35,6 +36,10 @@ Options:
                           simulate_process_death, bring_to_front, set_network_mock, clear_network_mocks,
                           set_location, clear_location, boot_emulator, shutdown_emulator) to this client
   --allow-network-bodies  Let this client read captured HTTP body texts (get_network_request)
+  --allow-storage-read    Offer the storage tools (list_storage, read_storage, get_storage_audit); a server
+                          this command starts lets its dashboard read app storage too. An attached server
+                          answers only if it was itself started with the flag
+  --allow-storage-write   Offer write_storage too (with --allow-storage-read; same rule for an attached server)
   -h, --help              Show this help
   -v, --version           Print the version
 `;
@@ -142,7 +147,10 @@ export async function runMcpCommand(argv: readonly string[]): Promise<void> {
     () =>
       createAgentMcpServer({
         version: SERVER_VERSION,
-        tools: availableTools(deviceControl),
+        tools: availableTools(
+          deviceControl,
+          storageConsentOf(config.allowStorageRead, config.allowStorageWrite),
+        ),
         deviceControl,
         invoke: backend.invoke,
       }),

@@ -46,7 +46,7 @@ function WarningFlag({ children }: { children: ReactNode }) {
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
         <path d="M5 0.8 9.6 9.2H0.4Z" fill="currentColor" />
       </svg>
-      {children}
+      <span className="readout-flag-label">{children}</span>
     </span>
   );
 }

@@ -1,0 +1,25 @@
+[
+  { "sql": "SELECT ';' AS value; -- tail", "readOnly": true, "table": null },
+  { "sql": "/* leading */ WITH x AS (SELECT 1) SELECT * FROM x", "readOnly": true, "table": null },
+  { "sql": "WITH x AS (SELECT 2) UPDATE item SET qty=(SELECT * FROM x)", "readOnly": false, "table": "item" },
+  {
+    "sql": "INSERT OR IGNORE INTO main.\"odd\"\"name\" VALUES ('a;--')",
+    "readOnly": false,
+    "table": "odd\"name"
+  },
+  { "sql": "DELETE FROM [item] WHERE id=1", "readOnly": false, "table": "item" },
+  { "sql": "UPDATE `item` SET label='ROLLBACK RETURNING'", "readOnly": false, "table": "item" },
+  { "sql": "SELECT 1; DELETE FROM item", "reject": true },
+  { "sql": "PRAGMA foreign_keys=OFF", "reject": true },
+  { "sql": "BEGIN TRANSACTION", "reject": true },
+  { "sql": "CREATE TABLE item(id)", "reject": true },
+  { "sql": "ATTACH DATABASE 'x' AS other", "reject": true },
+  { "sql": "UPDATE OR ROLLBACK item SET id=2", "reject": true },
+  { "sql": "INSERT INTO item VALUES (1) RETURNING id", "reject": true },
+  { "sql": "DELETE FROM other.item", "reject": true },
+  { "sql": "SELECT ?", "reject": true },
+  { "sql": "SELECT 'unterminated", "reject": true },
+  { "sql": "SELECT 1 /* unterminated", "reject": true },
+  { "sql": "SELECT (1", "reject": true },
+  { "sql": "", "reject": true }
+]

@@ -125,7 +125,7 @@ describe('Inspect toggle', () => {
     expect(inspects()).toEqual([{ type: 'inspect', serial: 'emulator-5554' }]);
     expect(inspectButton().getAttribute('aria-pressed')).toBe('true');
     expect(screen.getAllByText('Capturing the screen…').length).toBeGreaterThan(0);
-    expect(screen.getByRole('tab', { name: /Inspector/ }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Layout Inspector' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('freezes the screen to the snapshot png once it arrives', async () => {
@@ -254,7 +254,7 @@ describe('overlay', () => {
 });
 
 describe('Inspector tab', () => {
-  const openTab = () => fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+  const openTab = () => fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
   const selectedOn = (nodeId: number): ServerMessage => ({
     type: 'inspectorSelection',
     selection: { snapshotId: 'snap-1', nodeId, ts: 1, origin: 'user' },
@@ -262,7 +262,7 @@ describe('Inspector tab', () => {
 
   it('explains how to start while nothing was inspected', () => {
     setup();
-    fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
     expect(screen.getByText('Nothing inspected yet')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Inspect the screen' }));
     expect(inspectButton().getAttribute('aria-pressed')).toBe('true');
@@ -272,7 +272,7 @@ describe('Inspector tab', () => {
     const { push } = setup();
     await push(snapshotMsg());
     openTab();
-    const panel = screen.getByRole('tabpanel', { name: /Inspector/ });
+    const panel = screen.getByRole('region', { name: 'Layout Inspector workspace' });
     expect(within(panel).getByText('SDK')).toBeTruthy();
     expect(within(panel).getByText('4.2 ms')).toBeTruthy();
     expect(within(panel).getByText('8 nodes')).toBeTruthy();
@@ -286,7 +286,7 @@ describe('Inspector tab', () => {
       type: 'inspectorSelection',
       selection: { snapshotId: 'snap-1', nodeId: 2, ts: 1, origin: 'user' },
     });
-    const panel = screen.getByRole('tabpanel', { name: /Inspector/ });
+    const panel = screen.getByRole('region', { name: 'Layout Inspector workspace' });
     expect(within(panel).getByText('uiautomator — no SDK')).toBeTruthy();
   });
 
@@ -438,7 +438,7 @@ describe('Inspector tab', () => {
     const { push } = setup();
     await push(snapshotMsg({ serial: 'R58M123ABC' }));
     openTab();
-    fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
     expect(screen.getByText('Nothing inspected yet')).toBeTruthy();
   });
 });
@@ -550,7 +550,7 @@ describe('pending capture', () => {
     await push(snapshotMsg());
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await push({ type: 'error', code: 'inspect_failed', message: 'The app is in the background.' });
-    const panel = screen.getByRole('tabpanel', { name: /Inspector/ });
+    const panel = screen.getByRole('region', { name: 'Layout Inspector workspace' });
     expect(within(panel).getByRole('alert').textContent).toBe('The app is in the background.');
     await push(snapshotMsg({ id: 'snap-2' }));
     expect(within(panel).queryByRole('alert')).toBeNull();
@@ -614,7 +614,7 @@ describe('badges', () => {
   it('formats the capture time and words SDK and uiautomator truncation differently', async () => {
     const { push } = setup();
     await push(snapshotMsg({ captureMs: 12.3456, truncated: true }));
-    fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
     expect(screen.getByText('12.3 ms')).toBeTruthy();
     expect(screen.getByText('capped at 5,000').getAttribute('title')).toContain('deepest first');
     await push(
@@ -648,7 +648,7 @@ describe('rendering cost', () => {
   it('does not re-render a single row when live-session flushes arrive, and a hover re-renders two', async () => {
     const { push } = setup();
     await push({ type: 'inspection', snapshot: bigSnapshot(5000) });
-    fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
     const rows = screen.getByRole('tree').querySelectorAll('[data-node]');
     expect(rows.length).toBeGreaterThan(30);
     const renders = vi.mocked(shortClass);

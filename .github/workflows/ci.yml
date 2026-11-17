@@ -30,6 +30,20 @@ jobs:
       # Relative links, images, #anchors and github.com/risyadul/Lionscope URLs in the docs and sources resolve.
       - run: npm run docs:check
       - run: npm test
+      - name: Install layout-test browser
+        run: npx playwright install --with-deps chromium
+      - name: Check dashboard layout contracts
+        run: npm run test:ui
+      - name: Upload dashboard layout report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-layout-report
+          path: |
+            playwright-report/
+            test-results/ui/
+          if-no-files-found: ignore
+          retention-days: 7
       # Builds the dashboard, then bundles the server into cli/dist with the dashboard next to it.
       - run: npm run build:cli
       - name: Smoke-test the npm package

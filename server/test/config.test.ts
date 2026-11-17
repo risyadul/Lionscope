@@ -14,6 +14,8 @@ describe('config', () => {
       dev: false,
       allowDeviceControl: false,
       allowNetworkBodies: false,
+      allowStorageRead: false,
+      allowStorageWrite: false,
     });
   });
 
@@ -32,6 +34,8 @@ describe('config', () => {
       dev: false,
       allowDeviceControl: false,
       allowNetworkBodies: false,
+      allowStorageRead: false,
+      allowStorageWrite: false,
     });
     expect(parsePort(' ')).toBe(8701);
     expect(() => loadConfig({ LIONSCOPE_DEVICE_PORT: '70000' }, NO_ARGS)).toThrow(/LIONSCOPE_DEVICE_PORT/);
@@ -55,6 +59,15 @@ describe('config', () => {
     expect(() => parseCliArgs(['--allow-network-bodies', '--allow-network-bodies'])).toThrow(
       /more than once/,
     );
+  });
+
+  it('turns the storage inspector on only with --allow-storage-read (and edits with --allow-storage-write too)', () => {
+    expect(loadConfig({}, NO_ARGS).allowStorageRead).toBe(false);
+    expect(loadConfig({}, NO_ARGS).allowStorageWrite).toBe(false);
+    const both = loadConfig({}, parseCliArgs(['--allow-storage-read', '--allow-storage-write']));
+    expect([both.allowStorageRead, both.allowStorageWrite]).toEqual([true, true]);
+    expect(USAGE).toContain('--allow-storage-read');
+    expect(USAGE).toContain('--allow-storage-write');
   });
 
   it.each(['0', '8701', '65535', '00080'])('accepts port %j', (raw) => {
@@ -88,6 +101,8 @@ describe('command-line flags', () => {
       adb: undefined,
       allowDeviceControl: false,
       allowNetworkBodies: false,
+      allowStorageRead: false,
+      allowStorageWrite: false,
     });
     expect(
       parseCliArgs([
@@ -99,6 +114,8 @@ describe('command-line flags', () => {
         '--dev',
         '--allow-device-control',
         '--allow-network-bodies',
+        '--allow-storage-read',
+        '--allow-storage-write',
         '-h',
         '-v',
       ]),
@@ -111,6 +128,8 @@ describe('command-line flags', () => {
       adb: '/opt/adb',
       allowDeviceControl: true,
       allowNetworkBodies: true,
+      allowStorageRead: true,
+      allowStorageWrite: true,
     });
     expect(parseCliArgs(['--help']).help).toBe(true);
     expect(parseCliArgs(['--version']).version).toBe(true);

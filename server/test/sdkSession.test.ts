@@ -90,6 +90,7 @@ describe('ProfilingSession SDK link', () => {
     await vi.advanceTimersByTimeAsync(0);
     const expected = {
       connected: true,
+      linkGeneration: 1,
       sdkVersion: '0.1.0',
       processName: PKG,
       apiLevel: 35,
@@ -397,7 +398,7 @@ describe('ProfilingSession SDK link', () => {
     expect(first.link.closedWith).toBe('none');
     // Verified: what it sent meanwhile is replayed.
     expect(ofType('screen').map((message) => message.span.screen)).toEqual([HOME, PROMO]);
-    expect(session.state.sdk).toMatchObject({ connected: true, sdkVersion: '0.2.0' });
+    expect(session.state.sdk).toMatchObject({ connected: true, sdkVersion: '0.2.0', linkGeneration: 2 });
     expect(session.state.pid).toBe(2222);
 
     first.handler.onMessage({ type: 'screen', ts: deviceNow(), screen: null });

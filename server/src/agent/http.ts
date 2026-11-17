@@ -170,7 +170,7 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
     () =>
       createAgentMcpServer({
         version: ctx.serverVersion,
-        tools: availableTools(deviceControl),
+        tools: availableTools(deviceControl, ctx.storage?.consent ?? 'off'),
         deviceControl,
         invoke: (name, args) => callTool(ctx, name, args, deviceControl, { networkBodies }),
       }),

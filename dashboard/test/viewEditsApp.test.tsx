@@ -80,7 +80,7 @@ function setup(snapshot: InspectorSnapshot = editableSnapshot(), nodeId = 2) {
       <App />
     </ServicesContext.Provider>,
   );
-  fireEvent.click(screen.getByRole('tab', { name: /Inspector/ }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
   const push = (...msgs: ServerMessage[]) =>
     act(() => {
       for (const msg of msgs) store.dispatch({ kind: 'server', msg });
@@ -581,7 +581,7 @@ describe('reverting', () => {
 
   it('counts the live edits in the head and reverts them all', async () => {
     const { edits, answer } = setup(edited());
-    const panel = screen.getByRole('tabpanel', { name: /Inspector/ });
+    const panel = screen.getByRole('region', { name: 'Layout Inspector workspace' });
     const badge = within(panel).getByText('3 live edits (temporary)');
     expect(badge.getAttribute('title')).toContain('until reverted');
     fireEvent.click(within(panel).getByRole('button', { name: 'Revert all' }));

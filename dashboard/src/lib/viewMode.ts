@@ -4,11 +4,13 @@
  * remembered per viewer; the URL wins.
  */
 
-export type ViewMode = 'profile' | 'inspect' | 'device';
+export type ViewMode = 'profile' | 'inspect' | 'network' | 'storage' | 'device';
 
 export const VIEW_MODES: readonly { id: ViewMode; label: string; description: string }[] = [
   { id: 'profile', label: 'Profiler', description: 'Charts, screens, stalls, layouts and logcat' },
-  { id: 'inspect', label: 'Inspector', description: 'The Layout Inspector beside the device' },
+  { id: 'inspect', label: 'Layout Inspector', description: 'The Layout Inspector beside the device' },
+  { id: 'network', label: 'Network', description: 'HTTP requests and mock responses' },
+  { id: 'storage', label: 'Storage', description: 'App preferences and databases' },
   {
     id: 'device',
     label: 'Device',

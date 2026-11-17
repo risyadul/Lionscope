@@ -119,9 +119,9 @@ function traffic(now: number): HttpExchange[] {
   ];
 }
 
-const tab = (name: RegExp) => screen.getByRole('tab', { name });
+const tab = (name: RegExp) => screen.getByRole('radio', { name });
 const openNetwork = () => fireEvent.click(tab(/Network/));
-const netPanel = () => screen.getByRole('tabpanel', { name: /Network/ });
+const netPanel = () => screen.getByRole('region', { name: 'Network' });
 const list = () => within(netPanel()).getByRole('listbox', { name: /Requests/ });
 const rows = () => within(list()).getAllByRole('option');
 const rowIds = () => rows().map((row) => Number(row.dataset.id));
@@ -136,8 +136,8 @@ describe('Network tab: the list', () => {
   it('counts the calls in the window on its tab and lists them oldest first', () => {
     const now = Date.now();
     setup(running(SDK_V7, now, http(...traffic(now))));
-    expect(tab(/Network/).textContent).toBe('Network4');
     openNetwork();
+    expect(document.querySelector('.side-title')?.textContent).toBe('Network4');
     expect(rowIds()).toEqual([1, 2, 3, 4]);
     expect(row(2).getAttribute('aria-label')).toBe(
       'POST api.example.com/v1/cart, status 404, 120 ms, 2.0 KB',
@@ -621,8 +621,8 @@ describe('Mocks indicator', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Device' }));
     expect(document.querySelector<HTMLElement>('.workspace')?.dataset.view).toBe('device');
     fireEvent.click(indicator()!);
-    expect(document.querySelector<HTMLElement>('.workspace')?.dataset.view).toBe('profile');
-    expect(tab(/Network/).getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector<HTMLElement>('.workspace')?.dataset.view).toBe('network');
+    expect(tab(/Network/).getAttribute('aria-checked')).toBe('true');
     expect(within(netPanel()).getByRole('radio', { name: 'Mocks 1' }).getAttribute('aria-checked')).toBe(
       'true',
     );
@@ -634,7 +634,7 @@ describe('Mocks indicator', () => {
         { type: 'networkMocks', mocks: { rules: [mockRule('m1')], rev: 1, appliedRev: 1 } },
       ]),
     );
-    fireEvent.click(screen.getByRole('radio', { name: 'Inspector' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
     expect(screen.queryByRole('tab', { name: /Network/ })).toBeNull();
     expect(indicator()).toBeTruthy();
   });
@@ -664,7 +664,8 @@ describe('Network lane', () => {
     expect(tip.textContent).toContain('404');
     expect(tip.textContent).toContain('120 ms');
     fireEvent.click(bars[1]!);
-    expect(tab(/Network/).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Open in Network' })).toBeTruthy();
+    expect(document.querySelector<HTMLElement>('.workspace')?.dataset.view).toBe('profile');
     expect(row(2).getAttribute('aria-selected')).toBe('true');
     expect(within(netPanel()).getByRole('article', { name: 'Selected request' })).toBeTruthy();
   });

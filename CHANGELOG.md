@@ -6,7 +6,34 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Dashboard design contract in `DESIGN.md`, with Chromium layout regressions for Storage controls, source
+  navigation, metric warning labels and device mirror defaults. CI retains screenshots and browser reports.
+
+- Database Query workbench with a SQL editor, database selector, session-only history, keyboard execution and
+  paginated result grids. Device protocol 13 supports SELECT/WITH and explicit INSERT/UPDATE/DELETE through the
+  registered Room transaction; mutations require write consent, report affected rows and preserve late outcomes
+  without automatic retries or undo.
+
+- Storage inspector (SDK 0.13.0): the profiled app's SharedPreferences and the Room databases it registers with
+  `Lionscope.trackDatabase(name, db)` (the no-op artifact has it too), read and edited live from the dashboard's
+  **Storage** workspace or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless
+  the server starts with `--allow-storage-read` (and `--allow-storage-write` to edit); only on a profiling session's
+  proven link. Reads and edits go through the app's own transaction, never a second connection, one request at a
+  time off the main thread; edits are compare-and-set updates of existing values and deletes by primary key, with
+  undo on the same link. Device protocol 12 exposes original values, including credentials, and supports atomic
+  row edits including primary keys; older negotiated links retain v11 redaction. Technical read-only boundaries
+  and database constraints remain. Paging cursors are opaque tokens and an audit without values records every edit. Runtime-verified on API 28 with Room 2.7.2 only. See
+  [Storage](docs/features/storage.md).
+
 ### Changed
+
+- Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
+  and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network
+  and Storage use dedicated workspaces with the mirror initially shown and independent hide/show choices.
+- Storage adds per-row drafts with Apply/Discard, primary-key identity handoff, conditional Revert row edit,
+  dashboard BLOB/string-set editing, and draft preservation across workspace switches on the same SDK link.
 
 - The README is now an overview (what Lionscope is, requirements, quick start, adding the SDK). The rest moved to
   pages under `docs/` with its text unchanged (only links, heading levels and one cross-reference adjusted): the
@@ -17,6 +44,27 @@ All notable changes to Lionscope are documented here. The format is based on
   Saved-state tracking tooltip points to the docs, instead of the README.
 - CI runs `npm run docs:check`: relative links, images and anchors in the README and `docs/`, and Lionscope GitHub
   URLs in the sources, must resolve.
+
+### Fixed
+
+- Profiler readouts reflow by their panel width, and warning labels wrap inside their own metric instead of
+  overlapping adjacent panels.
+
+- Storage sources use separate preference/database groups and indented table lists, with row separators,
+  single-line names, full-name tooltips and read-only indicators.
+
+- The Query database selector reuses the dashboard's inset chevron and reserves room for long database names.
+
+- Database row draft inputs keep their intended single-line height instead of inheriting a 120 px flex basis
+  from the horizontal preference editor.
+
+- Storage Query uses compact desktop controls, table rows and editor spacing while keeping 44 px controls on
+  touch devices. Results fill the remaining workbench height instead of stopping at 55% of the viewport.
+
+- Storage: rows with nullable, incomplete, redacted or non-unique primary keys open their own read-only sheet,
+  without duplicate row identities or implicit rowid writes. A successful refresh that no longer contains the
+  open row or prefs key closes its sheet and discards its draft, so a reused key cannot revive an old edit;
+  failed reads preserve the draft.
 
 ## [0.12.0] - 2026-11-02
 

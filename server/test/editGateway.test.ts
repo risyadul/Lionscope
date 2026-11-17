@@ -78,6 +78,9 @@ describe('server → SDK golden lines', () => {
         'inspect',
         'setViewProperty',
         'revertViewProperties',
+        'storageList',
+        'storageRead',
+        'storageWrite',
       ]),
     );
   });

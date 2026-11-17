@@ -1,7 +1,7 @@
 /*
  * Lionscope design tokens — "instrument panel".
  * Cool graphite planes, hairline rules, IBM Plex Sans for UI, IBM Plex Mono for values.
- * Brand red is reserved for the logo mark; it never encodes data.
+ * Brand red marks identity and active navigation; it never encodes data.
  * Series hues come from the validated data-viz palette (adjacent CVD ΔE ≥ 8 in both modes).
  */
 :root {

@@ -86,7 +86,6 @@ function setup() {
 }
 
 const option = (name: string) => screen.getByRole('radio', { name });
-const tab = (name: string) => screen.getByRole('tab', { name: new RegExp(name) });
 const setVisibility = (state: 'visible' | 'hidden') => {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
   act(() => {
@@ -105,26 +104,24 @@ describe('inspectorFocus', () => {
 
   it('follows the Inspector view', () => {
     const { focuses } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     expect(focuses()).toEqual(['emulator-5554']);
     fireEvent.click(option('Device'));
     expect(focuses()).toEqual(['emulator-5554', null]);
   });
 
-  it('follows the Profiler side tab without duplicates', () => {
+  it('follows the Layout Inspector workspace without duplicate focus messages', () => {
     const { focuses } = setup();
-    fireEvent.click(tab('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     expect(focuses()).toEqual(['emulator-5554']);
-    fireEvent.click(option('Inspector'));
     fireEvent.click(option('Profiler'));
-    expect(focuses()).toEqual(['emulator-5554']);
-    fireEvent.click(tab('Screens'));
     expect(focuses()).toEqual(['emulator-5554', null]);
   });
 
   it('clears while the document is hidden and returns with it', () => {
     const { focuses } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     setVisibility('hidden');
     expect(focuses()).toEqual(['emulator-5554', null]);
     setVisibility('visible');
@@ -133,7 +130,7 @@ describe('inspectorFocus', () => {
 
   it('moves to another device when the serial changes', async () => {
     const { focuses, push } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     await push({ type: 'devices', devices: [EMU_DEVICE, PHONE] });
     fireEvent.change(screen.getByRole('combobox', { name: 'Device' }), { target: { value: 'R58M123ABC' } });
     expect(focuses()).toEqual(['emulator-5554', 'R58M123ABC']);
@@ -141,7 +138,7 @@ describe('inspectorFocus', () => {
 
   it('sends the current focus again after a reconnect', () => {
     const { focuses, setConnection } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     setConnection(LOST);
     expect(focuses()).toEqual(['emulator-5554']);
     setConnection(OPEN);
@@ -168,7 +165,7 @@ describe('fallback reasons of 0.5.2', () => {
 
   it('shows the label in the badge and the hint as its tooltip', async () => {
     const { push } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     await push({
       type: 'inspection',
       snapshot: inspectorSnapshot({ source: 'uiautomator', fallbackReason: 'sdk_needs_session' }),
@@ -182,7 +179,7 @@ describe('fallback reasons of 0.5.2', () => {
 
   it('repeats the hint in the attributes of a view from uiautomator', async () => {
     const { push } = setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     await push(
       {
         type: 'inspection',
@@ -200,7 +197,7 @@ describe('fallback reasons of 0.5.2', () => {
 
   it('does not tell the user a session is needed before the first inspect', () => {
     setup();
-    fireEvent.click(option('Inspector'));
+    fireEvent.click(option('Layout Inspector'));
     expect(screen.getByText(/without a session/)).toBeTruthy();
   });
 });

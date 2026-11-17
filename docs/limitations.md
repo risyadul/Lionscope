@@ -67,3 +67,7 @@
   Bodies are captured up to 64 KB and only for text types; Brotli and zstd bodies are not decoded. A response whose
   body the app never reads to the end or closes stays pending. Mocks are applied by the interceptor itself, so they
   answer only requests that go through it, and never when it was added with `addNetworkInterceptor`.
+- **Storage edits are checked on API 28 and Room 2.7.2 only.** Other API levels, physical devices and Room 2.6.x
+  have not been tried. Tables in a deferred foreign key are read-only, and edits are refused while the app leaves
+  `PRAGMA defer_foreign_keys` on; any Lionscope read or edit switches that pragma off (see
+  [Storage](features/storage.md#editing)).

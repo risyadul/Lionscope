@@ -34,6 +34,8 @@ const SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<ServerMessa
   'networkMocks',
   'viewEdit',
   'locations',
+  'storage',
+  'storageOutcome',
   'error',
 ]);
 

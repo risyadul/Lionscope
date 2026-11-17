@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 // Compose compatibility checks: `-PsampleComposeBom=2024.06.00 -PsampleNavigationCompose=2.7.7` (defaults: the catalog).
@@ -75,6 +76,10 @@ dependencies {
     implementation(libs.rxjava2)
     implementation(libs.rxandroid2)
     implementation(libs.coroutines.android)
+    // The storage inspector demo (StorageActivity): a Room database registered with Lionscope.trackDatabase.
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
 
     debugImplementation(project(":lionscope"))
     releaseImplementation(project(":lionscope-noop"))

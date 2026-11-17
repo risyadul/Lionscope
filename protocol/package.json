@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./wire": "./src/wire.ts",
+    "./storage-values": "./src/storageValues.ts",
+    "./storage-sql": "./src/storageSql.ts",
     "./insights": "./src/insights/index.ts"
   },
   "scripts": {

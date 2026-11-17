@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { initialViewMode, parseViewMode, searchWithViewMode } from '../src/lib/viewMode.ts';
 
 describe('parseViewMode', () => {
-  it('accepts the three modes and nothing else', () => {
+  it('accepts the five workspaces and nothing else', () => {
     expect(parseViewMode('profile')).toBe('profile');
     expect(parseViewMode('inspect')).toBe('inspect');
     expect(parseViewMode('device')).toBe('device');
+    expect(parseViewMode('network')).toBe('network');
+    expect(parseViewMode('storage')).toBe('storage');
     expect(parseViewMode('Inspect')).toBeNull();
     expect(parseViewMode('')).toBeNull();
     expect(parseViewMode(null)).toBeNull();

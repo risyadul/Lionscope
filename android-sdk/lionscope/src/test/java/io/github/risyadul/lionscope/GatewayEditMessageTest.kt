@@ -32,6 +32,9 @@ class GatewayEditMessageTest {
                 "mock" -> GatewayMessage.Mock::class
                 "setViewProperty" -> GatewayMessage.SetViewProperty::class
                 "revertViewProperties" -> GatewayMessage.RevertViewProperties::class
+                "storageList" -> GatewayMessage.StorageList::class
+                "storageRead" -> GatewayMessage.StorageRead::class
+                "storageWrite" -> GatewayMessage.StorageWrite::class
                 else -> error("no parser for $type")
             }
             assertEquals(line, expected, message?.let { it::class })

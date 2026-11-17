@@ -1,25 +1,23 @@
 # What the dashboard shows
 
-The dashboard is a single page: a top bar to pick the device and the app and to start or stop a session; the
-emulator's screen on the left; stacked timeline charts in the middle that share one time axis (last 1, 5 or 10
-minutes) and can be paused, with the app's logcat in a drawer below them (drag its bar to resize it,
-double-click the bar to maximise it; click, shift-click or Cmd/Ctrl-click lines and press Cmd/Ctrl+C to copy
-them); and, with the SDK, the Screens, Stalls, Layouts and Network tabs on the right. Below 1280 px the screen opens as a
-drawer from the top bar (in the Profiler view; the other two keep it on the page).
+Device/app selection and session Start/Stop controls stay in the top bar. A labeled left sidebar selects five
+workspaces (a drawer on narrow windows):
 
-The switch at the right of the top bar picks what the page is for:
+- **Profiler**: CPU, memory and rendering charts on a shared timeline, logcat below them, and Screens, Stalls,
+  Layouts and Saved State analysis tabs alongside. The device mirror is collapsible and becomes a drawer below
+  1280 px. Clicking a request on the timeline opens contextual request details without leaving the charts;
+  **Open in Network** continues in the dedicated workspace.
+- **Layout Inspector**: the device and view hierarchy/property editor, with room for the tree and attributes.
+- **Network**: Requests and Mocks, with the device mirror initially shown and available to hide.
+- **Storage**: preferences and registered databases, with a source list, grid, and row editor; the device mirror
+  starts shown and can be hidden independently from Network. See [Storage](features/storage.md).
+- **Device**: the device screen and guidance for letting an AI agent operate it.
 
-- **Profiler** (the default): everything above.
-- **Inspector**: only the device and the [Layout Inspector](features/layout-inspector.md),
-  which gets the room to show its tree and the attributes side by side.
-- **Device**: only the device screen, larger, with how to let an AI agent operate it (see
-  [Use with AI agents](agents.md)).
-
-The Inspector and Device views hide the charts and logcat and stop drawing them, so nothing hidden keeps
-redrawing in the browser; a running session keeps recording, and the charts and logcat (with its filters) are
-there as you left them when you switch back. The
-view is part of the address (`http://localhost:8701/?view=inspect`, `?view=device`), so you can bookmark it, and
-the page remembers the last one you used.
+A running session keeps recording when workspaces change. Hidden charts stop drawing while retaining their
+state, and Storage drafts survive workspace changes on the same app link. Switching apps or SDK connections
+clears old Storage drafts. Each workspace is bookmarkable: `?view=inspect`, `?view=network`, `?view=storage`, and
+`?view=device`; Profiler uses the default address. Existing Inspector and Device bookmarks still work, and the
+viewer remembers the last workspace.
 
 | Panel                                                 | Source                                                                                   | Interval |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |

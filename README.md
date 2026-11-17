@@ -43,8 +43,8 @@ screens by jank.</sub>
 
 ## What the dashboard shows
 
-One page: the device, the charts on one time axis, logcat and, with the SDK, the Screens, Stalls, Layouts and
-Network tabs. See [What the dashboard shows](docs/dashboard.md), and each part in detail:
+Five workspaces: Profiler (charts on one time axis, logcat, Screens, Stalls, Layouts and Saved State), Layout
+Inspector, Network, Storage and Device. See [What the dashboard shows](docs/dashboard.md), and each part in detail:
 
 - [Finding the line that blocks the main thread](docs/features/stalls.md)
 - [Layouts: what inflating XML costs](docs/features/layouts.md)
@@ -53,6 +53,7 @@ Network tabs. See [What the dashboard shows](docs/dashboard.md), and each part i
 - [Saved state: what makes it too large](docs/features/saved-state.md)
 - [Operating the emulator or a physical device from the dashboard](docs/features/device.md)
 - [Changing the device's location](docs/features/location.md)
+- [Storage: reading and editing app data live](docs/features/storage.md)
 
 <!-- /docs:added -->
 

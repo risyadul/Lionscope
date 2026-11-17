@@ -106,6 +106,8 @@ describe('parseServerMessage', () => {
       networkMocks: true,
       viewEdit: true,
       locations: true,
+      storage: true,
+      storageOutcome: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

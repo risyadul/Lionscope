@@ -29,6 +29,12 @@ rxjava2 = "2.2.21"
 # Sample app only (the Rx and coroutine stall demos).
 rxandroid2 = "2.1.1"
 coroutines = "1.8.1"
+# compileOnly in both SDK artifacts (Lionscope.trackDatabase): the app brings its own Room. Only 2.7.x is verified.
+room = "2.7.2"
+# Sample app only: Room's annotation processor (the storage inspector demo, StorageActivity).
+ksp = "2.2.0-2.0.2"
+# SDK tests only: a real SQLite for the storage inspector's database side (DbInspector).
+sqliteJdbc = "3.41.2.2"
 
 [libraries]
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlinStdlib" }
@@ -58,6 +64,10 @@ okhttp5 = { module = "com.squareup.okhttp3:okhttp-jvm", version.ref = "okhttp5" 
 okhttp5-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp5" }
 rxjava2 = { module = "io.reactivex.rxjava2:rxjava", version.ref = "rxjava2" }
 rxandroid2 = { module = "io.reactivex.rxjava2:rxandroid", version.ref = "rxandroid2" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqliteJdbc" }
+room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
@@ -65,3 +75,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

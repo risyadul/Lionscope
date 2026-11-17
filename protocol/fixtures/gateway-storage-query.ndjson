@@ -1,0 +1,3 @@
+{"type":"storageQuery","requestId":401,"opId":"00000000-0000-4000-8000-000000000401","name":"shop.db","sql":"SELECT 'synthetic' AS label, 9223372036854775807 AS n","limit":50,"offset":0}
+{"type":"storageQuery","requestId":402,"opId":"00000000-0000-4000-8000-000000000402","name":"shop.db","sql":"INSERT INTO item VALUES (1,'first')","limit":50,"offset":0}
+{"type":"storageQuery","requestId":403,"opId":"00000000-0000-4000-8000-000000000403","name":"shop.db","sql":"UPDATE item SET label='second' WHERE id=1","limit":50,"offset":0}
