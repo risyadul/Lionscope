@@ -280,6 +280,7 @@ describe('golden device messages through the gateway', () => {
       inflates: ofType('inflate').map((message) => message.sample),
       viewTrees: [ofType('viewtree')[0]?.sample],
     });
+    await v3.waitFor((message) => message.type === 'config');
     expect(v3.rawLines[0]).toBe('{"type":"welcome","protocolVersion":3}');
     expect(v3.rawLines[1]).toBe(
       '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true}',
