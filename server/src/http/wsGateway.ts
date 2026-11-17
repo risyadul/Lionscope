@@ -1,3 +1,4 @@
+import type { Permissions } from '@lionscope/protocol';
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -122,6 +123,7 @@ export type GatewayStorage = Pick<
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
 export interface WsGatewayOptions {
+  permissions?: () => Readonly<Permissions>;
   server: Server;
   manager: GatewayManager;
   emulators: GatewayEmulators;
@@ -414,6 +416,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       serverVersion: options.serverVersion,
       bufferWindowMs: options.bufferWindowMs,
       storageConsent: options.storage?.consent ?? 'off',
+      ...(options.permissions ? { permissions: options.permissions() } : {}),
     });
     send(ws, { type: 'devices', devices: manager.getDevices() });
     send(ws, { type: 'emulators', emulators: emulators.getEmulators() });

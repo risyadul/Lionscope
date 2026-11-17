@@ -33,6 +33,8 @@ cd android-sdk
 
 ## Commit style
 
+For version coordination, artifact checks and publication, follow [Releasing Lionscope](docs/releasing.md).
+
 Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes:
 
 ```

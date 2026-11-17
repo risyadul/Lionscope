@@ -9,7 +9,8 @@ workspaces (a drawer on narrow windows):
   **Open in Network** continues in the dedicated workspace.
 - **Layout Inspector**: the device and view hierarchy/property editor, with room for the tree and attributes.
 - **Network**: Requests and Mocks, with the device mirror initially shown and available to hide.
-- **Storage**: preferences and registered databases, with a source list, grid, and row editor; the device mirror
+- **Storage**: preferences and registered databases, with a source list, grid, row editor and SQL Query console;
+  the device mirror
   starts shown and can be hidden independently from Network. See [Storage](features/storage.md).
 - **Device**: the device screen and guidance for letting an AI agent operate it.
 

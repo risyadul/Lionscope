@@ -4,6 +4,7 @@ import { runDaemonChild, runLifecycle, startBackground } from './cli/daemon.ts';
 import { exitOnShutdown, startLionscope } from './cli/serve.ts';
 import { loadConfig, parseCliArgs, SERVER_VERSION, USAGE } from './config.ts';
 import { errorMessage, log } from './log.ts';
+import { runPermissionsCommand } from './cli/permissionsCommand.ts';
 
 async function main(): Promise<void> {
   let argv = process.argv.slice(2);
@@ -13,6 +14,7 @@ async function main(): Promise<void> {
     process.exitCode = await runQueryCommand(argv.slice(1));
     return;
   }
+  if (argv[0] === 'permissions') return runPermissionsCommand(argv.slice(1));
   if (argv[0] === 'stop' || argv[0] === 'status' || argv[0] === 'logs') {
     return runLifecycle(argv[0], argv.slice(1));
   }

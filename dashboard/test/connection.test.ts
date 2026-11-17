@@ -80,6 +80,7 @@ describe('parseServerMessage', () => {
     // A Record forces this list to grow with the protocol: a new type fails to compile here.
     const types: Record<ServerMessageType, true> = {
       hello: true,
+      permissions: true,
       devices: true,
       emulators: true,
       apps: true,

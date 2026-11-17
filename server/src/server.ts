@@ -35,8 +35,12 @@ import { SessionManager } from './session/sessionManager.ts';
 import { StorageService } from './storage/storageService.ts';
 import { storageConsentOf } from './storage/consent.ts';
 import type { CollectorIntervals } from './session/profilingSession.ts';
+import type { Permissions } from '@lionscope/protocol';
+import { PermissionSettings } from './permissions.ts';
+import { handlePermissions, PERMISSIONS_PATH } from './http/permissions.ts';
 
 export interface LionscopeServerOptions {
+  savePermissions?: (permissions: Readonly<Permissions>) => Promise<void>;
   /** Private CLI lifecycle control; absent on foreground and MCP-owned servers. */
   daemon?: DaemonControl;
   /** 0 picks a free port (tests). */
@@ -71,6 +75,7 @@ export interface LionscopeServerOptions {
 }
 
 export interface LionscopeServer {
+  readonly permissions: PermissionSettings;
   listen(): Promise<AddressInfo>;
   close(): Promise<void>;
   readonly address: AddressInfo | null;
@@ -134,8 +139,8 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   // "Don't keep activities" this server turned on: put back when the device's session stops or the server closes.
   const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
   const storageConsent = storageConsentOf(
-    options.allowStorageRead ?? false,
-    options.allowStorageWrite ?? false,
+    options.allowStorageRead ?? true,
+    options.allowStorageWrite ?? true,
   );
   const manager: SessionManager = new SessionManager({
     adb: options.adb,
@@ -191,7 +196,25 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     broadcast: (message, payload) => gateway?.broadcast(message, payload),
   });
   const viewEdits = new ViewEdits({ inspector });
+  const permissions = new PermissionSettings(
+    {
+      deviceControl: options.allowDeviceControl ?? true,
+      networkBodies: options.allowNetworkBodies ?? true,
+      storageRead: options.allowStorageRead ?? true,
+      storageWrite: (options.allowStorageRead ?? true) && (options.allowStorageWrite ?? true),
+    },
+    {
+      save: options.savePermissions,
+      changed: (value) => {
+        const consent = storageConsentOf(value.storageRead, value.storageWrite);
+        storage.setConsent(consent);
+        manager.setStorageConsent(consent);
+        gateway?.broadcast({ type: 'permissions', permissions: { ...value } });
+      },
+    },
+  );
   const agent: AgentBaseContext = {
+    permissions: () => permissions.value,
     sessions: manager,
     emulators,
     inspector,
@@ -213,8 +236,9 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   };
   const agentHttp = createAgentHttp({
     ctx: agent,
-    deviceControl: options.allowDeviceControl ?? false,
-    networkBodies: options.allowNetworkBodies ?? false,
+    deviceControl: options.allowDeviceControl ?? true,
+    networkBodies: options.allowNetworkBodies ?? true,
+    permissions: () => permissions.value,
     port: () => address?.port ?? null,
   });
 
@@ -229,6 +253,10 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     } catch {
       sendPlain(res, 400, 'Bad request\n');
+      return;
+    }
+    if (pathname === PERMISSIONS_PATH) {
+      await handlePermissions(req, res, { port: address?.port ?? 0, allowedOrigins, settings: permissions });
       return;
     }
     if (options.daemon && pathname.startsWith(DAEMON_PATH)) {
@@ -275,6 +303,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     viewEdits,
     locations,
     storage,
+    permissions: () => permissions.value,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
     allowedOrigins: () => allowedOrigins,
@@ -295,6 +324,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   });
 
   return {
+    permissions,
     manager,
     emulators,
     agent,

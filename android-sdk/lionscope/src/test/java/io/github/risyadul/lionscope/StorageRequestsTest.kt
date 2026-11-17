@@ -103,6 +103,24 @@ class StorageRequestsTest {
     }
 
     @Test
+    fun runtimeRevocationRefusesQueuedReadsAndWritesAndCanBeReenabled() {
+        requests()
+        link.welcome(true, DEVICE_PROTOCOL_V13)
+        consent(StorageConsent.READ_WRITE)
+        link.storage(read)
+        link.storage(write(2))
+        consent(StorageConsent.OFF)
+        runAll()
+        assertEquals(listOf("consent_required", "consent_required"), codes())
+        assertEquals(3, prefs.files.getValue("app").values["count"])
+        link.v11Lines.clear()
+        consent(StorageConsent.READ)
+        link.storage(read)
+        runAll()
+        assertEquals(listOf("ok"), codes())
+    }
+
+    @Test
     fun theConsentEndsWithItsConnection() {
         requests()
         link.welcome(true, DEVICE_PROTOCOL_V11)

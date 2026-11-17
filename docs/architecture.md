@@ -28,7 +28,8 @@ The SDK talks to the server over plain TCP with one JSON object per line rather 
 while plain sockets are not subject to that policy. The Kotlin encoders and the server's validator are both
 tested against the same golden file, `protocol/fixtures/device-messages.ndjson`.
 
-The SDK's `hello` carries its protocol version (2 since 0.2.0: stall, StrictMode and `config` messages); the server answers `welcome` with the lower of that and its own
+The SDK's `hello` carries its protocol version (14 in release 0.13.0); the server answers `welcome` with the lower
+of that and its own
 (the negotiated version, accepted from 1 to 1000), and lines of a message type the server does not know are
 skipped and counted instead of closing the connection; known types are still validated strictly. From 0.1.1 on,
 an SDK and a server from different releases therefore keep working together: a 0.1.1 server or SDK negotiates
@@ -38,8 +39,17 @@ protocol version 1 and closes the connection on unknown message types.
 
 The network inspector needs device protocol 7 on both sides (SDK and server 0.9.0 or later): with an older server
 the interceptor stays a pass-through, and an older SDK simply sends no requests. HTTP request and response lines
-may be up to 256 KB (other SDK lines keep the 64 KB cap), and the server's mock rules reach the SDK as flat lines of
-at most 512 KB.
+may be up to 256 KiB; Storage result lines also have a 256 KiB cap, with a 240 KiB SDK reply budget. Other SDK
+lines keep the 64 KiB cap. The server's mock rules reach the SDK as flat lines of at most 512 KiB.
+
+Storage begins at device protocol 11 and requires enabled server consent plus a proven profiling link.
+All four permissions default on, with persistent per-port runtime settings. The SDK starts with Storage off
+until its existing version-gated config arrives; permission changes push that config without replacing links.
+Protocol 12 adds original Storage values and primary-key row edits; protocol 13 adds SQL on the registered
+app-owned Room connection. The dashboard Query console and MCP/CLI SQL tools share the same Storage service,
+validation and consent checks; the agent entry points add no wire messages. Protocol 14 preserves original captured Network values
+and reports request completeness for Copy cURL. Older negotiated links retain their earlier behavior. See
+[Storage](features/storage.md) and [Network](features/network.md) for bounds and write contracts.
 
 Stall origins use device protocol 9 (SDK and server 0.9.0): its stalls may carry the stack's outermost frames, the
 RxJava hooks' findings and the coroutine name, and `config` carries the RxJava switch. With an older server the

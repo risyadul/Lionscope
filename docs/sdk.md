@@ -46,9 +46,20 @@ dependencies besides `androidx.startup` (`androidx.fragment`, Compose UI, Naviga
 from the host app, and are only used when it has them).
 Demo app: [`android-sdk/sample`](../android-sdk/sample).
 
-**Network (optional).** The only SDK feature that needs a code change: add `Lionscope.okHttpInterceptor()` to the
+**Network (optional).** Add `Lionscope.okHttpInterceptor()` to the
 app's `OkHttpClient` (Retrofit, or Ktor's OkHttp engine) to get the
 [Network tab and mocks](features/network.md). OkHttp 4.x or 5.x comes from the app.
+
+**Storage (optional).** Preferences are discovered automatically. Register each Room instance the app uses:
+
+```kotlin
+val db = Room.databaseBuilder(context, ShopDatabase::class.java, "shop.db").build()
+Lionscope.trackDatabase("shop.db", db)
+```
+
+Lionscope uses that app-owned connection; Room remains an optional host dependency. Start the server with
+Storage read permission and, for edits or SQL mutations, write permission. See [Storage](features/storage.md)
+for setup, Query console behavior and the API/Room versions verified so far.
 
 ## Keeping it out of release builds
 
@@ -57,11 +68,11 @@ app's `OkHttpClient` (Retrofit, or Ktor's OkHttp engine) to get the
 nothing unless the app is debuggable (`FLAG_DEBUGGABLE`).
 
 Apps that call the API explicitly (`Lionscope.install()`, `Lionscope.isActive()`, `Lionscope.trackNavigation()`,
-`Lionscope.okHttpInterceptor()`) also need it to compile in release; for them there is a no-op artifact with the
-same API (its interceptor only passes requests on):
+`Lionscope.okHttpInterceptor()`, `Lionscope.trackDatabase()`) also need it to compile in release; for them there
+is a no-op artifact with the same API (its interceptor only passes requests on):
 
 ```groovy
-releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.12.0"
+releaseImplementation "com.github.risyadul.Lionscope:lionscope-noop:0.13.0"
 ```
 
 ## Cost when no dashboard is connected

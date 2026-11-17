@@ -1,0 +1,84 @@
+.permissions-trigger {
+  flex: 0 0 auto;
+}
+.permissions-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-pop);
+}
+.permissions-dialog::backdrop {
+  background: rgba(11, 13, 16, 0.36);
+}
+.permissions-heading {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+}
+.permissions-heading h2 {
+  margin: 0;
+  font-size: var(--text-title);
+}
+.permissions-note {
+  color: var(--ink-2);
+  font-size: var(--text-body);
+  margin: var(--space-3) 0 0;
+}
+.permissions-rows {
+  margin-top: var(--space-3);
+}
+.permissions-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+.permissions-row > span {
+  flex: 1;
+  min-width: 0;
+}
+.permissions-label {
+  display: block;
+  font-weight: 600;
+  font-size: var(--text-body);
+}
+.permissions-description {
+  display: block;
+  color: var(--ink-2);
+  font-size: var(--text-body);
+  margin-top: var(--space-1);
+}
+.permissions-row input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+.permissions-row:has(input:disabled),
+.permissions-row input:disabled {
+  cursor: not-allowed;
+}
+.permissions-row input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.permissions-error {
+  color: var(--critical);
+  font-size: var(--text-body);
+}
+@media (max-width: 639px), (any-pointer: coarse) {
+  .permissions-trigger,
+  .permissions-heading .btn {
+    min-height: 44px;
+  }
+}

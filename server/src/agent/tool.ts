@@ -1,3 +1,4 @@
+import type { Permissions } from '@lionscope/protocol';
 /**
  * The agent tool layer: one typed definition per tool, served over MCP (HTTP and stdio) and the JSON tool API
  * (`lionscope query`). Handlers only read the session store / device lists and call the same session, emulator
@@ -76,7 +77,10 @@ export type AgentInspector = Pick<InspectorService, 'inspect' | 'select' | 'curr
 export type AgentViewEdits = Pick<ViewEdits, 'set' | 'setAll' | 'revert'>;
 
 /** The storage inspector: the same one the dashboard's Storage tab uses (its consent is the server's flags). */
-export type AgentStorage = Pick<StorageService, 'consent' | 'list' | 'read' | 'write' | 'auditEntries'>;
+export type AgentStorage = Pick<
+  StorageService,
+  'consent' | 'list' | 'read' | 'write' | 'query' | 'auditEntries'
+>;
 
 /** Device locations: the same ones the dashboard's Location panel shows and sets. */
 export type AgentLocations = Pick<
@@ -98,6 +102,7 @@ export interface ActivityInstance {
 }
 
 export interface AgentContext {
+  permissions?: () => Readonly<Permissions>;
   sessions: AgentSessions;
   emulators: AgentEmulators;
   inspector: AgentInspector;

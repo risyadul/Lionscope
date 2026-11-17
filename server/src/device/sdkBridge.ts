@@ -250,6 +250,12 @@ export class SdkBridge {
     for (const entry of links) entry.link.sendConfig(this.sdkOptions, this.options.storageConsent);
   }
 
+  setStorageConsent(consent: StorageConsent): void {
+    this.options.storageConsent = consent;
+    if (this.configTimer) clearTimeout(this.configTimer);
+    if (!this.stopped) this.pushConfig();
+  }
+
   private async verify(entry: LinkEntry): Promise<void> {
     const { pid } = entry.hello;
     let verified = false;

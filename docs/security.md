@@ -12,9 +12,9 @@
   the server's own port (DNS rebinding). `/mcp` refuses any `Origin` other than the dashboard's, and the JSON
   tool API refuses any `Origin` at all (CSRF); it also needs `Content-Type: application/json` and
   `X-Lionscope-Agent: 1`, which a web page can only send after a CORS preflight that the server never approves.
-  Typed text never appears in errors or logs. Device-control tools exist only with
-  `--allow-device-control`; that flag keeps an AI from operating your phone unasked, it is not a security
-  boundary (any local process can already run adb). App data in tool results is marked as untrusted.
+  Typed text never appears in errors or logs. Device-control tools follow the enabled-by-default device permission and client restrictions; disabled server
+  permissions cannot be overridden by legacy allow headers. These settings are not a security boundary against
+  local processes (which can already run adb). App data in tool results is marked as untrusted.
 - Device serials and package names are checked against strict patterns and passed to `adb` as argument arrays,
   never through a host shell.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
@@ -63,17 +63,17 @@
   accepts mock rules only when it checks out. An app listening on that port in place of the server therefore gets
   no network data, can't inject mocks and can't edit views (0.9.0); it can still receive the screens, frames, stalls
   and Inspector view trees described above. Requests are kept in memory only (10 minutes, 32 MB) and never written to disk;
-  bodies go to AI agents only with `--allow-network-bodies`. Mock rules are sent to the app only on its session link,
-  are cleared when the session stops, and need `--allow-device-control` when an agent sets them (they change what
+  bodies follow the enabled-by-default Network bodies permission and client restrictions. Mock rules are sent to the app only on its session link,
+  are cleared when the session stops, and need enabled device-control permission when an agent sets them (they change what
   the app sees).
 - Location (0.10.0): coordinates are checked (WGS 84 ranges) and sent to the device as fixed-point numbers in fixed
   commands. On a physical device the shell's mock-location permission is set only while Lionscope moves it and is
   restored to its previous mode afterwards. The dashboard's CSP allows images from `https://tile.openstreetmap.org`
   for the map, which the browser fetches (with the dashboard's origin as Referer, as OSM's tile policy asks) only
   while the Location panel is open.
-- Storage (0.13.0) is off unless the server starts with `--allow-storage-read` (reading the app's SharedPreferences
-  and the Room databases it registers with `Lionscope.trackDatabase`) and `--allow-storage-write` (editing them):
-  app data the AI or the dashboard can otherwise not see or change. It works only on a profiling session's link with
+- Storage (0.13.0) starts with read/write permissions enabled on a fresh installation. The dashboard Permissions
+  menu and CLI can disable them live; choices are saved locally per server port. Reads cover SharedPreferences
+  and registered Room databases; writes include conditional edits and explicit SQL mutations. It works only on a profiling session's link with
   the link proof above, and the SDK checks the consent the welcome gave it again. On device protocol 12 links, Storage values are original, including credentials,
   and editable from the dashboard or agents under the same read/write permissions. Older negotiated links keep
   v11 redaction and primary-key restrictions. Views and virtual/internal tables remain read-only; paging cursors are opaque tokens the SDK keeps, never key values. EncryptedSharedPreferences
@@ -82,16 +82,23 @@
   edited field, and apply all changes in one transaction with database constraints intact. An edit names the app link its values were read from and is refused
   on another. The server keeps an audit of every edit (who, what, where, the outcome) without values, primary keys
   as digests, in memory only. Protocol 13 also accepts one validated SELECT/WITH or INSERT/UPDATE/DELETE from
-  the dashboard Query console, with independent SDK consent checks, technical table restrictions and bounded
+  the dashboard Query console and MCP/CLI SQL tools, with independent SDK consent checks, technical table restrictions and bounded
   results on the same Room connection. SQL mutations have no compare-and-set or undo. Transaction/schema commands
   and ROLLBACK conflict behavior are refused. SQL text and literals never enter audit metadata; history is session
   memory only. There is no second connection. See [Storage](features/storage.md).
 - Live view edits (0.9.0) reach only the app of the current Inspector snapshot, through the SDK link that captured
   it, and only views of that app's latest capture (by a key the SDK gives each View object; a recreated view gets a
   new one). They change what the app does (a disabled button enabled, a label rewritten), so the SDK applies them only
-  on a link with the link proof above (a profiling session) and answers anything else `unauthenticated`. The dashboard sends one only when you commit a field; agents need `--allow-device-control`. Values are
+  on a link with the link proof above (a profiling session) and answers anything else `unauthenticated`. The dashboard sends one only when you commit a field; agents need enabled device-control permission. Values are
   checked against fixed bounds by the server and again by the SDK, edits are rate-limited per device (a burst of
   10, then 5 per second) and again by the SDK itself, which keeps at most 256, lets at most 8 wait for the main
   thread, and drops one whose connection ended before it ran. The SDK only calls the platform setters (and AppCompat's background tint),
   never other app code, though those setters can run the app's listeners; it never reads or sets the text of a
   password field, nor keeps it once a field it edited becomes one.
+
+Permission administration (`/api/permissions`) requires an exact loopback Host/port and a custom settings
+header. Mutations additionally require JSON, an allowed dashboard Origin when present and at most 4096 bytes.
+CLI clients send no Origin. The server validates and serializes updates, persists private boolean-only choices,
+then changes enforcement and broadcasts state. The SDK receives existing version-gated config messages; no
+server restart or link replacement is needed. Requests already executing may finish; disabling permission
+does not undo a mutation. See [Configuration](configuration.md#permissions).

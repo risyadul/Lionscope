@@ -1744,6 +1744,20 @@ export const STORAGE_REDACTED_NAME = '[redacted-name]';
 // Server → dashboard
 // ---------------------------------------------------------------------------
 
+export interface Permissions {
+  deviceControl: boolean;
+  networkBodies: boolean;
+  storageRead: boolean;
+  storageWrite: boolean;
+}
+
+export const DEFAULT_PERMISSIONS: Readonly<Permissions> = Object.freeze({
+  deviceControl: true,
+  networkBodies: true,
+  storageRead: true,
+  storageWrite: true,
+});
+
 export type ServerMessage =
   | {
       type: 'hello';
@@ -1752,7 +1766,10 @@ export type ServerMessage =
       bufferWindowMs: number;
       /** 0.13.0. What the server's storage flags allow (absent on older servers: `off`). */
       storageConsent?: StorageConsent;
+      /** Runtime permissions; absent on servers without permission settings. */
+      permissions?: Permissions;
     }
+  | { type: 'permissions'; permissions: Permissions }
   | { type: 'devices'; devices: DeviceInfo[] }
   /** Every AVD (off or running) and its state; sent on connect, on refresh and on every state change. */
   | { type: 'emulators'; emulators: EmulatorInfo[] }
@@ -1832,6 +1849,7 @@ export type ServerMessageType = ServerMessage['type'];
  */
 export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set([
   'hello',
+  'permissions',
   'devices',
   'emulators',
   'apps',

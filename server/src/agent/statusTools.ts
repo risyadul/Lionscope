@@ -88,6 +88,7 @@ export function statusData(ctx: AgentContext) {
       bufferWindowMinutes: ctx.bufferWindowMs / 60_000,
       deviceControl: ctx.deviceControl,
       networkBodies: ctx.networkBodies,
+      ...(ctx.permissions ? { permissions: ctx.permissions() } : {}),
     },
     devices: ctx.sessions
       .getDevices()

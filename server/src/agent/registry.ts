@@ -34,6 +34,7 @@ import {
 } from './restoreTools.ts';
 import { savedStateTool } from './savedStateTools.ts';
 import { listStorageTool, readStorageTool, storageAuditTool, writeStorageTool } from './storageTools.ts';
+import { executeStorageSqlTool, queryStorageSqlTool } from './storageSqlTools.ts';
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
@@ -91,10 +92,12 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   readStorageTool,
   writeStorageTool,
   storageAuditTool,
+  queryStorageSqlTool,
+  executeStorageSqlTool,
 ];
 
 export const DEVICE_CONTROL_DISABLED =
-  'Device control is off. Start Lionscope (or `lionscope mcp`) with --allow-device-control, or pass it to `lionscope query`.';
+  'Device control is disabled for this call. Check dashboard Permissions or `lionscope permissions --allow-device-control`, and client restrictions.';
 
 /** Device tools running at once on one device; more get a busy answer instead of piling up adb commands. */
 export const MAX_DEVICE_CALLS = 2;
@@ -107,9 +110,9 @@ function deviceKey(ctx: AgentBaseContext, args: Record<string, unknown>): string
 }
 
 export const STORAGE_READ_DISABLED =
-  'The storage inspector is off. Start Lionscope with --allow-storage-read (and --allow-storage-write to edit values).';
+  'Storage is disabled. Enable it in dashboard Permissions or run `lionscope permissions --allow-storage-read` (and --allow-storage-write to edit values).';
 export const STORAGE_WRITE_DISABLED =
-  'Editing app storage is off. Start Lionscope with --allow-storage-write (as well as --allow-storage-read).';
+  'Storage writes are disabled. Enable them in dashboard Permissions or run `lionscope permissions --allow-storage-write`.';
 
 /** Whether a tool of `access` may run under the server's storage consent (other tools: always). */
 export function storageAllows(access: AgentTool['access'], consent: StorageConsent): boolean {
@@ -163,6 +166,7 @@ export async function callTool(
   deviceControl: boolean,
   options: CallOptions = {},
 ): Promise<ToolOutcome> {
+  deviceControl = deviceControl && (ctx.permissions?.().deviceControl ?? true);
   const tool = findTool(name);
   if (!tool) return { ok: false, code: 'unknown_tool', error: `No tool named ${name}` };
   if (tool.access === 'device' && !deviceControl) {
@@ -203,7 +207,7 @@ export async function callTool(
     const { data, image } = await tool.run(parsed.data, {
       ...ctx,
       deviceControl,
-      networkBodies: options.networkBodies ?? false,
+      networkBodies: (options.networkBodies ?? false) && (ctx.permissions?.().networkBodies ?? true),
     });
     return image
       ? { ok: true, result: data, image: { mimeType: image.mimeType, data: image.data.toString('base64') } }

@@ -67,7 +67,7 @@ describe('lionscope query and lionscope mcp against a running server', () => {
       expect(code).toBe(0);
       expect(value.map((tool: { name: string }) => tool.name)).toContain('search_logcat');
       const tap = value.find((tool: { name: string }) => tool.name === 'tap');
-      expect(tap).toMatchObject({ access: 'device', requires: '--allow-device-control' });
+      expect(tap).toMatchObject({ access: 'device', requires: 'enabled device-control permission' });
       expect(tap.inputSchema.properties.x.type).toBe('number');
     });
 
@@ -83,12 +83,15 @@ describe('lionscope query and lionscope mcp against a running server', () => {
       expect(layouts).toMatchObject({ code: 0, value: { total: 0 } });
     });
 
-    it('asks for network bodies with --allow-network-bodies', async () => {
-      expect((await query('status', '--port', String(port))).value.server.networkBodies).toBe(false);
+    it('allows bodies by default and can restrict a query', async () => {
+      expect(
+        (await query('status', '--disable-network-bodies', '--port', String(port))).value.server
+          .networkBodies,
+      ).toBe(false);
       const allowed = await query('status', '--allow-network-bodies', '--port', String(port));
       expect(allowed).toMatchObject({
         code: 0,
-        value: { server: { networkBodies: true, deviceControl: false } },
+        value: { server: { networkBodies: true, deviceControl: true } },
       });
       expect(
         await query('network-request', '--id', '1', '--allow-network-bodies', '--port', String(port)),
@@ -126,7 +129,9 @@ describe('lionscope query and lionscope mcp against a running server', () => {
         value: { ok: false, error: expect.stringContaining('limit') },
       });
       expect(await query('nope', '--port', String(port))).toMatchObject({ code: 1, value: { ok: false } });
-      expect(await query('press-key', '--port', String(port), '--key', 'home')).toMatchObject({
+      expect(
+        await query('press-key', '--disable-device-control', '--port', String(port), '--key', 'home'),
+      ).toMatchObject({
         code: 1,
         value: { error: expect.stringContaining('--allow-device-control') },
       });
@@ -138,7 +143,7 @@ describe('lionscope query and lionscope mcp against a running server', () => {
   });
 
   it('mcp attaches to the running server and forwards tool calls (with its --allow-network-bodies)', async () => {
-    const { client, stderr } = await connectStdio(['--port', String(port), '--allow-network-bodies']);
+    const { client, stderr } = await connectStdio(['--port', String(port), '--disable-device-control']);
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       expect(names).toContain('get_summary');
@@ -213,7 +218,7 @@ describe('lionscope mcp when the server comes and goes', () => {
 });
 
 describe('lionscope mcp without a running server', () => {
-  it('starts one in-process; --allow-device-control and --allow-network-bodies apply to this client only', async () => {
+  it('starts one in-process with permissions enabled on both entry points', async () => {
     const port = await freePort();
     const { client, stderr } = await connectStdio([
       '--port',
@@ -239,15 +244,15 @@ describe('lionscope mcp without a running server', () => {
       expect(status.devices).toEqual([]);
       const summary = await client.callTool({ name: 'get_summary', arguments: { window: '5m' } });
       expect(json(summary).window.label).toBe('5m');
-      // Its HTTP endpoints keep device control off.
+      // The owned server shares the same permission defaults.
       const response = await fetch(`http://127.0.0.1:${port}/api/agent/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lionscope-Agent': '1' },
         body: '{}',
       });
       expect(((await response.json()) as Json).result.server).toMatchObject({
-        deviceControl: false,
-        networkBodies: false,
+        deviceControl: true,
+        networkBodies: true,
       });
       expect(stderr()).toContain(`Lionscope running at http://localhost:${port}`);
     } finally {

@@ -80,6 +80,9 @@ because navigation, the emulator and a row editor are visible together.
   Copy cURL reuses the shared copy control, with a visible, accessible reason when unavailable; action targets
   are at least 44 px below 640 px or with a coarse pointer.
 - Keep empty, loading, error, disabled and success states readable at the same panel widths as populated data.
+- Permissions live in one top-bar action, with four labeled switches in a native modal dialog. Keep it within
+  the viewport with internal scrolling. Show server-confirmed state, pending/offline/error feedback and the
+  Storage read/write dependency; Escape closes and returns focus. Permission changes do not add workspace tabs.
 
 ## Themes and interaction
 
@@ -104,6 +107,8 @@ For changes to the components below, keep the matching browser checks meaningful
 - **StatStrip:** warning flags and values contained at narrow panel widths while the viewport stays wide;
   include 240, 320, 430, 680 and 800 px panels.
 - **Device mirror:** initially shown in Storage/Network, independently hideable, with a closable narrow overlay.
+- **Permissions:** top-bar fit, four switches, live dependency updates, failure without optimistic state,
+  keyboard opening/closing and focus restoration. Cover the full app header at each existing viewport.
 
 Cover both themes, 320/430 px narrow layouts, a 768 px touch layout and 1440 px mouse/touch layouts. Browser
 screenshots support review; geometric assertions enforce the bounds independently of OS font rasterization.

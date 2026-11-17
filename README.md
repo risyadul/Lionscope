@@ -11,14 +11,18 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   calls them, and live edits of a View's properties (padding, size, colors with a picker, text…) on the running
   app.
 - **Network**: with the SDK's OkHttp interceptor, see the app's HTTP requests (headers, bodies, timings) on the same
-  time axis, and mock responses or failures from the dashboard.
+  time axis, copy complete requests as cURL, and mock responses or failures. Protocol 14 preserves original
+  captured values, including auth credentials.
+- **Storage**: browse SharedPreferences and registered Room databases, edit row drafts including primary keys,
+  and run SQL in the Query console or through MCP/CLI tools. Permissions start enabled and can be changed live from the dashboard or CLI.
 - **Operate**: see and control emulators (which it can also boot headless) and USB devices right next to the
   charts, and move them to another location on a map.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
   in the Inspector and ask your agent about "this element".
 
-It stays light. Measured with the sample app on an emulator, the server uses under 1% of one CPU core while the
-app is idle and about 4% while it scrolls, with 100–150 MB of memory. The SDK adds about 0.5% CPU in the app.
+The [local performance baseline](docs/verification/performance-2026-11-16.md) records dashboard, SDK and emulator
+mirror measurements, with their test conditions and limits. Results depend on the app, capture settings and
+device; those measurements are not a general overhead guarantee.
 
 It works in two modes:
 
@@ -62,8 +66,8 @@ Inspector, Network, Storage and Device. See [What the dashboard shows](docs/dash
 - Node.js ≥ 22.12
 - Android SDK platform-tools (`adb`). Lionscope looks for it in `LIONSCOPE_ADB`, `$ANDROID_HOME`,
   `$ANDROID_SDK_ROOT`, `~/Library/Android/sdk`, then `PATH`.
-- A device or emulator with USB debugging enabled, running Android 7.0 (API 24) or newer (Lionscope relies on
-  `pidof`, toybox `date +%s%3N` and a non-PTY `adb shell`).
+- A device or emulator with USB debugging enabled, running Android 6.0 (API 23) or newer for profiling.
+  SDK FrameMetrics and UI-helper tree operations require API 24. See [Known limitations](docs/limitations.md).
 
 ## Quick start
 
@@ -79,6 +83,11 @@ to this terminal, run `lionscope --foreground`. It starts on demand; run it agai
 
 For a one-off run without global installation, use `npx lionscope@latest`.
 
+All four permissions start enabled: agent device control, Network bodies for agents, Storage read and Storage
+write. Open **Permissions** in the dashboard to turn any off without restarting. CLI equivalents include
+`lionscope permissions --disable-storage-write` and `lionscope --disable-device-control`; flags also update a
+running server. Choices are saved locally per server port. See [Configuration](docs/configuration.md).
+
 `@latest` makes npx check for a new release; a bare `npx lionscope` can keep running a version it cached
 earlier.
 
@@ -87,7 +96,7 @@ From source instead (the npm package may lag the latest git tag):
 
 Pick the device, pick the app, press **Start**. Nothing needs to be installed on the device for the ADB-only
 mode. `npx lionscope --help` lists the options (`--port`, `--device-port`, `--adb`, `--allow-device-control`,
-`--allow-network-bodies`)
+`--allow-network-bodies`, `--allow-storage-read`, `--allow-storage-write`)
 and the `mcp` and `query` commands for [AI agents](docs/agents.md); the
 [`lionscope`](https://www.npmjs.com/package/lionscope) package is a single bundled file plus the built
 dashboard, with no runtime dependencies.
@@ -101,15 +110,15 @@ credentials or opt-in property are needed.
 // settings.gradle (dependencyResolutionManagement) or app/build.gradle repositories
 maven { url "https://jitpack.io"; content { includeGroup "com.github.risyadul.Lionscope" } }
 // app/build.gradle
-debugImplementation "com.github.risyadul.Lionscope:lionscope:0.12.0"
+debugImplementation "com.github.risyadul.Lionscope:lionscope:0.13.0"
 ```
 
 If the project uses `dependencyResolutionManagement`, the `maven` block goes in `settings.gradle`; otherwise
 in the module's `repositories`. The `content { includeGroup … }` filter keeps JitPack from serving anything
 except Lionscope.
 
-No code changes are needed: the SDK starts itself through androidx.startup, and only does anything in a
-debuggable build and in the app's main process. When a session starts, the server runs
+No code changes are needed for automatic profiling: the SDK starts itself through androidx.startup, and only
+does anything in a debuggable build and in the app's main process. When a session starts, the server runs
 `adb reverse tcp:8700 tcp:<gateway port>` for the selected device itself and removes it when the session stops.
 If an app removes androidx.startup's `InitializationProvider`, call `Lionscope.install(context)` from
 `Application.onCreate`.
@@ -117,15 +126,14 @@ If an app removes androidx.startup's `InitializationProvider`, call `Lionscope.i
 <!-- docs:added -->
 
 Apps that call the SDK's API (`Lionscope.install()`, `Lionscope.trackNavigation()`,
-`Lionscope.okHttpInterceptor()`, …) also need the `lionscope-noop` artifact in release builds. That, screen names,
-Navigation Compose, the Network interceptor and what the SDK costs when no dashboard is connected are in
+`Lionscope.okHttpInterceptor()`, `Lionscope.trackDatabase()`, …) also need the `lionscope-noop` artifact in release
+builds. That, screen names, Navigation Compose, the Network interceptor and what the SDK costs when no dashboard is connected are in
 [The SDK](docs/sdk.md).
 
 ## Use with AI agents
 
 AI coding agents (Claude Code, Cursor, VS Code, Codex, …) get the dashboard's data as tools, over MCP
-(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Tools that operate the device stay off unless
-you add `--allow-device-control`. Setup for each client, the tools, the agent skill and the safety notes
+(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Device tools follow the enabled-by-default device-control permission and any client restrictions. Setup for each client, the tools, the agent skill and the safety notes
 are in [Use with AI agents](docs/agents.md).
 
 ## Architecture

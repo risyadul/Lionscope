@@ -2,11 +2,13 @@
 import { createAdb } from '../adb/adb.ts';
 import { resolveAdbPath } from '../adb/resolveAdb.ts';
 import { IS_BUNDLE } from '../config.ts';
+import { DEFAULT_PERMISSIONS } from '@lionscope/protocol';
 import type { LionscopeConfig } from '../config.ts';
 import { errorMessage, log } from '../log.ts';
 import { createLionscopeServer } from '../server.ts';
 import type { LionscopeServer } from '../server.ts';
 import type { DaemonControl } from '../http/daemonControl.ts';
+import { mergePermissions, permissionSettings } from '../permissions.ts';
 
 /**
  * Hard cap for a clean exit. Shutting down the emulators this server booted takes up to ~5 s (1 s for a boot or
@@ -19,6 +21,18 @@ export async function startLionscope(
   config: LionscopeConfig,
   daemon?: DaemonControl,
 ): Promise<LionscopeServer> {
+  let settings = permissionSettings(config.port);
+  const permissions = config.permissionOverrides
+    ? mergePermissions(
+        config.port === 0 ? DEFAULT_PERMISSIONS : await settings.load(),
+        config.permissionOverrides,
+      )
+    : {
+        deviceControl: config.allowDeviceControl,
+        networkBodies: config.allowNetworkBodies,
+        storageRead: config.allowStorageRead,
+        storageWrite: config.allowStorageRead && config.allowStorageWrite,
+      };
   if (config.dev && IS_BUNDLE) {
     log.warn('Dev mode widens the WebSocket origin allowlist to the Vite dev server (localhost:5173)');
   }
@@ -38,25 +52,28 @@ export async function startLionscope(
     adb,
     dashboardDir: config.dashboardDir,
     dev: config.dev,
-    allowDeviceControl: config.allowDeviceControl,
-    allowNetworkBodies: config.allowNetworkBodies,
-    allowStorageRead: config.allowStorageRead,
-    allowStorageWrite: config.allowStorageWrite,
+    allowDeviceControl: permissions.deviceControl,
+    allowNetworkBodies: permissions.networkBodies,
+    allowStorageRead: permissions.storageRead,
+    allowStorageWrite: permissions.storageWrite,
+    savePermissions: (value) => settings.save(value),
     daemon,
   });
   try {
     const address = await server.listen();
+    if (config.port === 0) settings = permissionSettings(address.port);
+    if (Object.keys(config.permissionOverrides ?? {}).length) await settings.save(permissions);
     log.info(`Lionscope running at http://localhost:${address.port}`);
     if (server.deviceAddress) log.info(`SDK gateway on ${config.host}:${server.deviceAddress.port}`);
     if (config.dev)
       log.info('Dev mode: accepting WebSocket connections from the Vite dev server (port 5173)');
-    if (config.allowDeviceControl) log.info('Device control is enabled for AI agents');
-    if (config.allowNetworkBodies) log.info('HTTP bodies are readable by AI agents');
-    if (config.allowStorageWrite && !config.allowStorageRead) {
+    if (permissions.deviceControl) log.info('Device control is enabled for AI agents');
+    if (permissions.networkBodies) log.info('HTTP bodies are readable by AI agents');
+    if (permissions.storageWrite && !permissions.storageRead) {
       log.warn('--allow-storage-write needs --allow-storage-read as well: the storage inspector stays off');
-    } else if (config.allowStorageRead) {
+    } else if (permissions.storageRead) {
       log.info(
-        config.allowStorageWrite
+        permissions.storageWrite
           ? 'Storage inspector: the app storage is readable and editable (dashboard and AI agents)'
           : 'Storage inspector: the app storage is readable (dashboard and AI agents)',
       );

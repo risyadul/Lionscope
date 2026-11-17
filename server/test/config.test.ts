@@ -6,16 +6,17 @@ const NO_ARGS = parseCliArgs([]);
 describe('config', () => {
   it('defaults to port 8701 on 127.0.0.1 (SDK gateway 8700), not in dev mode', () => {
     expect(loadConfig({}, NO_ARGS)).toEqual({
+      permissionOverrides: {},
       host: '127.0.0.1',
       port: 8701,
       devicePort: 8700,
       dashboardDir: undefined,
       adb: undefined,
       dev: false,
-      allowDeviceControl: false,
-      allowNetworkBodies: false,
-      allowStorageRead: false,
-      allowStorageWrite: false,
+      allowDeviceControl: true,
+      allowNetworkBodies: true,
+      allowStorageRead: true,
+      allowStorageWrite: true,
     });
   });
 
@@ -26,16 +27,17 @@ describe('config', () => {
         NO_ARGS,
       ),
     ).toEqual({
+      permissionOverrides: {},
       host: '127.0.0.1',
       port: 0,
       devicePort: 9700,
       dashboardDir: '/d',
       adb: undefined,
       dev: false,
-      allowDeviceControl: false,
-      allowNetworkBodies: false,
-      allowStorageRead: false,
-      allowStorageWrite: false,
+      allowDeviceControl: true,
+      allowNetworkBodies: true,
+      allowStorageRead: true,
+      allowStorageWrite: true,
     });
     expect(parsePort(' ')).toBe(8701);
     expect(() => loadConfig({ LIONSCOPE_DEVICE_PORT: '70000' }, NO_ARGS)).toThrow(/LIONSCOPE_DEVICE_PORT/);
@@ -47,13 +49,13 @@ describe('config', () => {
     expect(loadConfig({ LIONSCOPE_DEV: 'true' }, NO_ARGS).dev).toBe(false);
   });
 
-  it('enables device control for AI agents only with --allow-device-control', () => {
+  it('enables device control for AI agents by default and accepts its allow alias', () => {
     expect(loadConfig({}, parseCliArgs(['--allow-device-control'])).allowDeviceControl).toBe(true);
     expect(USAGE).toContain('--allow-device-control');
   });
 
-  it('lets AI agents read HTTP bodies only with --allow-network-bodies', () => {
-    expect(loadConfig({}, NO_ARGS).allowNetworkBodies).toBe(false);
+  it('lets AI agents read HTTP bodies by default', () => {
+    expect(loadConfig({}, NO_ARGS).allowNetworkBodies).toBe(true);
     expect(loadConfig({}, parseCliArgs(['--allow-network-bodies'])).allowNetworkBodies).toBe(true);
     expect(USAGE).toContain('--allow-network-bodies');
     expect(() => parseCliArgs(['--allow-network-bodies', '--allow-network-bodies'])).toThrow(
@@ -61,9 +63,9 @@ describe('config', () => {
     );
   });
 
-  it('turns the storage inspector on only with --allow-storage-read (and edits with --allow-storage-write too)', () => {
-    expect(loadConfig({}, NO_ARGS).allowStorageRead).toBe(false);
-    expect(loadConfig({}, NO_ARGS).allowStorageWrite).toBe(false);
+  it('enables Storage read/write by default and accepts allow aliases', () => {
+    expect(loadConfig({}, NO_ARGS).allowStorageRead).toBe(true);
+    expect(loadConfig({}, NO_ARGS).allowStorageWrite).toBe(true);
     const both = loadConfig({}, parseCliArgs(['--allow-storage-read', '--allow-storage-write']));
     expect([both.allowStorageRead, both.allowStorageWrite]).toEqual([true, true]);
     expect(USAGE).toContain('--allow-storage-read');
@@ -93,6 +95,10 @@ describe('config', () => {
 describe('command-line flags', () => {
   it('parses every flag', () => {
     expect(NO_ARGS).toEqual({
+      disableDeviceControl: false,
+      disableNetworkBodies: false,
+      disableStorageRead: false,
+      disableStorageWrite: false,
       help: false,
       version: false,
       foreground: false,
@@ -121,6 +127,10 @@ describe('command-line flags', () => {
         '-v',
       ]),
     ).toEqual({
+      disableDeviceControl: false,
+      disableNetworkBodies: false,
+      disableStorageRead: false,
+      disableStorageWrite: false,
       help: true,
       version: true,
       foreground: false,

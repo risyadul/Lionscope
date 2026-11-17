@@ -1,0 +1,3 @@
+{"type":"permissions","permissions":{"deviceControl":true,"networkBodies":true,"storageRead":true,"storageWrite":true}}
+{"type":"permissions","permissions":{"deviceControl":false,"networkBodies":false,"storageRead":false,"storageWrite":false}}
+{"type":"permissions","permissions":{"deviceControl":false,"networkBodies":true,"storageRead":true,"storageWrite":false}}

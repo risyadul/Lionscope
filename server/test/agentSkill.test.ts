@@ -106,6 +106,16 @@ describe('agent skill', () => {
       expect([...called]).toContain(name);
     }
     expect([...called]).toContain('stop_session');
+    for (const name of [
+      'list_storage',
+      'read_storage',
+      'write_storage',
+      'get_storage_audit',
+      'query_storage_sql',
+      'execute_storage_sql',
+    ]) {
+      expect([...called]).toContain(name);
+    }
   });
 });
 

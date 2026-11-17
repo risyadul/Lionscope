@@ -8,7 +8,8 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { HOST, loadConfig, parseCliArgs, SERVER_VERSION } from '../config.ts';
+import { HOST, loadConfig, parseCliArgs, permissionOverrides, SERVER_VERSION } from '../config.ts';
+import { requestPermissions } from './permissionsCommand.ts';
 import type { CliArgs, LionscopeConfig } from '../config.ts';
 import { DAEMON_HEADER, DAEMON_PATH } from '../http/daemonControl.ts';
 import { probeServer } from './agentClient.ts';
@@ -99,25 +100,17 @@ function printRunning(state: DaemonState): void {
   );
 }
 
-function checkRequestedOptions(state: DaemonState, args: CliArgs): void {
-  for (const key of [
-    'dev',
-    'allowDeviceControl',
-    'allowNetworkBodies',
-    'allowStorageRead',
-    'allowStorageWrite',
-  ] as const) {
-    if (args[key] && !state.options[key])
-      throw new Error(
-        'The running instance has different startup permissions. Stop it before starting with new options.',
-      );
-  }
+async function checkRequestedOptions(state: DaemonState, args: CliArgs): Promise<void> {
+  if (args.dev && !state.options.dev)
+    throw new Error('The running instance has different startup mode. Stop it before changing dev mode.');
   if (
     (args.adb !== undefined && args.adb !== state.options.adb) ||
     (args.devicePort !== undefined && Number(args.devicePort) !== state.options.devicePort)
   ) {
     throw new Error('The running instance has different startup options. Stop it before changing them.');
   }
+  const patch = permissionOverrides(args);
+  if (Object.keys(patch).length) await requestPermissions(state.port, patch);
 }
 
 export async function startBackground(
@@ -130,7 +123,7 @@ export async function startBackground(
   const start = async () => {
     const existing = await readState(config.port);
     if (existing && (await control(existing, 'status'))) {
-      checkRequestedOptions(existing, args);
+      await checkRequestedOptions(existing, args);
       printRunning(existing);
       return;
     }
@@ -141,25 +134,19 @@ export async function startBackground(
       for (let attempt = 0; attempt < 5; attempt++) {
         const peer = await managedState(config.port);
         if (peer) {
-          checkRequestedOptions(peer, args);
+          await checkRequestedOptions(peer, args);
           printRunning(peer);
           return;
         }
         await delay(100);
       }
-      if (
-        args.allowDeviceControl ||
-        args.allowNetworkBodies ||
-        args.allowStorageRead ||
-        args.allowStorageWrite ||
-        args.devicePort !== undefined ||
-        args.adb !== undefined ||
-        args.dev
-      ) {
+      if (args.devicePort !== undefined || args.adb !== undefined || args.dev) {
         throw new Error(
           'A Lionscope instance started elsewhere already uses this port. Its startup options were not changed.',
         );
       }
+      const patch = permissionOverrides(args);
+      if (Object.keys(patch).length) await requestPermissions(config.port, patch);
       process.stdout.write(
         `Lionscope already running at http://localhost:${config.port} (started elsewhere).\nUse its original terminal or process manager to stop it.\n`,
       );
@@ -221,7 +208,7 @@ export async function startBackground(
       for (let attempt = 0; attempt < 10; attempt++) {
         const peer = await managedState(config.port);
         if (peer && peer.token !== token) {
-          checkRequestedOptions(peer, args);
+          await checkRequestedOptions(peer, args);
           printRunning(peer);
           return;
         }
@@ -271,10 +258,10 @@ export async function runDaemonChild(argv: readonly string[]): Promise<void> {
     startedAt: new Date().toISOString(),
     options: {
       dev: config.dev,
-      allowDeviceControl: config.allowDeviceControl,
-      allowNetworkBodies: config.allowNetworkBodies,
-      allowStorageRead: config.allowStorageRead,
-      allowStorageWrite: config.allowStorageWrite,
+      allowDeviceControl: server.permissions.value.deviceControl,
+      allowNetworkBodies: server.permissions.value.networkBodies,
+      allowStorageRead: server.permissions.value.storageRead,
+      allowStorageWrite: server.permissions.value.storageWrite,
       adb: config.adb,
       devicePort: config.devicePort,
     },
@@ -398,9 +385,19 @@ export async function runLifecycle(command: 'stop' | 'status' | 'logs', argv: st
       return;
     }
     if (command === 'status') {
+      const live = await requestPermissions(config.port).catch(() => null);
+      const current = live
+        ? {
+            ...state.options,
+            allowDeviceControl: live.deviceControl,
+            allowNetworkBodies: live.networkBodies,
+            allowStorageRead: live.storageRead,
+            allowStorageWrite: live.storageWrite,
+          }
+        : state.options;
       printRunning(state);
       process.stdout.write(
-        `Started: ${state.startedAt}\nVersion: ${state.version}\nSDK port: ${state.devicePort ?? 'unavailable'}\nDevice control: ${state.options.allowDeviceControl ? 'on' : 'off'}\nNetwork bodies: ${state.options.allowNetworkBodies ? 'on' : 'off'}\nStorage: ${state.options.allowStorageRead ? (state.options.allowStorageWrite ? 'read/write' : 'read only') : 'off'}\n`,
+        `Started: ${state.startedAt}\nVersion: ${state.version}\nSDK port: ${state.devicePort ?? 'unavailable'}\nDevice control: ${current.allowDeviceControl ? 'on' : 'off'}\nNetwork bodies: ${current.allowNetworkBodies ? 'on' : 'off'}\nStorage: ${current.allowStorageRead ? (current.allowStorageWrite ? 'read/write' : 'read only') : 'off'}\n`,
       );
       return;
     }

@@ -14,6 +14,8 @@ export default defineConfig({
       [WS_PATH]: { target: `ws://127.0.0.1:${SERVER_PORT}`, ws: true },
       // Layout Inspector screenshots (0.5.0).
       '/inspector': { target: `http://127.0.0.1:${SERVER_PORT}` },
+      // Settings checks the upstream Host/port and the forwarded Vite Origin independently.
+      '/api/permissions': { target: `http://127.0.0.1:${SERVER_PORT}`, changeOrigin: true },
     },
   },
   build: {

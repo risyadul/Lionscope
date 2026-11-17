@@ -27,6 +27,7 @@ export function freePort(): Promise<number> {
  */
 export async function connectStdio(
   args: readonly string[],
+  stateDir?: string,
 ): Promise<{ client: Client; stderr: () => string }> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -37,6 +38,7 @@ export async function connectStdio(
       HOME: mkdtempSync(path.join(tmpdir(), 'lionscope-mcp-')),
       ANDROID_HOME: '/nonexistent/sdk',
       ANDROID_SDK_ROOT: '/nonexistent/sdk',
+      ...(stateDir ? { LIONSCOPE_STATE_DIR: stateDir } : {}),
     },
     stderr: 'pipe',
   });

@@ -1,3 +1,4 @@
+import type { Permissions } from '@lionscope/protocol/wire';
 /**
  * Dashboard state: a pure, immutable reducer over `ServerMessage`s plus a tiny external
  * store that batches high-frequency messages into one notification per animation frame.
@@ -140,6 +141,7 @@ export interface DashboardState {
   /** Count of `viewEdit` messages: the answers past the one a reader saw last are the newest ones. */
   viewEditSeq: number;
   /** What the server's storage flags allow (0.13.0; `off` until its hello says otherwise, and from older servers). */
+  permissions: Permissions | null;
   storageConsent: StorageConsent;
   /** The latest answers to this client's storage requests, oldest first (at most MAX_STORAGE_ANSWERS). */
   storageAnswers: StorageAnswer[];
@@ -255,6 +257,7 @@ export function createInitialState(): DashboardState {
     locationError: null,
     viewEditAnswers: [],
     viewEditSeq: 0,
+    permissions: null,
     storageConsent: 'off',
     storageAnswers: [],
     storageOutcomes: [],
@@ -734,8 +737,20 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
         server: { protocolVersion: msg.protocolVersion, serverVersion: msg.serverVersion },
         bufferWindowMs,
         storageConsent: msg.storageConsent ?? 'off',
+        permissions: msg.permissions ?? null,
       });
     }
+    case 'permissions':
+      return {
+        ...state,
+        permissions: msg.permissions,
+        storageConsent: !msg.permissions.storageRead
+          ? 'off'
+          : msg.permissions.storageWrite
+            ? 'read_write'
+            : 'read',
+        ...(!msg.permissions.storageRead ? { storageAnswers: [] } : {}),
+      };
     case 'devices':
       return {
         ...state,
