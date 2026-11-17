@@ -14,12 +14,18 @@ compatibility references and golden fixtures remain unchanged. External lockfile
 `npm run release:check` enforces this consistency in CI. A negative probe with stale MCP metadata exited 1 as
 expected; the original file was restored and the positive check passed.
 
-Protocol and Android implementation sources match the reviewed Network branch. No raw screen transport or
+Android implementation sources match the reviewed Network branch. The protocol adds optional dashboard
+permission state; SDK consent reuses the existing version-gated config field. No raw screen transport or
 research files are in the candidate. The primary workspace, its unfinished edits and active Consumer session
 were left in place; initial release builds ran in `/tmp/lionscope-release-0.13.0`, and the SQL agent-tools
 follow-up was built in `/tmp/lionscope-storage-sql-agent-tools` before integration into the candidate.
 
 ## Checks and artifacts
+
+The initial preparation checks below precede the follow-ups. The latest runtime candidate passed **2,459
+TypeScript tests / 148 files**, **48 browser cases**, and **16 focused SDK JVM tests**, as detailed under
+[Runtime permissions](#runtime-permissions-follow-up). Earlier full Android results retain their original
+scope. The artifact table identifies the latest tested npm tarball.
 
 - `npm ci --offline --ignore-scripts`, `npm run release:check`, `npm run typecheck`, `npm run lint`,
   `npm run format:check`, `npm run docs:check`, `npm run build:cli` and `git diff --check`: passed.
@@ -122,18 +128,25 @@ failures investigated and limitations. Builds ran in `/tmp/lionscope-runtime-per
 
 ## Publication prerequisites still open
 
+Permissions are included in the versioned **0.13.0** changelog and release notes, rather than left under
+Unreleased. This release-scope follow-up changes documentation only. Its formatting, documentation links,
+release metadata and artifact-integrity checks passed; runtime suites and package builds were not repeated.
+The npm tarball and AARs are byte-identical to the verified runtime-permissions candidate.
+
 - PR #34 is open with passing CI. PR #36 and #37 are drafts based on its branch. Merge #34, retarget/rebase
   the two feature PRs onto `main`, and require their CI before merging them. Do not merge them into the Storage
-  branch just to collect the release.
+  branch just to collect the release. Status and the three unchanged feature heads were rechecked during this
+  release-scope follow-up; #36 and #37 have no check runs yet.
 - Review and merge the local SQL agent-tools feature and gateway test synchronization fix as separate scopes.
   They are included in the local candidate only; the feature adds no protocol or Android implementation changes.
 - Review the runtime-permissions follow-up before release. It changes default access and blocks legacy client
   allow headers from overriding server restrictions; release notes describe the new saved settings and defaults.
-- Reapply the separate version-preparation, documentation and SQL follow-up commits to the final reviewed `main`
+- Reapply the separate version-preparation, documentation, SQL and runtime-permissions follow-up commits to the final reviewed `main`
   tree and rerun affected checks. The local `prepare-0.13.0.patch` mailbox contains those candidate follow-ups.
   The current local integration branch is not an approved release target by itself.
-- npm's public registry still listed **0.12.0** as latest and did not list 0.13.0; the remote 0.13.0 tag was absent.
-  `npm whoami` returned **E401 Unauthorized**. Refresh npm publishing authentication before requesting publication;
+- At initial preparation, npm's public registry listed **0.12.0** as latest and did not list 0.13.0; the remote
+  0.13.0 tag was absent. `npm whoami` returned **E401 Unauthorized**. Recheck registry/tag availability and
+  npm publishing authentication before publication;
   the failure was not bypassed and no login credentials were changed.
 - Approve the final release commit/date and publication. No annotated tag, GitHub release, npm publish,
   JitPack remote build or MCP registry update has been performed. Follow the [release procedure](../releasing.md).

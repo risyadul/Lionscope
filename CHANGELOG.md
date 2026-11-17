@@ -6,13 +6,6 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
-### Changed
-
-- All four debugging permissions start enabled. Dashboard Permissions and `lionscope permissions` change
-  them without restarting, saving choices locally per server port. New `--disable-*` flags and existing
-  `--allow-*` aliases also update a running server. Storage read-off disables writes; enabling writes enables
-  reads. MCP/CLI clients cannot override disabled server settings. Already running actions may finish.
-
 ## [0.13.0] - 2026-11-17
 
 ### Added
@@ -37,9 +30,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 - Storage inspector (SDK 0.13.0): the profiled app's SharedPreferences and the Room databases it registers with
   `Lionscope.trackDatabase(name, db)` (the no-op artifact has it too), read and edited live from the dashboard's
-  **Storage** workspace or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Off unless
-  the server starts with `--allow-storage-read` (and `--allow-storage-write` to edit); only on a profiling session's
-  proven link. Reads and edits go through the app's own transaction, never a second connection, one request at a
+  **Storage** workspace or AI agents (`list_storage`, `read_storage`, `write_storage`, `get_storage_audit`). Read/write
+  permissions start enabled and can be disabled live; access needs a profiling session's proven link. Room reads
+  and edits go through the app's own transaction, never a second connection, one request at a
   time off the main thread; edits are compare-and-set updates of existing values and deletes by primary key, with
   undo on the same link. Device protocol 12 exposes original values, including credentials, and supports atomic
   row edits including primary keys; older negotiated links retain v11 redaction. Technical read-only boundaries
@@ -48,12 +41,18 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Changed
 
+- **Breaking:** all four debugging permissions start enabled: agent device control, Network bodies for agents,
+  Storage read and Storage write. Dashboard Permissions and `lionscope permissions` change them without
+  restarting, saving choices locally per server port. New `--disable-*` flags and existing `--allow-*` aliases
+  also update a running server. Storage read-off disables writes; enabling writes enables reads. MCP/CLI
+  clients cannot override disabled server settings. Already running actions may finish.
+
 - **Breaking:** `lionscope` now starts in the background and returns the terminal. Use `--foreground` for the
   previous attached-server behavior. Development scripts and MCP stdio retain their existing lifecycle.
 
 - **Breaking:** Network capture on negotiated device protocol 14 preserves original debug data, including auth
   headers, URL credentials, request/response text and failure messages. Older negotiated links retain credential
-  redaction. Capture bounds, link proof and AI body opt-in remain enforced.
+  redaction. Capture bounds, link proof and the configurable Network bodies permission remain enforced.
 
 - Dashboard navigation uses five workspaces in a labeled sidebar: Profiler, Layout Inspector, Network, Storage
   and Device. Profiler retains Screens, Stalls, Layouts and Saved State, plus contextual request details; Network
