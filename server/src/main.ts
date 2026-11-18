@@ -1,5 +1,6 @@
 import { runMcpCommand } from './cli/mcpCommand.ts';
 import { runQueryCommand } from './cli/queryCommand.ts';
+import { runLayoutPreviewCommand } from './cli/layoutPreviewCommand.ts';
 import { runDaemonChild, runLifecycle, startBackground } from './cli/daemon.ts';
 import { exitOnShutdown, startLionscope } from './cli/serve.ts';
 import { loadConfig, parseCliArgs, SERVER_VERSION, USAGE } from './config.ts';
@@ -10,6 +11,10 @@ async function main(): Promise<void> {
   let argv = process.argv.slice(2);
   if (argv[0] === '__daemon') return runDaemonChild(argv.slice(1));
   if (argv[0] === 'mcp') return runMcpCommand(argv.slice(1));
+  if (argv[0] === 'render-layout') {
+    process.exitCode = await runLayoutPreviewCommand(argv.slice(1));
+    return;
+  }
   if (argv[0] === 'query') {
     process.exitCode = await runQueryCommand(argv.slice(1));
     return;

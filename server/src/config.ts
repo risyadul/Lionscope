@@ -66,6 +66,7 @@ export const USAGE = `Usage: lionscope [options]
        lionscope permissions [--disable-* | --allow-*] [--port <port>]
        lionscope mcp [options]
        lionscope query <tool> [--<arg> <value> ...] [--json '<arguments>'] [--port <port>]
+       lionscope render-layout --module <:module> --layout <file.xml> --out <file.png>
 
 Starts Lionscope in the background and returns the terminal. The server serves the dashboard at
 http://localhost:<port>, an MCP endpoint for AI agents at http://localhost:<port>/mcp and a JSON tool API
@@ -82,6 +83,7 @@ Commands:
                         --port, or starts one in this process (the dashboard stays at http://localhost:<port>)
   query <tool>          Run one agent tool against the running server and print its JSON result
                         (\`lionscope query --list\` lists the tools)
+  render-layout         Render an Android layout XML to PNG locally (see render-layout --help)
 
 Options:
   --foreground         Keep the server in this terminal; Ctrl+C stops it

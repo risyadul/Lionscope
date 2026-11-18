@@ -308,6 +308,31 @@ Arguments are `--name value` flags (kebab or camel case) or `--json '{"window":"
 without the `get_` / `search_` prefix. The result is JSON on stdout; on failure the exit code is 1 and stdout
 holds `{"ok": false, "error": "…"}`. `query` needs a running server (`--port` to pick it).
 
+### Preview XML layouts
+
+Agents with shell and image access can run `lionscope render-layout` and open the PNG from the reported `path`.
+The command runs locally and needs JDK 21 (set `JAVA_HOME`), the Android SDK for the project and a Gradle wrapper.
+It has been verified with Gradle 8.11.1 and Android Gradle Plugin 8.9.1 on Apple silicon.
+
+```bash
+lionscope render-layout --project android-sdk --module :sample \
+  --layout sample/src/main/res/layout/fragment_home.xml \
+  --theme Theme.LionscopeSample --out /tmp/fragment_home.png
+```
+
+Use `--project` for the Gradle root and `--variant` for a build variant such as `demoDebug`. The layout path
+is relative to the Gradle root, and the output path is relative to your shell. The output directory must exist.
+Set `--theme` to the style name used by the screen, without the `@style/` prefix. The default uses an Android
+Material theme. The command reports the image path and dimensions as JSON on stdout.
+
+Lionscope supplies one temporary Gradle init script and one generic render test for every layout. Gradle downloads
+Paparazzi and Layoutlib on the first run and uses the selected module's resources and dependencies. Run the command
+on projects you trust to build locally, since Gradle and custom Views can execute project code.
+
+The preview uses a portrait Pixel 5 configuration. It reports an error if Android resource selection resolves the
+layout name to a different XML file. Text and lists populated by an Activity, Fragment or adapter only show the
+content available during inflation. Custom Views that depend on runtime services can fail during inflation.
+
 ## Safety notes
 
 - Everything stays on this machine: the endpoints listen on 127.0.0.1 and refuse requests a web page could make

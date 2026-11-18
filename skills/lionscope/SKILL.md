@@ -8,9 +8,10 @@ description: >-
   Use it when the user asks why an Android
   screen is slow, janky or frozen, what blocks the main thread, which layout is expensive, why the app crashes with
   TransactionTooLargeException, what a view on screen is or where it comes from, what
-  requests the app makes, wants to inspect or edit app storage, test an error or slow-network state, or operate a device.
+  requests the app makes, or wants to preview a layout XML without running the app, inspect or edit app storage,
+  test an error or slow-network state, or operate a device.
 license: Apache-2.0
-compatibility: Needs Node.js 22.12+, adb and Android 6.0+ (API 23) for profiling; FrameMetrics and UI-helper tree operations need API 24.
+compatibility: Needs Node.js 22.12+, adb and Android 6.0+ (API 23) for profiling. FrameMetrics and UI-helper tree operations need API 24. XML previews use JDK 21 and Gradle.
 metadata:
   version: 0.13.0
   homepage: https://github.com/risyadul/Lionscope
@@ -19,7 +20,14 @@ metadata:
 # Lionscope
 
 Lionscope is a local Android profiler and Layout Inspector (server and dashboard on 127.0.0.1, default
-`http://localhost:8701`). Everything it reports comes from one app on one device, during a profiling session.
+`http://localhost:8701`). Live data comes from one app on one device. XML layout previews render locally from source.
+
+## Preview a layout XML from source
+
+For a source preview, use `lionscope render-layout --help` to find the project, module, layout, variant and theme
+arguments. Run the command with an available PNG output path, then open the PNG identified by its JSON `path`.
+In a source checkout, `npm run build:cli` builds `cli/dist/lionscope.mjs` with this command. The source preview
+runs through Gradle and does not need a Lionscope session, device, or emulator.
 
 ## Two ways to call it
 
@@ -39,7 +47,7 @@ enabled; saved server choices and client disable flags can restrict them. Check 
 permission is disabled, explain the block and let the user enable it through dashboard Permissions or the CLI;
 do not silently re-enable it. Operate only the device the user named.
 
-## Start every task the same way
+## Start a live inspection
 
 1. `status`: the devices (serials), emulators, the session, the SDK link (version, protocol, options) and
    whether device control and network bodies are allowed.

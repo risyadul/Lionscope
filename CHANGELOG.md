@@ -6,6 +6,11 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- `lionscope render-layout` renders a layout XML file to PNG with the project's Android resources and theme.
+  It runs locally through Gradle and Layoutlib without a device, an installed app, or per-layout tests.
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

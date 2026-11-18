@@ -19,6 +19,8 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   charts, and move them to another location on a map.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
   in the Inspector and ask your agent about "this element".
+- **XML layout previews**: [render an Android layout file to PNG](docs/agents.md#preview-xml-layouts) on your
+  computer without launching the app or connecting a device.
 
 The [local performance baseline](docs/verification/performance-2026-11-16.md) records dashboard, SDK and emulator
 mirror measurements, with their test conditions and limits. Results depend on the app, capture settings and
