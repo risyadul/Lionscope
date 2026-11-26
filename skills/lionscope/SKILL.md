@@ -126,6 +126,11 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.13.0")
    `#AARRGGBB`), text and text size. Use `--json` for a four-side `padding` array or for a text like `42`.
    `revert_view_properties` undoes edits (without arguments, all of them). Edits are temporary; tell the user
    which file and line to change for real.
+4. For Compose recomposition and skip counts (Compose 1.9+, works with or without a session): enable tracking with
+   `set_sdk_options --composeRecompositionTracking true`, clear counters before reproducing an interaction with
+   `reset_compose_recompositions`, then inspect with `inspect_screen` or `get_inspector_selection` to read
+   `recompositions` and `skips` on restartable composables. Turn tracking off with
+   `set_sdk_options --composeRecompositionTracking false` when done.
 
 ### Network: "what does the app call?" and error states
 

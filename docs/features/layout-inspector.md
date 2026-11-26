@@ -42,6 +42,29 @@ after the app changes its top screen (never continuously), and the refresh butto
   screen) and have no text, content description, test tag or click; they stay in the tree. Clicking again on the
   same spot steps to the view below. Works with Jetpack Compose 1.6 and later and Compose Multiplatform 1.8+ on
   Android, compiled with source information (the default for debug builds).
+- **Compose recomposition and skip counts.** On Compose runtime 1.9 and later (device protocol 15), press
+  **Recompositions** in the Inspector header to opt in to counting recompositions and skips, and **Reset** to clear
+  the counters back to zero. Tracking starts **off** by default, works both with and without a profiling session
+  (inspect-only links too), and detaches its Compose runtime observers automatically when turned off or when the
+  link disconnects.
+  - **What the numbers mean.** Tree rows show `recompositions / skips` for restartable composables with non-zero
+    counts (highlighting counts ≥ 10), and the Attributes panel lists `Recompositions` and `Skips` separately.
+    Counts follow Android Studio's semantics: they accumulate from when tracking was enabled or last reset, and a
+    composable that first composes while tracking is active (for example, a `LazyColumn` item scrolled into view)
+    counts its initial composition as `1`. Inline and non-restartable composables (such as `Row` or `Column`) have
+    no restartable scope, so they show no row counter and note this in Attributes.
+  - **Compatibility and fallback.** Apps on Compose < 1.9 report `unsupported` (header tooltip: "Requires Compose
+    1.9+") and keep regular Compose hierarchy inspection unchanged. To distinguish skips from recompositions
+    without conflating them, the SDK reads `RecomposeScopeImpl`'s internal skip/rereading flags once and caches the
+    field; if any required runtime symbol is missing on a future Compose build, tracking fails closed to
+    `unsupported`.
+  - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
+    `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
+    ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time
+    moved from `22 ms` (OFF) to `23 ms` (ON) at p50 (`21.8 ms` vs `22.2 ms` mean), `32 ms` vs `32 ms` at p90
+    (`31.4 ms` vs `31.8 ms` mean), `34 ms` vs `36 ms` at p95 (`34.8 ms` vs `36.0 ms` mean), and `48 ms` vs `46 ms`
+    at p99 (`46.4 ms` vs `46.0 ms` mean) — within emulator run-to-run noise. Because tracking is opt-in and detaches
+    its observers when off, disabled overhead is zero.
 - **When Compose falls back.** A Compose screen that was composed before the SDK started (Lionscope installed by
   hand late, or the app opted out with `<meta-data android:name="io.github.risyadul.lionscope.composeInspection"
 android:value="false" />`) cannot be read: the badge says why (restart the app). So does a build without
