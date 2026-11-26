@@ -259,6 +259,40 @@ describe('DevicePicker wireless badges & disconnect', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Disconnect' }).at(-1)!);
     expect(onDisconnect).toHaveBeenCalledWith('192.168.1.10:5555');
   });
+
+  it('shows exact serial, public IP and port confirmation for public-IP USB handoff and confirms bound values', () => {
+    const onConfirmPublic = vi.fn();
+    const onCancelPublic = vi.fn();
+    render(
+      <DevicePicker
+        devices={[usbDevice]}
+        emulators={[]}
+        value={usbDevice.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={vi.fn()}
+        pendingPublicTcpip={{
+          usbSerial: 'R58M123ABC',
+          host: '192.0.2.15',
+          port: 5555,
+          target: '192.0.2.15:5555',
+        }}
+        onConfirmPublicTcpip={onConfirmPublic}
+        onCancelPublicTcpip={onCancelPublic}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.textContent).toContain('R58M123ABC');
+    expect(dialog.textContent).toContain('192.0.2.15');
+    expect(dialog.textContent).toContain('5555');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable on 192.0.2.15:5555' }));
+    expect(onConfirmPublic).toHaveBeenCalledWith('R58M123ABC', 5555, '192.0.2.15:5555');
+  });
 });
 
 describe('WirelessDialog', () => {

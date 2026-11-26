@@ -17,6 +17,7 @@ import {
 } from '../../lib/emulators.ts';
 import { ConfirmDialog } from '../ui/ConfirmDialog.tsx';
 import { Select } from '../ui/Select.tsx';
+import type { PendingPublicTcpip } from '../../hooks/useWirelessActions.ts';
 
 export const DEVICE_PICKER_ID = 'device-picker';
 
@@ -40,6 +41,10 @@ type Props = {
   onSwitchToWifi?: (serial: string) => void;
   /** True while the selected USB device is switching to Wi-Fi. */
   isSwitchingToWifi?: boolean;
+  /** Pending public-IP confirmation returned by the server before `adb tcpip` runs. */
+  pendingPublicTcpip?: PendingPublicTcpip | null;
+  onConfirmPublicTcpip?: (serial: string, port: number, target: string) => void;
+  onCancelPublicTcpip?: () => void;
   isLocked: boolean;
   isOffline: boolean;
   /** Boot / Shut down for the selected emulator, beside the select. */
@@ -76,6 +81,9 @@ export function DevicePicker({
   isDisconnecting = false,
   onSwitchToWifi,
   isSwitchingToWifi = false,
+  pendingPublicTcpip = null,
+  onConfirmPublicTcpip,
+  onCancelPublicTcpip,
   isLocked,
   isOffline,
   actions,
@@ -130,6 +138,17 @@ export function DevicePicker({
       : null;
   const handoffTargetEligible =
     handoffTarget !== null && isUsbTcpipEligible(handoffTarget) && !isLocked && onSwitchToWifi !== undefined;
+
+  const publicTcpipTarget =
+    pendingPublicTcpip !== null
+      ? (list.find((d) => d.serial === pendingPublicTcpip.usbSerial) ?? null)
+      : null;
+  const publicTcpipEligible =
+    pendingPublicTcpip !== null &&
+    publicTcpipTarget !== null &&
+    isUsbTcpipEligible(publicTcpipTarget) &&
+    !isLocked &&
+    onConfirmPublicTcpip !== undefined;
 
   if (confirmDisconnectSerial !== null && !disconnectTargetEligible) {
     setConfirmDisconnectSerial(null);
@@ -317,6 +336,31 @@ export function DevicePicker({
             </strong>{' '}
             (or switched back with <code className="mono">adb usb</code>). Only enable this on a network you
             trust.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingPublicTcpip && publicTcpipTarget && publicTcpipEligible && onConfirmPublicTcpip && (
+        <ConfirmDialog
+          title={`Public IP on ${deviceName(publicTcpipTarget)}`}
+          confirmLabel={`Enable on ${pendingPublicTcpip.target}`}
+          onConfirm={() => {
+            const { usbSerial, port, target } = pendingPublicTcpip;
+            onConfirmPublicTcpip(usbSerial, port, target);
+          }}
+          onCancel={() => onCancelPublicTcpip?.()}
+        >
+          <p>
+            USB device <strong className="mono">{pendingPublicTcpip.usbSerial}</strong> reported a{' '}
+            <strong>public Wi-Fi IP address</strong>:{' '}
+            <strong className="mono">{pendingPublicTcpip.host}</strong> (port{' '}
+            <strong className="mono">{pendingPublicTcpip.port}</strong>).
+          </p>
+          <p>
+            <strong>
+              Enabling <code className="mono">adb tcpip {pendingPublicTcpip.port}</code> exposes ADB and the
+              Lionscope SDK reverse tunnel on this public address until the phone is rebooted.
+            </strong>{' '}
+            Only continue if you trust this exact address and network.
           </p>
         </ConfirmDialog>
       )}

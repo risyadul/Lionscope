@@ -120,9 +120,14 @@ export const enableWirelessAdbTool = defineTool({
   async run({ serial: requested, port }, ctx) {
     const serial = targetSerial(ctx, requested);
     const result = await requireWireless(ctx).enableTcpipHandoff(serial, 'agent', { port });
+    if (result.status !== 'connected') throw new ToolError(result.message);
     return {
       data: {
-        ...result,
+        usbSerial: result.usbSerial,
+        serial: result.serial,
+        target: result.target,
+        port: result.port,
+        alreadyConnected: result.alreadyConnected,
         note: `TCP/IP port ${result.port} stays open on the device's Wi-Fi network until reboot (or \`adb usb\`).`,
       },
     };

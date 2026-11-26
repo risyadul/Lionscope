@@ -384,6 +384,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       requestId: clientRequestId,
       serial: serialSchema,
       port: z.number().int().min(MIN_WIRELESS_PORT).max(MAX_WIRELESS_PORT).optional(),
+      confirmPublicTarget: wirelessAddressSchema.optional(),
     })
     .strict(),
 ]) satisfies z.ZodType<ClientMessage>;

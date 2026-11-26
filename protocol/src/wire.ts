@@ -1867,7 +1867,18 @@ export type WirelessActionResult =
       port: number;
       alreadyConnected: boolean;
     }
-  | { action: 'tcpip'; ok: false; message: string };
+  | {
+      action: 'tcpip';
+      ok: false;
+      /** True when the device reported a public Wi-Fi IP and the user must confirm exact serial + host + port first. */
+      needsPublicConfirmation: true;
+      usbSerial: string;
+      host: string;
+      port: number;
+      target: string;
+      message: string;
+    }
+  | { action: 'tcpip'; ok: false; needsPublicConfirmation?: false; message: string };
 
 export type ServerMessage =
   | {
@@ -2107,7 +2118,14 @@ export type ClientMessage =
   /** Cancel an active QR pairing session (stops polling and erases its ephemeral password). */
   | { type: 'cancelQrPairing'; sessionId: string }
   /** Switch a USB physical device to TCP/IP mode (`adb tcpip <port>`) and connect over Wi-Fi. */
-  | { type: 'enableWirelessTcpip'; requestId: number; serial: string; port?: number };
+  | {
+      type: 'enableWirelessTcpip';
+      requestId: number;
+      serial: string;
+      port?: number;
+      /** Dashboard confirmation bound to the exact `host:port` previously returned for a public Wi-Fi IP. */
+      confirmPublicTarget?: string;
+    };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

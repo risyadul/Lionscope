@@ -524,13 +524,41 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     service.close();
   });
 
-  it('preserves exact uppercase hostname serial for session teardown and adb disconnect', async () => {
+  it('prefers the exact listed serial on disconnect and stops only that resolved transport session', async () => {
     const stopped: string[] = [];
     const adb = new FakeAdb((args) => {
       if (args[0] === 'disconnect') return `disconnected ${args[1]}\n`;
       return '';
     });
+    // Lab-Phone.local:5555 is listed BEFORE lab-phone.local:5555.
     const service = new WirelessService({
+      adb,
+      refreshDevices: async () => [],
+      stopSessionOn: async (serial) => {
+        stopped.push(serial);
+      },
+      getDevices: () => [
+        { serial: 'Lab-Phone.local:5555', state: 'device', model: 'Pixel_Upper', transport: 'wireless' },
+        { serial: 'lab-phone.local:5555', state: 'device', model: 'Pixel_Lower', transport: 'wireless' },
+      ],
+    });
+    service.approveFromDashboard('lab-phone.local:5555');
+
+    // Disconnecting the lowercase entry must act ONLY on lab-phone.local:5555, never Lab-Phone.local:5555.
+    const lowerRes = await service.disconnect('lab-phone.local:5555', 'agent');
+    expect(lowerRes).toEqual({ target: 'lab-phone.local:5555' });
+    expect(stopped).toEqual(['lab-phone.local:5555']);
+    expect(adb.execCalls.at(-1)).toEqual(['disconnect', 'lab-phone.local:5555']);
+
+    // Disconnecting the uppercase entry stops ONLY the uppercase session (never the lowercase one too).
+    stopped.length = 0;
+    const upperRes = await service.disconnect('Lab-Phone.local:5555', 'agent');
+    expect(upperRes).toEqual({ target: 'Lab-Phone.local:5555' });
+    expect(stopped).toEqual(['Lab-Phone.local:5555']);
+    expect(adb.execCalls.at(-1)).toEqual(['disconnect', 'Lab-Phone.local:5555']);
+
+    // Unique normalized fallback still resolves uppercase when only one case-variant is listed.
+    const singleUpper = new WirelessService({
       adb,
       refreshDevices: async () => [],
       stopSessionOn: async (serial) => {
@@ -540,13 +568,106 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
         { serial: 'MyPhone.local:5555', state: 'device', model: 'Pixel_8', transport: 'wireless' },
       ],
     });
-    service.approveFromDashboard('MyPhone.local:5555');
-
-    const res = await service.disconnect('MyPhone.local:5555', 'agent');
-    expect(res).toEqual({ target: 'MyPhone.local:5555' });
-    expect(stopped[0]).toBe('MyPhone.local:5555');
-    expect(adb.execCalls.find((c) => c[0] === 'disconnect')).toEqual(['disconnect', 'MyPhone.local:5555']);
+    singleUpper.approveFromDashboard('MyPhone.local:5555');
+    stopped.length = 0;
+    const fallbackRes = await singleUpper.disconnect('myphone.local:5555', 'agent');
+    expect(fallbackRes).toEqual({ target: 'MyPhone.local:5555' });
+    expect(stopped).toEqual(['MyPhone.local:5555']);
+    expect(adb.execCalls.at(-1)).toEqual(['disconnect', 'MyPhone.local:5555']);
+    singleUpper.close();
     service.close();
+  });
+
+  it('requires bound public-IP confirmation before running adb tcpip on dashboard and refuses on agent', async () => {
+    let devicesOutput =
+      'List of devices attached\nR58M123ABC device usb:1-1 product:panther model:Pixel_7 transport_id:2\n';
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') return devicesOutput;
+      if (args[0] === '-s' && args[2] === 'shell' && args[3] === 'ip -f inet addr show wlan0') {
+        return '14: wlan0: <UP>\n    inet 192.0.2.15/24 scope global wlan0\n';
+      }
+      if (args[0] === '-s' && args[2] === 'tcpip') return `restarting in TCP mode port: ${args[3]}\n`;
+      if (args[0] === 'connect') {
+        devicesOutput += `${args[1]} device product:panther model:Pixel_7 transport_id:9\n`;
+        return `connected to ${args[1]}\n`;
+      }
+      return '';
+    });
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    await server.manager.refreshDevices();
+
+    // Agent path refuses public IP before tcpip.
+    const agentRefused = await callTool(
+      server.agent,
+      'enable_wireless_adb',
+      { serial: 'R58M123ABC', port: 5555 },
+      true,
+    );
+    expect(agentRefused.ok).toBe(false);
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Dashboard path returns pending confirmation with exact serial, IP, and port without running tcpip or approving.
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+    client.send({ type: 'enableWirelessTcpip', requestId: 41, serial: 'R58M123ABC', port: 5555 });
+    const pending = await client.next('wirelessResult');
+    expect(pending).toEqual({
+      type: 'wirelessResult',
+      requestId: 41,
+      result: {
+        action: 'tcpip',
+        ok: false,
+        needsPublicConfirmation: true,
+        usbSerial: 'R58M123ABC',
+        host: '192.0.2.15',
+        port: 5555,
+        target: '192.0.2.15:5555',
+        message:
+          'Device R58M123ABC reported public Wi-Fi address 192.0.2.15:5555. Confirm this exact address before enabling ADB TCP/IP port 5555.',
+      },
+    });
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+    // Not dashboard-approved before user confirmation.
+    const stillRefused = await callTool(server.agent, 'connect_device', { address: '192.0.2.15:5555' }, true);
+    expect(stillRefused.ok).toBe(false);
+
+    // Confirmation bound to a different IP or port is NOT accepted — still refuses to run tcpip.
+    client.send({
+      type: 'enableWirelessTcpip',
+      requestId: 42,
+      serial: 'R58M123ABC',
+      port: 5555,
+      confirmPublicTarget: '192.0.2.99:5555',
+    });
+    const wrongTarget = await client.next('wirelessResult');
+    expect(wrongTarget.result).toMatchObject({ action: 'tcpip', ok: false, needsPublicConfirmation: true });
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Exact confirmation bound to serial + address + port proceeds and approves for this server run.
+    client.send({
+      type: 'enableWirelessTcpip',
+      requestId: 43,
+      serial: 'R58M123ABC',
+      port: 5555,
+      confirmPublicTarget: '192.0.2.15:5555',
+    });
+    const confirmed = await client.next('wirelessResult');
+    expect(confirmed).toEqual({
+      type: 'wirelessResult',
+      requestId: 43,
+      result: {
+        action: 'tcpip',
+        ok: true,
+        usbSerial: 'R58M123ABC',
+        serial: '192.0.2.15:5555',
+        target: '192.0.2.15:5555',
+        port: 5555,
+        alreadyConnected: false,
+      },
+    });
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip' && c[3] === '5555')).toBe(true);
   });
 
   it('rechecks QR expiry after an in-flight mDNS discovery finishes and does not pair once expired', async () => {

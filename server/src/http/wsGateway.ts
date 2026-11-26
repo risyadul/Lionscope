@@ -492,8 +492,32 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
           try {
             const handedOff = await wireless.enableTcpipHandoff(message.serial, 'dashboard', {
               ...(message.port !== undefined ? { port: message.port } : {}),
+              ...(message.confirmPublicTarget !== undefined
+                ? { confirmPublicTarget: message.confirmPublicTarget }
+                : {}),
             });
-            result = { action: 'tcpip', ok: true, ...handedOff };
+            if (handedOff.status === 'confirm_public') {
+              result = {
+                action: 'tcpip',
+                ok: false,
+                needsPublicConfirmation: true,
+                usbSerial: handedOff.usbSerial,
+                host: handedOff.host,
+                port: handedOff.port,
+                target: handedOff.target,
+                message: handedOff.message,
+              };
+            } else {
+              result = {
+                action: 'tcpip',
+                ok: true,
+                usbSerial: handedOff.usbSerial,
+                serial: handedOff.serial,
+                target: handedOff.target,
+                port: handedOff.port,
+                alreadyConnected: handedOff.alreadyConnected,
+              };
+            }
           } catch (error) {
             if (!(error instanceof PublicError))
               log.warn(`enableWirelessTcpip failed: ${errorMessage(error)}`);

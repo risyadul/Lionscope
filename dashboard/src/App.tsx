@@ -460,6 +460,13 @@ export function App() {
               serial !== null &&
               (wirelessActions.handoffSerial === serial || wirelessActions.provisionalTcpipSerial === serial)
             }
+            pendingPublicTcpip={wirelessActions.pendingPublicTcpip}
+            onConfirmPublicTcpip={(usbSerial, port, target) => {
+              void wirelessActions.enableTcpip(usbSerial, port, target).then((result) => {
+                if (result.ok) changeSerial(result.serial);
+              });
+            }}
+            onCancelPublicTcpip={wirelessActions.clearPendingPublicTcpip}
             apps={apps}
             packageName={packageName}
             onPackageChange={setChosenPackage}

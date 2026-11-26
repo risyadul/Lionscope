@@ -46,6 +46,13 @@ interface Input {
   timeouts?: Partial<Record<WirelessActionResult['action'], number>>;
 }
 
+export interface PendingPublicTcpip {
+  usbSerial: string;
+  host: string;
+  port: number;
+  target: string;
+}
+
 export interface WirelessActionsController {
   connect: (address: string) => Promise<Extract<WirelessActionResult, { action: 'connect' }>>;
   disconnect: (serial: string) => Promise<Extract<WirelessActionResult, { action: 'disconnect' }>>;
@@ -57,7 +64,13 @@ export interface WirelessActionsController {
   listMdns: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
   startQrPairing: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
   cancelQrPairing: (sessionId: string) => void;
-  enableTcpip: (serial: string, port?: number) => Promise<Extract<WirelessActionResult, { action: 'tcpip' }>>;
+  enableTcpip: (
+    serial: string,
+    port?: number,
+    confirmPublicTarget?: string,
+  ) => Promise<Extract<WirelessActionResult, { action: 'tcpip' }>>;
+  pendingPublicTcpip: PendingPublicTcpip | null;
+  clearPendingPublicTcpip: () => void;
   qrPairing: QrPairingUpdate | null;
   lateResult: LateWirelessResult | null;
   disconnectingSerial: string | null;
@@ -93,6 +106,7 @@ export function useWirelessActions({
   const [disconnectingSerial, setDisconnectingSerial] = useState<string | null>(null);
   const [handoffSerial, setHandoffSerial] = useState<string | null>(null);
   const [provisionalTcpipSerial, setProvisionalTcpipSerial] = useState<string | null>(null);
+  const [pendingPublicTcpip, setPendingPublicTcpip] = useState<PendingPublicTcpip | null>(null);
   const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
   const [lateResult, setLateResult] = useState<LateWirelessResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -100,8 +114,9 @@ export function useWirelessActions({
 
   if (prevIsOpen !== isOpen) {
     setPrevIsOpen(isOpen);
-    if (!isOpen && provisionalTcpipSerial !== null) {
-      setProvisionalTcpipSerial(null);
+    if (!isOpen) {
+      if (provisionalTcpipSerial !== null) setProvisionalTcpipSerial(null);
+      if (pendingPublicTcpip !== null) setPendingPublicTcpip(null);
     }
   }
 
@@ -135,11 +150,21 @@ export function useWirelessActions({
       } else if (result.action === 'tcpip') {
         setProvisionalTcpipSerial((current) => (current === timedOut.serial ? null : current));
         if (result.ok) {
+          setPendingPublicTcpip(null);
           setActionError(null);
           setActionNotice(
             `Switched to Wi-Fi (${result.serial}). Port ${result.port} stays open until reboot.`,
           );
           onLateConnectedRef.current?.(result.serial);
+        } else if (result.needsPublicConfirmation) {
+          setActionError(null);
+          setActionNotice(null);
+          setPendingPublicTcpip({
+            usbSerial: result.usbSerial,
+            host: result.host,
+            port: result.port,
+            target: result.target,
+          });
         } else {
           setActionNotice(null);
           setActionError(result.message);
@@ -175,7 +200,7 @@ export function useWirelessActions({
         action: entry.action,
         ok: false,
         message: 'Disconnected from the Lionscope server before the action completed.',
-      });
+      } as WirelessActionResult);
     }
     timedOutRef.current.clear();
   }, [isOpen]);
@@ -286,10 +311,11 @@ export function useWirelessActions({
   );
 
   const enableTcpip = useCallback(
-    async (serial: string, port?: number) => {
+    async (serial: string, port?: number, confirmPublicTarget?: string) => {
       setHandoffSerial(serial);
       setActionError(null);
       setActionNotice(null);
+      setPendingPublicTcpip(null);
       try {
         const result = await request(
           'tcpip',
@@ -298,10 +324,22 @@ export function useWirelessActions({
             requestId,
             serial,
             ...(port !== undefined ? { port } : {}),
+            ...(confirmPublicTarget !== undefined ? { confirmPublicTarget } : {}),
           }),
           { serial },
         );
-        if (!result.ok) setActionError(result.message);
+        if (!result.ok) {
+          if (result.needsPublicConfirmation) {
+            setPendingPublicTcpip({
+              usbSerial: result.usbSerial,
+              host: result.host,
+              port: result.port,
+              target: result.target,
+            });
+          } else {
+            setActionError(result.message);
+          }
+        }
         return result;
       } finally {
         setHandoffSerial((current) => (current === serial ? null : current));
@@ -310,6 +348,7 @@ export function useWirelessActions({
     [request],
   );
 
+  const clearPendingPublicTcpip = useCallback(() => setPendingPublicTcpip(null), []);
   const clearActionError = useCallback(() => setActionError(null), []);
   const clearActionNotice = useCallback(() => setActionNotice(null), []);
 
@@ -339,6 +378,8 @@ export function useWirelessActions({
     startQrPairing,
     cancelQrPairing,
     enableTcpip,
+    pendingPublicTcpip,
+    clearPendingPublicTcpip,
     qrPairing,
     lateResult,
     disconnectingSerial,

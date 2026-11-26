@@ -72,13 +72,23 @@ export interface QrPairingStartResult {
   expiresAt: number;
 }
 
-export interface WirelessTcpipOutcome {
-  usbSerial: string;
-  serial: string;
-  target: string;
-  port: number;
-  alreadyConnected: boolean;
-}
+export type WirelessTcpipOutcome =
+  | {
+      status: 'connected';
+      usbSerial: string;
+      serial: string;
+      target: string;
+      port: number;
+      alreadyConnected: boolean;
+    }
+  | {
+      status: 'confirm_public';
+      usbSerial: string;
+      host: string;
+      port: number;
+      target: string;
+      message: string;
+    };
 
 interface ActiveQrSession {
   sessionId: string;
@@ -180,16 +190,20 @@ export class WirelessService {
   }
 
   async disconnect(rawSerial: string, source: WirelessRequestSource): Promise<AdbDisconnectResult> {
-    // Validate against host policy using the normalized key, then act on the exact listed serial.
+    // Validate against host policy using the normalized key, then resolve the exact transport to tear down.
     const policyKey = this.validateTarget(rawSerial, source, true);
-    const matching = this.getDevices().find((d) => this.normalizePolicyKey(d.serial) === policyKey);
-    const exactSerial = matching ? matching.serial : rawSerial;
-
-    // Stop any profiling session running on this serial before tearing down its adb transport.
-    await this.stopSessionOn(exactSerial).catch(() => undefined);
-    if (policyKey !== exactSerial) {
-      await this.stopSessionOn(policyKey).catch(() => undefined);
+    const devices = this.getDevices();
+    const exactMatch = devices.find((d) => d.serial === rawSerial);
+    let exactSerial: string;
+    if (exactMatch) {
+      exactSerial = exactMatch.serial;
+    } else {
+      const normalizedMatches = devices.filter((d) => this.normalizePolicyKey(d.serial) === policyKey);
+      exactSerial = normalizedMatches.length === 1 ? normalizedMatches[0]!.serial : rawSerial;
     }
+
+    // Stop only the resolved transport's profiling session before tearing down its adb transport.
+    await this.stopSessionOn(exactSerial).catch(() => undefined);
     let result: AdbDisconnectResult;
     try {
       result = await adbDisconnect(this.adb, exactSerial);
@@ -482,7 +496,7 @@ export class WirelessService {
   async enableTcpipHandoff(
     usbSerial: string,
     source: WirelessRequestSource,
-    options: { port?: number } = {},
+    options: { port?: number; confirmPublicTarget?: string } = {},
   ): Promise<WirelessTcpipOutcome> {
     if (!isValidSerial(usbSerial)) throw new PublicError('Invalid adb serial');
     const port = parseWirelessPort(options.port ?? DEFAULT_ADB_TCP_PORT);
@@ -511,6 +525,23 @@ export class WirelessService {
 
     // Validate the device-reported IP against caller host policy BEFORE opening TCP/IP or connecting.
     const target = this.validateTarget(`${wifiIp}:${port}`, source, false);
+
+    // On the dashboard path, never restart adbd on a public IP without an explicit confirmation bound to
+    // the exact serial, IP address, and port just read from the phone.
+    if (source === 'dashboard' && isPublicWirelessHost(target)) {
+      const confirmed =
+        options.confirmPublicTarget !== undefined ? parseWirelessAddress(options.confirmPublicTarget) : null;
+      if (!confirmed || !confirmed.ok || confirmed.value.target !== target) {
+        return {
+          status: 'confirm_public',
+          usbSerial,
+          host: wifiIp,
+          port,
+          target,
+          message: `Device ${usbSerial} reported public Wi-Fi address ${target}. Confirm this exact address before enabling ADB TCP/IP port ${port}.`,
+        };
+      }
+    }
 
     try {
       await adbTcpip(this.adb, usbSerial, port);
@@ -542,6 +573,7 @@ export class WirelessService {
     }
     await this.refreshDevices().catch(() => undefined);
     return {
+      status: 'connected',
       usbSerial,
       serial: connected.serial,
       target: connected.target,
