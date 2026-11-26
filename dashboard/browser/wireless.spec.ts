@@ -37,7 +37,7 @@ test('wireless device picker badges, connect/pair/QR dialog, and stream preset f
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(info.project.use.viewport!.height + 1);
   await page.screenshot({ path: info.outputPath('wireless-connect.png'), fullPage: true });
 
-  // Pair with code tab fits within dialog bounds.
+  // Pair with code tab fits within dialog bounds and keeps focus across App clock ticks.
   const pairTab = dialog.getByRole('tab', { name: 'Pair with code', exact: true });
   await pairTab.click();
   await expect(pairTab).toHaveAttribute('aria-selected', 'true');
@@ -45,13 +45,17 @@ test('wireless device picker badges, connect/pair/QR dialog, and stream preset f
     'aria-selected',
     'false',
   );
-  await expect(dialog.getByLabel('6-digit pairing code')).toBeVisible();
+  const codeInput = dialog.getByLabel('6-digit pairing code');
+  await expect(codeInput).toBeVisible();
   await expect
     .poll(() => pairTab.evaluate((el) => getComputedStyle(el).borderBottomColor))
     .not.toBe('rgba(0, 0, 0, 0)');
+  await codeInput.focus();
+  await page.waitForTimeout(1200);
+  await expect(codeInput).toBeFocused();
   await page.screenshot({ path: info.outputPath('wireless-pair.png'), fullPage: true });
 
-  // Pair with QR tab renders crisp SVG QR code inside bounds.
+  // Pair with QR tab renders crisp SVG QR code inside bounds and survives clock ticks + pairing updates without cancelling.
   await dialog.getByRole('tab', { name: 'Pair with QR', exact: true }).click();
   const qr = dialog.getByRole('img', { name: 'Android wireless debugging pairing QR code' });
   await expect(qr).toBeVisible();
@@ -59,11 +63,16 @@ test('wireless device picker badges, connect/pair/QR dialog, and stream preset f
   expect(qrBox).not.toBeNull();
   expect(qrBox!.width).toBeGreaterThanOrEqual(120);
   await page.screenshot({ path: info.outputPath('wireless-qr.png'), fullPage: true });
+  await expect(dialog.getByText('Phone scanned QR — pairing with 192.168.1.50:39000…')).toBeVisible({
+    timeout: 3000,
+  });
+  expect(await page.evaluate(() => document.documentElement.dataset.qrCancelledCount)).toBe('0');
 
-  // Escape closes dialog and restores focus to trigger.
+  // Escape closes dialog, cancels active QR only on dismissal, and restores focus to trigger.
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(trigger).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.dataset.qrCancelledCount)).toBe('1');
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   expect(errors).toEqual([]);
 });

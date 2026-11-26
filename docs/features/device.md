@@ -62,9 +62,9 @@ Safari 16.4+; the dashboard must be opened on `localhost`).
 Under the mirrored screen, next to Back/Home/Recents, the stream quality preset (**Standard** at 60 fps with
 scrcpy's default bitrate, **Wi-Fi** at 30 fps / 2 Mbps, or **Low** at 15 fps / 1 Mbps; **Standard** by default,
 remembered per browser) trades smoothness for lower bandwidth and latency on congested Wi-Fi networks. When a
-Wi-Fi stream drops, Lionscope cleans up stale scrcpy forwards/processes and shows reconnect progress with a
-**Reconnect now** action. Note that `stay_awake` only keeps the screen on while plugged in; on battery over Wi-Fi,
-Android sleeps at its normal display timeout until woken.
+Wi-Fi stream drops, Lionscope cleans up that session's scrcpy forward and process (without disturbing other active
+mirrors) and shows reconnect progress with a **Reconnect now** action. Note that `stay_awake` only keeps the screen
+on while plugged in; on battery over Wi-Fi, Android sleeps at its normal display timeout until woken.
 
 The phone's hardware encoder does add a little work while it is mirrored, so close the Device column for the
 cleanest measurements.
@@ -76,8 +76,9 @@ on.
 ## Wireless physical devices (Wi-Fi ADB)
 
 Click the **Connect wireless device** (Wi-Fi) button beside the device picker to connect to a physical device over
-wireless ADB (`adb connect <host>:<port>`). The dialog accepts any valid IPv4, bracketed IPv6 (`[fd00::1]:5555`),
-or hostname with port, and warns whenever the address is a public IP.
+wireless ADB (`adb connect <host>:<port>`). The dialog accepts any valid dotted-decimal IPv4, bracketed IPv6
+(`[fd00::1]:5555`), or hostname with port, and warns before connecting to any public IP (whether entered manually,
+picked from mDNS discovery, or discovered after pairing).
 
 - **Transport badges & Disconnect.** Physical devices show a **USB** or **Wi-Fi** badge next to the device picker
   (and in the picker options). Selecting a wireless device shows a **Disconnect** button (`adb disconnect`); if a

@@ -459,22 +459,27 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     });
   });
 
-  it('requires matching mDNS GUID after pairing and never approves unverified automatic follow-ups for agents', async () => {
+  it('requires matching mDNS GUID after pairing, skips auto-connect on public IPs, and never approves unverified follow-ups for agents', async () => {
     const adb = new FakeAdb((args) => {
       if (args[0] === 'pair') {
         if (args[1] === '192.168.1.42:37123') {
           return 'Successfully paired to 192.168.1.42:37123 [guid=adb-PHONE_A-111]\n';
         }
-        // Older adb without GUID on a public host.
-        return 'Successfully paired to 8.8.8.8:37123\n';
+        if (args[1] === '8.8.8.8:37123') {
+          return 'Successfully paired to 8.8.8.8:37123 [guid=adb-PUBLIC-444]\n';
+        }
+        // Older adb without GUID on loopback (non-public, non-agent-allowed).
+        return 'Successfully paired to 127.0.0.1:37123\n';
       }
       if (args[0] === 'mdns' && args[1] === 'services') {
         return [
           'List of discovered mdns services',
           // Different device on the same IP as PHONE_A!
           'adb-PHONE_B-222\t_adb-tls-connect._tcp\t192.168.1.42:45555',
-          // Single record on 8.8.8.8 without GUID verification.
-          'adb-UNKNOWN-333\t_adb-tls-connect._tcp\t8.8.8.8:46666',
+          // Single record on 127.0.0.1 without GUID verification.
+          'adb-UNKNOWN-333\t_adb-tls-connect._tcp\t127.0.0.1:46666',
+          // Public IP connect service matching adb-PUBLIC-444.
+          'adb-PUBLIC-444\t_adb-tls-connect._tcp\t8.8.8.8:47777',
         ].join('\n');
       }
       if (args[0] === 'connect') return `connected to ${args[1]}\n`;
@@ -500,11 +505,22 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     });
     expect(adb.execCalls.some((c) => c[0] === 'connect' && c[1] === '192.168.1.42:45555')).toBe(false);
 
+    // When mDNS advertises a public IP for the connect port, never auto-connect silently — return
+    // discoveredTarget so the dashboard shows the public-IP warning before connecting.
+    const publicDiscovered = await service.pair('8.8.8.8:37123', '482910', 'dashboard');
+    expect(publicDiscovered).toMatchObject({
+      target: '8.8.8.8:37123',
+      host: '8.8.8.8',
+      connectedSerial: null,
+      discoveredTarget: '8.8.8.8:47777',
+    });
+    expect(adb.execCalls.some((c) => c[0] === 'connect' && c[1] === '8.8.8.8:47777')).toBe(false);
+
     // When adb omits GUID and auto-connects by unique host on a dashboard pair, do NOT add the
     // unverified automatic follow-up endpoint to the agent approval set.
-    const noGuid = await service.pair('8.8.8.8:37123', '482910', 'dashboard');
-    expect(noGuid.connectedSerial).toBe('8.8.8.8:46666');
-    expect(service.isDashboardApproved('8.8.8.8:46666')).toBe(false);
+    const noGuid = await service.pair('127.0.0.1:37123', '482910', 'dashboard');
+    expect(noGuid.connectedSerial).toBe('127.0.0.1:46666');
+    expect(service.isDashboardApproved('127.0.0.1:46666')).toBe(false);
     service.close();
   });
 

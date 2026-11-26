@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DeviceInfo } from '@lionscope/protocol/wire';
+import type { ClientMessage, DeviceInfo, WirelessActionResult } from '@lionscope/protocol/wire';
 import { DevicePicker } from '../src/components/topbar/DevicePicker.tsx';
 import { WirelessDialog } from '../src/components/topbar/WirelessDialog.tsx';
+import { useWirelessActions, WIRELESS_ACTION_TIMEOUTS_MS } from '../src/hooks/useWirelessActions.ts';
+import { createInitialState, reduce, type WirelessAnswer } from '../src/lib/store.ts';
 
 afterEach(cleanup);
 
@@ -135,6 +137,127 @@ describe('DevicePicker wireless badges & disconnect', () => {
 
     expect(screen.getByText('USB')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Use Wi-Fi' })).toBeTruthy();
+  });
+
+  it('pins USB handoff and disconnect confirmations to the captured serial and dismisses if it disappears', () => {
+    const usbA: DeviceInfo = { serial: 'USB_A', state: 'device', model: 'Pixel_A', transport: 'usb' };
+    const usbB: DeviceInfo = { serial: 'USB_B', state: 'device', model: 'Pixel_B', transport: 'usb' };
+    const onSwitchToWifi = vi.fn();
+    const { rerender } = render(
+      <DevicePicker
+        devices={[usbA, usbB]}
+        emulators={[]}
+        value={usbA.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={onSwitchToWifi}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+
+    // Open confirmation on USB_A, then change selection to USB_B before confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Use Wi-Fi' }));
+    rerender(
+      <DevicePicker
+        devices={[usbA, usbB]}
+        emulators={[]}
+        value={usbB.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={onSwitchToWifi}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+    expect(screen.getByRole('alertdialog').textContent).toContain('Pixel A');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Wi-Fi ADB' }));
+    expect(onSwitchToWifi).toHaveBeenCalledWith('USB_A');
+
+    // Open confirmation on USB_B, then remove USB_B: dialog dismisses and does not reappear if USB_B returns.
+    fireEvent.click(screen.getByRole('button', { name: 'Use Wi-Fi' }));
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    rerender(
+      <DevicePicker
+        devices={[usbA]}
+        emulators={[]}
+        value={usbA.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={onSwitchToWifi}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    rerender(
+      <DevicePicker
+        devices={[usbA, usbB]}
+        emulators={[]}
+        value={usbB.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={onSwitchToWifi}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    // Same pinning guarantee for wireless Disconnect confirmation.
+    const wifiA: DeviceInfo = {
+      serial: '192.168.1.10:5555',
+      state: 'device',
+      model: 'Phone_A',
+      transport: 'wireless',
+    };
+    const wifiB: DeviceInfo = {
+      serial: '192.168.1.20:5555',
+      state: 'device',
+      model: 'Phone_B',
+      transport: 'wireless',
+    };
+    const onDisconnect = vi.fn();
+    rerender(
+      <DevicePicker
+        devices={[wifiA, wifiB]}
+        emulators={[]}
+        value={wifiA.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnectWireless={onDisconnect}
+        isLocked={true}
+        isOffline={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    rerender(
+      <DevicePicker
+        devices={[wifiA, wifiB]}
+        emulators={[]}
+        value={wifiB.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnectWireless={onDisconnect}
+        isLocked={true}
+        isOffline={false}
+      />,
+    );
+    expect(screen.getByRole('alertdialog').textContent).toContain('192.168.1.10:5555');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Disconnect' }).at(-1)!);
+    expect(onDisconnect).toHaveBeenCalledWith('192.168.1.10:5555');
   });
 });
 
@@ -339,5 +462,258 @@ describe('WirelessDialog', () => {
       expect(onConnect).toHaveBeenCalledWith('192.168.1.50:42000');
       expect(onConnected).toHaveBeenCalledWith('192.168.1.50:42000');
     });
+  });
+
+  it('does not cancel QR pairing or steal focus when parent re-renders with a new onClose callback', async () => {
+    const onStartQrPairing = vi.fn(async () => ({
+      action: 'startQr' as const,
+      ok: true as const,
+      sessionId: 'fedcba9876543210',
+      payload: 'WIFI:T:ADB;S:ADB_WIFI_112233445566;P:SecretPass999999;;',
+      serviceName: 'ADB_WIFI_112233445566',
+      expiresAt: Date.now() + 120_000,
+    }));
+    const onCancelQrPairing = vi.fn();
+
+    const { rerender, unmount } = render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={noopPair}
+        onStartQrPairing={onStartQrPairing}
+        onCancelQrPairing={onCancelQrPairing}
+        onConnected={vi.fn()}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Focus pairing code input and rerender with new inline onClose (simulating a clock tick).
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with code' }));
+    const codeInput = screen.getByLabelText('6-digit pairing code');
+    codeInput.focus();
+    expect(document.activeElement).toBe(codeInput);
+
+    rerender(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={noopPair}
+        onStartQrPairing={onStartQrPairing}
+        onCancelQrPairing={onCancelQrPairing}
+        onConnected={vi.fn()}
+        onClose={() => undefined}
+      />,
+    );
+    expect(document.activeElement).toBe(codeInput);
+
+    // Start QR pairing and rerender multiple times with new inline callbacks: must NEVER cancel QR.
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with QR' }));
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'Android wireless debugging pairing QR code' })).toBeTruthy();
+    });
+    for (let i = 0; i < 3; i += 1) {
+      rerender(
+        <WirelessDialog
+          isOnline={true}
+          onConnect={vi.fn()}
+          onPair={noopPair}
+          onStartQrPairing={onStartQrPairing}
+          onCancelQrPairing={onCancelQrPairing}
+          onConnected={vi.fn()}
+          onClose={() => undefined}
+        />,
+      );
+    }
+    expect(onCancelQrPairing).not.toHaveBeenCalled();
+
+    // Only real unmount cancels the active QR session.
+    unmount();
+    expect(onCancelQrPairing).toHaveBeenCalledTimes(1);
+    expect(onCancelQrPairing).toHaveBeenCalledWith('fedcba9876543210');
+  });
+
+  it('warns before connecting to a public IP from mDNS discovery and rejects legacy numeric IPv4 spellings', async () => {
+    const onConnect = vi.fn(async (address: string) => ({
+      action: 'connect' as const,
+      ok: true as const,
+      serial: address,
+      target: address,
+      alreadyConnected: false,
+    }));
+    const onListMdns = vi.fn(async () => ({
+      action: 'mdns' as const,
+      ok: true as const,
+      services: [
+        {
+          instanceName: 'adb-PUBLIC-xyz',
+          host: '8.8.8.8',
+          port: 41234,
+          target: '8.8.8.8:41234',
+          serial: 'adb-PUBLIC-xyz._adb-tls-connect._tcp',
+          connected: false,
+        },
+      ],
+    }));
+
+    render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={onConnect}
+        onPair={noopPair}
+        onListMdns={onListMdns}
+        onConnected={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Legacy numeric IPv4 forms are rejected with a clear validation error.
+    const input = screen.getByLabelText('IP address and port');
+    fireEvent.change(input, { target: { value: '0x7f.1:5555' } });
+    expect(screen.getByRole('alert').textContent).toMatch(/dotted-decimal IPv4/i);
+    fireEvent.change(input, { target: { value: '3232235777:5555' } });
+    expect(screen.getByRole('alert').textContent).toMatch(/dotted-decimal IPv4/i);
+
+    // Public IP in discovery list requires explicit warning confirmation before calling onConnect.
+    await waitFor(() => {
+      expect(screen.getByText('adb-PUBLIC-xyz')).toBeTruthy();
+      expect(screen.getByText('Public IP')).toBeTruthy();
+    });
+    const connectButtons = screen.getAllByRole('button', { name: 'Connect' });
+    fireEvent.click(connectButtons.at(-1)!);
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog', { name: 'Confirm public IP connection' }).textContent).toContain(
+      '8.8.8.8:41234',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Connect anyway' }));
+    await waitFor(() => {
+      expect(onConnect).toHaveBeenCalledWith('8.8.8.8:41234');
+    });
+  });
+
+  it('prefills Connect tab and shows public-IP warning when pair discovers a public connect target', async () => {
+    const onPair = vi.fn(async () => ({
+      action: 'pair' as const,
+      ok: true as const,
+      target: '192.168.1.42:37123',
+      host: '192.168.1.42',
+      connectedSerial: null,
+      discoveredTarget: '8.8.8.8:47777',
+      connectNote: 'Paired successfully. Discovered connect address 8.8.8.8:47777 is a public IP.',
+    }));
+    render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={onPair}
+        onConnected={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with code' }));
+    fireEvent.change(screen.getByLabelText('Pairing IP address and port'), {
+      target: { value: '192.168.1.42:37123' },
+    });
+    fireEvent.change(screen.getByLabelText('6-digit pairing code'), { target: { value: '482910' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pair & connect' }));
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('IP address and port') as HTMLInputElement).value).toBe('8.8.8.8:47777');
+      expect(screen.getByText(/Public IP address\./i)).toBeTruthy();
+    });
+  });
+});
+
+describe('useWirelessActions deadlines, late reconciliation & QR payload scrubbing', () => {
+  it('aligns client deadlines with multi-step server operations and reconciles a late tcpip success', async () => {
+    expect(WIRELESS_ACTION_TIMEOUTS_MS.pair).toBeGreaterThanOrEqual(45_000);
+    expect(WIRELESS_ACTION_TIMEOUTS_MS.tcpip).toBeGreaterThanOrEqual(65_000);
+
+    const sent: ClientMessage[] = [];
+    const onLateConnected = vi.fn();
+    let answers: WirelessAnswer[] = [];
+
+    const { result, rerender } = renderHook(
+      ({ curAnswers }: { curAnswers: WirelessAnswer[] }) =>
+        useWirelessActions({
+          send: (msg) => {
+            sent.push(msg);
+            return true;
+          },
+          answers: curAnswers,
+          qrPairing: null,
+          isOpen: true,
+          onLateConnected,
+          timeouts: { tcpip: 25 },
+        }),
+      { initialProps: { curAnswers: answers } },
+    );
+
+    // Start tcpip and let the short test deadline expire while the server is still working.
+    let initialOutcome: Extract<WirelessActionResult, { action: 'tcpip' }> | undefined;
+    await act(async () => {
+      initialOutcome = await result.current.enableTcpip('R58M123ABC');
+    });
+    expect(initialOutcome?.ok).toBe(false);
+    expect(result.current.provisionalTcpipSerial).toBe('R58M123ABC');
+    expect(result.current.actionError).toMatch(/Still waiting/i);
+
+    const tcpipReq = sent.find((m) => m.type === 'enableWirelessTcpip');
+    expect(tcpipReq && tcpipReq.type === 'enableWirelessTcpip').toBe(true);
+    const requestId = tcpipReq?.type === 'enableWirelessTcpip' ? tcpipReq.requestId : 0;
+
+    // Late server success arrives: clears timeout error, clears provisional lock, switches serial, shows notice.
+    answers = [
+      {
+        requestId,
+        result: {
+          action: 'tcpip',
+          ok: true,
+          usbSerial: 'R58M123ABC',
+          serial: '192.168.1.42:5555',
+          target: '192.168.1.42:5555',
+          port: 5555,
+          alreadyConnected: false,
+        },
+      },
+    ];
+    rerender({ curAnswers: answers });
+
+    await waitFor(() => {
+      expect(result.current.provisionalTcpipSerial).toBeNull();
+      expect(result.current.actionError).toBeNull();
+      expect(result.current.actionNotice).toContain('192.168.1.42:5555');
+      expect(onLateConnected).toHaveBeenCalledWith('192.168.1.42:5555');
+    });
+  });
+
+  it('discards password-bearing QR payloads from store wirelessAnswers when expired or consumed', () => {
+    let state = createInitialState();
+    state = reduce(state, {
+      kind: 'server',
+      msg: {
+        type: 'wirelessResult',
+        requestId: 1,
+        result: {
+          action: 'startQr',
+          ok: true,
+          sessionId: '0123456789abcdef',
+          payload: 'WIFI:T:ADB;S:ADB_WIFI_aabbccddeeff;P:SuperSecretQr123;;',
+          serviceName: 'ADB_WIFI_aabbccddeeff',
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    expect(JSON.stringify(state.wirelessAnswers)).toContain('SuperSecretQr123');
+
+    // Expiring the QR session strips the password-bearing payload from store state.
+    const afterExpire = reduce(state, {
+      kind: 'server',
+      msg: { type: 'qrPairing', update: { sessionId: '0123456789abcdef', status: 'expired' } },
+    });
+    expect(JSON.stringify(afterExpire.wirelessAnswers)).not.toContain('SuperSecretQr123');
+
+    // Explicit clearQrPayload (on consumption/cancel) also strips it immediately.
+    const afterConsume = reduce(state, { kind: 'clearQrPayload', sessionId: '0123456789abcdef' });
+    expect(JSON.stringify(afterConsume.wirelessAnswers)).not.toContain('SuperSecretQr123');
   });
 });

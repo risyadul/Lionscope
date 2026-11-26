@@ -1,4 +1,4 @@
-import { Activity, memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SdkOptions } from '@lionscope/protocol/wire';
 import { DEFAULT_SDK_OPTIONS, isValidSerial, STALL_THRESHOLDS_MS } from '@lionscope/protocol/wire';
 import { exchangesInWindow } from '@lionscope/protocol/insights';
@@ -148,12 +148,28 @@ export function App() {
     serial: inspector.canInspect ? inspectorSerial : null,
     isOpen,
   });
+  const chooseSerialRef = useRef(selection.chooseSerial);
+  useEffect(() => {
+    chooseSerialRef.current = selection.chooseSerial;
+  }, [selection.chooseSerial]);
+  const changeSerial = useCallback((next: string) => {
+    chooseSerialRef.current(next);
+    setChosenPackage(null);
+  }, []);
+  const openWireless = useCallback(() => setWirelessOpen(true), []);
+  const closeWireless = useCallback(() => setWirelessOpen(false), []);
+  const consumeQrPayload = useCallback(
+    (sessionId?: string) => store.dispatch({ kind: 'clearQrPayload', ...(sessionId ? { sessionId } : {}) }),
+    [store],
+  );
   const emulatorActions = useEmulatorActions({ send, emulators: state.emulators, errorSeq: state.errorSeq });
   const wirelessActions = useWirelessActions({
     send,
     answers: state.wirelessAnswers,
     qrPairing: state.qrPairing,
     isOpen,
+    onConsumeQrPayload: consumeQrPayload,
+    onLateConnected: changeSerial,
   });
   // Shutting it down stops this session first (the server does; the confirmation says so).
   const isInSession = isActive && emulator !== null && emulator.serial === state.session.serial;
@@ -195,11 +211,6 @@ export function App() {
   const stop = () => {
     if (isPending || isRequestInFlight() || !isOpen) return;
     if (send({ type: 'stopSession' })) markPending();
-  };
-
-  const changeSerial = (next: string) => {
-    selection.chooseSerial(next);
-    setChosenPackage(null);
   };
 
   const changeAvd = (avdName: string) => {
@@ -437,7 +448,7 @@ export function App() {
             viewSwitch={null}
             mocksIndicator={mocksState && <MocksIndicator indicator={mocksState} onOpen={openMocks} />}
             onRefreshDevices={() => send({ type: 'refreshDevices' })}
-            onOpenWireless={() => setWirelessOpen(true)}
+            onOpenWireless={openWireless}
             onDisconnectWireless={(targetSerial) => void wirelessActions.disconnect(targetSerial)}
             isDisconnectingWireless={serial !== null && wirelessActions.disconnectingSerial === serial}
             onSwitchToWifi={(usbSerial) => {
@@ -445,7 +456,10 @@ export function App() {
                 if (result.ok) changeSerial(result.serial);
               });
             }}
-            isSwitchingToWifi={serial !== null && wirelessActions.handoffSerial === serial}
+            isSwitchingToWifi={
+              serial !== null &&
+              (wirelessActions.handoffSerial === serial || wirelessActions.provisionalTcpipSerial === serial)
+            }
             apps={apps}
             packageName={packageName}
             onPackageChange={setChosenPackage}
@@ -473,6 +487,26 @@ export function App() {
                 error={{ id: -1, message: wirelessActions.actionError }}
                 onDismiss={wirelessActions.clearActionError}
               />
+            )}
+            {wirelessActions.actionNotice && (
+              <div className="banner" data-tone="quiet" role="status">
+                <span>{wirelessActions.actionNotice}</span>
+                <button
+                  type="button"
+                  className="banner-close"
+                  onClick={wirelessActions.clearActionNotice}
+                  aria-label="Dismiss notice"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                    <path
+                      d="m1.5 1.5 7 7m0-7-7 7"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
             )}
             <SoftwareRendererBanner
               deviceLabel={emulator !== null && isSoftwareRendered(emulator) ? emulatorLabel(emulator) : null}
@@ -702,8 +736,9 @@ export function App() {
               onStartQrPairing={wirelessActions.startQrPairing}
               onCancelQrPairing={wirelessActions.cancelQrPairing}
               qrPairing={wirelessActions.qrPairing}
+              lateResult={wirelessActions.lateResult}
               onConnected={changeSerial}
-              onClose={() => setWirelessOpen(false)}
+              onClose={closeWireless}
             />
           )}
           {mockRules.editor && (

@@ -35,6 +35,9 @@ export function WirelessFixture() {
     });
     store.dispatch({ kind: 'server', msg: { type: 'emulators', emulators: [] } });
 
+    let qrTimer: ReturnType<typeof setTimeout> | null = null;
+    document.documentElement.dataset.qrCancelledCount = '0';
+
     const onSend = (event: Event) => {
       if (!(event instanceof CustomEvent)) return;
       const msg = event.detail as ClientMessage;
@@ -62,22 +65,37 @@ export function WirelessFixture() {
           },
         });
       } else if (msg.type === 'startQrPairing') {
+        const sessionId = '0123456789abcdef';
         reply({
           type: 'wirelessResult',
           requestId: msg.requestId,
           result: {
             action: 'startQr',
             ok: true,
-            sessionId: '0123456789abcdef',
+            sessionId,
             payload: 'WIFI:T:ADB;S:ADB_WIFI_aabbccddeeff;P:SyntheticPass123;;',
             serviceName: 'ADB_WIFI_aabbccddeeff',
             expiresAt: Date.now() + 120_000,
           },
         });
+        if (qrTimer !== null) clearTimeout(qrTimer);
+        // Push a pairing update AFTER at least one real 1s App clock tick to verify QR stays alive.
+        qrTimer = setTimeout(() => {
+          reply({
+            type: 'qrPairing',
+            update: { sessionId, status: 'pairing', target: '192.168.1.50:39000' },
+          });
+        }, 1250);
+      } else if (msg.type === 'cancelQrPairing') {
+        const prev = Number(document.documentElement.dataset.qrCancelledCount ?? '0');
+        document.documentElement.dataset.qrCancelledCount = String(prev + 1);
       }
     };
     window.addEventListener('fixture-send', onSend);
-    return () => window.removeEventListener('fixture-send', onSend);
+    return () => {
+      if (qrTimer !== null) clearTimeout(qrTimer);
+      window.removeEventListener('fixture-send', onSend);
+    };
   }, [store]);
 
   return <App />;

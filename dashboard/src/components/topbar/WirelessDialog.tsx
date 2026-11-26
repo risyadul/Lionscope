@@ -13,6 +13,7 @@ import type {
   WirelessActionResult,
 } from '@lionscope/protocol/wire';
 import { createPortal } from 'react-dom';
+import type { LateWirelessResult } from '../../hooks/useWirelessActions.ts';
 import { QrCode } from './QrCode.tsx';
 import './wireless.css';
 
@@ -37,6 +38,7 @@ type Props = {
   onStartQrPairing?: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
   onCancelQrPairing?: (sessionId: string) => void;
   qrPairing?: QrPairingUpdate | null;
+  lateResult?: LateWirelessResult | null;
   onConnected: (serial: string) => void;
   onClose: () => void;
 };
@@ -58,6 +60,7 @@ export function WirelessDialog({
   onStartQrPairing,
   onCancelQrPairing,
   qrPairing = null,
+  lateResult = null,
   onConnected,
   onClose,
 }: Props) {
@@ -67,6 +70,10 @@ export function WirelessDialog({
   const pairInputRef = useRef<HTMLInputElement>(null);
   const activeQrIdRef = useRef<string | null>(null);
   const handledQrIdRef = useRef<string | null>(null);
+  const handledLateIdRef = useRef<number | null>(lateResult?.requestId ?? null);
+  const onCloseRef = useRef(onClose);
+  const onConnectedRef = useRef(onConnected);
+  const onCancelQrRef = useRef(onCancelQrPairing);
 
   const [tab, setTab] = useState<Tab>('connect');
   const [address, setAddress] = useState('');
@@ -75,6 +82,7 @@ export function WirelessDialog({
   const [connectPort, setConnectPort] = useState('');
   const [pending, setPending] = useState(false);
   const [connectingTarget, setConnectingTarget] = useState<string | null>(null);
+  const [pendingPublicTarget, setPendingPublicTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successNote, setSuccessNote] = useState<string | null>(null);
 
@@ -88,14 +96,22 @@ export function WirelessDialog({
   const [qrLoading, setQrLoading] = useState(false);
   const [qrError, setQrError] = useState<string | null>(null);
 
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onConnectedRef.current = onConnected;
+    onCancelQrRef.current = onCancelQrPairing;
+  }, [onClose, onConnected, onCancelQrPairing]);
+
   const cancelActiveQr = useCallback(() => {
     const activeId = activeQrIdRef.current;
     if (activeId !== null) {
       activeQrIdRef.current = null;
-      onCancelQrPairing?.(activeId);
+      onCancelQrRef.current?.(activeId);
     }
-  }, [onCancelQrPairing]);
+    setQrSession(null);
+  }, []);
 
+  // Run modal lifecycle strictly on mount/unmount so parent clock ticks never reset focus or cancel QR pairing.
   useEffect(() => {
     const dialog = dialogRef.current;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -103,7 +119,7 @@ export function WirelessDialog({
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      onCloseRef.current();
     };
     document.addEventListener('keydown', escape, true);
     if (dialog) {
@@ -112,7 +128,11 @@ export function WirelessDialog({
     }
     connectInputRef.current?.focus();
     return () => {
-      cancelActiveQr();
+      const activeId = activeQrIdRef.current;
+      if (activeId !== null) {
+        activeQrIdRef.current = null;
+        onCancelQrRef.current?.(activeId);
+      }
       if (dialog) {
         if (typeof dialog.close === 'function') dialog.close();
         else dialog.removeAttribute('open');
@@ -120,7 +140,7 @@ export function WirelessDialog({
       document.removeEventListener('keydown', escape, true);
       if (opener?.isConnected) opener.focus();
     };
-  }, [onClose, cancelActiveQr]);
+  }, []);
 
   const refreshMdns = useCallback(async () => {
     if (!onListMdns || !isOnline) return;
@@ -186,22 +206,64 @@ export function WirelessDialog({
     qrSession !== null && qrPairing !== null && qrPairing.sessionId === qrSession.sessionId
       ? qrPairing
       : null;
+  const isQrTerminal =
+    matchingQrUpdate !== null &&
+    (matchingQrUpdate.status === 'paired' ||
+      matchingQrUpdate.status === 'expired' ||
+      matchingQrUpdate.status === 'failed' ||
+      matchingQrUpdate.status === 'cancelled');
 
-  // Auto-select and close when QR pairing also connected via mDNS.
+  // Auto-select and close when QR pairing also connected via mDNS, and stop tracking terminal QR sessions.
   useEffect(() => {
-    if (!matchingQrUpdate || matchingQrUpdate.status !== 'paired') return;
-    if (matchingQrUpdate.connectedSerial === null) return;
+    if (!matchingQrUpdate) return;
+    if (isQrTerminal && activeQrIdRef.current === matchingQrUpdate.sessionId) {
+      activeQrIdRef.current = null;
+    }
+    if (matchingQrUpdate.status !== 'paired' || matchingQrUpdate.connectedSerial === null) return;
     if (handledQrIdRef.current === matchingQrUpdate.sessionId) return;
     handledQrIdRef.current = matchingQrUpdate.sessionId;
-    activeQrIdRef.current = null;
-    onConnected(matchingQrUpdate.connectedSerial);
-    onClose();
-  }, [matchingQrUpdate, onConnected, onClose]);
+    onConnectedRef.current(matchingQrUpdate.connectedSerial);
+    onCloseRef.current();
+  }, [matchingQrUpdate, isQrTerminal]);
+
+  // Reconcile a late server result if a slow connect or pair finished after the client deadline.
+  useEffect(() => {
+    if (!lateResult || handledLateIdRef.current === lateResult.requestId) return;
+    handledLateIdRef.current = lateResult.requestId;
+    const { result } = lateResult;
+    if (result.action === 'connect') {
+      if (result.ok) {
+        onConnectedRef.current(result.serial);
+        onCloseRef.current();
+      } else {
+        queueMicrotask(() => setError(result.message));
+      }
+    } else if (result.action === 'pair') {
+      if (!result.ok) {
+        queueMicrotask(() => setError(result.message));
+      } else if (result.connectedSerial !== null) {
+        onConnectedRef.current(result.connectedSerial);
+        onCloseRef.current();
+      } else {
+        queueMicrotask(() => {
+          setError(null);
+          setAddress(result.discoveredTarget ?? hostPrefix(result.host));
+          setSuccessNote(
+            result.connectNote ??
+              `Paired with ${result.target}. Enter the separate connect port shown on the Wireless debugging screen.`,
+          );
+          setTab('connect');
+          queueMicrotask(() => connectInputRef.current?.focus());
+        });
+      }
+    }
+  }, [lateResult]);
 
   const switchTab = (next: Tab) => {
     if (tab === 'qr' && next !== 'qr') cancelActiveQr();
     setTab(next);
     setError(null);
+    setPendingPublicTarget(null);
     if (next !== 'connect') setSuccessNote(null);
     if (next === 'qr' && isOnline && onStartQrPairing) {
       void startQr();
@@ -291,7 +353,7 @@ export function WirelessDialog({
         onClose();
         return;
       }
-      setAddress(hostPrefix(result.host));
+      setAddress(result.discoveredTarget ?? hostPrefix(result.host));
       setSuccessNote(
         result.connectNote ??
           `Paired with ${result.target}. Enter the separate connect port shown on the Wireless debugging screen.`,
@@ -471,29 +533,77 @@ export function WirelessDialog({
               )}
               {mdnsServices !== null && mdnsServices.length > 0 && (
                 <ul className="wireless-mdns-list">
-                  {mdnsServices.map((service) => (
-                    <li key={service.serial} className="wireless-mdns-item">
-                      <div className="wireless-mdns-info">
-                        <span className="wireless-mdns-name mono" title={service.serial}>
-                          {service.instanceName}
-                        </span>
-                        <span className="wireless-mdns-target mono">{service.target}</span>
-                      </div>
-                      {service.connected ? (
-                        <span className="wireless-mdns-connected">Connected</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn"
-                          disabled={!isOnline || pending}
-                          onClick={() => void connectTarget(service.target)}
-                        >
-                          {pending && connectingTarget === service.target ? 'Connecting…' : 'Connect'}
-                        </button>
-                      )}
-                    </li>
-                  ))}
+                  {mdnsServices.map((service) => {
+                    const isPublic = isPublicWirelessHost(service.target);
+                    return (
+                      <li key={service.serial} className="wireless-mdns-item">
+                        <div className="wireless-mdns-info">
+                          <span className="wireless-mdns-name mono" title={service.serial}>
+                            {service.instanceName}
+                          </span>
+                          <span className="wireless-mdns-target mono">
+                            {service.target}
+                            {isPublic && <span className="wireless-mdns-public">Public IP</span>}
+                          </span>
+                        </div>
+                        {service.connected ? (
+                          <span className="wireless-mdns-connected">Connected</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={!isOnline || pending}
+                            onClick={() => {
+                              if (isPublic) {
+                                setPendingPublicTarget(service.target);
+                                return;
+                              }
+                              setPendingPublicTarget(null);
+                              void connectTarget(service.target);
+                            }}
+                          >
+                            {pending && connectingTarget === service.target ? 'Connecting…' : 'Connect'}
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
+              )}
+              {pendingPublicTarget !== null && (
+                <div
+                  className="wireless-warning wireless-mdns-confirm"
+                  role="alertdialog"
+                  aria-label="Confirm public IP connection"
+                >
+                  <p>
+                    <strong>Public IP address ({pendingPublicTarget}).</strong> Connecting gives this remote
+                    host access to ADB and the Lionscope SDK reverse tunnel on your machine. Make sure you
+                    trust this address.
+                  </p>
+                  <div className="wireless-mdns-confirm-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setPendingPublicTarget(null)}
+                      disabled={pending}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={!isOnline || pending}
+                      onClick={() => {
+                        const target = pendingPublicTarget;
+                        setPendingPublicTarget(null);
+                        void connectTarget(target);
+                      }}
+                    >
+                      Connect anyway
+                    </button>
+                  </div>
+                </div>
               )}
             </section>
           )}
@@ -627,7 +737,7 @@ export function WirelessDialog({
             code. Both devices must be on the same Wi-Fi network with mDNS enabled.
           </p>
           <div className="wireless-qr-box">
-            {qrSession !== null && matchingQrUpdate?.status !== 'expired' ? (
+            {qrSession !== null && !isQrTerminal ? (
               <QrCode payload={qrSession.payload} label="Android wireless debugging pairing QR code" />
             ) : (
               <div className="wireless-qr-placeholder">{qrLoading ? 'Generating…' : 'QR code inactive'}</div>
@@ -653,7 +763,7 @@ export function WirelessDialog({
                 type="button"
                 className="btn btn--primary"
                 onClick={() => {
-                  setAddress(hostPrefix(matchingQrUpdate.host));
+                  setAddress(matchingQrUpdate.discoveredTarget ?? hostPrefix(matchingQrUpdate.host));
                   setSuccessNote(
                     matchingQrUpdate.connectNote ??
                       `Paired with ${matchingQrUpdate.target}. Enter the separate connect port.`,
@@ -662,7 +772,7 @@ export function WirelessDialog({
                   queueMicrotask(() => connectInputRef.current?.focus());
                 }}
               >
-                Enter connect port
+                {matchingQrUpdate.discoveredTarget ? 'Review & connect' : 'Enter connect port'}
               </button>
             </div>
           )}

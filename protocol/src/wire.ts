@@ -1815,6 +1815,8 @@ export type QrPairingUpdate =
       target: string;
       host: string;
       connectedSerial: string | null;
+      /** Discovered connect endpoint when automatic connect was skipped (e.g. public IP requiring review). */
+      discoveredTarget?: string;
       connectNote?: string;
     }
   | { sessionId: string; status: 'failed'; message: string }
@@ -1833,6 +1835,8 @@ export type WirelessActionResult =
       host: string;
       /** Serial connected after pairing (from explicit connect port or mDNS discovery), or null if user must enter connect port. */
       connectedSerial: string | null;
+      /** Discovered connect endpoint when automatic connect was skipped (e.g. public IP requiring review). */
+      discoveredTarget?: string;
       /** Non-fatal note if pairing succeeded but follow-up connect failed or needs a manual connect port. */
       connectNote?: string;
     }

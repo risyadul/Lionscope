@@ -237,8 +237,36 @@
 }
 
 .wireless-mdns-target {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--ink-muted);
   font-size: var(--text-meta);
+}
+
+.wireless-mdns-public {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--jank-wash);
+  color: var(--jank-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-overline);
+  font-weight: 600;
+}
+
+.wireless-mdns-confirm {
+  margin-top: var(--space-2);
+}
+
+.wireless-mdns-confirm p {
+  margin: 0;
+}
+
+.wireless-mdns-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .wireless-mdns-connected {

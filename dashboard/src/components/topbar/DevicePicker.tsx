@@ -80,8 +80,8 @@ export function DevicePicker({
   isOffline,
   actions,
 }: Props) {
-  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  const [confirmWifiHandoff, setConfirmWifiHandoff] = useState(false);
+  const [confirmDisconnectSerial, setConfirmDisconnectSerial] = useState<string | null>(null);
+  const [confirmWifiHandoffSerial, setConfirmWifiHandoffSerial] = useState<string | null>(null);
   const list = devices ?? [];
   const avds = standaloneAvds(emulators, devices);
   const hasReady = list.some(isReady);
@@ -114,6 +114,30 @@ export function DevicePicker({
     isUsbTcpipEligible(selectedDevice) &&
     onSwitchToWifi !== undefined;
 
+  // Resolve confirmation targets by the serial captured when opening, never by the current selection.
+  const disconnectTarget =
+    confirmDisconnectSerial !== null
+      ? (list.find((d) => d.serial === confirmDisconnectSerial) ?? null)
+      : null;
+  const disconnectTargetEligible =
+    disconnectTarget !== null &&
+    resolveDeviceTransport(disconnectTarget) === 'wireless' &&
+    onDisconnectWireless !== undefined;
+
+  const handoffTarget =
+    confirmWifiHandoffSerial !== null
+      ? (list.find((d) => d.serial === confirmWifiHandoffSerial) ?? null)
+      : null;
+  const handoffTargetEligible =
+    handoffTarget !== null && isUsbTcpipEligible(handoffTarget) && !isLocked && onSwitchToWifi !== undefined;
+
+  if (confirmDisconnectSerial !== null && !disconnectTargetEligible) {
+    setConfirmDisconnectSerial(null);
+  }
+  if (confirmWifiHandoffSerial !== null && !handoffTargetEligible) {
+    setConfirmWifiHandoffSerial(null);
+  }
+
   const deviceOptions = list.map((device) => (
     <option key={device.serial} value={device.serial} disabled={deviceStateReason(device.state) !== null}>
       {deviceOptionLabel(device, emulators)}
@@ -122,7 +146,7 @@ export function DevicePicker({
 
   const requestDisconnect = () => {
     if (!selectedDevice || !onDisconnectWireless) return;
-    if (isLocked) setConfirmDisconnect(true);
+    if (isLocked) setConfirmDisconnectSerial(selectedDevice.serial);
     else onDisconnectWireless(selectedDevice.serial);
   };
 
@@ -196,11 +220,11 @@ export function DevicePicker({
             {isDisconnecting ? 'Disconnecting…' : 'Disconnect'}
           </button>
         )}
-        {canSwitchToWifi && (
+        {canSwitchToWifi && selectedDevice && (
           <button
             type="button"
             className="btn emu-action"
-            onClick={() => setConfirmWifiHandoff(true)}
+            onClick={() => setConfirmWifiHandoffSerial(selectedDevice.serial)}
             disabled={isOffline || isSwitchingToWifi || isLocked}
             title={
               isOffline
@@ -255,31 +279,33 @@ export function DevicePicker({
           </svg>
         </button>
       </div>
-      {confirmDisconnect && selectedDevice && onDisconnectWireless && (
+      {disconnectTarget && disconnectTargetEligible && onDisconnectWireless && (
         <ConfirmDialog
-          title={`Disconnect ${deviceName(selectedDevice)}?`}
+          title={`Disconnect ${deviceName(disconnectTarget)}?`}
           confirmLabel="Disconnect"
           onConfirm={() => {
-            setConfirmDisconnect(false);
-            onDisconnectWireless(selectedDevice.serial);
+            const targetSerial = disconnectTarget.serial;
+            setConfirmDisconnectSerial(null);
+            onDisconnectWireless(targetSerial);
           }}
-          onCancel={() => setConfirmDisconnect(false)}
+          onCancel={() => setConfirmDisconnectSerial(null)}
         >
           <p>
-            The active profiling session on <strong className="mono">{selectedDevice.serial}</strong> will
+            The active profiling session on <strong className="mono">{disconnectTarget.serial}</strong> will
             stop before disconnecting wireless ADB.
           </p>
         </ConfirmDialog>
       )}
-      {confirmWifiHandoff && selectedDevice && onSwitchToWifi && (
+      {handoffTarget && handoffTargetEligible && onSwitchToWifi && (
         <ConfirmDialog
-          title={`Switch ${deviceName(selectedDevice)} to Wi-Fi?`}
+          title={`Switch ${deviceName(handoffTarget)} to Wi-Fi?`}
           confirmLabel="Enable Wi-Fi ADB"
           onConfirm={() => {
-            setConfirmWifiHandoff(false);
-            onSwitchToWifi(selectedDevice.serial);
+            const targetSerial = handoffTarget.serial;
+            setConfirmWifiHandoffSerial(null);
+            onSwitchToWifi(targetSerial);
           }}
-          onCancel={() => setConfirmWifiHandoff(false)}
+          onCancel={() => setConfirmWifiHandoffSerial(null)}
         >
           <p>
             Lionscope will read this phone’s Wi-Fi IP, run <code className="mono">adb tcpip 5555</code>, and

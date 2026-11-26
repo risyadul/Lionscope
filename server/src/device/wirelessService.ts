@@ -14,6 +14,7 @@ import {
   DEFAULT_ADB_TCP_PORT,
   formatAdbQrPayload,
   isMdnsSerial,
+  isPublicWirelessHost,
   isUsbTcpipEligible,
   isValidPairingCode,
   isValidSerial,
@@ -59,6 +60,7 @@ export interface WirelessPairOutcome {
   target: string;
   host: string;
   connectedSerial: string | null;
+  discoveredTarget?: string;
   connectNote?: string;
 }
 
@@ -237,6 +239,17 @@ export class WirelessService {
     if (connectTarget === null) {
       const discovered = await this.findConnectTargetViaMdns(parsedPair.value.host, pairedGuid, source);
       if (discovered) {
+        // Never silently auto-connect to a public IP discovered via mDNS: let the user see the public-IP warning first.
+        if (isPublicWirelessHost(discovered.target)) {
+          await this.refreshDevices().catch(() => undefined);
+          return {
+            target,
+            host: parsedPair.value.host,
+            connectedSerial: null,
+            discoveredTarget: discovered.target,
+            connectNote: `Paired successfully. Discovered connect address ${discovered.target} is a public IP — review the warning before connecting.`,
+          };
+        }
         connectTarget = discovered.target;
         approveFollowUp = discovered.guidVerified;
       }
@@ -431,6 +444,14 @@ export class WirelessService {
     const password = session.password;
     const onUpdate = session.onUpdate;
     this.disposeQrSession(session);
+    if (isPublicWirelessHost(match.target)) {
+      onUpdate({
+        sessionId,
+        status: 'failed',
+        message: `Refused automatic QR pairing with public IP ${match.target}. Use Pair with code to review the public-IP warning first.`,
+      });
+      return;
+    }
     onUpdate({ sessionId, status: 'pairing', target: match.target });
     try {
       const outcome = await this.pair(match.target, password, 'dashboard', { allowQrPassword: true });
@@ -440,6 +461,7 @@ export class WirelessService {
         target: outcome.target,
         host: outcome.host,
         connectedSerial: outcome.connectedSerial,
+        ...(outcome.discoveredTarget ? { discoveredTarget: outcome.discoveredTarget } : {}),
         ...(outcome.connectNote ? { connectNote: outcome.connectNote } : {}),
       });
     } catch (error) {

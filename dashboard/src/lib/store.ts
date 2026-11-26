@@ -865,16 +865,25 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
           MAX_STORAGE_OUTCOMES,
         ),
       };
-    case 'wirelessResult':
+    case 'wirelessResult': {
+      const base =
+        msg.result.action === 'startQr' ? scrubQrAnswers(state.wirelessAnswers) : state.wirelessAnswers;
       return {
         ...state,
         wirelessAnswers: capTail(
-          [...state.wirelessAnswers, { requestId: msg.requestId, result: msg.result }],
+          [...base, { requestId: msg.requestId, result: msg.result }],
           MAX_WIRELESS_ANSWERS,
         ),
       };
+    }
     case 'qrPairing':
-      return { ...state, qrPairing: msg.update };
+      return {
+        ...state,
+        qrPairing: msg.update,
+        wirelessAnswers: TERMINAL_QR_STATUSES.has(msg.update.status)
+          ? scrubQrAnswers(state.wirelessAnswers, msg.update.sessionId)
+          : state.wirelessAnswers,
+      };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =
@@ -899,8 +908,28 @@ export function setConnection(state: DashboardState, connection: ConnectionState
   ) {
     return state;
   }
-  return { ...state, connection: { ...connection } };
+  const wirelessAnswers =
+    connection.status === 'open' ? state.wirelessAnswers : scrubQrAnswers(state.wirelessAnswers);
+  return { ...state, connection: { ...connection }, wirelessAnswers };
 }
+
+function scrubQrAnswers(answers: WirelessAnswer[], sessionId?: string): WirelessAnswer[] {
+  let changed = false;
+  const next = answers.filter((entry) => {
+    if (entry.result.action !== 'startQr' || !entry.result.ok) return true;
+    if (sessionId !== undefined && entry.result.sessionId !== sessionId) return true;
+    changed = true;
+    return false;
+  });
+  return changed ? next : answers;
+}
+
+const TERMINAL_QR_STATUSES: ReadonlySet<QrPairingUpdate['status']> = new Set([
+  'paired',
+  'expired',
+  'failed',
+  'cancelled',
+]);
 
 export function dismissError(state: DashboardState, id: number): DashboardState {
   return state.lastError?.id === id ? { ...state, lastError: null } : state;
@@ -913,7 +942,8 @@ export function dismissError(state: DashboardState, id: number): DashboardState 
 export type Action =
   | { kind: 'server'; msg: ServerMessage }
   | { kind: 'connection'; connection: ConnectionState }
-  | { kind: 'dismissError'; id: number };
+  | { kind: 'dismissError'; id: number }
+  | { kind: 'clearQrPayload'; sessionId?: string };
 
 export function reduce(state: DashboardState, action: Action): DashboardState {
   switch (action.kind) {
@@ -923,6 +953,10 @@ export function reduce(state: DashboardState, action: Action): DashboardState {
       return setConnection(state, action.connection);
     case 'dismissError':
       return dismissError(state, action.id);
+    case 'clearQrPayload': {
+      const wirelessAnswers = scrubQrAnswers(state.wirelessAnswers, action.sessionId);
+      return wirelessAnswers === state.wirelessAnswers ? state : { ...state, wirelessAnswers };
+    }
   }
 }
 
