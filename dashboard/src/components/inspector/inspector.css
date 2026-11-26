@@ -198,11 +198,38 @@
   font-size: var(--text-meta);
 }
 
+.inspect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.inspect-recomp {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.inspect-recomp-toggle,
+.inspect-recomp-reset,
 .inspect-refresh {
   height: 24px;
-  margin-left: auto;
   padding: 0 var(--space-2);
   font-size: var(--text-meta);
+}
+
+.inspect-recomp-toggle[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--compose) 55%, transparent);
+  background: color-mix(in srgb, var(--compose) 16%, transparent);
+  color: var(--compose);
+}
+
+.inspect-recomp-toggle[aria-pressed='true']:hover:not(:disabled) {
+  border-color: var(--compose);
+  background: color-mix(in srgb, var(--compose) 24%, transparent);
 }
 
 .inspect-failure {
@@ -347,6 +374,44 @@
   line-height: 15px;
 }
 
+.inspect-recomp-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+  color: var(--ink-2);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.inspect-recomp-skips {
+  color: var(--ink-muted);
+}
+
+.inspect-recomp-count[data-high] {
+  background: var(--jank-wash);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jank) 45%, transparent);
+  color: var(--jank-text);
+  font-weight: 600;
+}
+
+.inspect-recomp-count[data-high] .inspect-recomp-skips {
+  color: var(--jank-text);
+  opacity: 0.85;
+}
+
+.attr-recomp[data-high] {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--jank-wash);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jank) 45%, transparent);
+  color: var(--jank-text);
+  font-weight: 600;
+}
+
 /* Composables read from the composition (views keep the ink color). */
 .inspect-row[data-compose] .inspect-class {
   color: var(--compose);
@@ -442,7 +507,7 @@
 
 .attr-row {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
   gap: var(--space-2);
   padding: 5px 0;
   border-bottom: 1px solid var(--rule);
@@ -662,6 +727,13 @@
   .attr-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+  }
+}
+
+@media (max-width: 640px), (any-pointer: coarse) {
+  .inspect-head .btn {
+    min-height: 44px;
+    padding: 0 var(--space-3);
   }
 }
 

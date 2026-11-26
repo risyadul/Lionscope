@@ -352,6 +352,117 @@ describe('Inspector tab', () => {
     expect(within(attrs).queryByText('No padding or margin.')).toBeNull();
   });
 
+  it('controls Compose recomposition tracking, shows tree counters, attributes, and disabled reasons', async () => {
+    const composeNodes = [
+      node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+      node(1, 0, [0, 0, 1080, 2400], {
+        className: 'androidx.compose.ui.platform.AndroidComposeView',
+        composition: 'read',
+      }),
+      node(2, 1, [0, 0, 1080, 400], {
+        className: 'ProductCard',
+        composable: { file: 'CatalogScreen.kt', line: 42, recompositions: 12, skips: 3 },
+      }),
+      node(3, 2, [0, 0, 500, 100], {
+        className: 'Row',
+        composable: { file: 'CatalogScreen.kt', line: 45 },
+      }),
+    ];
+    const { push, sent } = setup();
+
+    // Older SDK (< v15): recompositionTracking omitted -> disabled with upgrade hint, no unreleased version number.
+    await push(
+      snapshotMsg({
+        id: 'snap-old',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    openTab();
+    const toggle = () => screen.getByRole('button', { name: 'Recompositions' });
+    const reset = () => screen.getByRole('button', { name: 'Reset' });
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle().getAttribute('title')).toContain('Requires a newer Lionscope SDK');
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Compose < 1.9: unsupported -> disabled with Compose 1.9+ reason.
+    await push(
+      snapshotMsg({
+        id: 'snap-unsupported',
+        recompositionTracking: 'unsupported',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle().getAttribute('title')).toContain('Requires Compose 1.9+');
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Supported but off: toggle enabled (unpressed), Reset disabled.
+    await push(
+      snapshotMsg({
+        id: 'snap-off',
+        recompositionTracking: 'off',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(false);
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Clicking toggle sends setComposeRecompositionTracking(enabled: true).
+    fireEvent.click(toggle());
+    expect(sent.at(-1)).toEqual({
+      type: 'setComposeRecompositionTracking',
+      serial: 'emulator-5554',
+      enabled: true,
+    });
+
+    // Active snapshot: pressed toggle, Reset enabled, tree row count with high-count highlight, attributes rows.
+    await push(
+      snapshotMsg({
+        id: 'snap-active',
+        recompositionTracking: 'active',
+        nodes: composeNodes,
+      }),
+    );
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    expect((reset() as HTMLButtonElement).disabled).toBe(false);
+
+    // Select ProductCard (node 2) -> tree row shows 12 / 3 with data-high, attributes show Recompositions & Skips.
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 2, ts: 1, origin: 'user' },
+    });
+    const cardRow = document.querySelector('[data-node="2"]')!;
+    const badge = cardRow.querySelector('.inspect-recomp-count')!;
+    expect(badge.textContent).toBe('12 / 3');
+    expect(badge.getAttribute('data-high')).toBe('true');
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText('Recompositions')).toBeTruthy();
+    expect(within(attrs).getByText('12')).toBeTruthy();
+    expect(within(attrs).getByText('Skips')).toBeTruthy();
+    expect(within(attrs).getByText('3')).toBeTruthy();
+
+    // Select inline composable (node 3) -> shows muted non-restartable note.
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 3, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+
+    // Clicking Reset sends resetComposeRecompositions.
+    fireEvent.click(reset());
+    expect(sent.at(-1)).toEqual({
+      type: 'resetComposeRecompositions',
+      serial: 'emulator-5554',
+    });
+  });
+
   it('says why an AndroidComposeView shows no composables', async () => {
     const unread = inspectorSnapshot({
       nodes: [

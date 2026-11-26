@@ -1,6 +1,11 @@
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useId, useState, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
-import { fallbackHint, fallbackLabel } from '../../lib/inspector.ts';
+import {
+  fallbackHint,
+  fallbackLabel,
+  hasComposeContent,
+  RECOMPOSITION_SEMANTICS_HINT,
+} from '../../lib/inspector.ts';
 import { EDIT_BLOCKED_HINTS, liveEditsLabel } from '../../lib/viewEdits.ts';
 import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
@@ -31,6 +36,8 @@ function Empty({
 export const InspectorPanel = memo(function InspectorPanel() {
   const controller = useInspectorContext();
   const [query, setQuery] = useState('');
+  const recompDescId = useId();
+  const resetDescId = useId();
   if (controller === null) return null;
   const { snapshot, index, selectedId } = controller;
 
@@ -66,6 +73,23 @@ export const InspectorPanel = memo(function InspectorPanel() {
   const revertAll = edits.status(null);
   const failure =
     controller.failure ?? (revertAll.kind === 'error' ? revertAll.message : null) ?? edits.notice;
+  const showRecomposition = hasComposeContent(snapshot);
+  const tracking = snapshot.recompositionTracking;
+  const isTrackingActive = tracking === 'active';
+  const recompDisabledReason =
+    tracking === undefined
+      ? 'Requires a newer Lionscope SDK'
+      : tracking === 'unsupported'
+        ? 'Requires Compose 1.9+'
+        : null;
+  const recompDesc =
+    recompDisabledReason ??
+    (isTrackingActive
+      ? `Tracking Compose recompositions. ${RECOMPOSITION_SEMANTICS_HINT}`
+      : `Track Compose recomposition and skip counts. ${RECOMPOSITION_SEMANTICS_HINT}`);
+  const resetDisabledReason =
+    recompDisabledReason ?? (isTrackingActive ? null : 'Turn on recomposition tracking first');
+  const resetDesc = resetDisabledReason ?? 'Reset recomposition and skip counts to 0';
   return (
     <div className="inspector" data-stale={controller.isStale || undefined}>
       <div className="inspect-head">
@@ -120,14 +144,47 @@ export const InspectorPanel = memo(function InspectorPanel() {
               </button>
             </span>
           )}
-          <button
-            type="button"
-            className="btn inspect-refresh"
-            onClick={controller.refresh}
-            disabled={controller.isCapturing || !controller.canInspect}
-          >
-            {controller.isCapturing ? (controller.isStale ? 'Refreshing…' : 'Capturing…') : 'Refresh'}
-          </button>
+          <div className="inspect-actions">
+            {showRecomposition && (
+              <div className="inspect-recomp" role="group" aria-label="Compose recompositions">
+                <button
+                  type="button"
+                  className="btn inspect-recomp-toggle"
+                  aria-pressed={isTrackingActive}
+                  aria-describedby={recompDescId}
+                  title={recompDesc}
+                  disabled={recompDisabledReason !== null || controller.isCapturing || !controller.canInspect}
+                  onClick={() => controller.setRecompositionTracking(!isTrackingActive)}
+                >
+                  Recompositions
+                </button>
+                <span id={recompDescId} className="sr-only">
+                  {recompDesc}
+                </span>
+                <button
+                  type="button"
+                  className="btn inspect-recomp-reset"
+                  aria-describedby={resetDescId}
+                  title={resetDesc}
+                  disabled={resetDisabledReason !== null || controller.isCapturing || !controller.canInspect}
+                  onClick={controller.resetRecompositions}
+                >
+                  Reset
+                </button>
+                <span id={resetDescId} className="sr-only">
+                  {resetDesc}
+                </span>
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn inspect-refresh"
+              onClick={controller.refresh}
+              disabled={controller.isCapturing || !controller.canInspect}
+            >
+              {controller.isCapturing ? (controller.isStale ? 'Refreshing…' : 'Capturing…') : 'Refresh'}
+            </button>
+          </div>
         </div>
         {hint !== undefined && <p className="inspect-hint">{hint}</p>}
         {failure !== null && (

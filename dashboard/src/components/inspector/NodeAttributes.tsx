@@ -21,15 +21,18 @@ import {
   VisibilityRow,
   type EditorProps,
 } from './ViewEditors.tsx';
+import { formatInteger } from '../../lib/format.ts';
 import {
   ancestorsOf,
   fallbackHint,
   compositionNote,
   fallbackLabel,
+  HIGH_RECOMPOSITION_COUNT,
   idLabel,
   isComposable,
   isZeroRect,
   nodeLabel,
+  RECOMPOSITION_SEMANTICS_HINT,
   rectSize,
   shortClass,
   sourceLabel,
@@ -264,6 +267,32 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
             <span className="attr-text">{note}</span>
           </Row>
         )}
+        {composable &&
+          snapshot.recompositionTracking === 'active' &&
+          (node.composable?.recompositions !== undefined ? (
+            <>
+              <Row name="Recompositions">
+                <span className="attr-source">
+                  <span
+                    className="mono attr-recomp"
+                    data-high={node.composable.recompositions >= HIGH_RECOMPOSITION_COUNT || undefined}
+                  >
+                    {formatInteger(node.composable.recompositions)}
+                  </span>
+                  <span className="attr-hint" title={RECOMPOSITION_SEMANTICS_HINT}>
+                    since enabled / reset
+                  </span>
+                </span>
+              </Row>
+              <Row name="Skips">
+                <span className="mono">{formatInteger(node.composable.skips ?? 0)}</span>
+              </Row>
+            </>
+          ) : (
+            <Row name="Recompositions">
+              <span className="attr-unset">Not independently restartable (inline or non-restartable)</span>
+            </Row>
+          ))}
         <Row name="Owner">
           {destination !== null || node.fragment !== null || node.activity !== null ? (
             <span className="attr-owner">
