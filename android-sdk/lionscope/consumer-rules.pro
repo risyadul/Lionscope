@@ -33,3 +33,11 @@
     *** onComplete;
     *** onCallback;
 }
+
+# Compose 1.9+ recomposition tracking (ComposeRecomposition19) is compileOnly and gated at runtime.
+-dontwarn androidx.compose.runtime.tooling.**
+-keepclassmembernames class androidx.compose.runtime.RecomposeScopeImpl {
+    int flags;
+    boolean getSkipped*();
+    boolean getRereading();
+}

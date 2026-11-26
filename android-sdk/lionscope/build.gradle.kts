@@ -48,6 +48,7 @@ dependencies {
     compileOnly(libs.androidx.fragment)
     // Read when the app has them (detected at runtime); an app without Compose / Navigation never loads that code.
     compileOnly(libs.compose.ui.sdk)
+    compileOnly(libs.compose.runtime.observer.sdk)
     compileOnly(libs.navigation.runtime.sdk)
     compileOnly(libs.kotlin.stdlib)
     compileOnly(libs.okhttp)
@@ -123,6 +124,51 @@ val testOkHttp5 = tasks.register<Test>("testOkHttp5") {
 }
 
 tasks.matching { it.name == "test" }.configureEach { dependsOn(testOkHttp5) }
+
+// Runs the debug unit tests against Compose runtime 1.9.x while default tests keep proving 1.6.8 safety.
+val compose19RuntimeVersion = libs.versions.composeRuntimeObserverSdk.get()
+val compose19RuntimeArtifacts: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(
+            org.gradle.api.attributes.Attribute.of("com.android.build.api.attributes.BuildTypeAttr", String::class.java),
+            "debug",
+        )
+    }
+}
+
+dependencies {
+    compose19RuntimeArtifacts(libs.compose.runtime.observer.sdk)
+}
+
+val compose16RuntimeJars = Regex(".*[/\\\\]runtime(-android)?-1\\.6\\..*\\.jar|.*[/\\\\]runtime-release[/\\\\]jars[/\\\\]classes\\.jar")
+
+val testCompose19 = tasks.register<Test>("testCompose19") {
+    description = "Runs the debug unit tests against Compose runtime $compose19RuntimeVersion."
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    val unitTests = tasks.named<Test>("testDebugUnitTest").get()
+    val compose19Classes = compose19RuntimeArtifacts.incoming.artifactView {
+        attributes {
+            attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "android-classes-jar")
+        }
+    }.files
+    testClassesDirs = unitTests.testClassesDirs
+    // Put Compose runtime 1.9 jars ahead of 1.6 and drop the 1.6 runtime classes jar.
+    classpath = compose19Classes + unitTests.classpath.filter { file ->
+        val path = file.absolutePath.replace('\\', '/')
+        !(path.contains("runtime") && !path.contains("runtime-saveable") && !path.contains("startup-runtime") &&
+            !path.contains("room-runtime") && !path.contains("navigation-runtime") && !path.contains("lifecycle-runtime") &&
+            (path.contains("1.6.") || path.endsWith("/runtime-release/jars/classes.jar")))
+    }
+    lionscopeTestInputs()
+    systemProperty("lionscope.composeRuntimeMinor", "9")
+    reports.html.outputLocation.set(layout.buildDirectory.dir("reports/tests/testCompose19"))
+}
+
+tasks.matching { it.name == "test" }.configureEach { dependsOn(testCompose19) }
 
 afterEvaluate {
     publishing {
