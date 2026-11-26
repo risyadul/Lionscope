@@ -86,6 +86,8 @@ export interface EmulatorClient {
   getDisplaySize(): Promise<DisplaySize>;
   /** One PNG, rotated like the screen: full resolution, or scaled into `box` (both sides set). */
   getScreenshot(box?: Size): Promise<ScreenFrame>;
+  /** One RGBA8888 frame, rotated like the screen: full resolution, or scaled into `box` (both sides set). */
+  getRawScreenshot?(box?: Size): Promise<RawScreenFrame>;
   /** PNG frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
   streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream;
   /** RGBA8888 frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
@@ -123,6 +125,8 @@ export interface GpsPoint {
 export type EmulatorClientFactory = (endpoint: GrpcEndpoint) => EmulatorClient;
 
 export const RPC_TIMEOUT_MS = 5000;
+/** Allow >4 MiB gRPC frames (e.g. 720×1616 RGBA8888 ≈ 4.65 MB, or larger tablets/foldables). */
+export const MAX_GRPC_RECEIVE_BYTES = 32 * 1024 * 1024;
 const UNAUTHENTICATED = grpc.status.UNAUTHENTICATED;
 
 interface RawImage {
@@ -158,7 +162,11 @@ interface RawController extends grpc.Client {
   ): grpc.ClientWritableStream<EmulatorInputEvent>;
 }
 
-type ControllerConstructor = new (address: string, credentials: grpc.ChannelCredentials) => RawController;
+type ControllerConstructor = new (
+  address: string,
+  credentials: grpc.ChannelCredentials,
+  options?: grpc.ChannelOptions,
+) => RawController;
 
 const LOADER_OPTIONS: protoLoader.Options = { keepCase: true, longs: Number, enums: String, defaults: true };
 
@@ -234,7 +242,9 @@ function toRawFrame(raw: RawImage): RawScreenFrame | null {
 /** Clients for every emulator from one loaded proto; each client has its own channel to 127.0.0.1. */
 export function createEmulatorClientFactory(Controller: ControllerConstructor): EmulatorClientFactory {
   return (endpoint) => {
-    const raw = new Controller(`${HOST}:${endpoint.port}`, grpc.credentials.createInsecure());
+    const raw = new Controller(`${HOST}:${endpoint.port}`, grpc.credentials.createInsecure(), {
+      'grpc.max_receive_message_length': MAX_GRPC_RECEIVE_BYTES,
+    });
     const metadata = (): grpc.Metadata => {
       const value = new grpc.Metadata();
       value.set('authorization', `Bearer ${endpoint.token.reveal()}`);
@@ -247,12 +257,17 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
           else resolve(response as Res);
         });
       });
-    const screenshot = async (box?: Size): Promise<ScreenFrame> => {
-      const request = box ? { format: 'PNG', width: box.width, height: box.height } : { format: 'PNG' };
-      const frame = toFrame(await unary('getScreenshot', raw.getScreenshot, request));
+    const fetchScreenshot = async <F>(
+      format: 'PNG' | 'RGBA8888',
+      decode: (image: RawImage) => F | null,
+      box?: Size,
+    ): Promise<F> => {
+      const request = box ? { format, width: box.width, height: box.height } : { format };
+      const frame = decode(await unary('getScreenshot', raw.getScreenshot, request));
       if (!frame) throw new EmulatorRpcError(grpc.status.UNAVAILABLE, 'getScreenshot returned no image');
       return frame;
     };
+    const screenshot = (box?: Size): Promise<ScreenFrame> => fetchScreenshot('PNG', toFrame, box);
 
     const startFrameStream = <F>(
       format: 'PNG' | 'RGBA8888',
@@ -311,6 +326,7 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
         return { ...rotatedSize(frame, frame.rotation), dpi: null };
       },
       getScreenshot: (box) => screenshot(box),
+      getRawScreenshot: (box) => fetchScreenshot('RGBA8888', toRawFrame, box),
       streamScreenshot(box, handlers) {
         return startFrameStream('PNG', box, toFrame, handlers);
       },

@@ -99,12 +99,44 @@ describe('EmulatorController client', () => {
     expect(await client.getDisplaySize()).toEqual({ width: 1080, height: 2424, dpi: null });
   });
 
-  it('takes full-size PNG screenshots, rotated like the screen', async () => {
+  it('takes full-size PNG screenshots and scaled RGBA8888 screenshots, rotated like the screen', async () => {
     emulator.rotation = 'LANDSCAPE';
     const frame = await connect().getScreenshot();
     expect(frame).toMatchObject({ width: 2424, height: 1080, rotation: 270 });
     expect(frame.png.toString()).toBe('png 2424x1080');
     expect(emulator.screenshotRequests.at(-1)).toMatchObject({ format: 'PNG', width: 0, height: 0 });
+
+    const raw = await client.getRawScreenshot?.({ width: 1212, height: 540 });
+    expect(raw).toMatchObject({ width: 1212, height: 540, rotation: 270 });
+    expect(raw?.rgba.length).toBe(1212 * 540 * 4);
+    expect(emulator.screenshotRequests.at(-1)).toMatchObject({
+      format: 'RGBA8888',
+      width: 1212,
+      height: 540,
+    });
+  });
+
+  it('receives >4 MiB RGBA8888 frames (e.g. 720x1616) over both getRawScreenshot and streamRawScreenshot', async () => {
+    emulator.rotation = 'PORTRAIT';
+    const c = connect();
+    const raw720 = await c.getRawScreenshot?.({ width: 720, height: 1616 });
+    expect(raw720).toMatchObject({ width: 720, height: 1616, rotation: 0 });
+    expect(raw720?.rgba.length).toBe(720 * 1616 * 4);
+
+    const streamed: RawScreenFrame[] = [];
+    const stream = requireRawStream(
+      c,
+      { width: 720, height: 1616 },
+      { onFrame: (f) => streamed.push(f), onEnd: () => undefined },
+    );
+    await waitUntil(() => emulator.openStreams.length === 1);
+    const bigBytes = Buffer.alloc(720 * 1616 * 4, 0x5a);
+    emulator.pushFrame({ rotation: 'PORTRAIT', width: 720, height: 1616, bytes: bigBytes });
+    await waitUntil(() => streamed.length === 1);
+    expect(streamed[0]).toMatchObject({ width: 720, height: 1616, rotation: 0 });
+    expect(streamed[0]?.rgba.length).toBe(720 * 1616 * 4);
+    stream.cancel();
+    await waitUntil(() => emulator.openStreams.length === 0);
   });
 
   it('streams scaled frames into the bounding box, skipping empty images, until cancelled', async () => {

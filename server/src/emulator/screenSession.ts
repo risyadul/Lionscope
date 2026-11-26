@@ -369,7 +369,7 @@ export class ScreenSession {
     void this.prime();
   }
 
-  private startH264Stream(rotation: ScreenRotation, { prime = false }: { prime?: boolean } = {}): void {
+  private startH264Stream(rotation: ScreenRotation, { prime = true }: { prime?: boolean } = {}): void {
     if (!this.display || this.closed || !this.client.streamRawScreenshot) return;
     this.stream?.cancel();
     this.streamRotation = rotation;
@@ -459,40 +459,53 @@ export class ScreenSession {
   private async prime(expected?: ScreenRotation): Promise<void> {
     const request = ++this.primeRequest;
     const framesBefore = this.streamFrames;
+    const modeAtStart = this.mode;
     let rotation = expected ?? this.rotation;
     for (let attempt = 1; ; attempt += 1) {
       const display = this.display;
-      if (!display || this.closed || request !== this.primeRequest) return;
-      let frame: ScreenFrame;
+      if (!display || this.closed || request !== this.primeRequest || this.mode !== modeAtStart) return;
+      const box = frameBox(display, rotation, this.size);
+      const useRaw = modeAtStart === 'h264' && typeof this.client.getRawScreenshot === 'function';
+      let fetched: PendingFrame;
       try {
-        frame = await this.client.getScreenshot(frameBox(display, rotation, this.size));
+        fetched = useRaw
+          ? { kind: 'raw', frame: await this.client.getRawScreenshot!(box) }
+          : { kind: 'png', frame: await this.client.getScreenshot(box) };
       } catch (error) {
         log.warn(`Fetching the screen of ${this.serial} failed: ${errorMessage(error)}`);
         return;
       }
-      if (this.closed || request !== this.primeRequest) return;
+      if (this.closed || request !== this.primeRequest || this.mode !== modeAtStart) return;
       // A newer stream frame (in the expected orientation) makes this one stale.
       const overtaken =
         this.streamFrames !== framesBefore &&
         (expected === undefined || this.lastStreamRotation === expected);
       if (overtaken) return;
-      const settled = expected === undefined || frame.rotation === expected || attempt >= SETTLE_ATTEMPTS;
-      if (settled && isQuarterTurn(frame.rotation) === isQuarterTurn(rotation)) {
+      const frameRotation = fetched.frame.rotation;
+      const settled = expected === undefined || frameRotation === expected || attempt >= SETTLE_ATTEMPTS;
+      if (settled && isQuarterTurn(frameRotation) === isQuarterTurn(rotation)) {
         // A stream frame still waiting came before this request: older.
         this.pending = null;
+        if (fetched.kind === 'raw') {
+          if (isQuarterTurn(frameRotation) !== isQuarterTurn(this.streamRotation)) {
+            this.startH264Stream(frameRotation, { prime: false });
+          }
+          this.deliverRaw(fetched.frame);
+          return;
+        }
         if (this.mode === 'h264') {
-          if (frame.rotation !== this.streamRotation || frame.rotation !== this.shown?.rotation) {
-            this.startH264Stream(frame.rotation);
+          if (frameRotation !== this.streamRotation || frameRotation !== this.shown?.rotation) {
+            this.startH264Stream(frameRotation, { prime: false });
           }
           return;
         }
-        this.followOrientation(frame.rotation);
-        this.deliver(frame);
+        this.followOrientation(frameRotation);
+        this.deliver(fetched.frame);
         return;
       }
       // Not there yet, or letterboxed into a box of the other orientation: ask again.
       if (!settled) await new Promise((resolve) => setTimeout(resolve, SETTLE_INTERVAL_MS));
-      rotation = frame.rotation;
+      rotation = frameRotation;
     }
   }
 

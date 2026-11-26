@@ -85,6 +85,7 @@ export class FakeEmulatorClient implements EmulatorClient {
   scaledScreenshots: 'hang' | 'answer' | Error = 'hang';
   skinRotation: ScreenFrame['rotation'] = 0;
   readonly screenshotBoxes: Size[] = [];
+  readonly rawScreenshotBoxes: Size[] = [];
 
   async getScreenshot(box?: Size): Promise<ScreenFrame> {
     if (box) {
@@ -95,6 +96,14 @@ export class FakeEmulatorClient implements EmulatorClient {
     }
     if (this.screenshot instanceof Error) throw this.screenshot;
     return this.screenshot;
+  }
+
+  async getRawScreenshot(box?: Size): Promise<RawScreenFrame> {
+    const target = box ?? { width: 1080, height: 2424 };
+    if (box) this.rawScreenshotBoxes.push(box);
+    if (this.scaledScreenshots === 'hang') return new Promise(() => undefined);
+    if (this.scaledScreenshots instanceof Error) throw this.scaledScreenshots;
+    return rawFrame(target.width, target.height, this.skinRotation, 0x22);
   }
 
   private openTrackedStream<H>(

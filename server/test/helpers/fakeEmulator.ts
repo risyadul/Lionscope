@@ -144,10 +144,13 @@ export class FakeEmulator {
         // Like the emulator: scaled into the box (aspect kept) only when both sides are set.
         const scale =
           box.width > 0 && box.height > 0 ? Math.min(1, box.width / width, box.height / height) : 1;
+        const outW = Math.round(width * scale);
+        const outH = Math.round(height * scale);
         return image({
-          width: Math.round(width * scale),
-          height: Math.round(height * scale),
+          width: outW,
+          height: outH,
           rotation: this.rotation,
+          bytes: box.format === 'RGBA8888' ? Buffer.alloc(outW * outH * 4, 0x22) : undefined,
         });
       }),
       setClipboard: (

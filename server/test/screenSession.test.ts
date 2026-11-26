@@ -1120,4 +1120,61 @@ describe('ScreenSession H.264', () => {
     await closing;
     expect(closedResolved).toBe(true);
   });
+
+  it('primes static screens, setSize, and rotations via getRawScreenshot in H.264 mode and respects overtaken frames', async () => {
+    const harness = createFakeEncoderHarness();
+    const client = new FakeEmulatorClient();
+    client.scaledScreenshots = 'answer';
+    const socket = new FakeScreenSocket();
+    const session = new ScreenSession(socket, client, SERIAL, 540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+
+    await session.start();
+    await tick();
+    expect(client.rawScreenshotBoxes).toEqual([{ width: 540, height: 1212 }]);
+    expect(harness.encoders).toHaveLength(1);
+    expect(harness.encoders[0]?.writes).toHaveLength(1);
+    harness.encoders[0]?.emitPacket({ isConfig: true, isKey: false, pts: 0, data: Buffer.from([0x67]) });
+    harness.encoders[0]?.emitPacket({ isConfig: false, isKey: true, pts: 1, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({ codec: 'h264', frameWidth: 540, frameHeight: 1212 });
+
+    // setSize primes immediately with the new box even on a static screen.
+    session.handle({ type: 'setSize', size: 720 });
+    await tick();
+    expect(client.rawScreenshotBoxes.at(-1)).toEqual({ width: 720, height: 1616 });
+    expect(harness.encoders).toHaveLength(2);
+    harness.encoders[1]?.emitPacket({ isConfig: false, isKey: true, pts: 2, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({ codec: 'h264', frameWidth: 720, frameHeight: 1616 });
+
+    // Rotation settles to the new orientation, restarts raw stream once with landscape box, and delivers raw prime.
+    session.handle({ type: 'rotate', direction: 'left' });
+    setTimeout(() => (client.skinRotation = 270), 40);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(client.rawStream?.box).toEqual({ width: 1616, height: 720 });
+    expect(harness.encoders.at(-1)).toMatchObject({ width: 1616, height: 720 });
+    harness.encoders.at(-1)?.emitPacket({ isConfig: false, isKey: true, pts: 3, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({
+      codec: 'h264',
+      rotation: 270,
+      frameWidth: 1616,
+      frameHeight: 720,
+    });
+
+    // Overtaken prime: a raw stream frame arriving before getRawScreenshot resolves suppresses the stale prime.
+    let resolveRawPrime: (frame: ReturnType<typeof rawFrame>) => void = () => undefined;
+    client.getRawScreenshot = () => new Promise((resolve) => (resolveRawPrime = resolve));
+    const writesBefore = harness.encoders.at(-1)?.writes.length ?? 0;
+    session.handle({ type: 'setSize', size: 360 });
+    client.rawStream?.handlers.onFrame(rawFrame(808, 360, 270, 0x55));
+    resolveRawPrime(rawFrame(808, 360, 270, 0x99));
+    await tick();
+    const lastEncoder = harness.encoders.at(-1);
+    expect(lastEncoder?.writes).toHaveLength(1);
+    expect(lastEncoder?.writes[0]?.rgba[0]).toBe(0x55);
+    expect(writesBefore).toBeGreaterThanOrEqual(1);
+    await session.close();
+  });
 });
