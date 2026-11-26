@@ -8,6 +8,9 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- USB → Wi-Fi handoff: **Use Wi-Fi** button beside the device picker for ready USB phones (with a confirmation
+  dialog noting that port 5555 stays open until reboot) and `enable_wireless_adb` agent tool to read the phone's
+  Wi-Fi IP, run `adb tcpip 5555`, and connect wirelessly.
 - Wireless QR pairing and mDNS discovery: **Pair with QR** generates an ephemeral
   `WIFI:T:ADB;S:<name>;P:<password>;;` QR code (using `uqr`), polls `adb mdns services` for the matching
   `_adb-tls-pairing._tcp` service, pairs, and connects automatically; the **Connect** tab lists discovered

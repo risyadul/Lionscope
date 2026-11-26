@@ -6,7 +6,9 @@ import {
   adbMdnsServices,
   adbPair,
   adbTcpip,
+  parseDeviceWifiIp,
   parseMdnsServices,
+  readDeviceWifiIp,
 } from '../src/adb/wireless.ts';
 import { FakeAdb } from './helpers/fakes.ts';
 
@@ -155,5 +157,26 @@ describe('adb wireless helpers', () => {
 
     const adb = new FakeAdb((args) => (args[0] === 'mdns' && args[1] === 'services' ? output : ''));
     expect(await adbMdnsServices(adb)).toHaveLength(4);
+  });
+
+  it('extracts a device Wi-Fi IPv4 from `ip addr show wlan0` or `ip route` fallback', async () => {
+    expect(
+      parseDeviceWifiIp(
+        '14: wlan0: <BROADCAST,MULTICAST,UP>\n    inet 192.168.1.77/24 brd 192.168.1.255 scope global wlan0\n',
+      ),
+    ).toBe('192.168.1.77');
+    expect(parseDeviceWifiIp('192.168.1.0/24 dev wlan1 proto kernel scope link src 192.168.1.88\n')).toBe(
+      '192.168.1.88',
+    );
+    expect(parseDeviceWifiIp('127.0.0.0/8 dev lo scope host src 127.0.0.1\n')).toBeNull();
+
+    const adb = new FakeAdb((args) => {
+      if (args[2] === 'shell' && args[3] === 'ip -f inet addr show wlan0') return '';
+      if (args[2] === 'shell' && args[3] === 'ip route') {
+        return '10.0.0.0/24 dev wlan0 proto kernel scope link src 10.0.0.55\n';
+      }
+      return '';
+    });
+    expect(await readDeviceWifiIp(adb, 'R58M123ABC')).toBe('10.0.0.55');
   });
 });

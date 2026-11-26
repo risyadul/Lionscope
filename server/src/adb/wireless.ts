@@ -4,18 +4,20 @@
  * pairing secrets out of return values and errors.
  */
 import {
+  classifyIpv4,
   DEFAULT_ADB_TCP_PORT,
   isMdnsSerial,
   isValidPairingCode,
   isValidSerial,
   MDNS_CONNECT_SERVICE,
   MDNS_PAIRING_SERVICE,
+  parseIpv4,
   parseWirelessAddress,
   parseWirelessPort,
   validateWirelessEndpoint,
 } from '@lionscope/protocol';
 import type { MdnsServiceType } from '@lionscope/protocol';
-import { scrubSecret } from './adb.ts';
+import { adbShell, scrubSecret } from './adb.ts';
 import type { Adb, ExecOptions } from './adb.ts';
 
 const PAIR_TIMEOUT_MS = 15_000;
@@ -217,4 +219,34 @@ export async function adbMdnsServices(adb: Adb, options: ExecOptions = {}): Prom
     timeoutMs: options.timeoutMs ?? MDNS_TIMEOUT_MS,
   });
   return parseMdnsServices(stdout);
+}
+
+/** Extract a non-loopback IPv4 address from `ip -f inet addr show wlan0` or `ip route`. */
+export function parseDeviceWifiIp(output: string): string | null {
+  for (const match of output.matchAll(/\binet\s+(\d+\.\d+\.\d+\.\d+)\/\d+\b/g)) {
+    const ip = match[1] ?? '';
+    const octets = parseIpv4(ip);
+    if (octets && classifyIpv4(octets) !== 'loopback') return ip;
+  }
+  for (const line of output.split(/\r?\n/)) {
+    if (!/\bdev\s+(?:wlan|wifi)\w*\b/.test(line)) continue;
+    const match = /\bsrc\s+(\d+\.\d+\.\d+\.\d+)\b/.exec(line);
+    const ip = match?.[1] ?? '';
+    const octets = parseIpv4(ip);
+    if (octets && classifyIpv4(octets) !== 'loopback') return ip;
+  }
+  return null;
+}
+
+/** Read a USB-connected phone's Wi-Fi IPv4 address via `ip -f inet addr show wlan0` (fallback: `ip route`). */
+export async function readDeviceWifiIp(adb: Adb, serial: string, options: ExecOptions = {}): Promise<string> {
+  if (!isValidSerial(serial)) throw new Error('Invalid adb serial');
+  const timeoutMs = options.timeoutMs ?? MDNS_TIMEOUT_MS;
+  const wlanOut = await adbShell(adb, serial, 'ip -f inet addr show wlan0', { timeoutMs }).catch(() => '');
+  const fromWlan = parseDeviceWifiIp(wlanOut);
+  if (fromWlan) return fromWlan;
+  const routeOut = await adbShell(adb, serial, 'ip route', { timeoutMs }).catch(() => '');
+  const fromRoute = parseDeviceWifiIp(routeOut);
+  if (fromRoute) return fromRoute;
+  throw new Error("Could not read the phone's Wi-Fi IP address. Connect the phone to Wi-Fi and try again.");
 }

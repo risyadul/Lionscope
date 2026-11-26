@@ -386,4 +386,76 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     expect(pairCall?.[1]).toBe('192.168.1.50:39000');
     expect(JSON.stringify(updates)).not.toContain(pairCall?.[2] ?? 'impossible');
   });
+
+  it('performs USB to Wi-Fi handoff via WS and agent tool, validating the reported IP against agent policy', async () => {
+    let devicesOutput =
+      'List of devices attached\nR58M123ABC device usb:1-1 product:panther model:Pixel_7 transport_id:2\n';
+    let wifiIp = '192.168.1.42';
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') return devicesOutput;
+      if (args[0] === '-s' && args[2] === 'shell' && args[3] === 'ip -f inet addr show wlan0') {
+        return `14: wlan0: <UP>\n    inet ${wifiIp}/24 scope global wlan0\n`;
+      }
+      if (args[0] === '-s' && args[2] === 'tcpip') return `restarting in TCP mode port: ${args[3]}\n`;
+      if (args[0] === 'connect') {
+        devicesOutput += `${args[1]} device product:panther model:Pixel_7 transport_id:9\n`;
+        return `connected to ${args[1]}\n`;
+      }
+      return '';
+    });
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    await server.manager.refreshDevices();
+
+    // Agent tool rejects a device-reported public IP before running `adb tcpip`.
+    wifiIp = '8.8.8.8';
+    const refusedPublic = await callTool(
+      server.agent,
+      'enable_wireless_adb',
+      { serial: 'R58M123ABC', port: 5555 },
+      true,
+    );
+    expect(refusedPublic.ok).toBe(false);
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Private Wi-Fi IP succeeds via agent tool.
+    wifiIp = '192.168.1.42';
+    const agentRes = await callTool(
+      server.agent,
+      'enable_wireless_adb',
+      { serial: 'R58M123ABC', port: 5555 },
+      true,
+    );
+    expect(agentRes).toEqual({
+      ok: true,
+      result: {
+        usbSerial: 'R58M123ABC',
+        serial: '192.168.1.42:5555',
+        target: '192.168.1.42:5555',
+        port: 5555,
+        alreadyConnected: false,
+        note: "TCP/IP port 5555 stays open on the device's Wi-Fi network until reboot (or `adb usb`).",
+      },
+    });
+
+    // WS enableWirelessTcpip works too.
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+    client.send({ type: 'enableWirelessTcpip', requestId: 31, serial: 'R58M123ABC' });
+    const wsAnswer = await client.next('wirelessResult');
+    expect(wsAnswer).toEqual({
+      type: 'wirelessResult',
+      requestId: 31,
+      result: {
+        action: 'tcpip',
+        ok: true,
+        usbSerial: 'R58M123ABC',
+        serial: '192.168.1.42:5555',
+        target: '192.168.1.42:5555',
+        port: 5555,
+        alreadyConnected: false,
+      },
+    });
+  });
 });

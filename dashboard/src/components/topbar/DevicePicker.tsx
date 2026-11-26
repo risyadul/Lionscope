@@ -30,6 +30,10 @@ type Props = {
   onDisconnectWireless?: (serial: string) => void;
   /** True while the selected wireless device is disconnecting. */
   isDisconnecting?: boolean;
+  /** Switches a USB physical device to TCP/IP mode (`adb tcpip 5555`) and connects over Wi-Fi. */
+  onSwitchToWifi?: (serial: string) => void;
+  /** True while the selected USB device is switching to Wi-Fi. */
+  isSwitchingToWifi?: boolean;
   isLocked: boolean;
   isOffline: boolean;
   /** Boot / Shut down for the selected emulator, beside the select. */
@@ -64,11 +68,14 @@ export function DevicePicker({
   onOpenWireless,
   onDisconnectWireless,
   isDisconnecting = false,
+  onSwitchToWifi,
+  isSwitchingToWifi = false,
   isLocked,
   isOffline,
   actions,
 }: Props) {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [confirmWifiHandoff, setConfirmWifiHandoff] = useState(false);
   const list = devices ?? [];
   const avds = standaloneAvds(emulators, devices);
   const hasReady = list.some(isReady);
@@ -94,6 +101,11 @@ export function DevicePicker({
   const selectedBadge = emulator === null ? transportBadgeLabel(selectedDevice?.transport) : null;
   const canDisconnect =
     emulator === null && selectedDevice?.transport === 'wireless' && onDisconnectWireless !== undefined;
+  const canSwitchToWifi =
+    emulator === null &&
+    selectedDevice?.transport === 'usb' &&
+    selectedDevice.state === 'device' &&
+    onSwitchToWifi !== undefined;
 
   const deviceOptions = list.map((device) => (
     <option key={device.serial} value={device.serial} disabled={deviceStateReason(device.state) !== null}>
@@ -177,6 +189,23 @@ export function DevicePicker({
             {isDisconnecting ? 'Disconnecting…' : 'Disconnect'}
           </button>
         )}
+        {canSwitchToWifi && (
+          <button
+            type="button"
+            className="btn emu-action"
+            onClick={() => setConfirmWifiHandoff(true)}
+            disabled={isOffline || isSwitchingToWifi || isLocked}
+            title={
+              isOffline
+                ? 'Offline — waiting for the server'
+                : isLocked
+                  ? 'Stop the session before switching to Wi-Fi'
+                  : `Switch ${deviceName(selectedDevice)} from USB to Wi-Fi (adb tcpip 5555)`
+            }
+          >
+            {isSwitchingToWifi ? 'Switching…' : 'Use Wi-Fi'}
+          </button>
+        )}
         {onOpenWireless && (
           <button
             type="button"
@@ -232,6 +261,29 @@ export function DevicePicker({
           <p>
             The active profiling session on <strong className="mono">{selectedDevice.serial}</strong> will
             stop before disconnecting wireless ADB.
+          </p>
+        </ConfirmDialog>
+      )}
+      {confirmWifiHandoff && selectedDevice && onSwitchToWifi && (
+        <ConfirmDialog
+          title={`Switch ${deviceName(selectedDevice)} to Wi-Fi?`}
+          confirmLabel="Enable Wi-Fi ADB"
+          onConfirm={() => {
+            setConfirmWifiHandoff(false);
+            onSwitchToWifi(selectedDevice.serial);
+          }}
+          onCancel={() => setConfirmWifiHandoff(false)}
+        >
+          <p>
+            Lionscope will read this phone’s Wi-Fi IP, run <code className="mono">adb tcpip 5555</code>, and
+            connect wirelessly so you can unplug the USB cable.
+          </p>
+          <p>
+            <strong>
+              TCP/IP port 5555 stays open on the phone’s Wi-Fi network until the phone is rebooted
+            </strong>{' '}
+            (or switched back with <code className="mono">adb usb</code>). Only enable this on a network you
+            trust.
           </p>
         </ConfirmDialog>
       )}

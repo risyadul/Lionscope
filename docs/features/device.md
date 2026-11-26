@@ -78,10 +78,15 @@ or hostname with port, and warns whenever the address is a public IP.
 - **Same phone over USB and Wi-Fi.** If the same physical device is connected over both USB and Wi-Fi at the same
   time, `adb devices` lists each transport separately, so both entries appear in the device picker; unplug USB or
   disconnect the wireless entry if you only want one.
-- **AI agent tools.** `connect_device`, `disconnect_device`, and `pair_device` (under the **Agent device control**
-  permission) let agents pair, connect, and disconnect wireless devices on private IPv4 (`10/8`, `172.16/12`,
-  `192.168/16`), link-local, IPv6 ULA (`fc00::/7`), Tailscale (`100.64/10`), mDNS serials, or a `host:port` the
-  user already connected from the dashboard during the current server run. Other addresses are rejected.
+- **AI agent tools.** `connect_device`, `disconnect_device`, `pair_device`, and `enable_wireless_adb` (under the
+  **Agent device control** permission) let agents pair, connect, hand off from USB to Wi-Fi, and disconnect
+  wireless devices on private IPv4 (`10/8`, `172.16/12`, `192.168/16`), link-local, IPv6 ULA (`fc00::/7`),
+  Tailscale (`100.64/10`), mDNS serials, or a `host:port` the user already connected from the dashboard during the
+  current server run. Other addresses are rejected.
+- **USB → Wi-Fi handoff.** Select a ready USB physical phone and click **Use Wi-Fi** next to the device picker.
+  After confirming that TCP/IP port `5555` stays open on the phone's Wi-Fi network until reboot (or `adb usb`),
+  Lionscope reads the phone's Wi-Fi IP, runs `adb tcpip 5555`, connects wirelessly, and selects the new Wi-Fi
+  entry so you can unplug USB.
 - **Android 11+ pairing code.** Switch to **Pair with code** in the Wireless device dialog, enter the pairing
   IP:port and the 6-digit code shown on the phone, and optionally enter the separate connect port. If you leave the
   connect port blank, Lionscope checks `adb mdns services` for a matching `_adb-tls-connect._tcp` endpoint and

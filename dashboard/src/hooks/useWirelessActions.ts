@@ -28,10 +28,12 @@ export interface WirelessActionsController {
   listMdns: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
   startQrPairing: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
   cancelQrPairing: (sessionId: string) => void;
+  enableTcpip: (serial: string, port?: number) => Promise<Extract<WirelessActionResult, { action: 'tcpip' }>>;
   qrPairing: QrPairingUpdate | null;
   disconnectingSerial: string | null;
-  disconnectError: string | null;
-  clearDisconnectError: () => void;
+  handoffSerial: string | null;
+  actionError: string | null;
+  clearActionError: () => void;
 }
 
 /** Sends request/response wireless ADB commands over the dashboard WebSocket and matches answers by requestId. */
@@ -39,7 +41,8 @@ export function useWirelessActions({ send, answers, qrPairing, isOpen }: Input):
   const nextIdRef = useRef(1);
   const pendingRef = useRef(new Map<number, PendingEntry>());
   const [disconnectingSerial, setDisconnectingSerial] = useState<string | null>(null);
-  const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  const [handoffSerial, setHandoffSerial] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     for (const answer of answers) {
@@ -133,14 +136,14 @@ export function useWirelessActions({ send, answers, qrPairing, isOpen }: Input):
   const disconnect = useCallback(
     async (serial: string) => {
       setDisconnectingSerial(serial);
-      setDisconnectError(null);
+      setActionError(null);
       try {
         const result = await request('disconnect', (requestId) => ({
           type: 'disconnectDevice',
           requestId,
           serial,
         }));
-        if (!result.ok) setDisconnectError(result.message);
+        if (!result.ok) setActionError(result.message);
         return result;
       } finally {
         setDisconnectingSerial((current) => (current === serial ? null : current));
@@ -149,7 +152,27 @@ export function useWirelessActions({ send, answers, qrPairing, isOpen }: Input):
     [request],
   );
 
-  const clearDisconnectError = useCallback(() => setDisconnectError(null), []);
+  const enableTcpip = useCallback(
+    async (serial: string, port?: number) => {
+      setHandoffSerial(serial);
+      setActionError(null);
+      try {
+        const result = await request('tcpip', (requestId) => ({
+          type: 'enableWirelessTcpip',
+          requestId,
+          serial,
+          ...(port !== undefined ? { port } : {}),
+        }));
+        if (!result.ok) setActionError(result.message);
+        return result;
+      } finally {
+        setHandoffSerial((current) => (current === serial ? null : current));
+      }
+    },
+    [request],
+  );
+
+  const clearActionError = useCallback(() => setActionError(null), []);
 
   const listMdns = useCallback(
     () => request('mdns', (requestId) => ({ type: 'listMdnsServices', requestId })),
@@ -175,9 +198,11 @@ export function useWirelessActions({ send, answers, qrPairing, isOpen }: Input):
     listMdns,
     startQrPairing,
     cancelQrPairing,
+    enableTcpip,
     qrPairing,
     disconnectingSerial,
-    disconnectError,
-    clearDisconnectError,
+    handoffSerial,
+    actionError,
+    clearActionError,
   };
 }

@@ -135,6 +135,7 @@ export type GatewayWireless = Pick<
   | 'connect'
   | 'disconnect'
   | 'pair'
+  | 'enableTcpipHandoff'
   | 'listMdnsConnectDevices'
   | 'startQrPairing'
   | 'cancelQrPairing'
@@ -201,6 +202,7 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   listMdnsServices: 'Could not list discovered wireless devices',
   startQrPairing: 'Could not start QR pairing',
   cancelQrPairing: 'Could not cancel QR pairing',
+  enableWirelessTcpip: 'Could not switch the USB device to Wi-Fi',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -481,6 +483,30 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       case 'cancelQrPairing':
         options.wireless?.cancelQrPairing(message.sessionId);
         return;
+      case 'enableWirelessTcpip': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'tcpip', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            const handedOff = await wireless.enableTcpipHandoff(message.serial, 'dashboard', {
+              ...(message.port !== undefined ? { port: message.port } : {}),
+            });
+            result = { action: 'tcpip', ok: true, ...handedOff };
+          } catch (error) {
+            if (!(error instanceof PublicError))
+              log.warn(`enableWirelessTcpip failed: ${errorMessage(error)}`);
+            result = {
+              action: 'tcpip',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.enableWirelessTcpip,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
     }
   };
 

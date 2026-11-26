@@ -31,6 +31,8 @@ type Props = {
   onOpenWireless?: () => void;
   onDisconnectWireless?: (serial: string) => void;
   isDisconnectingWireless?: boolean;
+  onSwitchToWifi?: (serial: string) => void;
+  isSwitchingToWifi?: boolean;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
   onPackageChange: (packageName: string) => void;
@@ -65,6 +67,8 @@ export function TopBar({
   onOpenWireless,
   onDisconnectWireless,
   isDisconnectingWireless = false,
+  onSwitchToWifi,
+  isSwitchingToWifi = false,
   apps,
   packageName,
   onPackageChange,
@@ -110,6 +114,8 @@ export function TopBar({
           onOpenWireless={onOpenWireless}
           onDisconnectWireless={onDisconnectWireless}
           isDisconnecting={isDisconnectingWireless}
+          onSwitchToWifi={onSwitchToWifi}
+          isSwitchingToWifi={isSwitchingToWifi}
           isLocked={isSessionActive}
           isOffline={isOffline}
           actions={emulatorActions}

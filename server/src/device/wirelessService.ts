@@ -8,19 +8,30 @@
  *   dashboard in this server run.
  */
 import { randomBytes, randomInt } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   checkAgentWirelessTarget,
+  DEFAULT_ADB_TCP_PORT,
   formatAdbQrPayload,
   isMdnsSerial,
   isValidPairingCode,
+  isValidSerial,
   MDNS_CONNECT_SERVICE,
   MDNS_PAIRING_SERVICE,
   parseWirelessAddress,
+  parseWirelessPort,
 } from '@lionscope/protocol';
 import type { DeviceInfo, DiscoveredWirelessDevice, QrPairingUpdate } from '@lionscope/protocol';
 import { scrubSecret } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
-import { adbConnect, adbDisconnect, adbMdnsServices, adbPair } from '../adb/wireless.ts';
+import {
+  adbConnect,
+  adbDisconnect,
+  adbMdnsServices,
+  adbPair,
+  adbTcpip,
+  readDeviceWifiIp,
+} from '../adb/wireless.ts';
 import type { AdbConnectResult, AdbDisconnectResult, MdnsService } from '../adb/wireless.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage } from '../log.ts';
@@ -29,6 +40,8 @@ export type WirelessRequestSource = 'dashboard' | 'agent';
 
 const DEFAULT_QR_POLL_MS = 1000;
 const DEFAULT_QR_TIMEOUT_MS = 120_000;
+const DEFAULT_TCPIP_RETRY_DELAY_MS = 750;
+const TCPIP_CONNECT_ATTEMPTS = 3;
 const QR_PASSWORD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const QR_PASSWORD_LENGTH = 16;
 
@@ -54,6 +67,14 @@ export interface QrPairingStartResult {
   expiresAt: number;
 }
 
+export interface WirelessTcpipOutcome {
+  usbSerial: string;
+  serial: string;
+  target: string;
+  port: number;
+  alreadyConnected: boolean;
+}
+
 interface ActiveQrSession {
   sessionId: string;
   owner: unknown;
@@ -73,6 +94,7 @@ export interface WirelessServiceOptions {
   now?: () => number;
   qrPollMs?: number;
   qrTimeoutMs?: number;
+  tcpipRetryDelayMs?: number;
 }
 
 export class WirelessService {
@@ -83,6 +105,7 @@ export class WirelessService {
   private readonly now: () => number;
   private readonly qrPollMs: number;
   private readonly qrTimeoutMs: number;
+  private readonly tcpipRetryDelayMs: number;
   /** Normalized `host:port` endpoints connected by the user from the dashboard during this server run. */
   private readonly dashboardApproved = new Set<string>();
   private readonly qrSessions = new Map<string, ActiveQrSession>();
@@ -96,6 +119,7 @@ export class WirelessService {
     this.now = options.now ?? Date.now;
     this.qrPollMs = options.qrPollMs ?? DEFAULT_QR_POLL_MS;
     this.qrTimeoutMs = options.qrTimeoutMs ?? DEFAULT_QR_TIMEOUT_MS;
+    this.tcpipRetryDelayMs = options.tcpipRetryDelayMs ?? DEFAULT_TCPIP_RETRY_DELAY_MS;
   }
 
   /** Remember a normalized `host:port` approved by the user from the dashboard. */
@@ -383,5 +407,77 @@ export class WirelessService {
         message: scrubSecret(errorMessage(error), password),
       });
     }
+  }
+
+  /**
+   * USB → Wi-Fi handoff: read the USB-connected phone's Wi-Fi IP, validate it against the caller's
+   * host policy, switch adbd to TCP/IP mode (`adb tcpip <port>`), and connect over Wi-Fi.
+   * Port stays open on the phone's Wi-Fi network until reboot (or `adb usb`).
+   */
+  async enableTcpipHandoff(
+    usbSerial: string,
+    source: WirelessRequestSource,
+    options: { port?: number } = {},
+  ): Promise<WirelessTcpipOutcome> {
+    if (!isValidSerial(usbSerial)) throw new PublicError('Invalid adb serial');
+    const port = parseWirelessPort(options.port ?? DEFAULT_ADB_TCP_PORT);
+    if (port === null) throw new PublicError('Port must be a whole number from 1 to 65535');
+
+    const device = this.getDevices().find((candidate) => candidate.serial === usbSerial);
+    if (!device) throw new PublicError(`Device ${usbSerial} is not connected`);
+    if (device.state !== 'device') throw new PublicError(`Device ${usbSerial} is ${device.state}`);
+    if (device.transport === 'emulator') {
+      throw new PublicError('Emulators cannot be switched to wireless TCP/IP mode');
+    }
+    if (device.transport === 'wireless') {
+      throw new PublicError(`Device ${usbSerial} is already connected wirelessly`);
+    }
+
+    let wifiIp: string;
+    try {
+      wifiIp = await readDeviceWifiIp(this.adb, usbSerial);
+    } catch (error) {
+      throw new PublicError(errorMessage(error), { cause: error });
+    }
+
+    // Validate the device-reported IP against caller host policy BEFORE opening TCP/IP or connecting.
+    const target = this.validateTarget(`${wifiIp}:${port}`, source, false);
+
+    try {
+      await adbTcpip(this.adb, usbSerial, port);
+    } catch (error) {
+      throw new PublicError(errorMessage(error), { cause: error });
+    }
+
+    let connected: AdbConnectResult | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= TCPIP_CONNECT_ATTEMPTS; attempt += 1) {
+      if (attempt > 1 && this.tcpipRetryDelayMs > 0) await sleep(this.tcpipRetryDelayMs);
+      try {
+        connected = await adbConnect(this.adb, target);
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!connected) {
+      throw new PublicError(
+        `Enabled TCP/IP mode on port ${port}, but connecting to ${target} failed: ${errorMessage(lastError)}`,
+        { cause: lastError },
+      );
+    }
+
+    if (source === 'dashboard') {
+      this.approveFromDashboard(connected.target);
+      this.approveFromDashboard(connected.serial);
+    }
+    await this.refreshDevices().catch(() => undefined);
+    return {
+      usbSerial,
+      serial: connected.serial,
+      target: connected.target,
+      port,
+      alreadyConnected: connected.alreadyConnected,
+    };
   }
 }

@@ -39,7 +39,12 @@ import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTool
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
 import { scrollToTool, tapElementTool, typeTextTool, uiTreeTool, waitForTool } from './uiTools.ts';
-import { connectDeviceTool, disconnectDeviceTool, pairDeviceTool } from './wirelessTools.ts';
+import {
+  connectDeviceTool,
+  disconnectDeviceTool,
+  enableWirelessAdbTool,
+  pairDeviceTool,
+} from './wirelessTools.ts';
 import { ToolError } from './tool.ts';
 import type { AgentBaseContext, AgentTool } from './tool.ts';
 
@@ -92,6 +97,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   connectDeviceTool,
   disconnectDeviceTool,
   pairDeviceTool,
+  enableWirelessAdbTool,
   listStorageTool,
   readStorageTool,
   writeStorageTool,

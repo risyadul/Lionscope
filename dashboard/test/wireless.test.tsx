@@ -90,6 +90,31 @@ describe('DevicePicker wireless badges & disconnect', () => {
     fireEvent.click(buttons.at(-1)!);
     expect(onDisconnect).toHaveBeenCalledWith('192.168.1.42:5555');
   });
+
+  it('asks for confirmation explaining port 5555 stays open until reboot before USB to Wi-Fi handoff', () => {
+    const onSwitchToWifi = vi.fn();
+    render(
+      <DevicePicker
+        devices={[usbDevice]}
+        emulators={[]}
+        value={usbDevice.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={onSwitchToWifi}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Wi-Fi' }));
+    expect(onSwitchToWifi).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.textContent).toMatch(/5555 stays open.*until.*reboot/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Wi-Fi ADB' }));
+    expect(onSwitchToWifi).toHaveBeenCalledWith('R58M123ABC');
+  });
 });
 
 describe('WirelessDialog', () => {

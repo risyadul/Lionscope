@@ -4,7 +4,13 @@
  * mDNS serials, or a host:port the user already connected from the dashboard in this server run.
  */
 import { z } from 'zod';
-import { isValidPairingCode } from '@lionscope/protocol';
+import {
+  DEFAULT_ADB_TCP_PORT,
+  isValidPairingCode,
+  MAX_WIRELESS_PORT,
+  MIN_WIRELESS_PORT,
+} from '@lionscope/protocol';
+import { optionalSerial, targetSerial } from './deviceTools.ts';
 import { defineTool, ToolError } from './tool.ts';
 import type { AgentContext } from './tool.ts';
 
@@ -89,6 +95,35 @@ export const pairDeviceTool = defineTool({
         target: result.target,
         connectedSerial: result.connectedSerial,
         ...(result.connectNote ? { note: result.connectNote } : {}),
+      },
+    };
+  },
+});
+
+export const enableWirelessAdbTool = defineTool({
+  name: 'enable_wireless_adb',
+  title: 'Switch USB device to wireless ADB',
+  description:
+    'Switches a USB-connected physical Android device to wireless TCP/IP mode (`adb tcpip <port>`, default 5555), reads its Wi-Fi IP, and connects via `adb connect` so USB can be unplugged. The phone TCP/IP port stays open on its Wi-Fi network until reboot (or `adb usb`); only use on a trusted network. The detected IP must satisfy the agent wireless host policy (private IPv4, link-local, or Tailscale). Device control.',
+  access: 'device',
+  input: z.object({
+    serial: optionalSerial,
+    port: z
+      .number()
+      .int()
+      .min(MIN_WIRELESS_PORT)
+      .max(MAX_WIRELESS_PORT)
+      .default(DEFAULT_ADB_TCP_PORT)
+      .describe('TCP/IP port for adbd (default 5555).'),
+  }),
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  async run({ serial: requested, port }, ctx) {
+    const serial = targetSerial(ctx, requested);
+    const result = await requireWireless(ctx).enableTcpipHandoff(serial, 'agent', { port });
+    return {
+      data: {
+        ...result,
+        note: `TCP/IP port ${result.port} stays open on the device's Wi-Fi network until reboot (or \`adb usb\`).`,
       },
     };
   },

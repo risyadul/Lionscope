@@ -89,8 +89,8 @@ export type AgentLocations = Pick<
   'getLocation' | 'readEmulatorGps' | 'setLocation' | 'clearLocation'
 >;
 
-/** Wireless ADB actions (connect, disconnect, pair, ...): shared with the dashboard gateway. */
-export type AgentWireless = Pick<WirelessService, 'connect' | 'disconnect' | 'pair'>;
+/** Wireless ADB actions (connect, disconnect, pair, tcpip handoff): shared with the dashboard gateway. */
+export type AgentWireless = Pick<WirelessService, 'connect' | 'disconnect' | 'pair' | 'enableTcpipHandoff'>;
 
 /** The last screenshot of a device: tap / swipe coordinates are in `shot` pixels, adb input wants `device` ones. */
 export interface ScreenshotSize {

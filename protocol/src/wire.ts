@@ -1814,7 +1814,17 @@ export type WirelessActionResult =
       serviceName: string;
       expiresAt: number;
     }
-  | { action: 'startQr'; ok: false; message: string };
+  | { action: 'startQr'; ok: false; message: string }
+  | {
+      action: 'tcpip';
+      ok: true;
+      usbSerial: string;
+      serial: string;
+      target: string;
+      port: number;
+      alreadyConnected: boolean;
+    }
+  | { action: 'tcpip'; ok: false; message: string };
 
 export type ServerMessage =
   | {
@@ -2052,7 +2062,9 @@ export type ClientMessage =
   /** Start an ephemeral QR pairing session; answered with `wirelessResult` (`startQr`) + `qrPairing` updates. */
   | { type: 'startQrPairing'; requestId: number }
   /** Cancel an active QR pairing session (stops polling and erases its ephemeral password). */
-  | { type: 'cancelQrPairing'; sessionId: string };
+  | { type: 'cancelQrPairing'; sessionId: string }
+  /** Switch a USB physical device to TCP/IP mode (`adb tcpip <port>`) and connect over Wi-Fi. */
+  | { type: 'enableWirelessTcpip'; requestId: number; serial: string; port?: number };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

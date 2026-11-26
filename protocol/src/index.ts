@@ -79,7 +79,9 @@ import {
   MAX_VIEW_PATH_NODES,
   MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
+  MAX_WIRELESS_PORT,
   MIN_DEVICE_PROTOCOL_VERSION,
+  MIN_WIRELESS_PORT,
   normalizeViewValue,
   PACKAGE_NAME_PATTERN,
   MAX_SCREEN_FPS_CAP,
@@ -371,6 +373,14 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('listMdnsServices'), requestId: clientRequestId }).strict(),
   z.object({ type: z.literal('startQrPairing'), requestId: clientRequestId }).strict(),
   z.object({ type: z.literal('cancelQrPairing'), sessionId: qrSessionIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal('enableWirelessTcpip'),
+      requestId: clientRequestId,
+      serial: serialSchema,
+      port: z.number().int().min(MIN_WIRELESS_PORT).max(MAX_WIRELESS_PORT).optional(),
+    })
+    .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

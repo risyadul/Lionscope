@@ -440,6 +440,12 @@ export function App() {
             onOpenWireless={() => setWirelessOpen(true)}
             onDisconnectWireless={(targetSerial) => void wirelessActions.disconnect(targetSerial)}
             isDisconnectingWireless={serial !== null && wirelessActions.disconnectingSerial === serial}
+            onSwitchToWifi={(usbSerial) => {
+              void wirelessActions.enableTcpip(usbSerial).then((result) => {
+                if (result.ok) changeSerial(result.serial);
+              });
+            }}
+            isSwitchingToWifi={serial !== null && wirelessActions.handoffSerial === serial}
             apps={apps}
             packageName={packageName}
             onPackageChange={setChosenPackage}
@@ -462,10 +468,10 @@ export function App() {
               protocolMismatch={isProtocolMismatch(state)}
             />
             <ErrorBanner error={state.lastError} onDismiss={dismissError} />
-            {wirelessActions.disconnectError && (
+            {wirelessActions.actionError && (
               <ErrorBanner
-                error={{ id: -1, message: wirelessActions.disconnectError }}
-                onDismiss={wirelessActions.clearDisconnectError}
+                error={{ id: -1, message: wirelessActions.actionError }}
+                onDismiss={wirelessActions.clearActionError}
               />
             )}
             <SoftwareRendererBanner
