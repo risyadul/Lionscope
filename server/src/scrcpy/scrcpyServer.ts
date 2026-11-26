@@ -536,6 +536,31 @@ export function parseScrcpyForwards(output: string): ScrcpyForward[] {
 }
 
 /**
+ * Best-effort cleanup for a single scrcpy session identified by `scid`: removes only forwards targeting
+ * `localabstract:scrcpy_<scid>` on `serial` and terminates only the matching `scid=<scid>` process.
+ * Never touches another client's active or starting scrcpy session on the same device.
+ */
+export async function cleanupScrcpySession(adb: Adb, serial: string, scid: string): Promise<void> {
+  if (!/^[0-9a-f]{8}$/.test(scid)) return;
+  try {
+    const forwards = parseScrcpyForwards(
+      await adb.exec(['forward', '--list'], { timeoutMs: ADB_TIMEOUT_MS }),
+    );
+    for (const forward of forwards) {
+      if (forward.serial === serial && forward.scid === scid) {
+        await adb
+          .exec(['-s', serial, 'forward', '--remove', forward.local], { timeoutMs: ADB_TIMEOUT_MS })
+          .catch(() => undefined);
+      }
+    }
+  } catch (error) {
+    log.warn(`Listing adb forwards for ${serial} failed: ${errorMessage(error)}`);
+  }
+  const pattern = `scid=[${scid.slice(0, 1)}]${scid.slice(1)}`;
+  await adbShell(adb, serial, `pkill -f '${pattern}'`, { timeoutMs: ADB_TIMEOUT_MS }).catch(() => undefined);
+}
+
+/**
  * Best effort at startup: servers a previous Lionscope left behind (killed before its cleanup ran) on these
  * devices. A leftover is one of our servers that still has its `adb forward` (it never connected: a running
  * Lionscope removes the forward within a second of starting a server) or that lost its parent shell. Those

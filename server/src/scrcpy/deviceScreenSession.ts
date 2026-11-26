@@ -39,7 +39,7 @@ import {
 } from './protocol.ts';
 import type { ScrcpyPosition, VideoPacket } from './protocol.ts';
 import {
-  cleanupScrcpyLeftovers,
+  cleanupScrcpySession,
   maxSizeFor,
   MirrorStartError,
   parseWmSize,
@@ -373,8 +373,8 @@ export class DeviceScreenSession {
     if (this.closed || generation !== this.generation) return;
     const summary = server.errorSummary;
     if (this.options.isWireless) {
-      // Reuse startup leftover cleanup so stale forwards / orphaned scrcpy processes do not linger across Wi-Fi drops.
-      void cleanupScrcpyLeftovers(this.options.adb, [this.serial]);
+      // Clean up only this ended session's own forward and scid process so other mirrors are untouched.
+      void cleanupScrcpySession(this.options.adb, this.serial, server.scid);
     }
     if (this.received) {
       this.fail('ended', this.options.isWireless ? WIRELESS_ENDED_MESSAGE : DEVICE_ENDED_MESSAGE);

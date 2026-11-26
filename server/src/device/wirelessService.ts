@@ -150,7 +150,11 @@ export class WirelessService {
     return parsed.value.target;
   }
 
-  async connect(rawAddress: string, source: WirelessRequestSource): Promise<AdbConnectResult> {
+  async connect(
+    rawAddress: string,
+    source: WirelessRequestSource,
+    options: { approveForAgent?: boolean } = {},
+  ): Promise<AdbConnectResult> {
     const target = this.validateTarget(rawAddress, source, true);
     let result: AdbConnectResult;
     try {
@@ -158,7 +162,7 @@ export class WirelessService {
     } catch (error) {
       throw new PublicError(errorMessage(error), { cause: error });
     }
-    if (source === 'dashboard') {
+    if (source === 'dashboard' && options.approveForAgent !== false) {
       this.approveFromDashboard(result.target);
       this.approveFromDashboard(result.serial);
     }
@@ -166,17 +170,26 @@ export class WirelessService {
     return result;
   }
 
+  private normalizePolicyKey(serial: string): string {
+    if (isMdnsSerial(serial)) return serial;
+    const parsed = parseWirelessAddress(serial);
+    return parsed.ok ? parsed.value.target : serial;
+  }
+
   async disconnect(rawSerial: string, source: WirelessRequestSource): Promise<AdbDisconnectResult> {
-    const target = this.validateTarget(rawSerial, source, true);
+    // Validate against host policy using the normalized key, then act on the exact listed serial.
+    const policyKey = this.validateTarget(rawSerial, source, true);
+    const matching = this.getDevices().find((d) => this.normalizePolicyKey(d.serial) === policyKey);
+    const exactSerial = matching ? matching.serial : rawSerial;
+
     // Stop any profiling session running on this serial before tearing down its adb transport.
-    await this.stopSessionOn(target).catch(() => undefined);
-    const matching = this.getDevices().find((d) => d.serial === target);
-    if (matching && matching.serial !== target) {
-      await this.stopSessionOn(matching.serial).catch(() => undefined);
+    await this.stopSessionOn(exactSerial).catch(() => undefined);
+    if (policyKey !== exactSerial) {
+      await this.stopSessionOn(policyKey).catch(() => undefined);
     }
     let result: AdbDisconnectResult;
     try {
-      result = await adbDisconnect(this.adb, target);
+      result = await adbDisconnect(this.adb, exactSerial);
     } catch (error) {
       throw new PublicError(errorMessage(error), { cause: error });
     }
@@ -186,7 +199,7 @@ export class WirelessService {
 
   /**
    * Pair an Android 11+ device via `adb pair <address> <code>`, then connect on the separate connect port
-   * (either `connectAddress` if supplied, or a matching `_adb-tls-connect._tcp` mDNS service when available).
+   * (either `connectAddress` if supplied, or a verified `_adb-tls-connect._tcp` mDNS service when available).
    * The pairing code is never stored, logged, or echoed in any return value or error.
    */
   async pair(
@@ -220,8 +233,13 @@ export class WirelessService {
 
     // Attempt follow-up connect on the separate connect port (explicit target or mDNS discovery).
     let connectTarget = explicitConnectTarget;
+    let approveFollowUp = explicitConnectTarget !== null;
     if (connectTarget === null) {
-      connectTarget = await this.findConnectTargetViaMdns(parsedPair.value.host, pairedGuid, source);
+      const discovered = await this.findConnectTargetViaMdns(parsedPair.value.host, pairedGuid, source);
+      if (discovered) {
+        connectTarget = discovered.target;
+        approveFollowUp = discovered.guidVerified;
+      }
     }
 
     if (connectTarget === null) {
@@ -236,7 +254,7 @@ export class WirelessService {
     }
 
     try {
-      const connected = await this.connect(connectTarget, source);
+      const connected = await this.connect(connectTarget, source, { approveForAgent: approveFollowUp });
       return {
         target,
         host: parsedPair.value.host,
@@ -257,7 +275,7 @@ export class WirelessService {
     host: string,
     guid: string | undefined,
     source: WirelessRequestSource,
-  ): Promise<string | null> {
+  ): Promise<{ target: string; guidVerified: boolean } | null> {
     let services: MdnsService[];
     try {
       services = await adbMdnsServices(this.adb);
@@ -265,9 +283,27 @@ export class WirelessService {
       return null;
     }
     const connectServices = services.filter((service) => service.serviceType === MDNS_CONNECT_SERVICE);
-    const byGuid = guid ? connectServices.find((service) => service.instanceName === guid) : undefined;
-    const byHost = connectServices.find((service) => service.host === host);
-    const match = byGuid ?? byHost;
+    let match: MdnsService | undefined;
+    let guidVerified = false;
+    if (guid) {
+      // When adb returns a paired GUID, require a matching `_adb-tls-connect` record: never fall back to
+      // another device advertised on the same IP.
+      const byGuid = connectServices.filter((service) => service.instanceName === guid);
+      if (byGuid.length === 1) {
+        match = byGuid[0];
+        guidVerified = true;
+      } else if (byGuid.length > 1) {
+        const sameHost = byGuid.filter((service) => service.host === host);
+        if (sameHost.length === 1) {
+          match = sameHost[0];
+          guidVerified = true;
+        }
+      }
+    } else {
+      // Without a GUID, only auto-connect when a single `_adb-tls-connect` service exists on that host.
+      const byHost = connectServices.filter((service) => service.host === host);
+      if (byHost.length === 1) match = byHost[0];
+    }
     if (!match) return null;
     // Verify policy before auto-connecting on behalf of an agent.
     if (source === 'agent') {
@@ -277,7 +313,7 @@ export class WirelessService {
       });
       if (!check.ok) return null;
     }
-    return match.target;
+    return { target: match.target, guidVerified };
   }
 
   /** Discover wireless devices advertising `_adb-tls-connect._tcp` via `adb mdns services`. */
@@ -369,24 +405,28 @@ export class WirelessService {
     try {
       services = await adbMdnsServices(this.adb);
     } catch {
+      if (!this.qrSessions.has(sessionId) || this.closed) return;
       session.polling = false;
-      return;
-    }
-    // Re-check after await in case the session was cancelled meanwhile.
-    if (!this.qrSessions.has(sessionId) || this.closed) return;
-    session.polling = false;
-
-    const match = services.find(
-      (service) =>
-        service.serviceType === MDNS_PAIRING_SERVICE && service.instanceName === session.serviceName,
-    );
-    if (!match) {
       if (this.now() >= session.expiresAt) {
         this.disposeQrSession(session);
         session.onUpdate({ sessionId, status: 'expired' });
       }
       return;
     }
+    // Re-check cancellation and expiry after the in-flight discovery await finishes.
+    if (!this.qrSessions.has(sessionId) || this.closed) return;
+    session.polling = false;
+    if (this.now() >= session.expiresAt) {
+      this.disposeQrSession(session);
+      session.onUpdate({ sessionId, status: 'expired' });
+      return;
+    }
+
+    const match = services.find(
+      (service) =>
+        service.serviceType === MDNS_PAIRING_SERVICE && service.instanceName === session.serviceName,
+    );
+    if (!match) return;
 
     const password = session.password;
     const onUpdate = session.onUpdate;

@@ -458,4 +458,124 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
       },
     });
   });
+
+  it('requires matching mDNS GUID after pairing and never approves unverified automatic follow-ups for agents', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'pair') {
+        if (args[1] === '192.168.1.42:37123') {
+          return 'Successfully paired to 192.168.1.42:37123 [guid=adb-PHONE_A-111]\n';
+        }
+        // Older adb without GUID on a public host.
+        return 'Successfully paired to 8.8.8.8:37123\n';
+      }
+      if (args[0] === 'mdns' && args[1] === 'services') {
+        return [
+          'List of discovered mdns services',
+          // Different device on the same IP as PHONE_A!
+          'adb-PHONE_B-222\t_adb-tls-connect._tcp\t192.168.1.42:45555',
+          // Single record on 8.8.8.8 without GUID verification.
+          'adb-UNKNOWN-333\t_adb-tls-connect._tcp\t8.8.8.8:46666',
+        ].join('\n');
+      }
+      if (args[0] === 'connect') return `connected to ${args[1]}\n`;
+      return '';
+    });
+
+    const service = new WirelessService({
+      adb,
+      refreshDevices: async () => [],
+      stopSessionOn: async () => undefined,
+      getDevices: () => [],
+    });
+
+    // When adb returns a GUID that does not match any _adb-tls-connect record, keep pairing successful
+    // and ask for the connect port instead of connecting to PHONE_B on the same IP.
+    const mismatch = await service.pair('192.168.1.42:37123', '482910', 'dashboard');
+    expect(mismatch).toEqual({
+      target: '192.168.1.42:37123',
+      host: '192.168.1.42',
+      connectedSerial: null,
+      connectNote:
+        'Paired successfully. Enter the separate connect IP:port shown on the Wireless debugging screen.',
+    });
+    expect(adb.execCalls.some((c) => c[0] === 'connect' && c[1] === '192.168.1.42:45555')).toBe(false);
+
+    // When adb omits GUID and auto-connects by unique host on a dashboard pair, do NOT add the
+    // unverified automatic follow-up endpoint to the agent approval set.
+    const noGuid = await service.pair('8.8.8.8:37123', '482910', 'dashboard');
+    expect(noGuid.connectedSerial).toBe('8.8.8.8:46666');
+    expect(service.isDashboardApproved('8.8.8.8:46666')).toBe(false);
+    service.close();
+  });
+
+  it('preserves exact uppercase hostname serial for session teardown and adb disconnect', async () => {
+    const stopped: string[] = [];
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'disconnect') return `disconnected ${args[1]}\n`;
+      return '';
+    });
+    const service = new WirelessService({
+      adb,
+      refreshDevices: async () => [],
+      stopSessionOn: async (serial) => {
+        stopped.push(serial);
+      },
+      getDevices: () => [
+        { serial: 'MyPhone.local:5555', state: 'device', model: 'Pixel_8', transport: 'wireless' },
+      ],
+    });
+    service.approveFromDashboard('MyPhone.local:5555');
+
+    const res = await service.disconnect('MyPhone.local:5555', 'agent');
+    expect(res).toEqual({ target: 'MyPhone.local:5555' });
+    expect(stopped[0]).toBe('MyPhone.local:5555');
+    expect(adb.execCalls.find((c) => c[0] === 'disconnect')).toEqual(['disconnect', 'MyPhone.local:5555']);
+    service.close();
+  });
+
+  it('rechecks QR expiry after an in-flight mDNS discovery finishes and does not pair once expired', async () => {
+    let now = 10_000;
+    let resolveMdns!: (value: string) => void;
+    const adb = new FakeAdb(() => '');
+    adb.exec = (args) => {
+      adb.execCalls.push(args);
+      if (args[0] === 'mdns' && args[1] === 'services') {
+        return new Promise<string>((resolve) => {
+          resolveMdns = resolve;
+        });
+      }
+      return Promise.resolve('');
+    };
+
+    const service = new WirelessService({
+      adb,
+      refreshDevices: async () => [],
+      stopSessionOn: async () => undefined,
+      getDevices: () => [],
+      now: () => now,
+      qrPollMs: 15,
+      qrTimeoutMs: 1000,
+    });
+
+    const updates: QrPairingUpdate[] = [];
+    const started = service.startQrPairing('owner-expiry', (update) => updates.push(update));
+
+    // Wait for the first in-flight `adb mdns services` call to start.
+    const waitStart = Date.now() + 1000;
+    while (!resolveMdns && Date.now() < waitStart) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(resolveMdns).toBeDefined();
+
+    // Advance clock past expiry while discovery is still in flight, then return a matching service.
+    now = started.expiresAt + 1;
+    resolveMdns(
+      `List of discovered mdns services\n${started.serviceName}\t_adb-tls-pairing._tcp\t192.168.1.50:39000\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    service.close();
+    expect(updates).toEqual([{ sessionId: started.sessionId, status: 'expired' }]);
+    expect(adb.execCalls.some((c) => c[0] === 'pair')).toBe(false);
+  });
 });

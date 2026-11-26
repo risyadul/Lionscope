@@ -144,7 +144,8 @@ export async function adbDisconnect(
   } else {
     const parsed = parseWirelessAddress(rawTarget);
     if (!parsed.ok) throw new Error(parsed.error);
-    target = parsed.value.target;
+    // Preserve exact hostname casing as listed by `adb devices` while still enforcing full endpoint validation.
+    target = rawTarget;
   }
   const stdout = await adb.exec(['disconnect', target], {
     timeoutMs: options.timeoutMs ?? DISCONNECT_TIMEOUT_MS,

@@ -589,7 +589,38 @@ describe('DeviceScreenSession', () => {
     await session.close();
   });
 
-  it('reports wireless drop feedback and runs leftover cleanup when a wireless stream drops', async () => {
+  it('reports wireless drop feedback and cleans up only its own scid/forward so another starting mirror survives', async () => {
+    const otherScid = 'bbbbbbbb';
+    const otherForward = 'tcp:49999';
+    const ownForwards: string[] = [];
+    const baseExec = adb.exec.bind(adb);
+    const removedForwards: string[] = [];
+    const killedShells: string[] = [];
+    let sessionScid = '';
+
+    adb.exec = async (args) => {
+      if (args[0] === 'forward' && args[1] === '--list') {
+        return [...ownForwards, `${PHYSICAL_SERIAL} ${otherForward} localabstract:scrcpy_${otherScid}`].join(
+          '\n',
+        );
+      }
+      if (args[2] === 'forward' && args[3] === '--remove') {
+        removedForwards.push(args[4] ?? '');
+      }
+      if (args[2] === 'shell' && (args[3]?.startsWith('pkill ') || args[3]?.startsWith('kill '))) {
+        killedShells.push(args[3]);
+      }
+      const res = await baseExec(args);
+      if (args[2] === 'forward' && args[3] === 'tcp:0') {
+        const scidMatch = /scrcpy_([0-9a-f]{8})$/.exec(args[4] ?? '');
+        if (scidMatch?.[1]) {
+          sessionScid = scidMatch[1];
+          ownForwards.push(`${PHYSICAL_SERIAL} tcp:${res.trim()} localabstract:scrcpy_${sessionScid}`);
+        }
+      }
+      return res;
+    };
+
     const session = new DeviceScreenSession({
       socket,
       adb,
@@ -600,15 +631,24 @@ describe('DeviceScreenSession', () => {
     });
     await session.start();
     await device.waitFor(() => socket.binaries.length >= 2);
+    expect(sessionScid).toMatch(/^[0-9a-f]{8}$/);
+
+    // Drop the wireless stream while a second client's scrcpy forward (`otherScid`) is present.
     device.video?.destroy();
     device.control?.destroy();
     await device.waitFor(() => socket.texts.some((m) => m.type === 'screenError'));
+    await device.waitFor(() =>
+      killedShells.some((cmd) => cmd.includes(`scid=[${sessionScid[0]}]${sessionScid.slice(1)}`)),
+    );
+
     expect(socket.texts.find((m) => m.type === 'screenError')).toEqual({
       type: 'screenError',
       code: 'ended',
       message: WIRELESS_ENDED_MESSAGE,
     });
-    expect(adb.execCalls.some((call) => call[0] === 'forward' && call[1] === '--list')).toBe(true);
+    // Only the ended session's own forward and scid are cleaned up; the second mirror is untouched.
+    expect(removedForwards).not.toContain(otherForward);
+    expect(killedShells.every((cmd) => !cmd.includes(otherScid) && !cmd.startsWith('kill '))).toBe(true);
     await session.close();
   });
 });
