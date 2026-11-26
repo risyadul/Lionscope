@@ -102,7 +102,7 @@ describe('SessionManager', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(messages.at(-1)).toEqual({
       type: 'devices',
-      devices: [{ serial: 'emulator-5554', state: 'offline' }],
+      devices: [{ serial: 'emulator-5554', state: 'offline', transport: 'emulator' }],
     });
     await manager.close();
     const calls = devicesCalls();

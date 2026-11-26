@@ -47,14 +47,17 @@ const GOLDEN_LINES = readFileSync(new URL('../fixtures/device-messages.ndjson', 
   .filter((line) => line.trim() !== '');
 
 describe('isValidSerial', () => {
-  it.each(['emulator-5554', 'R58M123ABC', '192.168.1.5:5555', 'adb-R58M._adb-tls-connect._tcp'])(
-    'accepts %s',
-    (serial) => {
-      expect(isValidSerial(serial)).toBe(true);
-    },
-  );
+  it.each([
+    'emulator-5554',
+    'R58M123ABC',
+    '192.168.1.5:5555',
+    '[fd00::1]:5555',
+    'adb-R58M._adb-tls-connect._tcp',
+  ])('accepts %s', (serial) => {
+    expect(isValidSerial(serial)).toBe(true);
+  });
 
-  it.each(['', 'a b', 'emu;rm -rf /', '$(id)', 'x'.repeat(129), "emu'1"])('rejects %j', (serial) => {
+  it.each(['', '-s', 'a b', 'emu;rm -rf /', '$(id)', 'x'.repeat(129), "emu'1"])('rejects %j', (serial) => {
     expect(isValidSerial(serial)).toBe(false);
   });
 });

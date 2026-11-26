@@ -38,16 +38,44 @@ const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /** An intent's `key` extra: the link key handed to the app (device/linkKey.ts). */
 const KEY_EXTRA = /(--es key )\S+/g;
+/** Global adb flags that consume a following argument before the subcommand. */
+const ADB_FLAGS_WITH_VALUE: ReadonlySet<string> = new Set(['-s', '-t', '-H', '-P', '-L']);
+
+/** Index of the adb subcommand (skipping leading global options), or -1 if none. */
+function adbSubcommandIndex(args: readonly string[]): number {
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i]!;
+    if (ADB_FLAGS_WITH_VALUE.has(arg)) {
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      i += 1;
+      continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/** Replace every literal occurrence of `secret` with `<redacted>` so errors and logs never echo it. */
+export function scrubSecret(text: string, secret: string): string {
+  return secret.length > 0 ? text.replaceAll(secret, '<redacted>') : text;
+}
 
 /**
- * Typed text can be a password and a link key is a secret: `input text …` and `--es key …` never reach an error
- * message or a log line.
+ * Typed text can be a password, a link key is a secret, and `adb pair <host:port> <code>` carries a
+ * pairing code/password: none of them may ever reach an error message or a log line.
  */
 export function describeArgs(args: readonly string[]): string {
+  const subcommandIdx = adbSubcommandIndex(args);
+  const isPair = subcommandIdx !== -1 && args[subcommandIdx] === 'pair';
   return args
-    .map((arg) =>
-      /^input text\b/.test(arg) ? 'input text <redacted>' : arg.replace(KEY_EXTRA, '$1<redacted>'),
-    )
+    .map((arg, index) => {
+      if (isPair && index >= subcommandIdx + 2) return '<redacted>';
+      return /^input text\b/.test(arg) ? 'input text <redacted>' : arg.replace(KEY_EXTRA, '$1<redacted>');
+    })
     .join(' ');
 }
 

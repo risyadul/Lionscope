@@ -28,25 +28,45 @@ describe('parseDevices', () => {
         product: 'sdk_gphone16k_arm64',
         model: 'sdk_gphone16k_arm64',
         transportId: '4',
+        transport: 'emulator',
       },
     ]);
   });
 
-  it('maps states, skips daemon banners and drops unsafe serials', () => {
+  it('maps states, derives transport, skips daemon banners and drops unsafe serials', () => {
     const output = [
       '* daemon not running; starting now at tcp:5037',
       '* daemon started successfully',
       'List of devices attached',
       'R58M123ABC             unauthorized usb:1-1 transport_id:7',
       '192.168.1.5:5555       offline',
+      '[fd00::1]:5555         device product:panther model:Pixel_7 transport_id:9',
+      'adb-R58M123ABC-xyz._adb-tls-connect._tcp device product:panther model:Pixel_7 transport_id:10',
       'weird-1                recovery',
       'bad;serial             device',
+      '-badflag               device',
       'lonely',
       '',
     ].join('\n');
     expect(parseDevices(output)).toEqual([
-      { serial: 'R58M123ABC', state: 'unauthorized', transportId: '7' },
-      { serial: '192.168.1.5:5555', state: 'offline' },
+      { serial: 'R58M123ABC', state: 'unauthorized', transportId: '7', transport: 'usb' },
+      { serial: '192.168.1.5:5555', state: 'offline', transport: 'wireless' },
+      {
+        serial: '[fd00::1]:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '9',
+        transport: 'wireless',
+      },
+      {
+        serial: 'adb-R58M123ABC-xyz._adb-tls-connect._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '10',
+        transport: 'wireless',
+      },
       { serial: 'weird-1', state: 'unknown' },
     ]);
   });
