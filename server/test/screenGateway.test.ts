@@ -5,7 +5,13 @@ import type { AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { MAX_SCREEN_INPUT_PER_SECOND, SCREEN_BINARY_KIND, SCREEN_WS_PATH } from '@lionscope/protocol';
+import {
+  MAX_SCREEN_INPUT_PER_SECOND,
+  SCREEN_BINARY_KIND,
+  SCREEN_VIDEO_FLAG,
+  SCREEN_VIDEO_HEADER_BYTES,
+  SCREEN_WS_PATH,
+} from '@lionscope/protocol';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { Secret } from '../src/emulator/discovery.ts';
@@ -13,18 +19,24 @@ import { createEmulatorClientFactory, loadEmulatorController } from '../src/emul
 import type { EmulatorClientFactory } from '../src/emulator/emulatorClient.ts';
 import type { EmulatorHost } from '../src/emulator/emulatorHost.ts';
 import {
+  clearHostH264EncoderProbeCache,
+  type HostH264EncoderInfo,
+  type HostVideoEncoderHandle,
+  type HostVideoEncoderOptions,
+} from '../src/emulator/hostVideoEncoder.ts';
+import {
   createScreenGateway,
   MAX_SCREEN_SOCKETS,
   SCREEN_ABUSE_FACTOR,
   SCREEN_CLIPBOARD_PER_SECOND,
   SCREEN_CONTROLS_PER_SECOND,
 } from '../src/emulator/screenGateway.ts';
-import type { ScreenGateway } from '../src/emulator/screenGateway.ts';
+import type { ScreenGateway, ScreenGatewayOptions } from '../src/emulator/screenGateway.ts';
 import { buildAllowedOrigins } from '../src/http/wsGateway.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { FAKE_TOKEN, FakeEmulator, FIXTURE_PROTO } from './helpers/fakeEmulator.ts';
-import { FakeEmulatorClient } from './helpers/fakeEmulatorClient.ts';
+import { FakeEmulatorClient, rawFrame } from './helpers/fakeEmulatorClient.ts';
 import { FakeAdb, fixture } from './helpers/fakes.ts';
 import { handshakeStatus, rawRequest } from './helpers/net.ts';
 
@@ -41,10 +53,12 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
 /** A screen socket client that records text (parsed) and binary ([kind, payload]) messages in order. */
 class ScreenClient {
   readonly received: (Record<string, unknown> | [number, string])[] = [];
+  readonly rawBinaries: Buffer[] = [];
   closeCode: number | null = null;
 
   constructor(readonly ws: WebSocket) {
     ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) this.rawBinaries.push(Buffer.from(data));
       this.received.push(
         isBinary
           ? [data[0] ?? -1, data.subarray(1).toString()]
@@ -95,6 +109,7 @@ describe('screen gateway', () => {
   let server: LionscopeServer;
   let port: number;
   let grpcPort: number;
+  let previousFfmpegEnv: string | undefined;
   const open: ScreenClient[] = [];
 
   const writeDiscovery = (token = FAKE_TOKEN) =>
@@ -113,6 +128,9 @@ describe('screen gateway', () => {
   beforeAll(async () => {
     grpcPort = await emulator.start();
     dir = mkdtempSync(path.join(tmpdir(), 'lionscope-screen-'));
+    previousFfmpegEnv = process.env.LIONSCOPE_FFMPEG;
+    process.env.LIONSCOPE_FFMPEG = path.join(dir, 'nonexistent-ffmpeg');
+    clearHostH264EncoderProbeCache();
     writeDiscovery();
     const host: EmulatorHost = {
       emulatorPath: '/sdk/emulator/emulator',
@@ -142,6 +160,9 @@ describe('screen gateway', () => {
   afterAll(async () => {
     await server.close();
     emulator.stop();
+    if (previousFfmpegEnv === undefined) delete process.env.LIONSCOPE_FFMPEG;
+    else process.env.LIONSCOPE_FFMPEG = previousFfmpegEnv;
+    clearHostH264EncoderProbeCache();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -443,7 +464,7 @@ describe('screen gateway', () => {
     }
   });
 
-  it('checks Host and Origin like the main socket, and refuses unknown sizes and fps caps', async () => {
+  it('checks Host and Origin like the main socket, and refuses unknown sizes, fps caps, and codecs', async () => {
     const pathname = `${SCREEN_WS_PATH}?serial=${SERIAL}`;
     const good = { Host: `localhost:${port}`, Origin: `http://localhost:${port}` };
     expect(await handshakeStatus(port, good, pathname)).toBe(101);
@@ -456,6 +477,10 @@ describe('screen gateway', () => {
       expect(await handshakeStatus(port, good, `${pathname}&fps=${fps}`)).toBe(101);
     for (const fps of ['4', '61', '120', '0', '-5', '45.5', '45.0', '045', '+45', '1e1', '%2045', '', 'abc'])
       expect(await handshakeStatus(port, good, `${pathname}&fps=${fps}`)).toBe(400);
+    for (const codec of ['auto', 'png', 'h264'])
+      expect(await handshakeStatus(port, good, `${pathname}&codec=${codec}`)).toBe(101);
+    for (const codec of ['vp9', 'AUTO', '', 'raw'])
+      expect(await handshakeStatus(port, good, `${pathname}&codec=${codec}`)).toBe(400);
     expect((await rawRequest(port, SCREEN_WS_PATH)).status).toBe(426);
     await waitUntil(() => emulator.openStreams.length === 0);
   });
@@ -500,7 +525,11 @@ describe('screen gateway lifecycle', () => {
   let gateway: ScreenGateway | null;
   let clients: FakeEmulatorClient[];
 
-  const start = async (createClient: EmulatorClientFactory | null, pingIntervalMs = 60_000) => {
+  const start = async (
+    createClient: EmulatorClientFactory | null,
+    pingIntervalMs = 60_000,
+    emulatorVideo: ScreenGatewayOptions['emulatorVideo'] = { probe: async () => null },
+  ) => {
     gateway = createScreenGateway({
       server: http,
       emulators: {
@@ -508,6 +537,7 @@ describe('screen gateway lifecycle', () => {
         onChange: () => () => undefined,
       },
       createClient,
+      emulatorVideo,
       allowedOrigins: () => buildAllowedOrigins(port, false),
       pingIntervalMs,
     });
@@ -572,5 +602,92 @@ describe('screen gateway lifecycle', () => {
       expect(socket.destroyed).toBe(false);
       socket.destroy();
     }
+  });
+
+  it('negotiates H.264 on emulator sockets, honors codec=png, falls back on failure, and awaits encoder close', async () => {
+    const encoderInfo: HostH264EncoderInfo = {
+      ffmpegPath: '/usr/bin/ffmpeg',
+      encoder: 'h264_videotoolbox',
+      hardware: true,
+    };
+    const handles: { options: HostVideoEncoderOptions; closed: boolean }[] = [];
+    let probeCalls = 0;
+    let throwOnCreate = false;
+    await start(factory, 60_000, {
+      probe: async () => {
+        probeCalls += 1;
+        return encoderInfo;
+      },
+      createFactory: () => (options) => {
+        if (throwOnCreate) throw new Error('encoder init failed');
+        const state = { options, closed: false };
+        handles.push(state);
+        const handle: HostVideoEncoderHandle = {
+          width: options.width,
+          height: options.height,
+          encodedWidth: options.width + (options.width & 1),
+          encodedHeight: options.height + (options.height & 1),
+          isBackpressured: false,
+          writeFrame: () => true,
+          close: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 15));
+            state.closed = true;
+          },
+        };
+        return handle;
+      },
+    });
+
+    // Default codec=auto negotiates H.264 and forwards 10-byte video headers.
+    const h264Client = await ScreenClient.open(port, `serial=${SERIAL}`);
+    await waitUntil(() => clients[0]?.rawStream !== undefined);
+    clients[0]?.rawStream?.handlers.onFrame(rawFrame(540, 1212, 0, 0x44));
+    expect(handles).toHaveLength(1);
+    handles[0]?.options.onPacket({
+      isConfig: true,
+      isKey: false,
+      pts: 0,
+      data: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x67]),
+    });
+    handles[0]?.options.onPacket({
+      isConfig: false,
+      isKey: true,
+      pts: 900,
+      data: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x65]),
+    });
+    await waitUntil(() => h264Client.rawBinaries.length === 2);
+    expect(h264Client.texts[0]).toMatchObject({ codec: 'h264', frameWidth: 540, frameHeight: 1212 });
+    const keyMsg = h264Client.rawBinaries[1];
+    expect(keyMsg).toBeDefined();
+    if (!keyMsg) throw new Error('expected keyframe video message');
+    expect(keyMsg.readUInt8(0)).toBe(SCREEN_BINARY_KIND.video);
+    expect(keyMsg.readUInt8(1)).toBe(SCREEN_VIDEO_FLAG.key);
+    expect(keyMsg.readDoubleBE(2)).toBe(900);
+    expect(keyMsg.subarray(SCREEN_VIDEO_HEADER_BYTES)).toEqual(Buffer.from([0x00, 0x00, 0x00, 0x01, 0x65]));
+
+    // codec=png skips probe and opens PNG stream directly.
+    const probesBeforePng = probeCalls;
+    const pngClient = await ScreenClient.open(port, `serial=${SERIAL}&codec=png`);
+    await waitUntil(() => clients[1]?.stream !== undefined);
+    expect(probeCalls).toBe(probesBeforePng);
+    expect(clients[1]?.rawStreams).toHaveLength(0);
+    pngClient.close();
+    await pngClient.closed();
+
+    // Encoder startup failure falls back to PNG without disconnecting.
+    throwOnCreate = true;
+    const fallbackClient = await ScreenClient.open(port, `serial=${SERIAL}&codec=h264`);
+    await waitUntil(() => clients[2]?.rawStream !== undefined);
+    clients[2]?.rawStream?.handlers.onFrame(rawFrame(540, 1212));
+    await waitUntil(() => clients[2]?.stream !== undefined);
+    expect(fallbackClient.closeCode).toBeNull();
+    fallbackClient.close();
+    await fallbackClient.closed();
+
+    // gateway.close() awaits encoder.close() for open H.264 sessions.
+    await gateway?.close();
+    gateway = null;
+    expect(handles[0]?.closed).toBe(true);
+    expect(await h264Client.closed()).toBe(1006);
   });
 });

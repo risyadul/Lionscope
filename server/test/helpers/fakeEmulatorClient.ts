@@ -6,6 +6,8 @@ import type {
   FrameStreamHandlers,
   GpsPoint,
   InputStream,
+  RawFrameStreamHandlers,
+  RawScreenFrame,
   ScreenFrame,
 } from '../../src/emulator/emulatorClient.ts';
 import type { ScreenSocket } from '../../src/emulator/screenSession.ts';
@@ -26,6 +28,15 @@ export class FakeEmulatorClient implements EmulatorClient {
     paused: boolean;
     resumes: number;
   }[] = [];
+  /** RGBA8888 raw screenshot streams as opened. */
+  readonly rawStreams: {
+    box: Size;
+    handlers: RawFrameStreamHandlers;
+    cancelled: boolean;
+    paused: boolean;
+    resumes: number;
+  }[] = [];
+  rawStreamThrow: Error | null = null;
   /**
    * Input streams as opened. Like grpc-js, a stream starts on a later tick: closing the client before then
    * cancels it (its events are lost, `cancelled`). After end() the emulator answers (`onEnd(null)`) on a later
@@ -46,6 +57,10 @@ export class FakeEmulatorClient implements EmulatorClient {
 
   get stream(): (typeof this.streams)[number] | undefined {
     return this.streams.at(-1);
+  }
+
+  get rawStream(): (typeof this.rawStreams)[number] | undefined {
+    return this.rawStreams.at(-1);
   }
 
   /** Every input event sent, over all input streams. */
@@ -82,9 +97,13 @@ export class FakeEmulatorClient implements EmulatorClient {
     return this.screenshot;
   }
 
-  streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream {
+  private openTrackedStream<H>(
+    list: { box: Size; handlers: H; cancelled: boolean; paused: boolean; resumes: number }[],
+    box: Size,
+    handlers: H,
+  ): FrameStream {
     const stream = { box, handlers, cancelled: false, paused: false, resumes: 0 };
-    this.streams.push(stream);
+    list.push(stream);
     return {
       pause: () => {
         stream.paused = true;
@@ -97,6 +116,15 @@ export class FakeEmulatorClient implements EmulatorClient {
         stream.cancelled = true;
       },
     };
+  }
+
+  streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream {
+    return this.openTrackedStream(this.streams, box, handlers);
+  }
+
+  streamRawScreenshot(box: Size, handlers: RawFrameStreamHandlers): FrameStream {
+    if (this.rawStreamThrow) throw this.rawStreamThrow;
+    return this.openTrackedStream(this.rawStreams, box, handlers);
   }
 
   openInput(onEnd: (error: EmulatorRpcError | null) => void): InputStream {
@@ -242,4 +270,13 @@ export function frame(
   label = 'f',
 ): ScreenFrame {
   return { width, height, rotation, png: Buffer.from(label) };
+}
+
+export function rawFrame(
+  width: number,
+  height: number,
+  rotation: RawScreenFrame['rotation'] = 0,
+  fill = 0x11,
+): RawScreenFrame {
+  return { width, height, rotation, rgba: Buffer.alloc(width * height * 4, fill) };
 }
