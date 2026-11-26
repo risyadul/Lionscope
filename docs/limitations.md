@@ -44,6 +44,8 @@
   with WebCodecs H.264 decoding, and rotating from the dashboard only works where the app allows rotation; the
   mirrored video is the phone's own encoder output, so quality and latency depend on the phone. The discovery locations for Linux and Windows follow Android Studio's and have not
   been tried on those systems yet.
+- **Dual USB and Wi-Fi listing.** A physical phone connected over both USB and wireless ADB at the same time is
+  listed twice in the device picker (once per adb transport); Lionscope does not merge duplicate transports.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.
 - Jank follows Android's own definition on API 31+ (frame finished after its deadline); "slow" frames are those

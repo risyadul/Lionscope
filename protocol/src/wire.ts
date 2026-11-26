@@ -1764,6 +1764,12 @@ export const DEFAULT_PERMISSIONS: Readonly<Permissions> = Object.freeze({
   storageWrite: true,
 });
 
+export type WirelessActionResult =
+  | { action: 'connect'; ok: true; serial: string; target: string; alreadyConnected: boolean }
+  | { action: 'connect'; ok: false; message: string }
+  | { action: 'disconnect'; ok: true; target: string }
+  | { action: 'disconnect'; ok: false; message: string };
+
 export type ServerMessage =
   | {
       type: 'hello';
@@ -1843,6 +1849,8 @@ export type ServerMessage =
    * commit that finished after a `provisional` answer), to every client. Never undoable.
    */
   | { type: 'storageOutcome'; serial: string; outcome: StorageWriteOutcome }
+  /** Answer to this client's wireless device action (`connectDevice` / `disconnectDevice` / ...). */
+  | { type: 'wirelessResult'; requestId: number; result: WirelessActionResult }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -1869,6 +1877,7 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'locations',
   'storage',
   'storageOutcome',
+  'wirelessResult',
   'error',
 ]);
 
@@ -1973,7 +1982,11 @@ export type ClientMessage =
   | { type: 'storageWrite'; requestId: number; write: StorageWriteInput }
   | { type: 'storageQuery'; requestId: number; query: StorageQueryInput }
   /** 0.13.0. The server's storage write audit (needs --allow-storage-read): answered with `storage` (`kind: 'audit'`). */
-  | { type: 'storageAudit'; requestId: number };
+  | { type: 'storageAudit'; requestId: number }
+  /** Connect to a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
+  | { type: 'connectDevice'; requestId: number; address: string }
+  /** Disconnect a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
+  | { type: 'disconnectDevice'; requestId: number; serial: string };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

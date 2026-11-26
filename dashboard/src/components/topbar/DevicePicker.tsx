@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import type { DeviceInfo, EmulatorInfo } from '@lionscope/protocol/wire';
+import { useState, type ReactNode } from 'react';
+import type { DeviceInfo, DeviceTransport, EmulatorInfo } from '@lionscope/protocol/wire';
 import { deviceName, deviceStateReason, isReady } from '../../lib/devices.ts';
 import {
   avdValue,
@@ -9,6 +9,7 @@ import {
   parseAvdValue,
   standaloneAvds,
 } from '../../lib/emulators.ts';
+import { ConfirmDialog } from '../ui/ConfirmDialog.tsx';
 import { Select } from '../ui/Select.tsx';
 
 export const DEVICE_PICKER_ID = 'device-picker';
@@ -23,11 +24,23 @@ type Props = {
   onChange: (serial: string) => void;
   onAvdChange: (avdName: string) => void;
   onRefresh: () => void;
+  /** Opens the wireless ADB connect/pair dialog. */
+  onOpenWireless?: () => void;
+  /** Disconnects the selected wireless device (`adb disconnect`). */
+  onDisconnectWireless?: (serial: string) => void;
+  /** True while the selected wireless device is disconnecting. */
+  isDisconnecting?: boolean;
   isLocked: boolean;
   isOffline: boolean;
   /** Boot / Shut down for the selected emulator, beside the select. */
   actions?: ReactNode;
 };
+
+function transportBadgeLabel(transport: DeviceTransport | undefined): string | null {
+  if (transport === 'wireless') return 'Wi-Fi';
+  if (transport === 'usb') return 'USB';
+  return null;
+}
 
 function deviceOptionLabel(device: DeviceInfo, emulators: readonly EmulatorInfo[] | null): string {
   const emulator = emulatorForSerial(emulators, device.serial);
@@ -35,7 +48,9 @@ function deviceOptionLabel(device: DeviceInfo, emulators: readonly EmulatorInfo[
   const isTransient = emulator?.state === 'booting' || emulator?.state === 'shutting_down';
   const reason = emulator && isTransient ? emulatorStateNote(emulator) : deviceStateReason(device.state);
   const name = emulator ? emulatorLabel(emulator) : deviceName(device);
-  return `${name} · ${device.serial}${reason ? ` — ${reason}` : ''}`;
+  const badge = emulator ? null : transportBadgeLabel(device.transport);
+  const suffix = badge ? ` (${badge})` : '';
+  return `${name} · ${device.serial}${suffix}${reason ? ` — ${reason}` : ''}`;
 }
 
 export function DevicePicker({
@@ -46,10 +61,14 @@ export function DevicePicker({
   onChange,
   onAvdChange,
   onRefresh,
+  onOpenWireless,
+  onDisconnectWireless,
+  isDisconnecting = false,
   isLocked,
   isOffline,
   actions,
 }: Props) {
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const list = devices ?? [];
   const avds = standaloneAvds(emulators, devices);
   const hasReady = list.some(isReady);
@@ -70,7 +89,11 @@ export function DevicePicker({
       : emulatorSerial !== null && list.some((d) => d.serial === emulatorSerial)
         ? emulatorSerial
         : value;
-  const isListed = selected !== null && list.some((d) => d.serial === selected);
+  const selectedDevice = selected !== null ? (list.find((d) => d.serial === selected) ?? null) : null;
+  const isListed = selectedDevice !== null;
+  const selectedBadge = emulator === null ? transportBadgeLabel(selectedDevice?.transport) : null;
+  const canDisconnect =
+    emulator === null && selectedDevice?.transport === 'wireless' && onDisconnectWireless !== undefined;
 
   const deviceOptions = list.map((device) => (
     <option key={device.serial} value={device.serial} disabled={deviceStateReason(device.state) !== null}>
@@ -78,11 +101,28 @@ export function DevicePicker({
     </option>
   ));
 
+  const requestDisconnect = () => {
+    if (!selectedDevice || !onDisconnectWireless) return;
+    if (isLocked) setConfirmDisconnect(true);
+    else onDisconnectWireless(selectedDevice.serial);
+  };
+
   return (
     <div className="field">
-      <label className="overline" htmlFor={DEVICE_PICKER_ID}>
-        Device
-      </label>
+      <div className="field-head">
+        <label className="overline" htmlFor={DEVICE_PICKER_ID}>
+          Device
+        </label>
+        {selectedBadge !== null && (
+          <span
+            className="transport-badge"
+            data-transport={selectedDevice?.transport}
+            title={selectedDevice?.transport === 'wireless' ? 'Connected over Wi-Fi' : 'Connected over USB'}
+          >
+            {selectedBadge}
+          </span>
+        )}
+      </div>
       <div className="field-row">
         <Select
           id={DEVICE_PICKER_ID}
@@ -122,6 +162,43 @@ export function DevicePicker({
           )}
         </Select>
         {actions}
+        {canDisconnect && (
+          <button
+            type="button"
+            className="btn emu-action"
+            onClick={requestDisconnect}
+            disabled={isOffline || isDisconnecting}
+            title={
+              isOffline
+                ? 'Offline — waiting for the server'
+                : `Disconnect wireless device ${selectedDevice.serial}`
+            }
+          >
+            {isDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        )}
+        {onOpenWireless && (
+          <button
+            type="button"
+            className="btn btn--icon"
+            onClick={onOpenWireless}
+            disabled={isOffline}
+            aria-label="Connect wireless device"
+            aria-haspopup="dialog"
+            title={isOffline ? 'Offline — waiting for the server' : 'Connect wireless device'}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <path
+                d="M1.5 5.2a7.8 7.8 0 0 1 11 0M3.7 7.6a4.7 4.7 0 0 1 6.6 0M5.8 9.9a1.8 1.8 0 0 1 2.4 0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <circle cx="7" cy="11.8" r="0.9" fill="currentColor" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           className="btn btn--icon"
@@ -142,6 +219,22 @@ export function DevicePicker({
           </svg>
         </button>
       </div>
+      {confirmDisconnect && selectedDevice && onDisconnectWireless && (
+        <ConfirmDialog
+          title={`Disconnect ${deviceName(selectedDevice)}?`}
+          confirmLabel="Disconnect"
+          onConfirm={() => {
+            setConfirmDisconnect(false);
+            onDisconnectWireless(selectedDevice.serial);
+          }}
+          onCancel={() => setConfirmDisconnect(false)}
+        >
+          <p>
+            The active profiling session on <strong className="mono">{selectedDevice.serial}</strong> will
+            stop before disconnecting wireless ADB.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

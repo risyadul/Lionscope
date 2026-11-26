@@ -32,6 +32,7 @@ import { MocksIndicator } from './components/topbar/MocksIndicator.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
 import { PermissionsMenu } from './components/topbar/PermissionsMenu.tsx';
 import { ViewSwitch } from './components/topbar/ViewSwitch.tsx';
+import { WirelessDialog } from './components/topbar/WirelessDialog.tsx';
 import { useAppList } from './hooks/useAppList.ts';
 import { useDeviceColumn } from './hooks/useDeviceColumn.ts';
 import { useDeviceTarget } from './hooks/useDeviceTarget.ts';
@@ -44,6 +45,7 @@ import { useMockRules } from './hooks/useMockRules.ts';
 import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { useViewMode } from './hooks/useViewMode.ts';
+import { useWirelessActions } from './hooks/useWirelessActions.ts';
 import type { ViewMode } from './lib/viewMode.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
@@ -112,6 +114,7 @@ export function App() {
   const [selectedStall, setSelectedStall] = useState<string | null>(null);
   const [selectedHttp, setSelectedHttp] = useState<number | null>(null);
   const [networkView, setNetworkView] = useState<NetworkView>('requests');
+  const [isWirelessOpen, setWirelessOpen] = useState(false);
   // Same request, read synchronously: two clicks in one task both run before React re-renders.
   const inFlight = useRef<PendingRequest | null>(null);
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
@@ -146,6 +149,11 @@ export function App() {
     isOpen,
   });
   const emulatorActions = useEmulatorActions({ send, emulators: state.emulators, errorSeq: state.errorSeq });
+  const wirelessActions = useWirelessActions({
+    send,
+    answers: state.wirelessAnswers,
+    isOpen,
+  });
   // Shutting it down stops this session first (the server does; the confirmation says so).
   const isInSession = isActive && emulator !== null && emulator.serial === state.session.serial;
   const deviceReason = serial === null || isActive ? null : serialUnavailableReason(state.devices, serial);
@@ -428,6 +436,9 @@ export function App() {
             viewSwitch={null}
             mocksIndicator={mocksState && <MocksIndicator indicator={mocksState} onOpen={openMocks} />}
             onRefreshDevices={() => send({ type: 'refreshDevices' })}
+            onOpenWireless={() => setWirelessOpen(true)}
+            onDisconnectWireless={(targetSerial) => void wirelessActions.disconnect(targetSerial)}
+            isDisconnectingWireless={serial !== null && wirelessActions.disconnectingSerial === serial}
             apps={apps}
             packageName={packageName}
             onPackageChange={setChosenPackage}
@@ -450,6 +461,12 @@ export function App() {
               protocolMismatch={isProtocolMismatch(state)}
             />
             <ErrorBanner error={state.lastError} onDismiss={dismissError} />
+            {wirelessActions.disconnectError && (
+              <ErrorBanner
+                error={{ id: -1, message: wirelessActions.disconnectError }}
+                onDismiss={wirelessActions.clearDisconnectError}
+              />
+            )}
             <SoftwareRendererBanner
               deviceLabel={emulator !== null && isSoftwareRendered(emulator) ? emulatorLabel(emulator) : null}
             />
@@ -669,6 +686,14 @@ export function App() {
               </Activity>
             </main>
           </div>
+          {isWirelessOpen && (
+            <WirelessDialog
+              isOnline={isOpen}
+              onConnect={wirelessActions.connect}
+              onConnected={changeSerial}
+              onClose={() => setWirelessOpen(false)}
+            />
+          )}
           {mockRules.editor && (
             <MockEditor
               key={mockRules.editor.openId}

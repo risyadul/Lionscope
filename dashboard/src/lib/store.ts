@@ -34,6 +34,7 @@ import type {
   TransactionFailure,
   ViewEditError,
   ViewTreeSample,
+  WirelessActionResult,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 import { pruneSavedStateInstances } from '@lionscope/protocol/insights';
@@ -147,6 +148,8 @@ export interface DashboardState {
   storageAnswers: StorageAnswer[];
   /** Final outcomes of writes that came after their answer (late, or after `provisional`), oldest first. */
   storageOutcomes: StorageOutcomeNotice[];
+  /** Answers to this client's wireless device actions (connect, disconnect, pair, ...), oldest first. */
+  wirelessAnswers: WirelessAnswer[];
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
@@ -172,6 +175,12 @@ export interface DashboardState {
 export interface StorageAnswer {
   requestId: number;
   response: StorageResponse;
+}
+
+/** The answer to one of this client's wireless device requests (`requestId` is the client's own). */
+export interface WirelessAnswer {
+  requestId: number;
+  result: WirelessActionResult;
 }
 
 /** A write's final outcome that came after its answer, for the device `serial`. */
@@ -211,6 +220,7 @@ export const MAX_VIEW_EDIT_ANSWERS = 64;
 /** Storage answers kept for their readers (one request per device runs at a time). */
 export const MAX_STORAGE_ANSWERS = 16;
 export const MAX_STORAGE_OUTCOMES = 50;
+export const MAX_WIRELESS_ANSWERS = 16;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -261,6 +271,7 @@ export function createInitialState(): DashboardState {
     storageConsent: 'off',
     storageAnswers: [],
     storageOutcomes: [],
+    wirelessAnswers: [],
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -848,6 +859,14 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
         storageOutcomes: capTail(
           [...state.storageOutcomes, { serial: msg.serial, outcome: msg.outcome }],
           MAX_STORAGE_OUTCOMES,
+        ),
+      };
+    case 'wirelessResult':
+      return {
+        ...state,
+        wirelessAnswers: capTail(
+          [...state.wirelessAnswers, { requestId: msg.requestId, result: msg.result }],
+          MAX_WIRELESS_ANSWERS,
         ),
       };
     case 'error': {

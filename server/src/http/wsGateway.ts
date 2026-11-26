@@ -10,13 +10,19 @@ import {
   PROTOCOL_VERSION,
   WS_PATH,
 } from '@lionscope/protocol';
-import type { ClientMessage, ServerMessage, StorageResponse } from '@lionscope/protocol';
+import type {
+  ClientMessage,
+  ServerMessage,
+  StorageResponse,
+  WirelessActionResult,
+} from '@lionscope/protocol';
 import { DEV_ORIGINS } from '../config.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
+import type { WirelessService } from '../device/wirelessService.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { ViewEditOutcome, ViewEdits } from '../inspector/viewEdits.ts';
@@ -122,6 +128,9 @@ export type GatewayStorage = Pick<
 /** What the gateway needs from the device locations. */
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
+/** What the gateway needs from the wireless ADB service. */
+export type GatewayWireless = Pick<WirelessService, 'connect' | 'disconnect'>;
+
 export interface WsGatewayOptions {
   permissions?: () => Readonly<Permissions>;
   server: Server;
@@ -136,6 +145,8 @@ export interface WsGatewayOptions {
   locations?: GatewayLocations;
   /** The storage inspector (`storageList` / `storageRead` / `storageWrite`); omitted = consent `off`. */
   storage?: GatewayStorage;
+  /** Wireless ADB actions (`connectDevice` / `disconnectDevice`); omitted = they are refused. */
+  wireless?: GatewayWireless;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -174,6 +185,8 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   storageWrite: 'Could not change the app storage',
   storageQuery: 'Could not run the SQL query',
   storageAudit: 'Could not read the storage audit',
+  connectDevice: 'Could not connect to the wireless device',
+  disconnectDevice: 'Could not disconnect the wireless device',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -365,6 +378,34 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
                   ? await storage.query(message.query)
                   : await storage.write(message.write);
         send(ws, { type: 'storage', requestId: message.requestId, response });
+        return;
+      }
+      case 'connectDevice':
+      case 'disconnectDevice': {
+        const action = message.type === 'connectDevice' ? 'connect' : 'disconnect';
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action, ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            if (message.type === 'connectDevice') {
+              const connected = await wireless.connect(message.address, 'dashboard');
+              result = { action: 'connect', ok: true, ...connected };
+            } else {
+              const disconnected = await wireless.disconnect(message.serial, 'dashboard');
+              result = { action: 'disconnect', ok: true, ...disconnected };
+            }
+          } catch (error) {
+            if (!(error instanceof PublicError)) log.warn(`${message.type} failed: ${errorMessage(error)}`);
+            result = {
+              action,
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES[message.type],
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
         return;
       }
     }

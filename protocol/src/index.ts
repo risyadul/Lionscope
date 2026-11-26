@@ -20,7 +20,9 @@ import {
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
+  isMdnsSerial,
   isValidPackageName,
+  parseWirelessAddress,
   LINK_NONCE_PATTERN,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_HTTP_BODY_BYTES,
@@ -122,6 +124,11 @@ import {
 } from './storage.ts';
 
 export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
+export const wirelessTargetSchema = z
+  .string()
+  .min(1)
+  .max(260)
+  .refine((value) => isMdnsSerial(value) || parseWirelessAddress(value).ok, 'invalid wireless ADB address');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
 export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
 /** Inspector snapshot ids as the server assigns them (`InspectorSnapshot.id`). */
@@ -336,6 +343,12 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     .object({ type: z.literal('storageQuery'), requestId: clientRequestId, query: storageQueryInputSchema })
     .strict(),
   z.object({ type: z.literal('storageAudit'), requestId: clientRequestId }).strict(),
+  z
+    .object({ type: z.literal('connectDevice'), requestId: clientRequestId, address: wirelessTargetSchema })
+    .strict(),
+  z
+    .object({ type: z.literal('disconnectDevice'), requestId: clientRequestId, serial: wirelessTargetSchema })
+    .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

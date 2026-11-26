@@ -28,6 +28,9 @@ type Props = {
   mocksIndicator?: ReactNode;
   permissionsAction?: ReactNode;
   onRefreshDevices: () => void;
+  onOpenWireless?: () => void;
+  onDisconnectWireless?: (serial: string) => void;
+  isDisconnectingWireless?: boolean;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
   onPackageChange: (packageName: string) => void;
@@ -59,6 +62,9 @@ export function TopBar({
   mocksIndicator,
   permissionsAction,
   onRefreshDevices,
+  onOpenWireless,
+  onDisconnectWireless,
+  isDisconnectingWireless = false,
   apps,
   packageName,
   onPackageChange,
@@ -101,6 +107,9 @@ export function TopBar({
           onChange={onSerialChange}
           onAvdChange={onAvdChange}
           onRefresh={onRefreshDevices}
+          onOpenWireless={onOpenWireless}
+          onDisconnectWireless={onDisconnectWireless}
+          isDisconnecting={isDisconnectingWireless}
           isLocked={isSessionActive}
           isOffline={isOffline}
           actions={emulatorActions}

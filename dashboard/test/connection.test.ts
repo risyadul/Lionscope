@@ -109,6 +109,7 @@ describe('parseServerMessage', () => {
       locations: true,
       storage: true,
       storageOutcome: true,
+      wirelessResult: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

@@ -6,6 +6,14 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Wireless ADB connect and disconnect: connect physical Android devices by `host:port` (IPv4, bracketed IPv6, or
+  hostname) or mDNS serial from the dashboard's **Connect wireless device** dialog (with a warning for public IP
+  addresses) or the `connect_device` / `disconnect_device` agent tools (restricted to private/LAN, link-local, IPv6
+  ULA, Tailscale, mDNS serials, or a `host:port` connected from the dashboard in the current server run). The device
+  picker shows **USB** / **Wi-Fi** transport badges and a **Disconnect** action for wireless devices.
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

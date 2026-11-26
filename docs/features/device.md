@@ -2,7 +2,7 @@
 
 # Operating a device
 
-Emulators and USB devices from the dashboard's Device column.
+Emulators, USB devices and wireless physical devices from the dashboard's Device column.
 
 <!-- /docs:added -->
 
@@ -65,3 +65,20 @@ cleanest measurements.
 On Xiaomi / HyperOS (and some other OEM builds) the phone refuses injected input until **USB debugging (Security
 settings)** is turned on in Developer options; the screen still mirrors and the dashboard tells you what to turn
 on.
+
+## Wireless physical devices (Wi-Fi ADB)
+
+Click the **Connect wireless device** (Wi-Fi) button beside the device picker to connect to a physical device over
+wireless ADB (`adb connect <host>:<port>`). The dialog accepts any valid IPv4, bracketed IPv6 (`[fd00::1]:5555`),
+or hostname with port, and warns whenever the address is a public IP.
+
+- **Transport badges & Disconnect.** Physical devices show a **USB** or **Wi-Fi** badge next to the device picker
+  (and in the picker options). Selecting a wireless device shows a **Disconnect** button (`adb disconnect`); if a
+  profiling session is running on that device, Lionscope confirms before stopping the session and disconnecting.
+- **Same phone over USB and Wi-Fi.** If the same physical device is connected over both USB and Wi-Fi at the same
+  time, `adb devices` lists each transport separately, so both entries appear in the device picker; unplug USB or
+  disconnect the wireless entry if you only want one.
+- **AI agent tools.** `connect_device` and `disconnect_device` (under the **Agent device control** permission) let
+  agents connect and disconnect wireless devices on private IPv4 (`10/8`, `172.16/12`, `192.168/16`), link-local,
+  IPv6 ULA (`fc00::/7`), Tailscale (`100.64/10`), mDNS serials, or a `host:port` the user already connected from the
+  dashboard during the current server run. Other addresses are rejected.

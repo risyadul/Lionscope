@@ -13,6 +13,7 @@ import type { ViewEdits } from '../inspector/viewEdits.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { SessionManager } from '../session/sessionManager.ts';
 import type { StorageService } from '../storage/storageService.ts';
+import type { WirelessService } from '../device/wirelessService.ts';
 import type { DontKeepActivities } from './dontKeepActivities.ts';
 import type { UiHelpers } from './uiHelper.ts';
 import type { UiTree } from './uiTree.ts';
@@ -88,6 +89,9 @@ export type AgentLocations = Pick<
   'getLocation' | 'readEmulatorGps' | 'setLocation' | 'clearLocation'
 >;
 
+/** Wireless ADB actions (connect, disconnect, ...): shared with the dashboard gateway. */
+export type AgentWireless = Pick<WirelessService, 'connect' | 'disconnect'>;
+
 /** The last screenshot of a device: tap / swipe coordinates are in `shot` pixels, adb input wants `device` ones. */
 export interface ScreenshotSize {
   shot: Size;
@@ -112,6 +116,8 @@ export interface AgentContext {
   locations?: AgentLocations;
   /** Omitted: storage consent is `off` (the storage tools are neither listed nor callable). */
   storage?: AgentStorage;
+  /** Omitted: wireless ADB tools say wireless is unavailable. */
+  wireless?: AgentWireless;
   adb: Adb;
   serverVersion: string;
   bufferWindowMs: number;
