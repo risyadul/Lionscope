@@ -230,9 +230,10 @@ internal interface InspectorScene<T : Any> {
     /**
      * The visible windows, bottom-most first, and how to read them; null when there is none. [readCompose]: read the
      * compositions of AndroidComposeViews (a v6 link), else they stay leaves as before. [viewState]: give View nodes
-     * their key and editable state (a v8 link).
+     * their key and editable state (a v8 link). [recompositionCounts]: include v15 Compose recomposition status and
+     * per-composable counts when tracking is active.
      */
-    fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<T>?
+    fun prepare(readCompose: Boolean, viewState: Boolean, recompositionCounts: Boolean = false): PreparedScene<T>?
 }
 
 /** [captured]: called once the walk worked (its view keys become the ones edits name); gives the live edits then. */
@@ -241,6 +242,7 @@ internal class PreparedScene<T : Any>(
     val display: InspectorDisplay,
     val access: InspectorTreeAccess<T>,
     val captured: (() -> Int)? = null,
+    val recompositionTracking: RecompositionStatus? = null,
 )
 
 /** A capture ready to be sent: everything was read on the main thread. */
@@ -253,6 +255,8 @@ internal class InspectSnapshot(
     val captureMs: Double,
     /** v8: live edits in effect when captured. */
     val liveEdits: Int? = null,
+    /** v15: Compose recomposition tracking status when captured. */
+    val recompositionTracking: RecompositionStatus? = null,
 )
 
 /**
@@ -284,20 +288,23 @@ internal class Inspector<T : Any>(
         val prepared: PreparedScene<T>
         val capture: InspectorCapture
         val liveEdits: Int?
+        val recompositionTracking: RecompositionStatus?
         try {
             val readCompose = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V6)
             val viewState = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V8)
-            prepared = scene.prepare(readCompose, viewState)?.takeIf { it.windows.isNotEmpty() }
+            val recompositionCounts = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V15)
+            prepared = scene.prepare(readCompose, viewState, recompositionCounts)?.takeIf { it.windows.isNotEmpty() }
                 ?: return reply(requestId, InspectError.NO_WINDOW)
             val display = prepared.display
             capture = InspectorWalker.capture(prepared.windows, PixelRect(0, 0, display.width, display.height), prepared.access)
             liveEdits = prepared.captured?.invoke()
+            recompositionTracking = if (recompositionCounts) prepared.recompositionTracking else null
         } catch (t: Throwable) {
             if (isFatal(t)) throw t
             return reply(requestId, InspectError.FAILED)
         }
         val captureMs = (nanoTime() - start) / NANOS_PER_MS
-        val snapshot = InspectSnapshot(requestId, ts, screenName(), prepared.display, capture, captureMs, liveEdits)
+        val snapshot = InspectSnapshot(requestId, ts, screenName(), prepared.display, capture, captureMs, liveEdits, recompositionTracking)
         val send = sender.prepare(snapshot)
         try {
             inBackground(send)
@@ -399,6 +406,7 @@ internal class InspectSender(
             captureMs = snapshot.captureMs,
             compose = capture.compose,
             liveEdits = snapshot.liveEdits,
+            recompositionTracking = snapshot.recompositionTracking,
         )
         lines += DeviceMessages.inspectChunks(snapshot.requestId, capture.nodes, maxChunkBytes)
         return lines

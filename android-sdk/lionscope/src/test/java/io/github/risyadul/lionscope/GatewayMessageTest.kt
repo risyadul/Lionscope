@@ -158,4 +158,15 @@ class GatewayMessageTest {
         assertEquals(true, config("{\"type\":\"config\",\"stallThresholdMs\":150,\"rxTracking\":\"false\"}").rxTracking)
         assertTrue(SdkOptions.DEFAULT.rxTracking)
     }
+
+    @Test
+    fun composeRecompositionTrackingDefaultsOffAndParsesResetMessage() {
+        assertFalse(SdkOptions.DEFAULT.composeRecompositionTracking)
+        assertFalse(config("{\"type\":\"config\",\"stallThresholdMs\":150,\"strictMode\":false}").composeRecompositionTracking)
+        assertFalse(config("{\"type\":\"config\",\"composeRecompositionTracking\":false}").composeRecompositionTracking)
+        assertFalse(config("{\"type\":\"config\",\"composeRecompositionTracking\":\"true\"}").composeRecompositionTracking)
+        assertFalse(config("{\"type\":\"config\",\"composeRecompositionTracking\":trueish}").composeRecompositionTracking)
+        assertTrue(config("{\"type\":\"config\",\"composeRecompositionTracking\":true}").composeRecompositionTracking)
+        assertTrue(GatewayMessage.parse("{\"type\":\"resetComposeRecompositions\"}") is GatewayMessage.ResetComposeRecompositions)
+    }
 }

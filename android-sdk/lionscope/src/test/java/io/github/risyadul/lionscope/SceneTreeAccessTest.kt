@@ -59,9 +59,11 @@ class SceneTreeAccessTest {
 
     private class FakeReading(val answer: (View) -> ComposeRead) : ComposeReading {
         var captures = 0
+        val recompositionFlags = ArrayList<Boolean>()
         val reads = ArrayList<View>()
-        override fun beginCapture() {
+        override fun beginCapture(recompositionCounts: Boolean) {
             captures++
+            recompositionFlags += recompositionCounts
         }
 
         override fun read(view: View): ComposeRead = answer(view).also { reads += view }
@@ -173,5 +175,24 @@ class SceneTreeAccessTest {
         assertTrue(reading.reads.isEmpty())
         access.children(composeView)
         assertEquals(1, reading.reads.size)
+    }
+
+    @Test
+    fun recompositionCountsPropagateToComposableSourceWhenPresent() {
+        val counted = composable("ProductCard").apply {
+            draws = true
+            recompositions = RecompositionCounts(recompositions = 4, skips = 2)
+        }
+        val inlineNode = composable("Row").apply { draws = false }
+        val access = SceneTreeAccess(views, FakeReading { ComposeRead(CompositionStatus.READ, listOf(counted, inlineNode)) })
+        access.children(composeView)
+        assertEquals(
+            ComposableSource("Shop.kt", 12, draws = true, recompositions = 4, skips = 2),
+            access.read(counted).composable,
+        )
+        assertEquals(
+            ComposableSource("Shop.kt", 12, draws = false, recompositions = null, skips = null),
+            access.read(inlineNode).composable,
+        )
     }
 }

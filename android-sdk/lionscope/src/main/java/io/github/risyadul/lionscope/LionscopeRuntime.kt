@@ -149,6 +149,11 @@ internal object LionscopeRuntime {
             Log.w(LOG_TAG, "Lionscope saved-state profiler disabled: $t")
             null
         }
+        val recompositionTracker = ComposeSupport.recompositionTracker
+        val recompositionLifecycle = recompositionTracker?.let { tracker ->
+            ComposeRecompositionController(deviceLink, main, tracker)
+            ComposeRecompositionLifecycle(tracker)
+        }
         screenTracker = screens
         mainScheduler = main
         app.registerActivityLifecycleCallbacks(screens)
@@ -156,6 +161,7 @@ internal object LionscopeRuntime {
         diagnostics?.let(app::registerActivityLifecycleCallbacks)
         layouts?.let(app::registerActivityLifecycleCallbacks)
         savedState?.let(app::registerActivityLifecycleCallbacks)
+        recompositionLifecycle?.let(app::registerActivityLifecycleCallbacks)
         NetworkCapture.shared.attach(deviceLink)
         link = deviceLink // Set before start(): a failed start must not lead to double registration on retry.
         deviceLink.start()

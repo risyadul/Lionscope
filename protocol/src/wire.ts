@@ -7,7 +7,7 @@
  */
 
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 /** WebSocket path on the dashboard HTTP server. */
 export const WS_PATH = '/ws';
@@ -189,6 +189,12 @@ export interface SdkOptions {
    * state (SavedStateSample). Absent on older servers (read as true); runs only on a v10 session link.
    */
   savedStateTracking: boolean;
+  /**
+   * Compose recomposition and skip tracking (off by default; device protocol 15, Compose runtime 1.9+):
+   * attaches Compose runtime observers and includes per-composable counts in Layout Inspector snapshots.
+   * Absent on older servers / links below v15 (read as false).
+   */
+  composeRecompositionTracking?: boolean;
 }
 
 export const STALL_THRESHOLDS_MS = [100, 150, 250, 500, 1000] as const;
@@ -778,6 +784,8 @@ export type ScreenClientMessage =
 // ---------------------------------------------------------------------------
 
 export type InspectorSource = 'sdk' | 'uiautomator';
+/** Device protocol v15: Compose recomposition tracking status reported by the SDK. */
+export type RecompositionTrackingState = 'off' | 'active' | 'unsupported';
 /** [left, top, right, bottom] in device screen pixels (the current rotation). */
 export type PixelRect = [number, number, number, number];
 
@@ -850,9 +858,17 @@ export interface InspectorNode {
    * has its name as `className`, no alpha, padding, margin or layout params, and `source` null. `draws` (when the SDK
    * knows) says whether the composable's own layout node paints anything (a background, border, image, text, a
    * drawBehind…): a full-size `Box` that draws nothing, like an idle toast or snackbar host, is let through when
-   * picking on the screen.
+   * picking on the screen. v15 adds optional `recompositions` and `skips` counts (present only when tracking is
+   * active and the composable has a RecomposeScope; counts since tracking was enabled or last reset, with initial
+   * composition while tracking is on counted as 1).
    */
-  composable?: { file: string | null; line: number | null; draws?: boolean };
+  composable?: {
+    file: string | null;
+    line: number | null;
+    draws?: boolean;
+    recompositions?: number;
+    skips?: number;
+  };
   /**
    * 0.6.0 (SDK, v6). Set on AndroidComposeView nodes: `read` when its composables follow as its children, else why
    * not (`disabled`: composed before Lionscope enabled Compose inspection, or the app opted out; `no_source`: built
@@ -906,6 +922,12 @@ export interface InspectorSnapshot {
    * be handed to the app). Absent when they can be edited.
    */
   editBlocked?: 'needs_session' | 'unverified';
+  /**
+   * Device protocol v15 (SDK). Compose recomposition tracking status for this snapshot: `off` (capable, disabled),
+   * `active` (observing and reporting counts), or `unsupported` (Compose < 1.9 or internal API unavailable). Absent
+   * on older SDKs, non-Compose apps, and uiautomator snapshots.
+   */
+  recompositionTracking?: RecompositionTrackingState;
 }
 
 /** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
@@ -1990,7 +2012,7 @@ export const MAX_MOCK_CLIENT_MESSAGE_BYTES = 1024 * 1024;
  * SDKs keep working against older servers and vice versa. (A 0.1.0 server rejects any `protocolVersion` other
  * than 1 and closes the link on unknown types.)
  */
-export const DEVICE_PROTOCOL_VERSION = 14;
+export const DEVICE_PROTOCOL_VERSION = 15;
 export const MIN_DEVICE_PROTOCOL_VERSION = 1;
 /**
  * Message types per negotiated version. v1: hello, screen, frames, heartbeat / welcome, bye.
@@ -2044,6 +2066,12 @@ export const DEVICE_PROTOCOL_V12 = 12;
 export const DEVICE_PROTOCOL_V13 = 13;
 /** Original Network values and request completeness for copying a captured request as cURL. */
 export const DEVICE_PROTOCOL_V14 = 14;
+/**
+ * Compose recomposition and skip tracking (Compose runtime 1.9+): `config.composeRecompositionTracking` and
+ * `resetComposeRecompositions` (server → SDK, on both session and inspect links), `inspectBegin.recompositionTracking`
+ * and per-composable `recompositions` / `skips` (SDK → server).
+ */
+export const DEVICE_PROTOCOL_V15 = 15;
 /** Max bytes of one `httpRequest` / `httpResponse` line on a v7 link (a 64 KB body, JSON-escaped, and headers). */
 export const MAX_HTTP_LINE_BYTES = 256 * 1024;
 /** Max bytes of one server → SDK line (a `mock` with a 256 KB body in base64); the SDK skips longer ones. */
@@ -2212,6 +2240,8 @@ export type DeviceMessage =
       compose: boolean;
       /** v8. Live edits in effect in the app's process (InspectorSnapshot.liveEdits). */
       liveEdits?: number;
+      /** v15. Compose recomposition tracking status (`off` | `active` | `unsupported`). */
+      recompositionTracking?: RecompositionTrackingState;
     }
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
   | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }
@@ -2403,9 +2433,13 @@ export type GatewayMessage =
       rxTracking?: boolean;
       /** v10 links only. */
       savedStateTracking?: boolean;
-      /** v11 links only, last: what storage requests the SDK may answer (StorageConsent). */
+      /** v11 links only, last before v15: what storage requests the SDK may answer (StorageConsent). */
       storageConsent?: StorageConsent;
+      /** v15 links only (session and inspect), last: opt-in Compose recomposition tracking (default false). */
+      composeRecompositionTracking?: boolean;
     }
+  /** v15 (session and inspect links). Reset accumulated Compose recomposition and skip counts to 0. */
+  | { type: 'resetComposeRecompositions' }
   /** v4. Take an Inspector snapshot of the app's windows now; answered with `inspectBegin`/`inspectNodes` or `inspectError`. */
   | { type: 'inspect'; requestId: number }
   /**

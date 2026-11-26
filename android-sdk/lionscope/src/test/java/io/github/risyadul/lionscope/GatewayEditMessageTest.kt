@@ -35,6 +35,7 @@ class GatewayEditMessageTest {
                 "storageList" -> GatewayMessage.StorageList::class
                 "storageRead" -> GatewayMessage.StorageRead::class
                 "storageWrite" -> GatewayMessage.StorageWrite::class
+                "resetComposeRecompositions" -> GatewayMessage.ResetComposeRecompositions::class
                 else -> error("no parser for $type")
             }
             assertEquals(line, expected, message?.let { it::class })

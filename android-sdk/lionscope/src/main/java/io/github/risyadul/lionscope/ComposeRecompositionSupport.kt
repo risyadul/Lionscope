@@ -195,3 +195,31 @@ internal class ComposeRecompositionLifecycle(
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
     override fun onActivityDestroyed(activity: Activity) = Unit
 }
+
+/**
+ * Connects [ComposeRecompositionTracker] to [LinkPort]: enables/disables on v15 `config` (on both session and
+ * inspect-only links), clears counts on v15 `resetComposeRecompositions`, and auto-detaches observers on disconnect.
+ */
+internal class ComposeRecompositionController(
+    private val link: LinkPort,
+    private val main: MainScheduler,
+    private val tracker: ComposeRecompositionTracker,
+) {
+    init {
+        link.addWelcomeListener { welcomed ->
+            if (!welcomed) main.post(Runnable { guarded { tracker.setEnabled(false) } })
+        }
+        link.addComposeRecompositionListener { message ->
+            main.post(Runnable { guarded { onMessage(message) } })
+        }
+    }
+
+    private fun onMessage(message: GatewayMessage) {
+        if (!link.isWelcomed || !DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V15)) return
+        when (message) {
+            is GatewayMessage.Config -> tracker.setEnabled(message.options.composeRecompositionTracking)
+            is GatewayMessage.ResetComposeRecompositions -> tracker.reset()
+            else -> Unit
+        }
+    }
+}

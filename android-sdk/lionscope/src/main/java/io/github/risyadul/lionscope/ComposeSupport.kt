@@ -38,7 +38,7 @@ internal class ComposeRead(
 /** Reads AndroidComposeViews (main thread); implemented only by the Compose-linked [ComposeViewReader]. */
 internal interface ComposeReading {
     /** A fresh capture: the group budget is shared by every view read until the next [beginCapture]. */
-    fun beginCapture()
+    fun beginCapture(recompositionCounts: Boolean = false)
     fun read(view: View): ComposeRead
 }
 
@@ -60,6 +60,11 @@ internal object ComposeSupport {
     var reading: ComposeReading? = null
         private set
 
+    /** Null when the app has no Compose UI or opted out of Compose inspection; set once by [install]. */
+    @Volatile
+    var recompositionTracker: ComposeRecompositionTracker? = null
+        private set
+
     /**
      * Turns inspection on and sets [reading] when the app has Compose UI. Opted out (or failing to turn it on), every
      * AndroidComposeView reads as [CompositionStatus.DISABLED] (or [CompositionStatus.FAILED]), so the server can say
@@ -78,7 +83,9 @@ internal object ComposeSupport {
         }
         reading = try {
             ComposeInspectionSwitch.enable()
-            ComposeViewReader()
+            val tracker = ComposeRecompositionSupport.createTracker()
+            recompositionTracker = tracker
+            ComposeViewReader(tracker)
         } catch (e: LinkageError) {
             Log.w(LOG_TAG, "Lionscope Compose inspection unavailable: $e")
             Unreadable(CompositionStatus.FAILED)
@@ -91,10 +98,11 @@ internal object ComposeSupport {
     /** Tests only: forget what [install] set. */
     internal fun reset() {
         reading = null
+        recompositionTracker = null
     }
 
     private class Unreadable(private val status: CompositionStatus) : ComposeReading {
-        override fun beginCapture() = Unit
+        override fun beginCapture(recompositionCounts: Boolean) = Unit
         override fun read(view: View): ComposeRead = ComposeRead(status)
     }
 

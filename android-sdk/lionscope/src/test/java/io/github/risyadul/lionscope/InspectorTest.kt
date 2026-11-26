@@ -28,16 +28,25 @@ class InspectorTest {
         var commits = 0
         val readCompose = ArrayList<Boolean>()
         val viewState = ArrayList<Boolean>()
+        val recompositionCounts = ArrayList<Boolean>()
+        var trackingStatus: RecompositionStatus? = null
         override val isForeground: Boolean
             get() = foreground
 
-        override fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<FakeView>? {
+        override fun prepare(readCompose: Boolean, viewState: Boolean, recompositionCounts: Boolean): PreparedScene<FakeView>? {
             this.readCompose += readCompose
             this.viewState += viewState
+            this.recompositionCounts += recompositionCounts
             failure?.let { throw it }
             val root = root ?: return null
             val captured = if (viewState) { { ++commits } } else null
-            return PreparedScene(listOf(fakeWindow(root)), InspectorDisplay(1080, 2424, 0), FakeTreeAccess(), captured)
+            return PreparedScene(
+                listOf(fakeWindow(root)),
+                InspectorDisplay(1080, 2424, 0),
+                FakeTreeAccess(),
+                captured,
+                trackingStatus,
+            )
         }
     }
 
@@ -148,6 +157,26 @@ class InspectorTest {
         assertEquals(listOf(false, true), scene.viewState)
         assertEquals(1, scene.commits)
         assertEquals(1.0, sent().single { it["type"] == "inspectBegin" }["liveEdits"])
+    }
+
+    @Test
+    fun recompositionTrackingStatusIsOnlyEmittedOnAV15Link() {
+        scene.trackingStatus = RecompositionStatus.ACTIVE
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V14)
+        link.v4Lines.clear()
+        request(1)
+        background.removeAt(0).run()
+        assertEquals(listOf(false), scene.recompositionCounts)
+        assertFalse(sent().single { it["type"] == "inspectBegin" }.containsKey("recompositionTracking"))
+
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V15)
+        link.v4Lines.clear()
+        request(2)
+        background.removeAt(0).run()
+        assertEquals(listOf(false, true), scene.recompositionCounts)
+        assertEquals("active", sent().single { it["type"] == "inspectBegin" }["recompositionTracking"])
     }
 
     @Test

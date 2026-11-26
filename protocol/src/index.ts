@@ -19,6 +19,7 @@ import {
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
+  DEVICE_PROTOCOL_V15,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -674,6 +675,8 @@ const inspectorNodeSchema = z
         file: layoutText.nullable(),
         line: z.number().int().min(1).max(MAX_JAVA_INT).nullable(),
         draws: z.boolean().optional(),
+        recompositions: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
+        skips: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
       })
       .strip()
       .optional(),
@@ -913,6 +916,7 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       captureMs: durationMs,
       compose: z.boolean(),
       liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS).optional(),
+      recompositionTracking: z.enum(['off', 'active', 'unsupported']).optional(),
     })
     .strip(),
   z
@@ -1266,6 +1270,39 @@ export function parseDeviceMessage(
       error: 'SQL outcomes need protocol version 13',
       unnegotiated: { type, since: DEVICE_PROTOCOL_V13 },
     };
+  }
+  if (
+    type === 'inspectBegin' &&
+    protocolVersion < DEVICE_PROTOCOL_V15 &&
+    object &&
+    Object.hasOwn(object, 'recompositionTracking')
+  ) {
+    return {
+      ok: false,
+      error: 'recompositionTracking needs protocol version 15',
+      unnegotiated: { type, since: DEVICE_PROTOCOL_V15 },
+    };
+  }
+  if (type === 'inspectNodes' && protocolVersion < DEVICE_PROTOCOL_V15 && object) {
+    const nodes: unknown = Reflect.get(object, 'nodes');
+    if (
+      Array.isArray(nodes) &&
+      nodes.some((node) => {
+        if (typeof node !== 'object' || node === null) return false;
+        const composable: unknown = Reflect.get(node, 'composable');
+        return (
+          typeof composable === 'object' &&
+          composable !== null &&
+          (Object.hasOwn(composable, 'recompositions') || Object.hasOwn(composable, 'skips'))
+        );
+      })
+    ) {
+      return {
+        ok: false,
+        error: 'Compose recomposition counts need protocol version 15',
+        unnegotiated: { type, since: DEVICE_PROTOCOL_V15 },
+      };
+    }
   }
   const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;
   if (typeof version === 'number' && !isSupportedProtocolVersion(version)) {

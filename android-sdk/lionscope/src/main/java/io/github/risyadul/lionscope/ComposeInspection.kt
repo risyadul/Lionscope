@@ -36,14 +36,21 @@ internal object ComposeInspectionSwitch {
  * their `getLayoutNode()` and whether a composable paints through its modifier nodes ([ComposeDrawing]). Only public
  * API, except those reflective reads (on failure, AndroidViews stay under AndroidViewsHandler and `draws` is omitted).
  */
-internal class ComposeViewReader : ComposeReading {
+internal class ComposeViewReader(
+    private val recompositionTracker: ComposeRecompositionTracker? = null,
+) : ComposeReading {
     private var budget = ComposeBudget()
     private var filter = ComposableFilter()
     private val drawing = ComposeDrawing()
+    private var includeRecompositionCounts = false
 
-    override fun beginCapture() {
+    override fun beginCapture(recompositionCounts: Boolean) {
         budget = ComposeBudget()
         filter = ComposableFilter()
+        includeRecompositionCounts = recompositionCounts
+        if (recompositionCounts && recompositionTracker?.status == RecompositionStatus.ACTIVE) {
+            recompositionTracker.rescan()
+        }
     }
 
     override fun read(view: View): ComposeRead = try {
@@ -70,9 +77,13 @@ internal class ComposeViewReader : ComposeReading {
         if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
         val configs = ComposeSemanticsReader.byLayout(rootSemantics)
         val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
+        val activeTracker = recompositionTracker?.takeIf {
+            includeRecompositionCounts && it.status == RecompositionStatus.ACTIVE
+        }
         forEachNode(tree.roots) { node ->
             semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
             node.draws = drawing.of(node.layouts)
+            node.recompositions = if (activeTracker != null) node.recomposeScope?.let(activeTracker::countsFor) else null
         }
         val claimed = claimInteropViews(view, tree, semantics)
         return ComposeRead(CompositionStatus.READ, tree.roots, semantics, claimed, tree.truncated)
@@ -103,6 +114,8 @@ internal class ComposeViewReader : ComposeReading {
         override fun children(group: CompositionGroup): Iterable<CompositionGroup> = group.compositionGroups
         override fun sourceInfo(group: CompositionGroup): String? = group.sourceInfo
         override fun layoutNode(group: CompositionGroup): LayoutInfo? = group.node as? LayoutInfo
+        override fun recomposeScope(group: CompositionGroup): Any? =
+            group.data.firstOrNull { it != null && it.javaClass.name.endsWith(RECOMPOSE_SCOPE) }
         override fun parent(node: LayoutInfo): LayoutInfo? = node.parentInfo
         /** A node mid-transform can report a non-finite position: it counts as not placed rather than failing the read. */
         override fun isPlaced(node: LayoutInfo): Boolean {

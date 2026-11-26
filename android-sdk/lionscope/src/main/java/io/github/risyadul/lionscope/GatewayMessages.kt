@@ -59,6 +59,9 @@ internal sealed class GatewayMessage {
 
     class StorageQuery(val requestId: Int, val opId: String, val name: String, val sql: String, val limit: Int, val offset: Int) : GatewayMessage()
 
+    /** v15: clear accumulated Compose recomposition and skip counts (session and inspect links). */
+    object ResetComposeRecompositions : GatewayMessage()
+
     companion object {
         private const val ANY_METHOD = "*"
         private const val MIN_MOCK_STATUS = 100
@@ -76,6 +79,7 @@ internal sealed class GatewayMessage {
         private val STORAGE_CONSENT = Regex("\"storageConsent\"\\s*:\\s*\"([a-z_]+)\"")
         private val OP_ID = Regex("[A-Za-z0-9_-]{1,64}")
         private val SAVED_STATE_TRACKING = Regex("\"savedStateTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
+        private val COMPOSE_RECOMPOSITION_TRACKING = Regex("\"composeRecompositionTracking\"\\s*:\\s*(true|false)(?![A-Za-z0-9_])")
         /** A non-negative JSON integer that fits an Int. */
         private val REQUEST_ID = Regex("\"requestId\"\\s*:\\s*(\\d{1,10})(?![\\d.eE])")
 
@@ -105,6 +109,7 @@ internal sealed class GatewayMessage {
             "storageRead" -> FlatJson.parse(line)?.let(::storageRead)
             "storageWrite" -> FlatJson.parse(line)?.let(::storageWrite)
             "storageQuery" -> FlatJson.parse(line)?.let(::storageQuery)
+            "resetComposeRecompositions" -> ResetComposeRecompositions
             else -> null
         }
 
@@ -189,7 +194,8 @@ internal sealed class GatewayMessage {
             val rxTracking = RX_TRACKING.find(line)?.groupValues?.get(1) != "false"
             val savedStateTracking = SAVED_STATE_TRACKING.find(line)?.groupValues?.get(1) != "false"
             val storageConsent = StorageConsent.of(STORAGE_CONSENT.find(line)?.groupValues?.get(1))
-            return SdkOptions(threshold, strictMode, inflateTracking, rxTracking, savedStateTracking, storageConsent)
+            val composeRecompositionTracking = COMPOSE_RECOMPOSITION_TRACKING.find(line)?.groupValues?.get(1) == "true"
+            return SdkOptions(threshold, strictMode, inflateTracking, rxTracking, savedStateTracking, storageConsent, composeRecompositionTracking)
         }
 
         private fun storageName(fields: FlatJson, key: String): String? =
