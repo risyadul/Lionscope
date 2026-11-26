@@ -95,6 +95,7 @@ describe('ProfilingSession SDK options', () => {
       inflateTracking: true,
       rxTracking: true,
       savedStateTracking: true,
+      composeRecompositionTracking: false,
     };
     expect(session.state.sdk?.options).toEqual(strict);
     expect(ofType('session').at(-1)?.session.sdk?.options).toEqual(strict);
@@ -105,6 +106,7 @@ describe('ProfilingSession SDK options', () => {
       inflateTracking: true,
       rxTracking: true,
       savedStateTracking: true,
+      composeRecompositionTracking: false,
     };
     expect(session.state.sdk?.options).toEqual(latest);
     await vi.advanceTimersByTimeAsync(CONFIG_DEBOUNCE_MS - 1);
@@ -139,8 +141,24 @@ describe('ProfilingSession SDK options', () => {
       inflateTracking: true,
       rxTracking: true,
       savedStateTracking: true,
+      composeRecompositionTracking: false,
     });
     expect(ofType('session')).toHaveLength(count);
+  });
+
+  it('pushes composeRecompositionTracking immediately without debounce and resets only v15+ links', async () => {
+    const { session, connect } = await setup();
+    const v14 = await connect({ ...HELLO_V2, protocolVersion: 14 });
+    expect(session.resetComposeRecompositions()).toBe(false);
+    expect(v14.link.recompositionResets).toBe(0);
+
+    const v15 = await connect({ ...HELLO_V2, protocolVersion: 15 });
+    session.setSdkOptions({ composeRecompositionTracking: true });
+    // Pushed synchronously (no CONFIG_DEBOUNCE_MS wait) so a following inspect sees it in order.
+    expect(v15.link.configs.at(-1)?.composeRecompositionTracking).toBe(true);
+    expect(session.resetComposeRecompositions()).toBe(true);
+    expect(v15.link.recompositionResets).toBe(1);
+    session.stop();
   });
 
   it('tells the dashboard (throttled) when the live link sent an invalid diagnostic', async () => {

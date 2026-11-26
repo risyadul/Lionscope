@@ -98,6 +98,8 @@ export type GatewayManager = Pick<
   | 'startSession'
   | 'stopSession'
   | 'setSdkOptions'
+  | 'setComposeRecompositionTracking'
+  | 'resetComposeRecompositions'
   | 'getHttpExchange'
   | 'getNetworkMocks'
   | 'setNetworkMock'
@@ -105,7 +107,10 @@ export type GatewayManager = Pick<
 >;
 
 /** What the gateway needs from the Inspector. */
-export type GatewayInspector = Pick<InspectorService, 'inspect' | 'select' | 'current' | 'selection'>;
+export type GatewayInspector = Pick<
+  InspectorService,
+  'inspect' | 'inspectFresh' | 'select' | 'current' | 'selection'
+>;
 
 /** What the gateway needs from the inspect-only SDK links. */
 export type GatewayInspectLinks = Pick<InspectLinks, 'setFocus'>;
@@ -159,6 +164,8 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   startSession: 'Could not start the profiling session',
   stopSession: 'Could not stop the profiling session',
   setSdkOptions: 'Could not change the SDK options',
+  setComposeRecompositionTracking: 'Could not change Compose recomposition tracking',
+  resetComposeRecompositions: 'Could not reset Compose recomposition counts',
   inspect: 'Could not inspect the screen',
   selectInspectorNode: 'Could not select the Inspector node',
   inspectorFocus: 'Could not focus the Inspector',
@@ -285,7 +292,14 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         send(ws, { type: 'session', session: await manager.stopSession() });
         return;
       case 'setSdkOptions': {
-        const { stallThresholdMs, strictMode, inflateTracking, rxTracking, savedStateTracking } = message;
+        const {
+          stallThresholdMs,
+          strictMode,
+          inflateTracking,
+          rxTracking,
+          savedStateTracking,
+          composeRecompositionTracking,
+        } = message;
         // Answered by the `session` broadcast that carries the new options.
         if (
           !manager.setSdkOptions({
@@ -294,12 +308,21 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
             inflateTracking,
             rxTracking,
             savedStateTracking,
+            composeRecompositionTracking,
           })
         ) {
           send(ws, { type: 'error', code: 'no_session', message: NO_SESSION_MESSAGE });
         }
         return;
       }
+      case 'setComposeRecompositionTracking':
+        manager.setComposeRecompositionTracking(message.serial, message.enabled);
+        await inspector.inspectFresh(message.serial);
+        return;
+      case 'resetComposeRecompositions':
+        manager.resetComposeRecompositions(message.serial);
+        await inspector.inspectFresh(message.serial);
+        return;
       case 'inspect':
         // Answered by the `inspection` broadcast (a failure by `inspect_failed` to this client).
         await inspector.inspect(message.serial);

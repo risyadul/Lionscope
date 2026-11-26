@@ -603,6 +603,43 @@ describe('InspectLinks links', () => {
     expect((await links.prepare(SERIAL)).sources).toEqual([]);
     await links.close();
   });
+
+  it('forwards Compose recomposition tracking and reset to v15 inspect links only, and clears on teardown', async () => {
+    const { links, client, connect, settle, afterTeardown } = setup();
+    links.setFocus(client, SERIAL);
+    await settle();
+    const v14 = await connect({ ...HELLO, protocolVersion: 14 });
+    const v15 = await connect({ ...OTHER_HELLO, protocolVersion: 15 });
+
+    // Toggling on pushes config to v15 link only (with storageConsent 'off'), not v14.
+    links.setComposeRecompositionTracking(SERIAL, true);
+    expect(v14.link.configs).toEqual([]);
+    expect(v15.link.configs).toHaveLength(1);
+    expect(v15.link.configs[0]?.composeRecompositionTracking).toBe(true);
+    expect(v15.link.storageConsents).toEqual(['off']);
+
+    // Reset only reaches v15 link.
+    expect(links.resetComposeRecompositions(SERIAL)).toBe(true);
+    expect(v14.link.recompositionResets).toBe(0);
+    expect(v15.link.recompositionResets).toBe(1);
+
+    // A newly attached v15 link while tracking is on immediately gets config with tracking enabled.
+    const reconnected = await connect({ ...OTHER_HELLO, protocolVersion: 15 });
+    expect(reconnected.link.configs).toHaveLength(1);
+    expect(reconnected.link.configs[0]?.composeRecompositionTracking).toBe(true);
+
+    // Toggling off pushes disabled config.
+    links.setComposeRecompositionTracking(SERIAL, false);
+    expect(reconnected.link.configs.at(-1)?.composeRecompositionTracking).toBe(false);
+
+    // Re-enabling and tearing down resets device tracking state back to default off.
+    links.setComposeRecompositionTracking(SERIAL, true);
+    expect(links.getComposeRecompositionTracking(SERIAL)).toBe(true);
+    links.setFocus(client, null);
+    await afterTeardown();
+    expect(links.getComposeRecompositionTracking(SERIAL)).toBe(false);
+    await links.close();
+  });
 });
 
 describe('InspectLinks wait window', () => {

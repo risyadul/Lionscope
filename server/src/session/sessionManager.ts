@@ -269,8 +269,44 @@ export class SessionManager implements SdkLinkTarget {
   setSdkOptions(changes: Partial<SdkOptions>): boolean {
     const session = this.session;
     if (!session || session.isStopped) return false;
+    if (changes.composeRecompositionTracking !== undefined) {
+      this.inspectLinks?.setComposeRecompositionTracking(
+        session.serial,
+        changes.composeRecompositionTracking,
+      );
+    }
     session.setSdkOptions(changes);
     return true;
+  }
+
+  /**
+   * Toggle Compose recomposition tracking on `serial` for both inspect-only links and any active profiling session
+   * on that device.
+   */
+  setComposeRecompositionTracking(serial: string, enabled: boolean): void {
+    if (!isValidSerial(serial)) throw new PublicError('invalid adb serial');
+    this.inspectLinks?.setComposeRecompositionTracking(serial, enabled);
+    const session = this.session;
+    if (session && !session.isStopped && session.serial === serial) {
+      session.setSdkOptions({ composeRecompositionTracking: enabled });
+    }
+  }
+
+  /**
+   * Reset accumulated Compose recomposition counters on `serial` across any live v15+ session or inspect-only link.
+   * Returns true if at least one link received the reset message.
+   */
+  resetComposeRecompositions(serial: string): boolean {
+    if (!isValidSerial(serial)) throw new PublicError('invalid adb serial');
+    let sent = false;
+    const session = this.session;
+    if (session && !session.isStopped && session.serial === serial) {
+      sent = session.resetComposeRecompositions() || sent;
+    }
+    if (this.inspectLinks?.resetComposeRecompositions(serial)) {
+      sent = true;
+    }
+    return sent;
   }
 
   setStorageConsent(consent: StorageConsent): void {
@@ -403,6 +439,8 @@ export class SessionManager implements SdkLinkTarget {
           if (this.session === session) this.openTunnel(serial, packageName);
         },
         storageConsent: this.storageConsent,
+        initialComposeRecompositionTracking:
+          this.inspectLinks?.getComposeRecompositionTracking(serial) ?? false,
         onStorageWriteResult: (message) => {
           if (this.session !== session) return;
           this.onStorageWriteResult?.(

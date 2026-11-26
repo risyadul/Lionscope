@@ -1,6 +1,7 @@
 import {
   DEFAULT_SDK_OPTIONS,
   DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V15,
   HTTP_EXCHANGES_PER_SECOND,
   LARGE_SAVED_STATE_BYTES,
 } from '@lionscope/protocol';
@@ -98,6 +99,8 @@ export interface SdkBridgeOptions {
   onMocksApplied?: (rev: number) => void;
   /** What the server's storage flags allow; sent to every link in its `config` (v11). Default `off`. */
   storageConsent?: StorageConsent;
+  /** Carry over Compose recomposition tracking if already toggled on for this device's Inspector. Default `false`. */
+  initialComposeRecompositionTracking?: boolean;
   /**
    * A storage write's answer that no request was waiting for (a `final` after its `provisional`, or after the server
    * gave up on it), from the live link.
@@ -141,6 +144,12 @@ export class SdkBridge {
 
   constructor(private readonly options: SdkBridgeOptions) {
     this.refusals = new ErrorThrottle(options.now);
+    if (options.initialComposeRecompositionTracking) {
+      this.current = {
+        ...DISCONNECTED_SDK,
+        options: { ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: true },
+      };
+    }
   }
 
   get status(): SdkStatus {
@@ -159,7 +168,8 @@ export class SdkBridge {
 
   /**
    * Change the SDK options (partial): announced with the status at once and, when they changed, pushed to the
-   * links CONFIG_DEBOUNCE_MS after the last change.
+   * links CONFIG_DEBOUNCE_MS after the last change (or immediately when `composeRecompositionTracking` changes, so
+   * a following `inspect` on the same TCP connection sees the updated state in order).
    */
   setOptions(changes: Partial<SdkOptions>): void {
     if (this.stopped) return;
@@ -170,19 +180,36 @@ export class SdkBridge {
       inflateTracking: changes.inflateTracking ?? previous.inflateTracking,
       rxTracking: changes.rxTracking ?? previous.rxTracking,
       savedStateTracking: changes.savedStateTracking ?? previous.savedStateTracking ?? true,
+      composeRecompositionTracking:
+        changes.composeRecompositionTracking ?? previous.composeRecompositionTracking ?? false,
     };
     this.update({ options });
+    const recompositionChanged =
+      options.composeRecompositionTracking !== (previous.composeRecompositionTracking ?? false);
     if (
       options.stallThresholdMs === previous.stallThresholdMs &&
       options.strictMode === previous.strictMode &&
       options.inflateTracking === previous.inflateTracking &&
       options.rxTracking === previous.rxTracking &&
-      options.savedStateTracking === previous.savedStateTracking
+      options.savedStateTracking === previous.savedStateTracking &&
+      !recompositionChanged
     ) {
       return;
     }
     if (this.configTimer) clearTimeout(this.configTimer);
-    this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
+    if (recompositionChanged) {
+      this.pushConfig();
+    } else {
+      this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
+    }
+  }
+
+  /** Reset accumulated Compose recomposition counters on the live v15+ link. */
+  resetComposeRecompositions(): boolean {
+    const link = this.liveLink;
+    if (!link || link.protocolVersion < DEVICE_PROTOCOL_V15) return false;
+    link.resetComposeRecompositions();
+    return true;
   }
 
   /**

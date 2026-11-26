@@ -55,6 +55,8 @@ export type AgentSessions = Pick<
   | 'startSession'
   | 'stopSession'
   | 'setSdkOptions'
+  | 'setComposeRecompositionTracking'
+  | 'resetComposeRecompositions'
   | 'getHttpExchange'
   | 'getHttpExchangeCount'
   | 'getHttpExchangesSeen'

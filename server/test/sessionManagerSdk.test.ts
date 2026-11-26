@@ -128,6 +128,7 @@ describe('SessionManager SDK link', () => {
       inflateTracking: true,
       rxTracking: true,
       savedStateTracking: true,
+      composeRecompositionTracking: false,
     };
     expect(manager.getSessionState().sdk?.options).toEqual(options);
     const last = messages.at(-1);

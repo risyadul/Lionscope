@@ -180,6 +180,9 @@ export interface FakeAgent {
   snapshot: Required<Snapshot>;
   session: SessionState;
   sdkOptionCalls: unknown[];
+  recompositionTrackingCalls: { serial: string; enabled: boolean }[];
+  recompositionResetCalls: string[];
+  recompositionResetResult: boolean;
   /** getSdkEverLinked answers true when set, or while the session's SDK is connected. */
   sdkEverLinked: boolean;
   /** The session's mock rules (a real MockRules; `networkMocks` messages are dropped). */
@@ -206,6 +209,9 @@ export function fakeAgent(
     snapshot: { ...emptySnapshot(), ...snapshot },
     session: options.session ?? RUNNING,
     sdkOptionCalls: [],
+    recompositionTrackingCalls: [],
+    recompositionResetCalls: [],
+    recompositionResetResult: true,
     sdkEverLinked: false,
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
     httpDetails: new Map(),
@@ -238,6 +244,13 @@ export function fakeAgent(
       setSdkOptions: (changes) => {
         agent.sdkOptionCalls.push(changes);
         return agent.session.status !== 'idle';
+      },
+      setComposeRecompositionTracking: (serial, enabled) => {
+        agent.recompositionTrackingCalls.push({ serial, enabled });
+      },
+      resetComposeRecompositions: (serial) => {
+        agent.recompositionResetCalls.push(serial);
+        return agent.recompositionResetResult;
       },
       getHttpExchange: (id) => agent.httpDetails.get(id) ?? null,
       getHttpExchangeCount: () => agent.snapshot.http.length,

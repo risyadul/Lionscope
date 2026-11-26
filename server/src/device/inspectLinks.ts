@@ -7,8 +7,10 @@
  */
 import type { AddressInfo } from 'node:net';
 import {
+  DEFAULT_SDK_OPTIONS,
   DEVICE_LINK_PORT,
   DEVICE_PROTOCOL_V5,
+  DEVICE_PROTOCOL_V15,
   INSPECT_LINK_LINGER_MS,
   INSPECT_LINK_WAIT_MS,
 } from '@lionscope/protocol';
@@ -164,6 +166,8 @@ export class InspectLinks {
   private readonly oldSdks = new Map<string, number>();
   /** `serial package pid` → whether that app is debuggable (it can't change without a new process). */
   private readonly debuggable = new Map<string, Promise<boolean>>();
+  /** Per-device opt-in Compose recomposition tracking for inspect-only v15+ links (default off). */
+  private readonly recompositionTracking = new Map<string, boolean>();
   private readyDevices = new Set<string>();
   /** The device and app of the session that maps its device to the session gateway. */
   private session: { serial: string; packageName: string; since: number } | null = null;
@@ -195,6 +199,41 @@ export class InspectLinks {
     timer.unref();
     this.lingers.set(serial, timer);
     this.update(serial, true);
+  }
+
+  /** Whether Compose recomposition tracking is enabled for `serial`'s inspect-only links. */
+  getComposeRecompositionTracking(serial: string): boolean {
+    return this.recompositionTracking.get(serial) ?? false;
+  }
+
+  /**
+   * Toggle Compose recomposition tracking on `serial` (default off) and push `config` immediately to any live v15+
+   * inspect-only link on that device.
+   */
+  setComposeRecompositionTracking(serial: string, enabled: boolean): void {
+    if (enabled) this.recompositionTracking.set(serial, true);
+    else this.recompositionTracking.delete(serial);
+    const entry = this.entries.get(serial);
+    if (!entry) return;
+    for (const record of entry.links.values()) {
+      if (record.link.protocolVersion >= DEVICE_PROTOCOL_V15) {
+        record.link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: enabled }, 'off');
+      }
+    }
+  }
+
+  /** Reset accumulated Compose recomposition counters on every live v15+ inspect-only link of `serial`. */
+  resetComposeRecompositions(serial: string): boolean {
+    const entry = this.entries.get(serial);
+    if (!entry) return false;
+    let sent = false;
+    for (const record of entry.links.values()) {
+      if (record.link.protocolVersion >= DEVICE_PROTOCOL_V15) {
+        record.link.resetComposeRecompositions();
+        sent = true;
+      }
+    }
+    return sent;
   }
 
   /**
@@ -279,6 +318,9 @@ export class InspectLinks {
       topSince: 0,
     };
     entry.links.set(hello.packageName, record);
+    if (link.protocolVersion >= DEVICE_PROTOCOL_V15 && this.getComposeRecompositionTracking(serial)) {
+      link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: true }, 'off');
+    }
     return {
       ok: true,
       mode: 'inspect',
@@ -519,6 +561,7 @@ export class InspectLinks {
    */
   private teardown(entry: DeviceEntry): void {
     this.entries.delete(entry.serial);
+    this.recompositionTracking.delete(entry.serial);
     if (entry.teardownTimer) clearTimeout(entry.teardownTimer);
     entry.teardownTimer = null;
     for (const record of entry.links.values()) record.link.close('no_session');

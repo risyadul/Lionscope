@@ -204,6 +204,7 @@ export const DEFAULT_SDK_OPTIONS: SdkOptions = {
   inflateTracking: true,
   rxTracking: true,
   savedStateTracking: true,
+  composeRecompositionTracking: false,
 };
 
 export interface SessionState {
@@ -1920,7 +1921,19 @@ export type ClientMessage =
       rxTracking?: boolean;
       /** 0.12.0 (dashboard protocol 10). */
       savedStateTracking?: boolean;
+      /** Device protocol 15: Compose recomposition and skip tracking (off by default). */
+      composeRecompositionTracking?: boolean;
     }
+  /**
+   * Toggle Compose recomposition and skip tracking on `serial` (works for both profiling-session and inspect-only
+   * SDK links at device protocol ≥ 15), then capture a fresh Inspector snapshot.
+   */
+  | { type: 'setComposeRecompositionTracking'; serial: string; enabled: boolean }
+  /**
+   * Reset accumulated Compose recomposition and skip counters on `serial` (device protocol ≥ 15), then capture a
+   * fresh Inspector snapshot.
+   */
+  | { type: 'resetComposeRecompositions'; serial: string }
   /**
    * 0.5.0. Capture an Inspector snapshot of `serial`'s screen: from the SDK when the session's app on that device is
    * linked at device protocol ≥ 4 and on top, else from uiautomator. Answered with `inspection` (to every client) or

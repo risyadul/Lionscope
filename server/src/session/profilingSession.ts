@@ -76,6 +76,8 @@ export interface ProfilingSessionOptions {
   onReady?: () => void;
   /** What the server's storage flags allow (sent to the SDK in `config`); default `off`. */
   storageConsent?: StorageConsent;
+  /** Carry over Compose recomposition tracking already enabled in the Inspector; default `false`. */
+  initialComposeRecompositionTracking?: boolean;
   /** A storage write's answer that came after its request was settled (see SdkBridge). */
   onStorageWriteResult?: (message: SdkStorageWriteResult) => void;
 }
@@ -195,6 +197,9 @@ export class ProfilingSession {
         link && network === 'active' ? this.mocks.linkUp(link) : this.mocks.linkDown(),
       onMocksApplied: (rev) => this.mocks.applied(rev),
       ...(options.storageConsent ? { storageConsent: options.storageConsent } : {}),
+      ...(options.initialComposeRecompositionTracking
+        ? { initialComposeRecompositionTracking: options.initialComposeRecompositionTracking }
+        : {}),
       ...(options.onStorageWriteResult ? { onStorageWriteResult: options.onStorageWriteResult } : {}),
     });
   }
@@ -232,6 +237,11 @@ export class ProfilingSession {
   /** Change this session's SDK options (partial); the session is re-announced and live links get `config`. */
   setSdkOptions(changes: Partial<SdkOptions>): void {
     this.sdk.setOptions(changes);
+  }
+
+  /** Reset accumulated Compose recomposition counters on the live v15+ SDK link. */
+  resetComposeRecompositions(): boolean {
+    return this.sdk.resetComposeRecompositions();
   }
 
   setStorageConsent(consent: StorageConsent): void {

@@ -739,9 +739,38 @@ describe('session control', () => {
     expect(started.session).toMatchObject({ status: 'waiting_for_process', packageName: PKG });
     await run(agent, 'set_sdk_options', { stallThresholdMs: 250, strictMode: true });
     expect(agent.sdkOptionCalls).toEqual([
-      { stallThresholdMs: 250, strictMode: true, inflateTracking: undefined, rxTracking: undefined },
+      {
+        stallThresholdMs: 250,
+        strictMode: true,
+        inflateTracking: undefined,
+        rxTracking: undefined,
+        savedStateTracking: undefined,
+        composeRecompositionTracking: undefined,
+      },
     ]);
+    await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(agent.sdkOptionCalls.at(-1)).toMatchObject({ composeRecompositionTracking: true });
     expect((await run(agent, 'stop_session')).session.status).toBe('idle');
+
+    // Without a session: composeRecompositionTracking alone works on inspect-only links.
+    const inspectToggle = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(inspectToggle).toEqual({
+      serial: 'emulator-5554',
+      composeRecompositionTracking: true,
+      options: null,
+      sdkConnected: false,
+    });
+    expect(agent.recompositionTrackingCalls).toEqual([{ serial: 'emulator-5554', enabled: true }]);
+
+    // Without a session: session-only options are still rejected.
+    expect(
+      await callTool(
+        agent.ctx,
+        'set_sdk_options',
+        { strictMode: true, composeRecompositionTracking: true },
+        false,
+      ),
+    ).toMatchObject({ ok: false, code: 'failed' });
   });
 
   it('validates serials, package names and thresholds before anything runs', async () => {

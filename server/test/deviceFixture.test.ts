@@ -298,6 +298,7 @@ describe('golden device messages through the gateway', () => {
       inflateTracking: false,
       rxTracking: true,
       savedStateTracking: true,
+      composeRecompositionTracking: false,
     });
     v3.close();
   });

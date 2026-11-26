@@ -130,6 +130,10 @@ describe('parseClientMessage', () => {
       ok: true,
       value: { type: 'setSdkOptions', rxTracking: false },
     });
+    expect(parse({ composeRecompositionTracking: true })).toEqual({
+      ok: true,
+      value: { type: 'setSdkOptions', composeRecompositionTracking: true },
+    });
     expect(parse({ stallThresholdMs: 500, strictMode: false, inflateTracking: true }).ok).toBe(true);
   });
 
@@ -143,7 +147,38 @@ describe('parseClientMessage', () => {
     expect(parse({ inflateTracking: 'no' }).ok).toBe(false);
     expect(parse({ inflateTracking: 1 }).ok).toBe(false);
     expect(parse({ rxTracking: 'off' }).ok).toBe(false);
+    expect(parse({ composeRecompositionTracking: 'yes' }).ok).toBe(false);
     expect(parse({ strictMode: true, extra: 1 }).ok).toBe(false);
+  });
+
+  it('parses setComposeRecompositionTracking and resetComposeRecompositions', () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: true }),
+      ),
+    ).toEqual({
+      ok: true,
+      value: { type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: true },
+    });
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'resetComposeRecompositions', serial: 'emulator-5554' })),
+    ).toEqual({
+      ok: true,
+      value: { type: 'resetComposeRecompositions', serial: 'emulator-5554' },
+    });
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'bad;serial', enabled: true }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: 1 }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'resetComposeRecompositions', serial: 'bad serial' })).ok,
+    ).toBe(false);
   });
 
   it('rejects unknown message types', () => {

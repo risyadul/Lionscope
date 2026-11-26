@@ -81,6 +81,7 @@ describe('server → SDK golden lines', () => {
         'storageList',
         'storageRead',
         'storageWrite',
+        'resetComposeRecompositions',
       ]),
     );
   });

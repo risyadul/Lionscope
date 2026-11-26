@@ -73,10 +73,16 @@ export interface SdkLink {
   /** Close the connection, telling the SDK why when a reason is given. */
   close(reason?: ByeReason): void;
   /**
-   * Send the session's SDK options as `config`. Only links at protocol ≥ 2 get it (a no-op otherwise); called
-   * before the `welcome` went out, it is sent right after it.
+   * Send the session's SDK options as `config`. Only links at protocol ≥ 2 get it (a no-op otherwise); on
+   * inspect-only links it is sent only at protocol ≥ 15 (with storageConsent forced off). Called before the
+   * `welcome` went out, it is sent right after it.
    */
   sendConfig(options: SdkOptions, storageConsent?: StorageConsent): void;
+  /**
+   * v15: reset accumulated Compose recomposition and skip counters on the device (both session and inspect-only
+   * links). A no-op below protocol 15 or before the link is attached.
+   */
+  resetComposeRecompositions(): void;
   /**
    * Send a complete mock rule set (`mocks`, then one `mock` per rule, in the order given: the first match answers).
    * Only session links at protocol ≥ 7 get it (a no-op otherwise); called before the `welcome` went out, the latest

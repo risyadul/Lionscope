@@ -263,6 +263,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       inflateTracking: z.boolean().optional(),
       rxTracking: z.boolean().optional(),
       savedStateTracking: z.boolean().optional(),
+      composeRecompositionTracking: z.boolean().optional(),
     })
     .strict()
     .refine(
@@ -271,9 +272,18 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
         message.strictMode !== undefined ||
         message.inflateTracking !== undefined ||
         message.rxTracking !== undefined ||
-        message.savedStateTracking !== undefined,
+        message.savedStateTracking !== undefined ||
+        message.composeRecompositionTracking !== undefined,
       'no SDK option given',
     ),
+  z
+    .object({
+      type: z.literal('setComposeRecompositionTracking'),
+      serial: serialSchema,
+      enabled: z.boolean(),
+    })
+    .strict(),
+  z.object({ type: z.literal('resetComposeRecompositions'), serial: serialSchema }).strict(),
   z.object({ type: z.literal('inspect'), serial: serialSchema }).strict(),
   z
     .object({
