@@ -15,10 +15,11 @@ const STDERR_CAP_BYTES = 8 * 1024;
 const MAX_ERROR_SUMMARY_CHARS = 300;
 const DEFAULT_EOF_GRACE_MS = 200;
 const DEFAULT_TERM_GRACE_MS = 500;
-const DEFAULT_FLUSH_DELAY_MS = 35;
-const DEFAULT_FLUSH_INTERVAL_MS = 20;
-const MAX_FLUSH_IN_FLIGHT = 8;
-const MAX_FLUSH_ATTEMPTS = 12;
+const DEFAULT_FLUSH_INTERVAL_MS = 8;
+const MAX_FLUSH_DELAY_MS = 50;
+const MIN_FLUSH_DELAY_MS = 18;
+const MAX_FLUSH_IN_FLIGHT = 6;
+const MAX_FLUSH_ATTEMPTS = 8;
 const DEFAULT_VAAPI_DEVICE = '/dev/dri/renderD128';
 
 export type HostH264EncoderName = 'h264_videotoolbox' | 'h264_nvenc' | 'h264_vaapi' | 'h264_qsv' | 'libx264';
@@ -31,6 +32,21 @@ const HARDWARE_ENCODERS_DARWIN: readonly HostH264EncoderName[] = [
 ];
 
 const HARDWARE_ENCODERS_OTHER: readonly HostH264EncoderName[] = ['h264_nvenc', 'h264_vaapi', 'h264_qsv'];
+
+const LOW_LATENCY_ENCODERS_DARWIN: readonly HostH264EncoderName[] = [
+  'h264_nvenc',
+  'libx264',
+  'h264_qsv',
+  'h264_vaapi',
+  'h264_videotoolbox',
+];
+
+const LOW_LATENCY_ENCODERS_OTHER: readonly HostH264EncoderName[] = [
+  'h264_nvenc',
+  'libx264',
+  'h264_qsv',
+  'h264_vaapi',
+];
 
 export interface HostH264EncoderInfo {
   ffmpegPath: string;
@@ -139,8 +155,10 @@ export function parseFfmpegEncoders(output: string): Set<string> {
 }
 
 function candidateEncoders(platform: NodeJS.Platform, allowSoftware: boolean): HostH264EncoderName[] {
-  const hw = platform === 'darwin' ? HARDWARE_ENCODERS_DARWIN : HARDWARE_ENCODERS_OTHER;
-  return allowSoftware ? [...hw, 'libx264'] : [...hw];
+  if (!allowSoftware) {
+    return [...(platform === 'darwin' ? HARDWARE_ENCODERS_DARWIN : HARDWARE_ENCODERS_OTHER)];
+  }
+  return [...(platform === 'darwin' ? LOW_LATENCY_ENCODERS_DARWIN : LOW_LATENCY_ENCODERS_OTHER)];
 }
 
 function execFfmpegProbe(
@@ -298,16 +316,38 @@ function assertFpsCap(fpsCap: number): number {
 function encoderTuningArgs(encoder: HostH264EncoderName): string[] {
   switch (encoder) {
     case 'h264_videotoolbox':
-      // VideoToolbox rejects `-flags low_delay` without an explicit `-b:v`; realtime + prio_speed + 1 ref frame keeps latency low.
-      return ['-realtime', 'true', '-prio_speed', 'true', '-max_ref_frames', '1', '-profile:v', 'high'];
+      // VideoToolbox rejects `-flags low_delay` without an explicit `-b:v`; baseline disables B/reordering.
+      return ['-realtime', 'true', '-prio_speed', 'true', '-max_ref_frames', '1', '-profile:v', 'baseline'];
     case 'h264_nvenc':
-      return ['-preset', 'p1', '-tune', 'ull', '-zerolatency', '1', '-flags', 'low_delay'];
+      return [
+        '-preset',
+        'p1',
+        '-tune',
+        'ull',
+        '-zerolatency',
+        '1',
+        '-profile:v',
+        'baseline',
+        '-flags',
+        'low_delay',
+      ];
     case 'h264_vaapi':
       return ['-flags', 'low_delay'];
     case 'h264_qsv':
-      return ['-preset', 'veryfast', '-look_ahead', '0', '-flags', 'low_delay'];
+      return ['-preset', 'veryfast', '-look_ahead', '0', '-profile:v', 'baseline', '-flags', 'low_delay'];
     case 'libx264':
-      return ['-preset', 'ultrafast', '-tune', 'zerolatency', '-flags', 'low_delay'];
+      return [
+        '-preset',
+        'ultrafast',
+        '-tune',
+        'zerolatency',
+        '-profile:v',
+        'baseline',
+        '-crf',
+        '26',
+        '-flags',
+        'low_delay',
+      ];
   }
 }
 
@@ -369,6 +409,8 @@ export function buildFfmpegArgs(
   }
 
   args.push(
+    '-fps_mode',
+    'passthrough',
     '-c:v',
     encoder,
     '-bf',
@@ -378,6 +420,12 @@ export function buildFfmpegArgs(
     ...encoderTuningArgs(encoder),
     '-flush_packets',
     '1',
+    '-muxdelay',
+    '0',
+    '-muxpreload',
+    '0',
+    '-max_interleave_delta',
+    '0',
     '-f',
     'flv',
     'pipe:1',
@@ -446,7 +494,11 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     this.expectedFrameBytes = this.width * this.height * 4;
     this.eofGraceMs = deps.eofGraceMs ?? DEFAULT_EOF_GRACE_MS;
     this.termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
-    this.flushDelayMs = deps.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS;
+    const defaultFlushDelayMs = Math.min(
+      MAX_FLUSH_DELAY_MS,
+      Math.max(MIN_FLUSH_DELAY_MS, Math.round(1000 / assertFpsCap(options.fpsCap)) + 10),
+    );
+    this.flushDelayMs = deps.flushDelayMs ?? defaultFlushDelayMs;
     this.flushIntervalMs = deps.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
 
     const { args, encodedWidth, encodedHeight } = buildFfmpegArgs(probe.encoder, {
@@ -520,7 +572,7 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     }
 
     const slice = rgba.length === this.expectedFrameBytes ? rgba : rgba.subarray(0, this.expectedFrameBytes);
-    this.lastRealFrame = Buffer.from(slice);
+    this.lastRealFrame = slice;
     this.lastRealPts = ptsUs;
     this.ptsQueue.push(ptsUs);
     try {

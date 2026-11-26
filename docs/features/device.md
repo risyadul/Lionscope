@@ -41,8 +41,9 @@ the host side only when the screen changes, so Android inside the emulator does 
 app's measurements are not affected; an idle screen sends nothing.
 
 When the browser supports WebCodecs (Chrome, Firefox 130+, Safari 16.4+ on `localhost`) and a working host
-`ffmpeg` H.264 encoder is available (`h264_videotoolbox` on macOS, `h264_nvenc`, `h264_vaapi`, `h264_qsv`, or
-`libx264` fallback; configured via `LIONSCOPE_FFMPEG` or `PATH`), Lionscope requests `RGBA8888` frames over
+`ffmpeg` H.264 encoder is available (preferring zero-latency `baseline` encoders such as `h264_nvenc` or
+`libx264` for interactive input latency, with `h264_qsv`, `h264_vaapi`, and `h264_videotoolbox` fallbacks;
+configured via `LIONSCOPE_FFMPEG` or `PATH`), Lionscope requests `RGBA8888` frames over
 gRPC, encodes them on the host, and streams H.264 video to the browser's WebCodecs decoder. When no working
 `ffmpeg` encoder is available, the browser lacks WebCodecs, or the browser cannot decode the H.264 stream
 (or `/ws/screen` requests `codec=png`), Lionscope automatically falls back to gRPC `PNG` frames (the

@@ -120,7 +120,7 @@ describe('probeHostH264Encoder', () => {
     expect(parseFfmpegEncoders(out)).toEqual(new Set(['h264_videotoolbox', 'libx264']));
   });
 
-  it('picks hardware encoder in platform priority order and skips broken candidates', async () => {
+  it('prefers zero-latency baseline encoders (libx264 over videotoolbox) and keeps allowSoftware=false hardware-only', async () => {
     const calls: string[][] = [];
     const execFile: ExecFileLike = (_file, args, _opts, cb) => {
       calls.push([...args]);
@@ -134,9 +134,9 @@ describe('probeHostH264Encoder', () => {
         );
         return;
       }
-      // Simulate h264_videotoolbox failing startup null-encode, h264_nvenc succeeding
-      if (args.includes('h264_videotoolbox')) {
-        cb(execError('vt init failed', 1), '', 'Cannot create session');
+      // Simulate h264_nvenc failing startup null-encode, libx264 succeeding ahead of videotoolbox
+      if (args.includes('h264_nvenc')) {
+        cb(execError('nvenc init failed', 1), '', 'No NVENC capable devices');
         return;
       }
       cb(null, '', '');
@@ -149,15 +149,27 @@ describe('probeHostH264Encoder', () => {
     });
     expect(info).toEqual({
       ffmpegPath: 'ffmpeg',
-      encoder: 'h264_nvenc',
-      hardware: true,
+      encoder: 'libx264',
+      hardware: false,
     });
     expect(calls[0]).toEqual(['-hide_banner', '-encoders']);
-    expect(calls[1]).toContain('h264_videotoolbox');
-    expect(calls[2]).toContain('h264_nvenc');
+    expect(calls[1]).toContain('h264_nvenc');
+    expect(calls[2]).toContain('libx264');
+
+    const hwOnly = await probeHostH264Encoder({
+      platform: 'darwin',
+      env: {},
+      allowSoftware: false,
+      execFile,
+    });
+    expect(hwOnly).toEqual({
+      ffmpegPath: 'ffmpeg',
+      encoder: 'h264_videotoolbox',
+      hardware: true,
+    });
   });
 
-  it('falls back to libx264 only when hardware encoders fail and allowSoftware is enabled', async () => {
+  it('falls back to libx264 or hardware encoders and respects allowSoftware=false on linux', async () => {
     const execFile: ExecFileLike = (_file, args, _opts, cb) => {
       if (args.includes('-encoders')) {
         cb(null, ' V..... h264_vaapi VAAPI\n V..... libx264 x264\n', '');
@@ -222,6 +234,9 @@ describe('buildFfmpegArgs', () => {
     expect(even.args).toContain('-prio_speed');
     expect(even.args).toContain('-max_ref_frames');
     expect(even.args).toContain('-probesize');
+    expect(even.args).toContain('-fps_mode');
+    expect(even.args).toContain('passthrough');
+    expect(even.args).toContain('baseline');
     expect(even.args).toContain('flv');
     expect(even.args).not.toContain('low_delay');
     expect(even.args).not.toContain('-vf');
@@ -231,6 +246,7 @@ describe('buildFfmpegArgs', () => {
     expect(odd.encodedHeight).toBe(1202);
     expect(odd.args).toContain('pad=542:1202:0:0:black');
     expect(odd.args).toContain('48');
+    expect(odd.args).toContain('baseline');
     expect(odd.args).toContain('low_delay');
     expect(odd.args).toContain('flv');
 
@@ -342,7 +358,7 @@ describe('HostVideoEncoder', () => {
     await encoder.close();
   });
 
-  it('probes the real host ffmpeg and delivers config + keyframe for 1 RGBA frame without closing stdin', async () => {
+  it('probes the real host ffmpeg and delivers config + keyframe for 1 RGBA frame quickly without closing stdin', async () => {
     clearHostH264EncoderProbeCache();
     const info = await probeHostH264Encoder();
     if (!info) {
@@ -350,40 +366,35 @@ describe('HostVideoEncoder', () => {
       return;
     }
 
-    const targets: HostH264EncoderInfo[] = [info];
-    if (info.encoder !== 'libx264') {
-      const sw = await probeHostH264Encoder({ platform: 'linux' });
-      if (sw?.encoder === 'libx264') targets.push(sw);
+    const packets: HostVideoPacket[] = [];
+    const exits: (Error | undefined)[] = [];
+    const encoder = new HostVideoEncoder(info, {
+      width: 128,
+      height: 128,
+      fpsCap: 30,
+      onPacket: (packet) => packets.push(packet),
+      onExit: (error) => exits.push(error),
+    });
+    const startedAt = performance.now();
+    const frame = Buffer.alloc(128 * 128 * 4, 0x40);
+    expect(encoder.writeFrame(frame, 1000)).toBe(true);
+
+    const deadline = Date.now() + 1000;
+    while (
+      Date.now() < deadline &&
+      (!packets.some((p) => p.isConfig) || !packets.some((p) => !p.isConfig && p.isKey))
+    ) {
+      await new Promise((r) => setTimeout(r, 5));
     }
+    const elapsedMs = performance.now() - startedAt;
 
-    for (const target of targets) {
-      const packets: HostVideoPacket[] = [];
-      const exits: (Error | undefined)[] = [];
-      const encoder = new HostVideoEncoder(target, {
-        width: 128,
-        height: 128,
-        fpsCap: 30,
-        onPacket: (packet) => packets.push(packet),
-        onExit: (error) => exits.push(error),
-      });
-      const frame = Buffer.alloc(128 * 128 * 4, 0x40);
-      expect(encoder.writeFrame(frame, 1000)).toBe(true);
+    // Delivered BEFORE closing stdin and within low-latency budget!
+    expect(packets.some((packet) => packet.isConfig)).toBe(true);
+    expect(packets.some((packet) => !packet.isConfig && packet.isKey && packet.pts === 1000)).toBe(true);
+    expect(elapsedMs).toBeLessThan(150);
 
-      const deadline = Date.now() + 1000;
-      while (
-        Date.now() < deadline &&
-        (!packets.some((p) => p.isConfig) || !packets.some((p) => !p.isConfig && p.isKey))
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-
-      // Delivered BEFORE closing stdin!
-      expect(packets.some((packet) => packet.isConfig)).toBe(true);
-      expect(packets.some((packet) => !packet.isConfig && packet.isKey && packet.pts === 1000)).toBe(true);
-
-      await encoder.close();
-      expect(exits).toEqual([undefined]);
-    }
+    await encoder.close();
+    expect(exits).toEqual([undefined]);
   });
 
   it('rejects undersized RGBA buffers', () => {
