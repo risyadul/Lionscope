@@ -8,6 +8,10 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Android 11+ wireless pairing by 6-digit code: **Pair with code** tab in the dashboard Wireless dialog and
+  `pair_device` agent tool (`adb pair`), followed by automatic connection via an explicit connect port or mDNS
+  (`_adb-tls-connect._tcp`) discovery, or pre-filled fallback to the Connect tab when the separate connect port is
+  needed. Pairing codes are redacted in `describeArgs`, scrubbed from errors, and never stored, logged, or echoed.
 - Wireless ADB connect and disconnect: connect physical Android devices by `host:port` (IPv4, bracketed IPv6, or
   hostname) or mDNS serial from the dashboard's **Connect wireless device** dialog (with a warning for public IP
   addresses) or the `connect_device` / `disconnect_device` agent tools (restricted to private/LAN, link-local, IPv6

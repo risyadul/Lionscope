@@ -22,6 +22,7 @@ import {
   DEVICE_PROTOCOL_VERSION,
   isMdnsSerial,
   isValidPackageName,
+  isValidPairingCode,
   parseWirelessAddress,
   LINK_NONCE_PATTERN,
   MAX_CLIENT_MESSAGE_BYTES,
@@ -129,6 +130,14 @@ export const wirelessTargetSchema = z
   .min(1)
   .max(260)
   .refine((value) => isMdnsSerial(value) || parseWirelessAddress(value).ok, 'invalid wireless ADB address');
+export const wirelessAddressSchema = z
+  .string()
+  .min(1)
+  .max(260)
+  .refine((value) => parseWirelessAddress(value).ok, 'invalid wireless ADB host:port');
+export const pairingCodeSchema = z
+  .string()
+  .refine(isValidPairingCode, 'Pairing code must be exactly 6 digits');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
 export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
 /** Inspector snapshot ids as the server assigns them (`InspectorSnapshot.id`). */
@@ -348,6 +357,15 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     .strict(),
   z
     .object({ type: z.literal('disconnectDevice'), requestId: clientRequestId, serial: wirelessTargetSchema })
+    .strict(),
+  z
+    .object({
+      type: z.literal('pairDevice'),
+      requestId: clientRequestId,
+      address: wirelessAddressSchema,
+      code: pairingCodeSchema,
+      connectAddress: wirelessTargetSchema.optional(),
+    })
     .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 

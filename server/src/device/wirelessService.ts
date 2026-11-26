@@ -7,15 +7,29 @@
  *   (fc00::/7), Tailscale (100.64/10), mDNS serials, or a host:port already connected from the
  *   dashboard in this server run.
  */
-import { checkAgentWirelessTarget, isMdnsSerial, parseWirelessAddress } from '@lionscope/protocol';
+import {
+  checkAgentWirelessTarget,
+  isMdnsSerial,
+  isValidPairingCode,
+  MDNS_CONNECT_SERVICE,
+  parseWirelessAddress,
+} from '@lionscope/protocol';
 import type { DeviceInfo } from '@lionscope/protocol';
+import { scrubSecret } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
-import { adbConnect, adbDisconnect } from '../adb/wireless.ts';
-import type { AdbConnectResult, AdbDisconnectResult } from '../adb/wireless.ts';
+import { adbConnect, adbDisconnect, adbMdnsServices, adbPair } from '../adb/wireless.ts';
+import type { AdbConnectResult, AdbDisconnectResult, MdnsService } from '../adb/wireless.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage } from '../log.ts';
 
 export type WirelessRequestSource = 'dashboard' | 'agent';
+
+export interface WirelessPairOutcome {
+  target: string;
+  host: string;
+  connectedSerial: string | null;
+  connectNote?: string;
+}
 
 export interface WirelessServiceOptions {
   adb: Adb;
@@ -97,5 +111,101 @@ export class WirelessService {
     }
     await this.refreshDevices().catch(() => undefined);
     return result;
+  }
+
+  /**
+   * Pair an Android 11+ device via `adb pair <address> <code>`, then connect on the separate connect port
+   * (either `connectAddress` if supplied, or a matching `_adb-tls-connect._tcp` mDNS service when available).
+   * The pairing code is never stored, logged, or echoed in any return value or error.
+   */
+  async pair(
+    rawAddress: string,
+    code: string,
+    source: WirelessRequestSource,
+    options: { connectAddress?: string; allowQrPassword?: boolean } = {},
+  ): Promise<WirelessPairOutcome> {
+    const target = this.validateTarget(rawAddress, source, false);
+    const parsedPair = parseWirelessAddress(target);
+    if (!parsedPair.ok) throw new PublicError(parsedPair.error);
+    if (!options.allowQrPassword && !isValidPairingCode(code)) {
+      throw new PublicError('Pairing code must be exactly 6 digits');
+    }
+
+    let explicitConnectTarget: string | null = null;
+    if (options.connectAddress !== undefined && options.connectAddress !== '') {
+      explicitConnectTarget = this.validateTarget(options.connectAddress, source, true);
+    }
+
+    let pairedGuid: string | undefined;
+    try {
+      const paired = await adbPair(this.adb, target, code, {
+        allowQrPassword: options.allowQrPassword,
+      });
+      pairedGuid = paired.guid;
+    } catch (error) {
+      // Never attach the raw caught error as cause because it could carry the pairing secret.
+      throw new PublicError(scrubSecret(errorMessage(error), code));
+    }
+
+    // Attempt follow-up connect on the separate connect port (explicit target or mDNS discovery).
+    let connectTarget = explicitConnectTarget;
+    if (connectTarget === null) {
+      connectTarget = await this.findConnectTargetViaMdns(parsedPair.value.host, pairedGuid, source);
+    }
+
+    if (connectTarget === null) {
+      await this.refreshDevices().catch(() => undefined);
+      return {
+        target,
+        host: parsedPair.value.host,
+        connectedSerial: null,
+        connectNote:
+          'Paired successfully. Enter the separate connect IP:port shown on the Wireless debugging screen.',
+      };
+    }
+
+    try {
+      const connected = await this.connect(connectTarget, source);
+      return {
+        target,
+        host: parsedPair.value.host,
+        connectedSerial: connected.serial,
+      };
+    } catch (error) {
+      await this.refreshDevices().catch(() => undefined);
+      return {
+        target,
+        host: parsedPair.value.host,
+        connectedSerial: null,
+        connectNote: `Paired successfully, but connecting to ${connectTarget} failed: ${scrubSecret(errorMessage(error), code)}`,
+      };
+    }
+  }
+
+  private async findConnectTargetViaMdns(
+    host: string,
+    guid: string | undefined,
+    source: WirelessRequestSource,
+  ): Promise<string | null> {
+    let services: MdnsService[];
+    try {
+      services = await adbMdnsServices(this.adb);
+    } catch {
+      return null;
+    }
+    const connectServices = services.filter((service) => service.serviceType === MDNS_CONNECT_SERVICE);
+    const byGuid = guid ? connectServices.find((service) => service.instanceName === guid) : undefined;
+    const byHost = connectServices.find((service) => service.host === host);
+    const match = byGuid ?? byHost;
+    if (!match) return null;
+    // Verify policy before auto-connecting on behalf of an agent.
+    if (source === 'agent') {
+      const check = checkAgentWirelessTarget(match.target, {
+        allowMdns: true,
+        dashboardApproved: this.dashboardApproved,
+      });
+      if (!check.ok) return null;
+    }
+    return match.target;
   }
 }

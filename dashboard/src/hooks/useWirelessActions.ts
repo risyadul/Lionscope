@@ -19,6 +19,11 @@ interface Input {
 export interface WirelessActionsController {
   connect: (address: string) => Promise<Extract<WirelessActionResult, { action: 'connect' }>>;
   disconnect: (serial: string) => Promise<Extract<WirelessActionResult, { action: 'disconnect' }>>;
+  pair: (
+    address: string,
+    code: string,
+    connectAddress?: string,
+  ) => Promise<Extract<WirelessActionResult, { action: 'pair' }>>;
   disconnectingSerial: string | null;
   disconnectError: string | null;
   clearDisconnectError: () => void;
@@ -108,6 +113,18 @@ export function useWirelessActions({ send, answers, isOpen }: Input): WirelessAc
     [request],
   );
 
+  const pair = useCallback(
+    (address: string, code: string, connectAddress?: string) =>
+      request('pair', (requestId) => ({
+        type: 'pairDevice',
+        requestId,
+        address,
+        code,
+        ...(connectAddress !== undefined && connectAddress !== '' ? { connectAddress } : {}),
+      })),
+    [request],
+  );
+
   const disconnect = useCallback(
     async (serial: string) => {
       setDisconnectingSerial(serial);
@@ -129,5 +146,5 @@ export function useWirelessActions({ send, answers, isOpen }: Input): WirelessAc
 
   const clearDisconnectError = useCallback(() => setDisconnectError(null), []);
 
-  return { connect, disconnect, disconnectingSerial, disconnectError, clearDisconnectError };
+  return { connect, disconnect, pair, disconnectingSerial, disconnectError, clearDisconnectError };
 }

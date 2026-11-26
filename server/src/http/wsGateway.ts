@@ -16,6 +16,7 @@ import type {
   StorageResponse,
   WirelessActionResult,
 } from '@lionscope/protocol';
+import { scrubSecret } from '../adb/adb.ts';
 import { DEV_ORIGINS } from '../config.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
@@ -129,7 +130,7 @@ export type GatewayStorage = Pick<
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
 /** What the gateway needs from the wireless ADB service. */
-export type GatewayWireless = Pick<WirelessService, 'connect' | 'disconnect'>;
+export type GatewayWireless = Pick<WirelessService, 'connect' | 'disconnect' | 'pair'>;
 
 export interface WsGatewayOptions {
   permissions?: () => Readonly<Permissions>;
@@ -187,6 +188,7 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   storageAudit: 'Could not read the storage audit',
   connectDevice: 'Could not connect to the wireless device',
   disconnectDevice: 'Could not disconnect the wireless device',
+  pairDevice: 'Could not pair with the wireless device',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -381,8 +383,14 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         return;
       }
       case 'connectDevice':
-      case 'disconnectDevice': {
-        const action = message.type === 'connectDevice' ? 'connect' : 'disconnect';
+      case 'disconnectDevice':
+      case 'pairDevice': {
+        const action =
+          message.type === 'connectDevice'
+            ? 'connect'
+            : message.type === 'disconnectDevice'
+              ? 'disconnect'
+              : 'pair';
         const wireless = options.wireless;
         let result: WirelessActionResult;
         if (!wireless) {
@@ -392,16 +400,23 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
             if (message.type === 'connectDevice') {
               const connected = await wireless.connect(message.address, 'dashboard');
               result = { action: 'connect', ok: true, ...connected };
-            } else {
+            } else if (message.type === 'disconnectDevice') {
               const disconnected = await wireless.disconnect(message.serial, 'dashboard');
               result = { action: 'disconnect', ok: true, ...disconnected };
+            } else {
+              const paired = await wireless.pair(message.address, message.code, 'dashboard', {
+                ...(message.connectAddress !== undefined ? { connectAddress: message.connectAddress } : {}),
+              });
+              result = { action: 'pair', ok: true, ...paired };
             }
           } catch (error) {
-            if (!(error instanceof PublicError)) log.warn(`${message.type} failed: ${errorMessage(error)}`);
+            const secret = message.type === 'pairDevice' ? message.code : '';
+            const safeDetail = scrubSecret(errorMessage(error), secret);
+            if (!(error instanceof PublicError)) log.warn(`${message.type} failed: ${safeDetail}`);
             result = {
               action,
               ok: false,
-              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES[message.type],
+              message: error instanceof PublicError ? safeDetail : PUBLIC_FAILURES[message.type],
             };
           }
         }

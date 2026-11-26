@@ -17,6 +17,15 @@
   local processes (which can already run adb). App data in tool results is marked as untrusted.
 - Device serials and package names are checked against strict patterns and passed to `adb` as argument arrays,
   never through a host shell.
+- Wireless ADB targets (`adb pair`, `adb connect`, `adb disconnect`) reject leading `-`, whitespace, control
+  characters, and shell metacharacters, enforce ports 1–65535 and 6-digit pairing codes, and always run via
+  argument arrays. Pairing codes and QR pairing passwords are redacted in `describeArgs`, scrubbed from any error
+  text, and never stored, logged, or echoed in tool responses or audit records. The dashboard warns before
+  connecting or pairing to a public IP; AI agent wireless tools (`connect_device`, `disconnect_device`,
+  `pair_device`) are gated by the **Agent device control** permission and restricted to private IPv4 (`10/8`,
+  `172.16/12`, `192.168/16`), link-local, IPv6 ULA (`fc00::/7`), Tailscale (`100.64/10`), mDNS serials, or a
+  `host:port` the user already connected from the dashboard during the current server run, because untrusted app
+  data could otherwise steer an agent to attach a foreign host that receives `adb reverse` traffic.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and answers nothing (not even `welcome`) until the hello's PID is verified with `pidof` on the

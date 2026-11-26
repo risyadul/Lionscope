@@ -26,6 +26,63 @@
   font-size: var(--text-title);
 }
 
+.wireless-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.wireless-tab {
+  position: relative;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.wireless-tab:hover {
+  color: var(--ink);
+}
+
+.wireless-tab[aria-selected='true'] {
+  border-bottom-color: var(--brand);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.wireless-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.wireless-panel {
+  min-width: 0;
+}
+
+.wireless-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.wireless-success {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--good) 45%, var(--rule));
+  border-left: 3px solid var(--good);
+  border-radius: var(--radius-m);
+  background: var(--good-wash);
+  color: var(--ink);
+  font-size: var(--text-small);
+  line-height: 1.45;
+}
+
 .wireless-note {
   margin: var(--space-3) 0 0;
   color: var(--ink-2);
@@ -126,8 +183,13 @@
     font-size: 16px;
   }
 
+  .wireless-tab,
   .wireless-heading .btn,
   .wireless-actions .btn {
     min-height: 44px;
+  }
+
+  .wireless-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

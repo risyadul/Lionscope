@@ -1768,7 +1768,18 @@ export type WirelessActionResult =
   | { action: 'connect'; ok: true; serial: string; target: string; alreadyConnected: boolean }
   | { action: 'connect'; ok: false; message: string }
   | { action: 'disconnect'; ok: true; target: string }
-  | { action: 'disconnect'; ok: false; message: string };
+  | { action: 'disconnect'; ok: false; message: string }
+  | {
+      action: 'pair';
+      ok: true;
+      target: string;
+      host: string;
+      /** Serial connected after pairing (from explicit connect port or mDNS discovery), or null if user must enter connect port. */
+      connectedSerial: string | null;
+      /** Non-fatal note if pairing succeeded but follow-up connect failed or needs a manual connect port. */
+      connectNote?: string;
+    }
+  | { action: 'pair'; ok: false; message: string };
 
 export type ServerMessage =
   | {
@@ -1986,7 +1997,18 @@ export type ClientMessage =
   /** Connect to a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
   | { type: 'connectDevice'; requestId: number; address: string }
   /** Disconnect a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
-  | { type: 'disconnectDevice'; requestId: number; serial: string };
+  | { type: 'disconnectDevice'; requestId: number; serial: string }
+  /**
+   * Pair an Android 11+ wireless device (`adb pair <address> <code>`) and optionally connect on the
+   * separate connect port (or via mDNS discovery). The pairing code is never stored, logged, or echoed.
+   */
+  | {
+      type: 'pairDevice';
+      requestId: number;
+      address: string;
+      code: string;
+      connectAddress?: string;
+    };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

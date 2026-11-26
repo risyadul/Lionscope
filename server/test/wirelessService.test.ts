@@ -173,4 +173,109 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
       },
     });
   });
+
+  it('pairs via 6-digit code, connects via mDNS or explicit connect port, and never leaks the pairing code', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') return 'List of devices attached\n';
+      if (args[0] === 'pair') {
+        if (args[2] === '000000') throw new Error('adb pair 192.168.1.42:37123 failed: wrong code 000000');
+        return 'Successfully paired to 192.168.1.42:37123 [guid=adb-R58M123ABC-xyz]\n';
+      }
+      if (args[0] === 'mdns' && args[1] === 'services') {
+        return 'List of discovered mdns services\nadb-R58M123ABC-xyz\t_adb-tls-connect._tcp\t192.168.1.42:41234\n';
+      }
+      if (args[0] === 'connect') return `connected to ${args[1]}\n`;
+      return '';
+    });
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+
+    // WS pair auto-connects via mDNS connect port.
+    client.send({ type: 'pairDevice', requestId: 11, address: '192.168.1.42:37123', code: '482910' });
+    const pairedViaMdns = await client.next('wirelessResult');
+    expect(pairedViaMdns).toEqual({
+      type: 'wirelessResult',
+      requestId: 11,
+      result: {
+        action: 'pair',
+        ok: true,
+        target: '192.168.1.42:37123',
+        host: '192.168.1.42',
+        connectedSerial: '192.168.1.42:41234',
+      },
+    });
+    expect(JSON.stringify(pairedViaMdns)).not.toContain('482910');
+
+    // WS pair failure scrubs the pairing code from the response.
+    client.send({ type: 'pairDevice', requestId: 12, address: '192.168.1.42:37123', code: '000000' });
+    const pairFailed = await client.next('wirelessResult');
+    expect(pairFailed.result.ok).toBe(false);
+    expect(JSON.stringify(pairFailed)).not.toContain('000000');
+
+    // Agent pair_device with explicit connectAddress succeeds and never echoes the code.
+    const agentPaired = await callTool(
+      server.agent,
+      'pair_device',
+      { address: '192.168.1.42:37123', code: '654321', connectAddress: '192.168.1.42:45555' },
+      true,
+    );
+    expect(agentPaired).toEqual({
+      ok: true,
+      result: {
+        paired: true,
+        target: '192.168.1.42:37123',
+        connectedSerial: '192.168.1.42:45555',
+      },
+    });
+    expect(JSON.stringify(agentPaired)).not.toContain('654321');
+
+    // Agent pair_device rejects public IP and invalid code without echoing the code.
+    const refusedPublic = await callTool(
+      server.agent,
+      'pair_device',
+      { address: '8.8.8.8:37123', code: '654321' },
+      true,
+    );
+    expect(refusedPublic.ok).toBe(false);
+    expect(JSON.stringify(refusedPublic)).not.toContain('654321');
+
+    const badCode = await callTool(
+      server.agent,
+      'pair_device',
+      { address: '192.168.1.42:37123', code: '99999x' },
+      true,
+    );
+    expect(badCode.ok).toBe(false);
+    expect(JSON.stringify(badCode)).not.toContain('99999x');
+  });
+
+  it('succeeds pairing without auto-connect when mDNS has no matching connect service', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') return 'List of devices attached\n';
+      if (args[0] === 'pair') return 'Successfully paired to 192.168.1.42:37123\n';
+      if (args[0] === 'mdns') return 'List of discovered mdns services\n';
+      return '';
+    });
+    server = makeServer(adb);
+    await server.listen();
+
+    const res = await callTool(
+      server.agent,
+      'pair_device',
+      { address: '192.168.1.42:37123', code: '123456' },
+      true,
+    );
+    expect(res).toEqual({
+      ok: true,
+      result: {
+        paired: true,
+        target: '192.168.1.42:37123',
+        connectedSerial: null,
+        note: 'Paired successfully. Enter the separate connect IP:port shown on the Wireless debugging screen.',
+      },
+    });
+  });
 });

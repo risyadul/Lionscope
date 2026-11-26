@@ -93,6 +93,14 @@ describe('DevicePicker wireless badges & disconnect', () => {
 });
 
 describe('WirelessDialog', () => {
+  const noopPair = vi.fn(async () => ({
+    action: 'pair' as const,
+    ok: true as const,
+    target: '192.168.1.42:37123',
+    host: '192.168.1.42',
+    connectedSerial: '192.168.1.42:41234',
+  }));
+
   it('validates input, warns on public IPs, and connects cleanly', async () => {
     const onConnect = vi.fn(async (address: string) => ({
       action: 'connect' as const,
@@ -105,7 +113,13 @@ describe('WirelessDialog', () => {
     const onClose = vi.fn();
 
     render(
-      <WirelessDialog isOnline={true} onConnect={onConnect} onConnected={onConnected} onClose={onClose} />,
+      <WirelessDialog
+        isOnline={true}
+        onConnect={onConnect}
+        onPair={noopPair}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
     );
 
     const input = screen.getByLabelText('IP address and port');
@@ -142,7 +156,15 @@ describe('WirelessDialog', () => {
     }));
     const onClose = vi.fn();
 
-    render(<WirelessDialog isOnline={true} onConnect={onConnect} onConnected={vi.fn()} onClose={onClose} />);
+    render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={onConnect}
+        onPair={noopPair}
+        onConnected={vi.fn()}
+        onClose={onClose}
+      />,
+    );
 
     fireEvent.change(screen.getByLabelText('IP address and port'), {
       target: { value: '192.168.1.42:5555' },
@@ -152,6 +174,49 @@ describe('WirelessDialog', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toMatch(/Connection refused/);
     });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('pairs with a 6-digit code, clears the code immediately, and falls back to Connect tab when connect port is separate', async () => {
+    const onPair = vi.fn(async () => ({
+      action: 'pair' as const,
+      ok: true as const,
+      target: '192.168.1.42:37123',
+      host: '192.168.1.42',
+      connectedSerial: null,
+      connectNote: 'Paired successfully. Enter the separate connect port.',
+    }));
+    const onClose = vi.fn();
+
+    render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={onPair}
+        onConnected={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with code' }));
+    const pairAddr = screen.getByLabelText('Pairing IP address and port');
+    const codeInput = screen.getByLabelText('6-digit pairing code') as HTMLInputElement;
+    const submit = screen.getByRole('button', { name: 'Pair & connect' }) as HTMLButtonElement;
+
+    fireEvent.change(pairAddr, { target: { value: '192.168.1.42:37123' } });
+    fireEvent.change(codeInput, { target: { value: '12345' } });
+    expect(screen.getByRole('alert').textContent).toMatch(/6 digits/i);
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.change(codeInput, { target: { value: '482910' } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(onPair).toHaveBeenCalledWith('192.168.1.42:37123', '482910', undefined);
+      expect((screen.getByLabelText('IP address and port') as HTMLInputElement).value).toBe('192.168.1.42:');
+    });
+    expect(screen.getByText(/Paired successfully/i)).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -690,6 +690,7 @@ export function App() {
             <WirelessDialog
               isOnline={isOpen}
               onConnect={wirelessActions.connect}
+              onPair={wirelessActions.pair}
               onConnected={changeSerial}
               onClose={() => setWirelessOpen(false)}
             />
