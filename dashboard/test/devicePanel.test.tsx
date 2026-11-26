@@ -150,7 +150,7 @@ describe('ScreenView stream', () => {
       />,
     );
     const socket = FakeScreenSocket.latest();
-    expect(socket.url).toMatch(/\/ws\/screen\?serial=emulator-5554&size=540&fps=30$/);
+    expect(socket.url).toMatch(/\/ws\/screen\?serial=emulator-5554&size=540&fps=30&codec=png$/);
     expect(screen.getByText('Connecting to the screen…')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true);
 

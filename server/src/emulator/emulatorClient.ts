@@ -15,6 +15,14 @@ export interface ScreenFrame {
   png: Buffer;
 }
 
+/** An RGBA8888 frame as the emulator delivers it: already rotated, `width` × `height` as shown. */
+export interface RawScreenFrame {
+  width: number;
+  height: number;
+  rotation: ScreenRotation;
+  rgba: Buffer;
+}
+
 /** A gRPC failure; `code` is the gRPC status (16 = UNAUTHENTICATED: the token was refused). */
 export class EmulatorRpcError extends Error {
   override name = 'EmulatorRpcError';
@@ -34,6 +42,12 @@ export function isAuthError(error: unknown): boolean {
 
 export interface FrameStreamHandlers {
   onFrame(frame: ScreenFrame): void;
+  /** The stream ended without cancel(): null when the emulator closed it, else the error. */
+  onEnd(error: EmulatorRpcError | null): void;
+}
+
+export interface RawFrameStreamHandlers {
+  onFrame(frame: RawScreenFrame): void;
   /** The stream ended without cancel(): null when the emulator closed it, else the error. */
   onEnd(error: EmulatorRpcError | null): void;
 }
@@ -72,8 +86,12 @@ export interface EmulatorClient {
   getDisplaySize(): Promise<DisplaySize>;
   /** One PNG, rotated like the screen: full resolution, or scaled into `box` (both sides set). */
   getScreenshot(box?: Size): Promise<ScreenFrame>;
+  /** One RGBA8888 frame, rotated like the screen: full resolution, or scaled into `box` (both sides set). */
+  getRawScreenshot?(box?: Size): Promise<RawScreenFrame>;
   /** PNG frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
   streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream;
+  /** RGBA8888 frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
+  streamRawScreenshot?(box: Size, handlers: RawFrameStreamHandlers): FrameStream;
   /** One long-lived input stream; `onEnd` fires when it fails or ends (also after end()). */
   openInput(onEnd: (error: EmulatorRpcError | null) => void): InputStream;
   /** Physical model ROTATION z, in degrees. */
@@ -107,6 +125,8 @@ export interface GpsPoint {
 export type EmulatorClientFactory = (endpoint: GrpcEndpoint) => EmulatorClient;
 
 export const RPC_TIMEOUT_MS = 5000;
+/** Allow >4 MiB gRPC frames (e.g. 720×1616 RGBA8888 ≈ 4.65 MB, or larger tablets/foldables). */
+export const MAX_GRPC_RECEIVE_BYTES = 32 * 1024 * 1024;
 const UNAUTHENTICATED = grpc.status.UNAUTHENTICATED;
 
 interface RawImage {
@@ -142,7 +162,11 @@ interface RawController extends grpc.Client {
   ): grpc.ClientWritableStream<EmulatorInputEvent>;
 }
 
-type ControllerConstructor = new (address: string, credentials: grpc.ChannelCredentials) => RawController;
+type ControllerConstructor = new (
+  address: string,
+  credentials: grpc.ChannelCredentials,
+  options?: grpc.ChannelOptions,
+) => RawController;
 
 const LOADER_OPTIONS: protoLoader.Options = { keepCase: true, longs: Number, enums: String, defaults: true };
 
@@ -188,17 +212,39 @@ function rpcError(method: string, error: grpc.ServiceError): EmulatorRpcError {
   return new EmulatorRpcError(error.code, `${method} failed: ${details}`);
 }
 
-function toFrame(raw: RawImage): ScreenFrame | null {
+function readImageHeader(
+  raw: RawImage,
+): { width: number; height: number; rotation: ScreenRotation; image: Buffer } | null {
   const width = raw.format?.width ?? 0;
   const height = raw.format?.height ?? 0;
-  if (width <= 0 || height <= 0 || !raw.image?.length) return null;
-  return { width, height, rotation: rotationOf(raw.format?.rotation?.rotation), png: raw.image };
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  if (!raw.image?.length) return null;
+  return { width, height, rotation: rotationOf(raw.format?.rotation?.rotation), image: raw.image };
+}
+
+function toFrame(raw: RawImage): ScreenFrame | null {
+  const parsed = readImageHeader(raw);
+  return parsed
+    ? { width: parsed.width, height: parsed.height, rotation: parsed.rotation, png: parsed.image }
+    : null;
+}
+
+function toRawFrame(raw: RawImage): RawScreenFrame | null {
+  const parsed = readImageHeader(raw);
+  if (!parsed) return null;
+  const requiredBytes = parsed.width * parsed.height * 4;
+  if (!Number.isSafeInteger(requiredBytes) || parsed.image.length < requiredBytes) return null;
+  return { width: parsed.width, height: parsed.height, rotation: parsed.rotation, rgba: parsed.image };
 }
 
 /** Clients for every emulator from one loaded proto; each client has its own channel to 127.0.0.1. */
 export function createEmulatorClientFactory(Controller: ControllerConstructor): EmulatorClientFactory {
   return (endpoint) => {
-    const raw = new Controller(`${HOST}:${endpoint.port}`, grpc.credentials.createInsecure());
+    const raw = new Controller(`${HOST}:${endpoint.port}`, grpc.credentials.createInsecure(), {
+      'grpc.max_receive_message_length': MAX_GRPC_RECEIVE_BYTES,
+    });
     const metadata = (): grpc.Metadata => {
       const value = new grpc.Metadata();
       value.set('authorization', `Bearer ${endpoint.token.reveal()}`);
@@ -211,11 +257,54 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
           else resolve(response as Res);
         });
       });
-    const screenshot = async (box?: Size): Promise<ScreenFrame> => {
-      const request = box ? { format: 'PNG', width: box.width, height: box.height } : { format: 'PNG' };
-      const frame = toFrame(await unary('getScreenshot', raw.getScreenshot, request));
+    const fetchScreenshot = async <F>(
+      format: 'PNG' | 'RGBA8888',
+      decode: (image: RawImage) => F | null,
+      box?: Size,
+    ): Promise<F> => {
+      const request = box ? { format, width: box.width, height: box.height } : { format };
+      const frame = decode(await unary('getScreenshot', raw.getScreenshot, request));
       if (!frame) throw new EmulatorRpcError(grpc.status.UNAVAILABLE, 'getScreenshot returned no image');
       return frame;
+    };
+    const screenshot = (box?: Size): Promise<ScreenFrame> => fetchScreenshot('PNG', toFrame, box);
+
+    const startFrameStream = <F>(
+      format: 'PNG' | 'RGBA8888',
+      box: Size,
+      decode: (image: RawImage) => F | null,
+      handlers: { onFrame(frame: F): void; onEnd(error: EmulatorRpcError | null): void },
+    ): FrameStream => {
+      const stream = raw.streamScreenshot({ format, width: box.width, height: box.height }, metadata());
+      limitReadAhead(stream);
+      let cancelled = false;
+      let ended = false;
+      const end = (error: EmulatorRpcError | null): void => {
+        if (ended || cancelled) return;
+        ended = true;
+        handlers.onEnd(error);
+      };
+      stream.on('data', (image: RawImage) => {
+        // A newer image already read behind this one (read ahead while paused) makes it stale. The first image
+        // of a stream can be empty (0×0).
+        if (cancelled || stream.readableLength > 0) return;
+        const frame = decode(image);
+        if (frame) handlers.onFrame(frame);
+      });
+      stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamScreenshot', error)));
+      stream.on('end', () => end(null));
+      return {
+        pause() {
+          if (!cancelled) stream.pause();
+        },
+        resume() {
+          if (!cancelled) stream.resume();
+        },
+        cancel() {
+          cancelled = true;
+          stream.cancel();
+        },
+      };
     };
 
     return {
@@ -237,40 +326,12 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
         return { ...rotatedSize(frame, frame.rotation), dpi: null };
       },
       getScreenshot: (box) => screenshot(box),
+      getRawScreenshot: (box) => fetchScreenshot('RGBA8888', toRawFrame, box),
       streamScreenshot(box, handlers) {
-        const stream = raw.streamScreenshot(
-          { format: 'PNG', width: box.width, height: box.height },
-          metadata(),
-        );
-        limitReadAhead(stream);
-        let cancelled = false;
-        let ended = false;
-        const end = (error: EmulatorRpcError | null): void => {
-          if (ended || cancelled) return;
-          ended = true;
-          handlers.onEnd(error);
-        };
-        stream.on('data', (image: RawImage) => {
-          // A newer image already read behind this one (read ahead while paused) makes it stale. The first image
-          // of a stream can be empty (0×0).
-          if (cancelled || stream.readableLength > 0) return;
-          const frame = toFrame(image);
-          if (frame) handlers.onFrame(frame);
-        });
-        stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamScreenshot', error)));
-        stream.on('end', () => end(null));
-        return {
-          pause() {
-            if (!cancelled) stream.pause();
-          },
-          resume() {
-            if (!cancelled) stream.resume();
-          },
-          cancel() {
-            cancelled = true;
-            stream.cancel();
-          },
-        };
+        return startFrameStream('PNG', box, toFrame, handlers);
+      },
+      streamRawScreenshot(box, handlers) {
+        return startFrameStream('RGBA8888', box, toRawFrame, handlers);
       },
       openInput(onEnd) {
         let ended = false;

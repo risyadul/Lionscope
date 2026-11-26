@@ -39,7 +39,10 @@
   parent and also on their own, and only inflation on the main thread through the Activity's inflater is seen:
   layouts inflated on a background thread, from an application-context inflater or by Compose are not.
 - **Screen mirroring.** Emulators need a discovery file with a gRPC port and token (tested with emulator 36.6).
-  AVDs have no mouse, so the wheel scrolls with a short touch drag, and typed keys are reliable for printable
+  Host-side emulator H.264 mirroring requires a working `ffmpeg` (`LIONSCOPE_FFMPEG` or on `PATH`) with
+  `h264_videotoolbox`, `h264_nvenc`, `h264_vaapi`, `h264_qsv`, or `libx264` and a browser with WebCodecs
+  (`localhost`); otherwise emulator mirroring falls back to gRPC `PNG`. AVDs have no mouse, so the wheel
+  scrolls with a short touch drag, and typed keys are reliable for printable
   ASCII (the emulator may drop other characters); use paste for anything else. Physical devices need a browser
   with WebCodecs H.264 decoding, and rotating from the dashboard only works where the app allows rotation; the
   mirrored video is the phone's own encoder output, so quality and latency depend on the phone. The discovery locations for Linux and Windows follow Android Studio's and have not

@@ -11,7 +11,7 @@
                                                                  │ HTTP + WebSocket :8701
                                                                  ▼
                                                                dashboard/ in the browser
- emulator ◀─────────── gRPC (EmulatorController, token) ─────── server/ emulator manager + /ws/screen
+ emulator ◀── gRPC (EmulatorController, RGBA8888/PNG) ── server/ emulator manager (+ ffmpeg H.264) + /ws/screen
  phone ◀── adb forward ── scrcpy-server (H.264 + control) ───── server/ scrcpy session + /ws/screen
 ```
 
@@ -55,3 +55,8 @@ Stall origins use device protocol 9 (SDK and server 0.9.0): its stalls may carry
 RxJava hooks' findings and the coroutine name, and `config` carries the RxJava switch. With an older server the
 SDK sends stalls as before and leaves its RxJava hooks off; stalls from an older SDK still get an origin from
 their stack.
+
+Emulator mirroring on `/ws/screen` negotiates `codec` (`auto`, `png`, `h264`; default `auto`): when a working
+host `ffmpeg` H.264 encoder and browser WebCodecs are available, the server pulls `RGBA8888` over gRPC, encodes
+Annex B H.264 on the host, and automatically falls back to gRPC `PNG` if encoding or browser decoding is
+unavailable. Physical devices continue to stream H.264 from `scrcpy-server`.

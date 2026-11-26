@@ -6,6 +6,16 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Emulator H.264 screen mirroring: when a working host `ffmpeg` H.264 encoder (`h264_videotoolbox` on macOS,
+  `h264_nvenc`, `h264_vaapi`, `h264_qsv`, or `libx264` fallback; configurable via `LIONSCOPE_FFMPEG`) and
+  browser WebCodecs are available, the server streams `RGBA8888` frames from `EmulatorController.streamScreenshot`,
+  encodes H.264 on the host with zero guest-side encoding overhead, and sends Annex B access units over
+  `/ws/screen` (with `?codec=auto|png|h264`). Automatically falls back to gRPC `PNG` when no working host
+  encoder or WebCodecs support is available or if runtime encoding/decoding fails. See
+  [Operating a device](docs/features/device.md).
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

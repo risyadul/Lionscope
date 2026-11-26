@@ -1,6 +1,11 @@
-import { SCREEN_BINARY_KIND } from '@lionscope/protocol';
+import { SCREEN_BINARY_KIND, SCREEN_VIDEO_FLAG, SCREEN_VIDEO_HEADER_BYTES } from '@lionscope/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EmulatorRpcError } from '../src/emulator/emulatorClient.ts';
+import type {
+  HostH264EncoderInfo,
+  HostVideoEncoderHandle,
+  HostVideoEncoderOptions,
+} from '../src/emulator/hostVideoEncoder.ts';
 import {
   WHEEL_BATCH_MS,
   WHEEL_FINGER_ID,
@@ -19,15 +24,21 @@ import {
   ScreenSession,
   SETTLE_ATTEMPTS,
 } from '../src/emulator/screenSession.ts';
-import { FakeEmulatorClient, FakeScreenSocket, frame } from './helpers/fakeEmulatorClient.ts';
+import type { ScreenSessionOptions } from '../src/emulator/screenSession.ts';
+import { FakeEmulatorClient, FakeScreenSocket, frame, rawFrame } from './helpers/fakeEmulatorClient.ts';
 
 const SERIAL = 'emulator-5554';
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const NO_VIDEO_PROBE: ScreenSessionOptions = { probeVideoEncoder: async () => null };
 
-async function started(size: 360 | 540 | 720 = 540, fpsCap?: number) {
+async function started(
+  size: 360 | 540 | 720 = 540,
+  fpsCap?: number,
+  options: ScreenSessionOptions = NO_VIDEO_PROBE,
+) {
   const client = new FakeEmulatorClient();
   const socket = new FakeScreenSocket();
-  const session = new ScreenSession(socket, client, SERIAL, size, fpsCap);
+  const session = new ScreenSession(socket, client, SERIAL, size, fpsCap, options);
   await session.start();
   return { client, socket, session };
 }
@@ -474,7 +485,7 @@ describe('ScreenSession priming', () => {
     const client = new FakeEmulatorClient();
     client.scaledScreenshots = 'answer';
     const socket = new FakeScreenSocket();
-    const session = new ScreenSession(socket, client, SERIAL, 540);
+    const session = new ScreenSession(socket, client, SERIAL, 540, undefined, NO_VIDEO_PROBE);
     await session.start();
     return { client, socket, session };
   }
@@ -484,7 +495,7 @@ describe('ScreenSession priming', () => {
     client.scaledScreenshots = 'answer';
     const socket = new FakeScreenSocket();
     socket.bufferedAmount = 5;
-    await new ScreenSession(socket, client, SERIAL, 540).start();
+    await new ScreenSession(socket, client, SERIAL, 540, undefined, NO_VIDEO_PROBE).start();
     await waitFor(() => socket.binaries.length === 1);
     expect(client.screenshotBoxes).toEqual([{ width: 540, height: 1212 }]);
     expect(socket.kinds).toEqual(['screenInfo', '1:prime 540x1212']);
@@ -504,7 +515,7 @@ describe('ScreenSession priming', () => {
     let answer: (value: ScreenFrame) => void = () => undefined;
     client.getScreenshot = () => new Promise((resolve) => (answer = resolve));
     const socket = new FakeScreenSocket();
-    await new ScreenSession(socket, client, SERIAL, 540).start();
+    await new ScreenSession(socket, client, SERIAL, 540, undefined, NO_VIDEO_PROBE).start();
     client.stream?.handlers.onFrame(frame(540, 1212, 0, 'stream'));
     answer(frame(540, 1212, 0, 'stale'));
     await tick();
@@ -543,7 +554,7 @@ describe('ScreenSession priming', () => {
     const client = new FakeEmulatorClient();
     client.scaledScreenshots = new Error('UNAVAILABLE');
     const socket = new FakeScreenSocket();
-    await new ScreenSession(socket, client, SERIAL, 540).start();
+    await new ScreenSession(socket, client, SERIAL, 540, undefined, NO_VIDEO_PROBE).start();
     await tick();
     expect(socket.sent).toEqual([]);
     expect(socket.closedWith).toBeNull();
@@ -764,5 +775,406 @@ describe('ScreenSession clipboard', () => {
     client.clipboardStream?.handlers.onEnd(new EmulatorRpcError(16, 'streamClipboard failed: no token'));
     expect(socket.texts.at(-1)).toMatchObject({ type: 'screenError', code: 'auth' });
     expect(session.isClosed).toBe(true);
+  });
+});
+
+interface FakeEncoderRecord extends HostVideoEncoderHandle {
+  options: HostVideoEncoderOptions;
+  writes: { rgba: Buffer; ptsUs: number }[];
+  closed: boolean;
+  resolveClose: () => void;
+  setBackpressured(value: boolean): void;
+  emitPacket(packet: { isConfig: boolean; isKey: boolean; pts: number; data: Buffer }): void;
+  emitExit(error?: Error): void;
+}
+
+function createFakeEncoderHarness(config: { manualClose?: boolean } = {}) {
+  const probeInfo: HostH264EncoderInfo = {
+    ffmpegPath: '/usr/bin/ffmpeg',
+    encoder: 'h264_videotoolbox',
+    hardware: true,
+  };
+  const encoders: FakeEncoderRecord[] = [];
+  const createVideoEncoder =
+    () =>
+    (options: HostVideoEncoderOptions): HostVideoEncoderHandle => {
+      let backpressured = false;
+      let resolveClose: () => void = () => undefined;
+      const closePromise = new Promise<void>((resolve) => {
+        resolveClose = resolve;
+      });
+      const record: FakeEncoderRecord = {
+        width: options.width,
+        height: options.height,
+        encodedWidth: options.width + (options.width & 1),
+        encodedHeight: options.height + (options.height & 1),
+        get isBackpressured() {
+          return backpressured;
+        },
+        options,
+        writes: [],
+        closed: false,
+        resolveClose,
+        setBackpressured(value: boolean) {
+          backpressured = value;
+        },
+        writeFrame(rgba, ptsUs) {
+          if (record.closed || backpressured) return false;
+          record.writes.push({ rgba, ptsUs });
+          return true;
+        },
+        close() {
+          record.closed = true;
+          if (!config.manualClose) resolveClose();
+          return closePromise;
+        },
+        emitPacket(packet) {
+          options.onPacket(packet);
+        },
+        emitExit(error) {
+          options.onExit(error);
+        },
+      };
+      encoders.push(record);
+      return record;
+    };
+  return { probeInfo, encoders, createVideoEncoder };
+}
+
+function parseVideoMessages(socket: FakeScreenSocket) {
+  return socket.sent
+    .filter((item): item is Buffer => Buffer.isBuffer(item) && item[0] === SCREEN_BINARY_KIND.video)
+    .map((buf) => ({
+      kind: buf.readUInt8(0),
+      flags: buf.readUInt8(1),
+      pts: buf.readDoubleBE(2),
+      data: buf.subarray(SCREEN_VIDEO_HEADER_BYTES),
+    }));
+}
+
+describe('ScreenSession H.264', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('streams RGBA8888 into the host encoder and sends screenInfo + 10-byte video headers', async () => {
+    vi.useFakeTimers();
+    const harness = createFakeEncoderHarness();
+    const { client, socket, session } = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    expect(client.streams).toHaveLength(0);
+    expect(client.rawStreams).toHaveLength(1);
+    expect(client.rawStream?.box).toEqual({ width: 540, height: 1212 });
+
+    // Odd height (541) verifies encodedHeight pads to even (542) in screenInfo.
+    client.rawStream?.handlers.onFrame(rawFrame(540, 541, 0, 0x2a));
+    expect(harness.encoders).toHaveLength(1);
+    const enc = harness.encoders[0];
+    expect(enc?.writes).toHaveLength(1);
+    expect(enc?.writes[0]?.rgba[0]).toBe(0x2a);
+    // screenInfo waits until the first video packet so early encoder failure can still fall back cleanly.
+    expect(socket.texts).toEqual([]);
+
+    enc?.emitPacket({
+      isConfig: true,
+      isKey: false,
+      pts: 0,
+      data: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x67]),
+    });
+    enc?.emitPacket({
+      isConfig: false,
+      isKey: true,
+      pts: 1234,
+      data: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x65]),
+    });
+
+    expect(socket.texts).toEqual([
+      {
+        type: 'screenInfo',
+        serial: SERIAL,
+        codec: 'h264',
+        displayWidth: 1080,
+        displayHeight: 2424,
+        rotation: 0,
+        frameWidth: 540,
+        frameHeight: 542,
+      },
+    ]);
+    const packets = parseVideoMessages(socket);
+    expect(packets).toHaveLength(2);
+    expect(packets[0]).toMatchObject({
+      kind: SCREEN_BINARY_KIND.video,
+      flags: SCREEN_VIDEO_FLAG.config,
+      pts: 0,
+    });
+    expect(packets[0]?.data).toEqual(Buffer.from([0x00, 0x00, 0x00, 0x01, 0x67]));
+    expect(packets[1]).toMatchObject({
+      kind: SCREEN_BINARY_KIND.video,
+      flags: SCREEN_VIDEO_FLAG.key,
+      pts: 1234,
+    });
+    expect(packets[1]?.data).toEqual(Buffer.from([0x00, 0x00, 0x00, 0x01, 0x65]));
+
+    // Paces raw frames at fpsCap and holds newest while encoder is backpressured.
+    expect(client.rawStream?.paused).toBe(true);
+    vi.advanceTimersByTime(INTERVAL_30);
+    expect(client.rawStream?.paused).toBe(false);
+    enc?.setBackpressured(true);
+    client.rawStream?.handlers.onFrame(rawFrame(540, 541, 0, 0x31));
+    client.rawStream?.handlers.onFrame(rawFrame(540, 541, 0, 0x32));
+    expect(enc?.writes).toHaveLength(1);
+    vi.advanceTimersByTime(DRAIN_POLL_MS);
+    expect(enc?.writes).toHaveLength(1);
+    enc?.setBackpressured(false);
+    vi.advanceTimersByTime(DRAIN_POLL_MS);
+    expect(enc?.writes).toHaveLength(2);
+    expect(enc?.writes[1]?.rgba[0]).toBe(0x32);
+    await session.close();
+  });
+
+  it('uses PNG directly when codecMode is png, probe returns null, or streamRawScreenshot is missing', async () => {
+    const harness = createFakeEncoderHarness();
+    let probed = 0;
+    const pngForced = await started(540, 30, {
+      codecMode: 'png',
+      probeVideoEncoder: async () => {
+        probed += 1;
+        return harness.probeInfo;
+      },
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    expect(probed).toBe(0);
+    expect(pngForced.client.streams).toHaveLength(1);
+    expect(pngForced.client.rawStreams).toHaveLength(0);
+
+    const noProbe = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => null,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    expect(noProbe.client.streams).toHaveLength(1);
+    expect(noProbe.client.rawStreams).toHaveLength(0);
+
+    const legacyClient = new FakeEmulatorClient();
+    Object.defineProperty(legacyClient, 'streamRawScreenshot', { value: undefined, configurable: true });
+    const legacySocket = new FakeScreenSocket();
+    const legacySession = new ScreenSession(legacySocket, legacyClient, SERIAL, 540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => {
+        probed += 1;
+        return harness.probeInfo;
+      },
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    await legacySession.start();
+    expect(probed).toBe(0);
+    expect(legacyClient.streams).toHaveLength(1);
+    expect(legacyClient.rawStreams).toHaveLength(0);
+  });
+
+  it('falls back to PNG when streamRawScreenshot throws or fails before video, but still fails on auth', async () => {
+    const harness = createFakeEncoderHarness();
+    const throwingClient = new FakeEmulatorClient();
+    throwingClient.rawStreamThrow = new Error('RGBA8888 unsupported');
+    const throwingSocket = new FakeScreenSocket();
+    await new ScreenSession(throwingSocket, throwingClient, SERIAL, 540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    }).start();
+    expect(throwingClient.streams).toHaveLength(1);
+    expect(throwingSocket.closedWith).toBeNull();
+
+    const failingStream = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    failingStream.client.rawStream?.handlers.onEnd(new EmulatorRpcError(12, 'UNIMPLEMENTED'));
+    expect(failingStream.client.streams).toHaveLength(1);
+    expect(failingStream.socket.closedWith).toBeNull();
+    failingStream.client.stream?.handlers.onFrame(frame(540, 1212, 0, 'png-ok'));
+    expect(failingStream.socket.texts[0]).toMatchObject({ codec: 'png' });
+    expect(failingStream.socket.binaries).toEqual([[SCREEN_BINARY_KIND.frame, 'png-ok']]);
+
+    const authDenied = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+    authDenied.client.rawStream?.handlers.onEnd(new EmulatorRpcError(16, 'UNAUTHENTICATED'));
+    expect(authDenied.client.streams).toHaveLength(0);
+    expect(authDenied.socket.texts).toEqual([{ type: 'screenError', code: 'auth', message: AUTH_MESSAGE }]);
+    expect(authDenied.socket.closedWith).toEqual({ code: 1000, reason: 'auth' });
+  });
+
+  it('falls back to PNG when encoder creation throws or encoder exits before or after video', async () => {
+    const throwingSession = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => ({ ffmpegPath: '/usr/bin/ffmpeg', encoder: 'libx264', hardware: false }),
+      createVideoEncoder: () => () => {
+        throw new Error('spawn failed');
+      },
+    });
+    throwingSession.client.rawStream?.handlers.onFrame(rawFrame(540, 1212));
+    expect(throwingSession.client.rawStream?.cancelled).toBe(true);
+    expect(throwingSession.client.streams).toHaveLength(1);
+
+    const earlyExitHarness = createFakeEncoderHarness();
+    const earlyExit = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => earlyExitHarness.probeInfo,
+      createVideoEncoder: earlyExitHarness.createVideoEncoder,
+    });
+    earlyExit.client.rawStream?.handlers.onFrame(rawFrame(540, 1212));
+    earlyExitHarness.encoders[0]?.emitPacket({
+      isConfig: true,
+      isKey: false,
+      pts: 0,
+      data: Buffer.from([1]),
+    });
+    earlyExitHarness.encoders[0]?.emitExit(new Error('dyld missing'));
+    expect(earlyExit.client.rawStream?.cancelled).toBe(true);
+    expect(earlyExit.client.streams).toHaveLength(1);
+    earlyExit.client.stream?.handlers.onFrame(frame(540, 1212, 0, 'recovered'));
+    expect(earlyExit.socket.texts.at(-1)).toMatchObject({ codec: 'png' });
+    expect(earlyExit.socket.binaries.at(-1)).toEqual([SCREEN_BINARY_KIND.frame, 'recovered']);
+
+    const midExitHarness = createFakeEncoderHarness();
+    const midExit = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => midExitHarness.probeInfo,
+      createVideoEncoder: midExitHarness.createVideoEncoder,
+    });
+    midExit.client.rawStream?.handlers.onFrame(rawFrame(540, 1212));
+    midExitHarness.encoders[0]?.emitPacket({ isConfig: false, isKey: true, pts: 10, data: Buffer.from([2]) });
+    midExitHarness.encoders[0]?.emitExit(new Error('ffmpeg crashed'));
+    expect(midExit.client.streams).toHaveLength(1);
+    expect(midExit.socket.closedWith).toBeNull();
+  });
+
+  it('recreates the encoder on setSize, quarter-turn rotation, and keyFrame, and awaits close()', async () => {
+    const harness = createFakeEncoderHarness({ manualClose: true });
+    const { client, socket, session } = await started(540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+
+    client.rawStream?.handlers.onFrame(rawFrame(540, 1212, 0, 0x10));
+    harness.encoders[0]?.emitPacket({ isConfig: true, isKey: false, pts: 0, data: Buffer.from([0x67]) });
+    harness.encoders[0]?.emitPacket({ isConfig: false, isKey: true, pts: 1, data: Buffer.from([0x65]) });
+
+    // keyFrame request recreates encoder and re-encodes the last raw frame without duplicating screenInfo.
+    session.handle({ type: 'keyFrame' });
+    expect(harness.encoders[0]?.closed).toBe(true);
+    expect(harness.encoders).toHaveLength(2);
+    expect(harness.encoders[1]?.writes).toHaveLength(1);
+    expect(harness.encoders[1]?.writes[0]?.rgba[0]).toBe(0x10);
+    const infoCountBeforeKey = socket.texts.length;
+    harness.encoders[1]?.emitPacket({ isConfig: true, isKey: false, pts: 0, data: Buffer.from([0x67]) });
+    harness.encoders[1]?.emitPacket({ isConfig: false, isKey: true, pts: 2, data: Buffer.from([0x65]) });
+    expect(socket.texts).toHaveLength(infoCountBeforeKey);
+
+    // setSize restarts raw stream and replaces encoder once the new frame arrives.
+    session.handle({ type: 'setSize', size: 720 });
+    expect(client.rawStreams).toHaveLength(2);
+    expect(client.rawStream?.box).toEqual({ width: 720, height: 1616 });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    client.rawStream?.handlers.onFrame(rawFrame(720, 1616, 0, 0x20));
+    expect(harness.encoders[1]?.closed).toBe(true);
+    expect(harness.encoders).toHaveLength(3);
+    harness.encoders[2]?.emitPacket({ isConfig: false, isKey: true, pts: 3, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({ codec: 'h264', frameWidth: 720, frameHeight: 1616 });
+
+    // Quarter-turn rotation restarts raw stream with landscape box and new encoder.
+    client.rawStream?.handlers.onFrame(rawFrame(720, 321, 90, 0x30));
+    expect(client.rawStreams).toHaveLength(3);
+    expect(client.rawStream?.box).toEqual({ width: 1616, height: 720 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    client.rawStream?.handlers.onFrame(rawFrame(1616, 720, 90, 0x31));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(harness.encoders.at(-1)?.width).toBe(1616);
+    expect(harness.encoders.at(-1)?.height).toBe(720);
+
+    // Toolbar PNG screenshot still works during H.264 streaming.
+    session.handle({ type: 'screenshot' });
+    await tick();
+    expect(
+      socket.binaries.some(([kind, payload]) => kind === SCREEN_BINARY_KIND.screenshot && payload === 'full'),
+    ).toBe(true);
+
+    // close() awaits every encoder's close().
+    let closedResolved = false;
+    const closing = session.close().then(() => {
+      closedResolved = true;
+    });
+    expect(client.rawStream?.cancelled).toBe(true);
+    expect(client.closed).toBe(true);
+    await tick();
+    expect(closedResolved).toBe(false);
+    for (const enc of harness.encoders) enc.resolveClose();
+    await closing;
+    expect(closedResolved).toBe(true);
+  });
+
+  it('primes static screens, setSize, and rotations via getRawScreenshot in H.264 mode and respects overtaken frames', async () => {
+    const harness = createFakeEncoderHarness();
+    const client = new FakeEmulatorClient();
+    client.scaledScreenshots = 'answer';
+    const socket = new FakeScreenSocket();
+    const session = new ScreenSession(socket, client, SERIAL, 540, 30, {
+      codecMode: 'auto',
+      probeVideoEncoder: async () => harness.probeInfo,
+      createVideoEncoder: harness.createVideoEncoder,
+    });
+
+    await session.start();
+    await tick();
+    expect(client.rawScreenshotBoxes).toEqual([{ width: 540, height: 1212 }]);
+    expect(harness.encoders).toHaveLength(1);
+    expect(harness.encoders[0]?.writes).toHaveLength(1);
+    harness.encoders[0]?.emitPacket({ isConfig: true, isKey: false, pts: 0, data: Buffer.from([0x67]) });
+    harness.encoders[0]?.emitPacket({ isConfig: false, isKey: true, pts: 1, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({ codec: 'h264', frameWidth: 540, frameHeight: 1212 });
+
+    // setSize primes immediately with the new box even on a static screen.
+    session.handle({ type: 'setSize', size: 720 });
+    await tick();
+    expect(client.rawScreenshotBoxes.at(-1)).toEqual({ width: 720, height: 1616 });
+    expect(harness.encoders).toHaveLength(2);
+    harness.encoders[1]?.emitPacket({ isConfig: false, isKey: true, pts: 2, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({ codec: 'h264', frameWidth: 720, frameHeight: 1616 });
+
+    // Rotation settles to the new orientation, restarts raw stream once with landscape box, and delivers raw prime.
+    session.handle({ type: 'rotate', direction: 'left' });
+    setTimeout(() => (client.skinRotation = 270), 40);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(client.rawStream?.box).toEqual({ width: 1616, height: 720 });
+    expect(harness.encoders.at(-1)).toMatchObject({ width: 1616, height: 720 });
+    harness.encoders.at(-1)?.emitPacket({ isConfig: false, isKey: true, pts: 3, data: Buffer.from([0x65]) });
+    expect(socket.texts.at(-1)).toMatchObject({
+      codec: 'h264',
+      rotation: 270,
+      frameWidth: 1616,
+      frameHeight: 720,
+    });
+
+    // Overtaken prime: a raw stream frame arriving before getRawScreenshot resolves suppresses the stale prime.
+    let resolveRawPrime: (frame: ReturnType<typeof rawFrame>) => void = () => undefined;
+    client.getRawScreenshot = () => new Promise((resolve) => (resolveRawPrime = resolve));
+    const writesBefore = harness.encoders.at(-1)?.writes.length ?? 0;
+    session.handle({ type: 'setSize', size: 360 });
+    client.rawStream?.handlers.onFrame(rawFrame(808, 360, 270, 0x55));
+    resolveRawPrime(rawFrame(808, 360, 270, 0x99));
+    await tick();
+    const lastEncoder = harness.encoders.at(-1);
+    expect(lastEncoder?.writes).toHaveLength(1);
+    expect(lastEncoder?.writes[0]?.rgba[0]).toBe(0x55);
+    expect(writesBefore).toBeGreaterThanOrEqual(1);
+    await session.close();
   });
 });

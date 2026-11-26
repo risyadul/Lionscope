@@ -37,13 +37,24 @@ you started yourself never is.
 
 Lionscope talks to the emulator's own gRPC endpoint, found through the emulator's discovery file
 (`avd/running/pid_<pid>.ini`, which holds its port and access token). Frames are captured by the emulator on
-the host side and sent as PNG only when the screen changes, so Android inside the emulator does no extra work
-and the app's measurements are not affected; an idle screen sends nothing. While the screen changes, the frame
-rate cap holds the emulator's stream back between frames (and while the browser is still receiving the last
-one), so the emulator doesn't encode frames that would only be dropped, and the last frame of every change (the
-settled screen) always arrives. On an M-series Mac at 540 px, a scrolling list streams at the cap; 30 fps sends
-about half the data of 60 fps (~20 vs ~41 Mbit/s) and costs the emulator noticeably less CPU. Pick 60 for smooth
-animations, 15 to save the most.
+the host side only when the screen changes, so Android inside the emulator does no encoding work and the
+app's measurements are not affected; an idle screen sends nothing.
+
+When the browser supports WebCodecs (Chrome, Firefox 130+, Safari 16.4+ on `localhost`) and a working host
+`ffmpeg` H.264 encoder is available (preferring zero-latency `baseline` encoders such as `h264_nvenc` or
+`libx264` for interactive input latency, with `h264_qsv`, `h264_vaapi`, and `h264_videotoolbox` fallbacks;
+configured via `LIONSCOPE_FFMPEG` or `PATH`), Lionscope requests `RGBA8888` frames over
+gRPC, encodes them on the host, and streams H.264 video to the browser's WebCodecs decoder. When no working
+`ffmpeg` encoder is available, the browser lacks WebCodecs, or the browser cannot decode the H.264 stream
+(or `/ws/screen` requests `codec=png`), Lionscope automatically falls back to gRPC `PNG` frames (the
+`/ws/screen` socket accepts `codec=auto|png|h264`, defaulting to `auto`).
+
+In both modes, while the screen changes, the frame rate cap holds the emulator's stream back between frames
+(and while the browser or encoder is still draining the last one), so the emulator doesn't capture frames
+that would only be dropped, and the last frame of every change (the settled screen) always arrives. Over
+PNG on an M-series Mac at 540 px, a scrolling list streams at the cap; 30 fps sends about half the data of
+60 fps (~20 vs ~41 Mbit/s) and costs the emulator noticeably less CPU. Pick 60 for smooth animations, 15 to
+save the most.
 
 If an emulator renders in software (SwiftShader, e.g. `-no-window` without `-gpu host`), the dashboard warns:
 frame times are then not representative of a device.

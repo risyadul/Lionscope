@@ -3,8 +3,10 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { RawData, WebSocket } from 'ws';
 import {
+  DEFAULT_SCREEN_CODEC_MODE,
   DEFAULT_SCREEN_FPS_CAP,
   DEFAULT_SCREEN_SIZE,
+  isValidScreenCodecMode,
   isValidScreenFpsCap,
   isValidSerial,
   MAX_SCREEN_SOCKET_FRAME_BYTES,
@@ -16,6 +18,7 @@ import {
 import type {
   DeviceInfo,
   ScreenClientMessage,
+  ScreenCodecMode,
   ScreenErrorCode,
   ScreenFpsCap,
   ScreenServerMessage,
@@ -26,6 +29,7 @@ import { isAllowedHost, isAllowedOrigin, PING_INTERVAL_MS, rejectUpgrade } from 
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorClientFactory } from './emulatorClient.ts';
+import type { HostH264EncoderInfo, HostVideoEncoderFactory } from './hostVideoEncoder.ts';
 import { DeviceScreenSession } from '../scrcpy/deviceScreenSession.ts';
 import { resolveScrcpyJar } from '../scrcpy/scrcpyServer.ts';
 import type { EmulatorManager, MirrorTarget } from './emulatorManager.ts';
@@ -55,6 +59,11 @@ export interface DeviceMirroringOptions {
   jarPath?: string;
 }
 
+export interface EmulatorVideoOptions {
+  probe?: () => Promise<HostH264EncoderInfo | null>;
+  createFactory?: (info: HostH264EncoderInfo) => HostVideoEncoderFactory;
+}
+
 export interface ScreenGatewayOptions {
   server: Server;
   emulators: Pick<EmulatorManager, 'mirrorTarget' | 'onChange'>;
@@ -62,6 +71,8 @@ export interface ScreenGatewayOptions {
   createClient: EmulatorClientFactory | null;
   /** Omitted: physical devices are refused (`not_emulator`). */
   devices?: DeviceMirroringOptions;
+  /** Optional host-side H.264 encoder overrides for emulator mirroring. */
+  emulatorVideo?: EmulatorVideoOptions;
   /** The same allowlist as the main socket. */
   allowedOrigins: () => ReadonlySet<string>;
   pingIntervalMs?: number;
@@ -135,6 +146,11 @@ function fpsCapOf(raw: string | null): ScreenFpsCap | null {
   return isValidScreenFpsCap(fps) ? fps : null;
 }
 
+function codecModeOf(raw: string | null): ScreenCodecMode | null {
+  if (raw === null) return DEFAULT_SCREEN_CODEC_MODE;
+  return isValidScreenCodecMode(raw) ? raw : null;
+}
+
 function sendError(
   ws: WebSocket,
   code: Extract<ScreenServerMessage, { type: 'screenError' }>['code'],
@@ -145,15 +161,17 @@ function sendError(
 }
 
 /**
- * `/ws/screen?serial=…&size=…&fps=…`: mirrors one running emulator or physical device per socket (`fps`, a whole
- * number 5–60, caps an emulator's frame rate; physical devices ignore it). An unknown size or an fps that is not
- * a whole number in range is refused with 400; an invalid `setFpsCap` on a live socket is ignored.
+ * `/ws/screen?serial=…&size=…&fps=…&codec=…`: mirrors one running emulator or physical device per socket (`fps`,
+ * a whole number 5–60, caps an emulator's frame rate; `codec` selects `'auto' | 'png' | 'h264'` for emulators;
+ * physical devices ignore both). An unknown size, fps, or codec is refused with 400; an invalid `setFpsCap` on a
+ * live socket is ignored.
  */
 export function createScreenGateway(options: ScreenGatewayOptions): ScreenGateway {
   const { server, emulators } = options;
   const jarPath = options.devices?.jarPath ?? resolveScrcpyJar();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_SCREEN_SOCKET_FRAME_BYTES });
   const sockets = new Map<WebSocket, ScreenSocketState>();
+  const closingSessions = new Set<Promise<void>>();
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     let url: URL;
@@ -171,12 +189,20 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     }
     const size = sizeOf(url.searchParams.get('size'));
     const fpsCap = fpsCapOf(url.searchParams.get('fps'));
-    if (size === null || fpsCap === null) return rejectUpgrade(socket, 400, 'Bad Request');
+    const codecMode = codecModeOf(url.searchParams.get('codec'));
+    if (size === null || fpsCap === null || codecMode === null)
+      return rejectUpgrade(socket, 400, 'Bad Request');
     const serial = url.searchParams.get('serial') ?? '';
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size, fpsCap));
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size, fpsCap, codecMode));
   });
 
-  const onConnection = (ws: WebSocket, serial: string, size: ScreenSize, fpsCap: ScreenFpsCap): void => {
+  const onConnection = (
+    ws: WebSocket,
+    serial: string,
+    size: ScreenSize,
+    fpsCap: ScreenFpsCap,
+    codecMode: ScreenCodecMode,
+  ): void => {
     ws.on('error', (error) => log.warn('Screen socket error:', error.message));
     if (sockets.size >= MAX_SCREEN_SOCKETS) {
       return sendError(ws, 'busy', `At most ${MAX_SCREEN_SOCKETS} screens can be mirrored at once`);
@@ -187,7 +213,11 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     let session: MirrorSession;
     if (backend.kind === 'emulator') {
       if (!options.createClient) return sendError(ws, 'unavailable', 'Emulator mirroring is not available');
-      session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size, fpsCap);
+      session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size, fpsCap, {
+        codecMode,
+        probeVideoEncoder: options.emulatorVideo?.probe,
+        createVideoEncoder: options.emulatorVideo?.createFactory,
+      });
     } else {
       const { adb } = backend.mirroring;
       session = new DeviceScreenSession({
@@ -211,7 +241,10 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     let invalidReported = false;
     ws.on('close', () => {
       sockets.delete(ws);
-      void session.close();
+      const pending = Promise.resolve(session.close()).finally(() => {
+        closingSessions.delete(pending);
+      });
+      closingSessions.add(pending);
     });
     ws.on('pong', () => {
       state.alive = true;
@@ -280,8 +313,9 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
         closing.push(state.session.close());
         ws.terminate();
       }
-      // Device screens resolve once their scrcpy server is gone from the device.
-      await Promise.all(closing);
+      // Device screens resolve once their scrcpy server is gone from the device, and emulator H.264 encoders wait
+      // for process shutdown.
+      await Promise.all([...closing, ...closingSessions]);
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
   };

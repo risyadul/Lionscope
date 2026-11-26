@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { ScreenClientMessage, ScreenFpsCap, ScreenSize } from '@lionscope/protocol/wire';
+import type {
+  ScreenClientMessage,
+  ScreenCodecMode,
+  ScreenFpsCap,
+  ScreenSize,
+} from '@lionscope/protocol/wire';
 import { downloadBlob, screenshotFileName } from '../../lib/download.ts';
 import { createFpsMeter, createFrameDecoder } from '../../lib/frameQueue.ts';
 import {
@@ -70,8 +75,8 @@ function drawFrame(
 }
 
 /**
- * One screen socket per visible panel: PNG frames (emulators) and H.264 video (physical devices) go straight
- * to the canvas, screenshots to a download.
+ * One screen socket per visible panel: PNG frames and H.264 video go straight to the canvas, screenshots to
+ * a download. Emulators prefer H.264 when WebCodecs is available and fall back to PNG if unsupported.
  */
 export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events }: Input): ScreenStream {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -79,12 +84,15 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
   const sizeRef = useRef(size);
   const fpsCapRef = useRef(fpsCap);
   const nameRef = useRef(name);
+  const isEmulator = fpsCap !== undefined;
   const [state, setState] = useState<ScreenConnectionState>(CONNECTING);
   const [info, setInfo] = useState<ScreenInfo | null>(null);
   const [fps, setFps] = useState(0);
   const [attempt, setAttempt] = useState(0);
+  const [pngFallbackSerial, setPngFallbackSerial] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<VideoError | null>(null);
   const [inputDenied, setInputDenied] = useState<string | null>(null);
+  const usePngFallback = isEmulator && pngFallbackSerial === serial;
 
   useEffect(() => {
     nameRef.current = name;
@@ -114,17 +122,29 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
         meter.tick(performance.now());
       },
     });
+    const forcePng = isEmulator && (usePngFallback || webCodecsApi() === null);
+    const requestedCodec: ScreenCodecMode | undefined = forcePng ? 'png' : undefined;
     let video: VideoPipeline | null = null;
     const failVideo = (error: VideoError) => {
       connection.close();
       setVideoError(error);
     };
-    // Created on the first video packet: emulators stream PNG and never touch WebCodecs.
+    const fallbackToPng = (message: string) => {
+      video?.dispose();
+      video = null;
+      if (isEmulator && !forcePng) {
+        connection.close();
+        setPngFallbackSerial(serial);
+        return;
+      }
+      failVideo({ message, canRetry: false });
+    };
+    // Created on the first video packet (physical devices or H.264-capable emulators).
     const videoPipeline = (): VideoPipeline | null => {
       if (video !== null) return video;
       const api = webCodecsApi();
       if (api === null) {
-        failVideo({ message: videoUnavailableMessage(), canRetry: false });
+        fallbackToPng(videoUnavailableMessage());
         return null;
       }
       video = createVideoPipeline({
@@ -134,23 +154,28 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
           meter.tick(performance.now());
           connection.markLive();
         },
-        onUnsupported: (message) => failVideo({ message, canRetry: false }),
-        onFailed: (message) => failVideo({ message, canRetry: true }),
-        // RESET_VIDEO on the device: a fresh IDR instead of waiting for the encoder's next one (~10 s).
+        onUnsupported: fallbackToPng,
+        onFailed: (message) => (isEmulator ? fallbackToPng(message) : failVideo({ message, canRetry: true })),
+        // Request a fresh IDR instead of waiting for the encoder's next periodic key frame.
         onKeyFrameNeeded: () => connection.send({ type: 'keyFrame' }),
       });
       return video;
     };
     const connection = createScreenConnection({
-      url: () => screenUrl(window.location, serial, sizeRef.current, fpsCapRef.current),
+      url: () => screenUrl(window.location, serial, sizeRef.current, fpsCapRef.current, requestedCodec),
       onBinary: (msg) => {
         if (msg.kind === 'frame') decoder.push(msg.png);
         else if (msg.kind === 'video') videoPipeline()?.push(msg.packet);
         else downloadBlob(msg.png, screenshotFileName(nameRef.current, new Date()));
       },
       onInfo: (next) => {
-        // A new capture session (rotation, size): its own SPS / PPS and key frame follow.
-        if (next.codec === 'h264') video?.reset();
+        if (next.codec === 'h264') {
+          // A new capture session (rotation, size): its own SPS / PPS and key frame follow.
+          video?.reset();
+        } else if (video !== null) {
+          video.dispose();
+          video = null;
+        }
         setInfo(next);
       },
       onState: setState,
@@ -172,7 +197,7 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
       setVideoError(null);
       setInputDenied(null);
     };
-  }, [isEnabled, serial, attempt, events]);
+  }, [isEnabled, serial, isEmulator, usePngFallback, attempt, events]);
 
   const send = useCallback((msg: ScreenClientMessage) => connectionRef.current?.send(msg) ?? false, []);
   const retry = useCallback(() => setAttempt((n) => n + 1), []);

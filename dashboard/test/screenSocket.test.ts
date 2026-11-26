@@ -34,6 +34,18 @@ describe('screenUrl', () => {
     expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 45)).toBe(
       'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=45',
     );
+    expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 30, 'auto')).toBe(
+      'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=30',
+    );
+    expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 30, 'png')).toBe(
+      'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=30&codec=png',
+    );
+    expect(screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, 30, 'h264')).toBe(
+      'ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&fps=30&codec=h264',
+    );
+    expect(
+      screenUrl({ protocol: 'http:', host: '127.0.0.1:8701' }, 'emulator-5554', 540, undefined, 'png'),
+    ).toBe('ws://127.0.0.1:8701/ws/screen?serial=emulator-5554&size=540&codec=png');
   });
 });
 
