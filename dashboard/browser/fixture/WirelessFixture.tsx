@@ -37,32 +37,77 @@ export function WirelessFixture() {
 
     let qrTimer: ReturnType<typeof setTimeout> | null = null;
     let tcpipTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingConnect: { requestId: number; address: string } | null = null;
+    const includePublicDiscovery = new URLSearchParams(window.location.search).get('publicDiscovery') === '1';
     document.documentElement.dataset.qrCancelledCount = '0';
+
+    const reply = (serverMsg: ServerMessage) => {
+      store.dispatch({ kind: 'server', msg: serverMsg });
+      store.flush();
+    };
+
+    const onResolveConnect = () => {
+      if (!pendingConnect) return;
+      const { requestId, address } = pendingConnect;
+      pendingConnect = null;
+      reply({
+        type: 'devices',
+        devices: [
+          { serial: '192.168.1.42:5555', state: 'device', model: 'Pixel_8_Pro', transport: 'wireless' },
+          { serial: 'R58M123ABC', state: 'device', model: 'Pixel_7', transport: 'usb' },
+          { serial: address, state: 'device', model: 'Pixel_9', transport: 'wireless' },
+        ],
+      });
+      reply({
+        type: 'wirelessResult',
+        requestId,
+        result: {
+          action: 'connect',
+          ok: true,
+          serial: address,
+          target: address,
+          alreadyConnected: false,
+        },
+      });
+    };
 
     const onSend = (event: Event) => {
       if (!(event instanceof CustomEvent)) return;
       const msg = event.detail as ClientMessage;
-      const reply = (serverMsg: ServerMessage) => {
-        store.dispatch({ kind: 'server', msg: serverMsg });
-        store.flush();
-      };
+      if (msg.type === 'connectDevice') {
+        pendingConnect = { requestId: msg.requestId, address: msg.address };
+        return;
+      }
       if (msg.type === 'listMdnsServices') {
+        const services = [
+          {
+            instanceName: 'adb-PIXEL9-abc123',
+            host: '192.168.1.50',
+            port: 41234,
+            target: '192.168.1.50:41234',
+            serial: 'adb-PIXEL9-abc123._adb-tls-connect._tcp',
+            connected: false,
+          },
+          ...(includePublicDiscovery
+            ? [
+                {
+                  instanceName: 'adb-PUBLIC-999',
+                  host: '198.51.100.20',
+                  port: 41234,
+                  target: '198.51.100.20:41234',
+                  serial: 'adb-PUBLIC-999._adb-tls-connect._tcp',
+                  connected: false,
+                },
+              ]
+            : []),
+        ];
         reply({
           type: 'wirelessResult',
           requestId: msg.requestId,
           result: {
             action: 'mdns',
             ok: true,
-            services: [
-              {
-                instanceName: 'adb-PIXEL9-abc123',
-                host: '192.168.1.50',
-                port: 41234,
-                target: '192.168.1.50:41234',
-                serial: 'adb-PIXEL9-abc123._adb-tls-connect._tcp',
-                connected: false,
-              },
-            ],
+            services,
           },
         });
       } else if (msg.type === 'startQrPairing') {
@@ -139,10 +184,12 @@ export function WirelessFixture() {
       }
     };
     window.addEventListener('fixture-send', onSend);
+    window.addEventListener('fixture-resolve-connect', onResolveConnect);
     return () => {
       if (qrTimer !== null) clearTimeout(qrTimer);
       if (tcpipTimer !== null) clearTimeout(tcpipTimer);
       window.removeEventListener('fixture-send', onSend);
+      window.removeEventListener('fixture-resolve-connect', onResolveConnect);
     };
   }, [store]);
 

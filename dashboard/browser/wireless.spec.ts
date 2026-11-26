@@ -110,3 +110,47 @@ test('confirmed public USB handoff completing before deadline does not override 
   await expect(picker).toHaveValue('192.168.1.42:5555');
   expect(errors).toEqual([]);
 });
+
+test('late connect success does not hijack an open public-IP discovery confirmation', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.clock.install();
+  await page.goto('/?scenario=wireless&publicDiscovery=1');
+  await page.evaluate(() => document.fonts.ready);
+
+  const picker = page.locator('#device-picker');
+  await expect(picker).toHaveValue('192.168.1.42:5555');
+
+  // Open Wireless dialog and start Connect A (192.168.1.99:5555).
+  await page.getByRole('button', { name: 'Connect wireless device', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Wireless device', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('198.51.100.20:41234')).toBeVisible();
+
+  await dialog.getByLabel('IP address and port').fill('192.168.1.99:5555');
+  await dialog.locator('form').getByRole('button', { name: 'Connect', exact: true }).click();
+
+  // Advance past the real 25s connect deadline so Connect A times out in the dialog.
+  await page.clock.runFor(25_100);
+  await expect(dialog.getByRole('alert')).toContainText('Still waiting for adb');
+
+  // Click Connect on discovered public device B so its public-IP confirmation is open.
+  const publicRow = dialog.locator('.wireless-mdns-item', { hasText: '198.51.100.20:41234' });
+  await publicRow.getByRole('button', { name: 'Connect', exact: true }).click();
+  const publicConfirm = dialog.getByRole('alertdialog', { name: 'Confirm public IP connection' });
+  await expect(publicConfirm).toBeVisible();
+  await expect(publicConfirm).toContainText('198.51.100.20:41234');
+
+  // Deliver Connect A's late server success into the real store.
+  await page.evaluate(() => window.dispatchEvent(new Event('fixture-resolve-connect')));
+
+  // B's confirmation must stay visible, the picker selection must stay unchanged,
+  // and A's result must appear only as a background notice.
+  await expect(dialog).toBeVisible();
+  await expect(publicConfirm).toBeVisible();
+  await expect(publicConfirm).toContainText('198.51.100.20:41234');
+  await expect(picker).toHaveValue('192.168.1.42:5555');
+  await expect(page.locator('.banners')).toContainText('Connected 192.168.1.99:5555 in the background.');
+  expect(errors).toEqual([]);
+});

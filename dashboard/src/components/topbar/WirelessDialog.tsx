@@ -154,6 +154,11 @@ export function WirelessDialog({
     }
   }, [pendingPublicTarget]);
 
+  const supersedeWorkflow = useCallback(() => {
+    workflowSeqRef.current += 1;
+    if (dialogInstanceId !== undefined) onSupersedeDialog?.(dialogInstanceId);
+  }, [dialogInstanceId, onSupersedeDialog]);
+
   const dismissPublicConfirm = useCallback(() => {
     pendingPublicTargetRef.current = null;
     setPendingPublicTarget(null);
@@ -214,6 +219,7 @@ export function WirelessDialog({
 
   const refreshMdns = useCallback(async () => {
     if (!onListMdns || !isOnline) return;
+    supersedeWorkflow();
     setMdnsLoading(true);
     setMdnsError(null);
     try {
@@ -227,7 +233,7 @@ export function WirelessDialog({
     } finally {
       setMdnsLoading(false);
     }
-  }, [onListMdns, isOnline]);
+  }, [onListMdns, isOnline, supersedeWorkflow]);
 
   useEffect(() => {
     if (tab !== 'connect' || !isOnline || !onListMdns) return;
@@ -249,8 +255,7 @@ export function WirelessDialog({
 
   const startQr = useCallback(async () => {
     if (!onStartQrPairing || !isOnline) return;
-    workflowSeqRef.current += 1;
-    if (dialogInstanceId !== undefined) onSupersedeDialog?.(dialogInstanceId);
+    supersedeWorkflow();
     cancelActiveQr();
     const myGen = ++qrStartGenRef.current;
     const myConnEpoch = connectionEpochRef.current;
@@ -290,7 +295,7 @@ export function WirelessDialog({
         setQrLoading(false);
       }
     }
-  }, [onStartQrPairing, isOnline, cancelActiveQr, dialogInstanceId, onSupersedeDialog]);
+  }, [onStartQrPairing, isOnline, cancelActiveQr, dialogInstanceId, supersedeWorkflow]);
 
   const matchingQrUpdate =
     qrSession !== null && qrPairing !== null && qrPairing.sessionId === qrSession.sessionId
@@ -325,10 +330,11 @@ export function WirelessDialog({
   useEffect(() => {
     if (!lateResult || handledLateIdRef.current === lateResult.requestId) return;
     if (dialogInstanceId === undefined || lateResult.dialogInstanceId !== dialogInstanceId) return;
-    // Never let a superseded connect/pair hijack a newer workflow (e.g. switched to Pair with QR).
+    // Never let a superseded connect/pair hijack a newer workflow (e.g. Pair with QR or public-IP confirmation).
     if (
       tabRef.current === 'qr' ||
       activeQrIdRef.current !== null ||
+      pendingPublicTargetRef.current !== null ||
       (submittedWorkflowSeqRef.current !== null && submittedWorkflowSeqRef.current !== workflowSeqRef.current)
     ) {
       handledLateIdRef.current = lateResult.requestId;
@@ -366,8 +372,7 @@ export function WirelessDialog({
 
   const switchTab = (next: Tab) => {
     if (next !== tab) {
-      workflowSeqRef.current += 1;
-      if (dialogInstanceId !== undefined) onSupersedeDialog?.(dialogInstanceId);
+      supersedeWorkflow();
     }
     tabRef.current = next;
     if (tab === 'qr' && next !== 'qr') cancelActiveQr();
@@ -417,7 +422,8 @@ export function WirelessDialog({
     connectPortError === null;
 
   const connectTarget = async (target: string) => {
-    const seq = ++workflowSeqRef.current;
+    supersedeWorkflow();
+    const seq = workflowSeqRef.current;
     submittedWorkflowSeqRef.current = seq;
     setPending(true);
     setConnectingTarget(target);
@@ -450,7 +456,8 @@ export function WirelessDialog({
     event.preventDefault();
     if (!canPair || !parsedPair?.ok) return;
     const submittedCode = trimmedCode;
-    const seq = ++workflowSeqRef.current;
+    supersedeWorkflow();
+    const seq = workflowSeqRef.current;
     submittedWorkflowSeqRef.current = seq;
     // Clear the one-time pairing code from component state immediately on submit.
     setPairCode('');
@@ -600,6 +607,7 @@ export function WirelessDialog({
                 aria-invalid={connectSyntaxError !== null || error !== null || undefined}
                 aria-describedby={`${id}-connect-hint`}
                 onChange={(event) => {
+                  supersedeWorkflow();
                   setAddress(event.target.value);
                   if (error !== null) setError(null);
                 }}
@@ -689,6 +697,8 @@ export function WirelessDialog({
                             disabled={!isOnline || pending}
                             onClick={(event) => {
                               if (isPublic) {
+                                supersedeWorkflow();
+                                if (error !== null) setError(null);
                                 publicConfirmOpenerRef.current = event.currentTarget;
                                 pendingPublicTargetRef.current = service.target;
                                 setPendingPublicTarget(service.target);
@@ -778,6 +788,7 @@ export function WirelessDialog({
                 disabled={!isOnline || pending}
                 aria-invalid={pairAddrError !== null || undefined}
                 onChange={(event) => {
+                  supersedeWorkflow();
                   setPairAddress(event.target.value);
                   if (error !== null) setError(null);
                 }}
@@ -802,6 +813,7 @@ export function WirelessDialog({
                   disabled={!isOnline || pending}
                   aria-invalid={codeError !== null || undefined}
                   onChange={(event) => {
+                    supersedeWorkflow();
                     setPairCode(event.target.value);
                     if (error !== null) setError(null);
                   }}
@@ -825,6 +837,7 @@ export function WirelessDialog({
                   disabled={!isOnline || pending}
                   aria-invalid={connectPortError !== null || undefined}
                   onChange={(event) => {
+                    supersedeWorkflow();
                     setConnectPort(event.target.value);
                     if (error !== null) setError(null);
                   }}

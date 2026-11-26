@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, DeviceInfo, WirelessActionResult } from '@lionscope/protocol/wire';
@@ -1217,6 +1218,119 @@ describe('useWirelessActions deadlines, late reconciliation & QR payload scrubbi
     expect(onLateConnected).not.toHaveBeenCalled();
     expect(result.current.actionNotice).toContain(
       'Switched R58M123ABC to Wi-Fi (192.0.2.15:5555) in the background',
+    );
+  });
+
+  it('keeps an open public-IP discovery confirmation intact and only posts a background notice when an earlier timed-out connect succeeds', async () => {
+    const sent: ClientMessage[] = [];
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    let pushAnswer!: (answer: WirelessAnswer) => void;
+
+    function Harness() {
+      const [answers, setAnswers] = useState<WirelessAnswer[]>([]);
+      pushAnswer = (answer) => setAnswers((prev) => [...prev, answer]);
+      const send = useCallback((msg: ClientMessage) => {
+        sent.push(msg);
+        if (msg.type === 'listMdnsServices') {
+          queueMicrotask(() => {
+            setAnswers((prev) => [
+              ...prev,
+              {
+                requestId: msg.requestId,
+                result: {
+                  action: 'mdns',
+                  ok: true,
+                  services: [
+                    {
+                      instanceName: 'adb-PUBLIC-999',
+                      host: '198.51.100.20',
+                      port: 41234,
+                      target: '198.51.100.20:41234',
+                      serial: 'adb-PUBLIC-999._adb-tls-connect._tcp',
+                      connected: false,
+                    },
+                  ],
+                },
+              },
+            ]);
+          });
+        }
+        return true;
+      }, []);
+      const actions = useWirelessActions({
+        send,
+        answers,
+        qrPairing: null,
+        isOpen: true,
+        currentSerial: '192.168.1.42:5555',
+        selectionVersion: 0,
+        activeDialogId: 1,
+        timeouts: { connect: 20 },
+      });
+      return (
+        <div>
+          {actions.actionNotice && <div data-testid="bg-notice">{actions.actionNotice}</div>}
+          <WirelessDialog
+            dialogInstanceId={1}
+            isOnline={true}
+            onConnect={actions.connect}
+            onPair={actions.pair}
+            onListMdns={actions.listMdns}
+            onSupersedeDialog={actions.supersedeDialog}
+            lateResult={actions.lateResult}
+            onConnected={onConnected}
+            onClose={onClose}
+          />
+        </div>
+      );
+    }
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByText('198.51.100.20:41234')).toBeTruthy());
+
+    // Start Connect A and wait for the client timeout.
+    fireEvent.change(screen.getByLabelText('IP address and port'), {
+      target: { value: '192.168.1.99:5555' },
+    });
+    const connectButtons = screen.getAllByRole('button', { name: 'Connect' });
+    fireEvent.click(connectButtons[0]!);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Still waiting for adb/i));
+
+    const connectReq = sent.find((m) => m.type === 'connectDevice');
+    const connectReqId = connectReq?.type === 'connectDevice' ? connectReq.requestId : 0;
+    expect(connectReqId).toBeGreaterThan(0);
+
+    // Click Connect on discovered public device B to open its confirmation prompt.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Connect' })[1]!);
+    await waitFor(() => {
+      const confirm = screen.getByRole('alertdialog', { name: 'Confirm public IP connection' });
+      expect(confirm.textContent).toContain('198.51.100.20:41234');
+    });
+
+    // Late success for Connect A arrives: must NOT close dialog, must NOT select A, and must keep B's prompt visible.
+    act(() => {
+      pushAnswer({
+        requestId: connectReqId,
+        result: {
+          action: 'connect',
+          ok: true,
+          serial: '192.168.1.99:5555',
+          target: '192.168.1.99:5555',
+          alreadyConnected: false,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bg-notice').textContent).toBe(
+        'Connected 192.168.1.99:5555 in the background.',
+      );
+    });
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog', { name: 'Confirm public IP connection' }).textContent).toContain(
+      '198.51.100.20:41234',
     );
   });
 });
