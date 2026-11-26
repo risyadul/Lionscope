@@ -114,7 +114,9 @@ export function App() {
   const [selectedStall, setSelectedStall] = useState<string | null>(null);
   const [selectedHttp, setSelectedHttp] = useState<number | null>(null);
   const [networkView, setNetworkView] = useState<NetworkView>('requests');
-  const [isWirelessOpen, setWirelessOpen] = useState(false);
+  const [wirelessDialogId, setWirelessDialogId] = useState<number | null>(null);
+  const nextWirelessDialogIdRef = useRef(1);
+  const [selectionVersion, setSelectionVersion] = useState(0);
   // Same request, read synchronously: two clicks in one task both run before React re-renders.
   const inFlight = useRef<PendingRequest | null>(null);
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
@@ -155,9 +157,10 @@ export function App() {
   const changeSerial = useCallback((next: string) => {
     chooseSerialRef.current(next);
     setChosenPackage(null);
+    setSelectionVersion((v) => v + 1);
   }, []);
-  const openWireless = useCallback(() => setWirelessOpen(true), []);
-  const closeWireless = useCallback(() => setWirelessOpen(false), []);
+  const openWireless = useCallback(() => setWirelessDialogId(nextWirelessDialogIdRef.current++), []);
+  const closeWireless = useCallback(() => setWirelessDialogId(null), []);
   const consumeQrPayload = useCallback(
     (sessionId?: string) => store.dispatch({ kind: 'clearQrPayload', ...(sessionId ? { sessionId } : {}) }),
     [store],
@@ -168,6 +171,9 @@ export function App() {
     answers: state.wirelessAnswers,
     qrPairing: state.qrPairing,
     isOpen,
+    currentSerial: serial,
+    selectionVersion,
+    activeDialogId: wirelessDialogId,
     onConsumeQrPayload: consumeQrPayload,
     onLateConnected: changeSerial,
   });
@@ -216,6 +222,7 @@ export function App() {
   const changeAvd = (avdName: string) => {
     selection.chooseAvd(avdName);
     setChosenPackage(null);
+    setSelectionVersion((v) => v + 1);
   };
 
   const dismissError = useCallback((id: number) => store.dispatch({ kind: 'dismissError', id }), [store]);
@@ -734,8 +741,10 @@ export function App() {
               </Activity>
             </main>
           </div>
-          {isWirelessOpen && (
+          {wirelessDialogId !== null && (
             <WirelessDialog
+              key={wirelessDialogId}
+              dialogInstanceId={wirelessDialogId}
               isOnline={isOpen}
               onConnect={wirelessActions.connect}
               onPair={wirelessActions.pair}

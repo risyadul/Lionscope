@@ -28,11 +28,17 @@ interface QrSessionState {
 
 type Props = {
   isOnline: boolean;
-  onConnect: (address: string) => Promise<Extract<WirelessActionResult, { action: 'connect' }>>;
+  /** Unique id for this dialog mount so late server replies from an older dialog cannot close a newer one. */
+  dialogInstanceId?: number;
+  onConnect: (
+    address: string,
+    dialogInstanceId?: number,
+  ) => Promise<Extract<WirelessActionResult, { action: 'connect' }>>;
   onPair: (
     address: string,
     code: string,
     connectAddress?: string,
+    dialogInstanceId?: number,
   ) => Promise<Extract<WirelessActionResult, { action: 'pair' }>>;
   onListMdns?: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
   onStartQrPairing?: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
@@ -54,6 +60,7 @@ function hostPrefix(host: string): string {
  */
 export function WirelessDialog({
   isOnline,
+  dialogInstanceId,
   onConnect,
   onPair,
   onListMdns,
@@ -68,9 +75,16 @@ export function WirelessDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const connectInputRef = useRef<HTMLInputElement>(null);
   const pairInputRef = useRef<HTMLInputElement>(null);
+  const publicConfirmCancelRef = useRef<HTMLButtonElement>(null);
+  const publicConfirmOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const isMountedRef = useRef(true);
+  const tabRef = useRef<Tab>('connect');
   const activeQrIdRef = useRef<string | null>(null);
+  const qrStartGenRef = useRef(0);
+  const connectionEpochRef = useRef(0);
   const handledQrIdRef = useRef<string | null>(null);
   const handledLateIdRef = useRef<number | null>(lateResult?.requestId ?? null);
+  const pendingPublicTargetRef = useRef<string | null>(null);
   const onCloseRef = useRef(onClose);
   const onConnectedRef = useRef(onConnected);
   const onCancelQrRef = useRef(onCancelQrPairing);
@@ -95,14 +109,56 @@ export function WirelessDialog({
   const [qrSession, setQrSession] = useState<QrSessionState | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
   const [qrError, setQrError] = useState<string | null>(null);
+  const [qrDisconnectedNotice, setQrDisconnectedNotice] = useState(false);
+  const [prevIsOnline, setPrevIsOnline] = useState(isOnline);
+
+  if (prevIsOnline !== isOnline) {
+    setPrevIsOnline(isOnline);
+    if (!isOnline) {
+      if (qrSession !== null) {
+        setQrSession(null);
+        setQrDisconnectedNotice(true);
+      }
+      if (qrLoading) setQrLoading(false);
+      if (qrError !== null) setQrError(null);
+    }
+  }
 
   useEffect(() => {
     onCloseRef.current = onClose;
     onConnectedRef.current = onConnected;
     onCancelQrRef.current = onCancelQrPairing;
-  }, [onClose, onConnected, onCancelQrPairing]);
+    tabRef.current = tab;
+    pendingPublicTargetRef.current = pendingPublicTarget;
+  }, [onClose, onConnected, onCancelQrPairing, tab, pendingPublicTarget]);
+
+  // Invalidate any in-flight QR start and clear active QR tracking when the WebSocket drops.
+  useEffect(() => {
+    if (isOnline) return;
+    connectionEpochRef.current += 1;
+    qrStartGenRef.current += 1;
+    activeQrIdRef.current = null;
+  }, [isOnline]);
+
+  // Move keyboard focus to Cancel when opening the public-IP discovery confirmation.
+  useEffect(() => {
+    if (pendingPublicTarget !== null) {
+      publicConfirmCancelRef.current?.focus();
+    }
+  }, [pendingPublicTarget]);
+
+  const dismissPublicConfirm = useCallback(() => {
+    pendingPublicTargetRef.current = null;
+    setPendingPublicTarget(null);
+    queueMicrotask(() => {
+      if (publicConfirmOpenerRef.current?.isConnected) {
+        publicConfirmOpenerRef.current.focus();
+      }
+    });
+  }, []);
 
   const cancelActiveQr = useCallback(() => {
+    qrStartGenRef.current += 1;
     const activeId = activeQrIdRef.current;
     if (activeId !== null) {
       activeQrIdRef.current = null;
@@ -113,12 +169,17 @@ export function WirelessDialog({
 
   // Run modal lifecycle strictly on mount/unmount so parent clock ticks never reset focus or cancel QR pairing.
   useEffect(() => {
+    isMountedRef.current = true;
     const dialog = dialogRef.current;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
+      if (pendingPublicTargetRef.current !== null) {
+        dismissPublicConfirm();
+        return;
+      }
       onCloseRef.current();
     };
     document.addEventListener('keydown', escape, true);
@@ -128,6 +189,8 @@ export function WirelessDialog({
     }
     connectInputRef.current?.focus();
     return () => {
+      isMountedRef.current = false;
+      qrStartGenRef.current += 1;
       const activeId = activeQrIdRef.current;
       if (activeId !== null) {
         activeQrIdRef.current = null;
@@ -140,7 +203,7 @@ export function WirelessDialog({
       document.removeEventListener('keydown', escape, true);
       if (opener?.isConnected) opener.focus();
     };
-  }, []);
+  }, [dismissPublicConfirm]);
 
   const refreshMdns = useCallback(async () => {
     if (!onListMdns || !isOnline) return;
@@ -180,11 +243,26 @@ export function WirelessDialog({
   const startQr = useCallback(async () => {
     if (!onStartQrPairing || !isOnline) return;
     cancelActiveQr();
+    const myGen = ++qrStartGenRef.current;
+    const myConnEpoch = connectionEpochRef.current;
     setQrSession(null);
     setQrError(null);
+    setQrDisconnectedNotice(false);
     setQrLoading(true);
     try {
       const result = await onStartQrPairing();
+      const stale =
+        !isMountedRef.current ||
+        qrStartGenRef.current !== myGen ||
+        tabRef.current !== 'qr' ||
+        connectionEpochRef.current !== myConnEpoch;
+      if (stale) {
+        // Dismissed dialog, switched tabs, or superseded start: cancel the orphaned server session on the same connection.
+        if (result.ok && connectionEpochRef.current === myConnEpoch) {
+          onCancelQrRef.current?.(result.sessionId);
+        }
+        return;
+      }
       if (result.ok) {
         activeQrIdRef.current = result.sessionId;
         handledQrIdRef.current = null;
@@ -198,7 +276,9 @@ export function WirelessDialog({
         setQrError(result.message);
       }
     } finally {
-      setQrLoading(false);
+      if (isMountedRef.current && qrStartGenRef.current === myGen) {
+        setQrLoading(false);
+      }
     }
   }, [onStartQrPairing, isOnline, cancelActiveQr]);
 
@@ -213,6 +293,11 @@ export function WirelessDialog({
       matchingQrUpdate.status === 'failed' ||
       matchingQrUpdate.status === 'cancelled');
 
+  // Erase the password-bearing QR payload from component state on every terminal transition while mounted.
+  if (qrSession !== null && qrSession.payload !== '' && isQrTerminal) {
+    setQrSession({ ...qrSession, payload: '' });
+  }
+
   // Auto-select and close when QR pairing also connected via mDNS, and stop tracking terminal QR sessions.
   useEffect(() => {
     if (!matchingQrUpdate) return;
@@ -226,9 +311,10 @@ export function WirelessDialog({
     onCloseRef.current();
   }, [matchingQrUpdate, isQrTerminal]);
 
-  // Reconcile a late server result if a slow connect or pair finished after the client deadline.
+  // Reconcile a late server result ONLY when it belongs to this exact dialog instance.
   useEffect(() => {
     if (!lateResult || handledLateIdRef.current === lateResult.requestId) return;
+    if (dialogInstanceId === undefined || lateResult.dialogInstanceId !== dialogInstanceId) return;
     handledLateIdRef.current = lateResult.requestId;
     const { result } = lateResult;
     if (result.action === 'connect') {
@@ -257,12 +343,14 @@ export function WirelessDialog({
         });
       }
     }
-  }, [lateResult]);
+  }, [lateResult, dialogInstanceId]);
 
   const switchTab = (next: Tab) => {
+    tabRef.current = next;
     if (tab === 'qr' && next !== 'qr') cancelActiveQr();
     setTab(next);
     setError(null);
+    pendingPublicTargetRef.current = null;
     setPendingPublicTarget(null);
     if (next !== 'connect') setSuccessNote(null);
     if (next === 'qr' && isOnline && onStartQrPairing) {
@@ -309,7 +397,9 @@ export function WirelessDialog({
     setConnectingTarget(target);
     setError(null);
     try {
-      const result = await onConnect(target);
+      const result =
+        dialogInstanceId !== undefined ? await onConnect(target, dialogInstanceId) : await onConnect(target);
+      if (!isMountedRef.current) return;
       if (result.ok) {
         onConnected(result.serial);
         onClose();
@@ -317,8 +407,10 @@ export function WirelessDialog({
         setError(result.message);
       }
     } finally {
-      setPending(false);
-      setConnectingTarget(null);
+      if (isMountedRef.current) {
+        setPending(false);
+        setConnectingTarget(null);
+      }
     }
   };
 
@@ -343,7 +435,11 @@ export function WirelessDialog({
       if (built.ok) followUpAddress = built.value.target;
     }
     try {
-      const result = await onPair(trimmedPairAddr, submittedCode, followUpAddress);
+      const result =
+        dialogInstanceId !== undefined
+          ? await onPair(trimmedPairAddr, submittedCode, followUpAddress, dialogInstanceId)
+          : await onPair(trimmedPairAddr, submittedCode, followUpAddress);
+      if (!isMountedRef.current) return;
       if (!result.ok) {
         setError(result.message);
         return;
@@ -361,18 +457,24 @@ export function WirelessDialog({
       setTab('connect');
       queueMicrotask(() => connectInputRef.current?.focus());
     } finally {
-      setPending(false);
+      if (isMountedRef.current) setPending(false);
     }
   };
 
   const qrStatusText = (): string => {
     if (!isOnline) return 'Offline — waiting for the server.';
     if (qrLoading) return 'Generating QR code…';
+    if (qrSession === null) {
+      return qrDisconnectedNotice
+        ? 'Server connection reset — generate a new QR code to pair.'
+        : 'Generate a QR code to pair.';
+    }
     if (matchingQrUpdate?.status === 'pairing') {
       return `Phone scanned QR — pairing with ${matchingQrUpdate.target}…`;
     }
     if (matchingQrUpdate?.status === 'expired') return 'QR code expired. Generate a new code to try again.';
     if (matchingQrUpdate?.status === 'failed') return '';
+    if (matchingQrUpdate?.status === 'paired') return '';
     return 'Waiting for your phone to scan the QR code (polling adb mdns services)…';
   };
 
@@ -384,7 +486,11 @@ export function WirelessDialog({
       onCancel={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        onClose();
+        if (pendingPublicTargetRef.current !== null) {
+          dismissPublicConfirm();
+          return;
+        }
+        onCloseRef.current();
       }}
     >
       <div className="wireless-heading">
@@ -553,11 +659,14 @@ export function WirelessDialog({
                             type="button"
                             className="btn"
                             disabled={!isOnline || pending}
-                            onClick={() => {
+                            onClick={(event) => {
                               if (isPublic) {
+                                publicConfirmOpenerRef.current = event.currentTarget;
+                                pendingPublicTargetRef.current = service.target;
                                 setPendingPublicTarget(service.target);
                                 return;
                               }
+                              pendingPublicTargetRef.current = null;
                               setPendingPublicTarget(null);
                               void connectTarget(service.target);
                             }}
@@ -583,9 +692,10 @@ export function WirelessDialog({
                   </p>
                   <div className="wireless-mdns-confirm-actions">
                     <button
+                      ref={publicConfirmCancelRef}
                       type="button"
                       className="btn"
-                      onClick={() => setPendingPublicTarget(null)}
+                      onClick={dismissPublicConfirm}
                       disabled={pending}
                     >
                       Cancel
@@ -596,6 +706,7 @@ export function WirelessDialog({
                       disabled={!isOnline || pending}
                       onClick={() => {
                         const target = pendingPublicTarget;
+                        pendingPublicTargetRef.current = null;
                         setPendingPublicTarget(null);
                         void connectTarget(target);
                       }}
@@ -737,7 +848,7 @@ export function WirelessDialog({
             code. Both devices must be on the same Wi-Fi network with mDNS enabled.
           </p>
           <div className="wireless-qr-box">
-            {qrSession !== null && !isQrTerminal ? (
+            {qrSession !== null && qrSession.payload !== '' && !isQrTerminal ? (
               <QrCode payload={qrSession.payload} label="Android wireless debugging pairing QR code" />
             ) : (
               <div className="wireless-qr-placeholder">{qrLoading ? 'Generating…' : 'QR code inactive'}</div>

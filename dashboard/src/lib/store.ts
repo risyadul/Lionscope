@@ -908,9 +908,15 @@ export function setConnection(state: DashboardState, connection: ConnectionState
   ) {
     return state;
   }
-  const wirelessAnswers =
-    connection.status === 'open' ? state.wirelessAnswers : scrubQrAnswers(state.wirelessAnswers);
-  return { ...state, connection: { ...connection }, wirelessAnswers };
+  if (connection.status === 'open') {
+    return { ...state, connection: { ...connection } };
+  }
+  return {
+    ...state,
+    connection: { ...connection },
+    wirelessAnswers: scrubQrAnswers(state.wirelessAnswers),
+    qrPairing: null,
+  };
 }
 
 function scrubQrAnswers(answers: WirelessAnswer[], sessionId?: string): WirelessAnswer[] {
