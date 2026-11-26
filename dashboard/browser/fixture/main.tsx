@@ -16,6 +16,7 @@ import { useDeviceColumn } from '../../src/hooks/useDeviceColumn.ts';
 import { createFixtureServices, stats } from './data.ts';
 import { NetworkFixture } from './NetworkFixture.tsx';
 import { PermissionsFixture } from './PermissionsFixture.tsx';
+import { WirelessFixture } from './WirelessFixture.tsx';
 
 const services = createFixtureServices();
 const query = new URLSearchParams(location.search);
@@ -101,6 +102,8 @@ function Fixture() {
   switch (query.get('scenario')) {
     case 'permissions':
       return <PermissionsFixture />;
+    case 'wireless':
+      return <WirelessFixture />;
     case 'network':
       return <NetworkFixture state={query.get('state')} />;
     case 'stats':

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { AppInfo, DeviceInfo, EmulatorInfo, SessionState } from '@lionscope/protocol/wire';
+import type { PendingPublicTcpip } from '../../hooks/useWirelessActions.ts';
 import type { ConnectionStatus } from '../../lib/store.ts';
 import { BrandMark } from '../brand/BrandMark.tsx';
 import { AppCombobox } from './AppCombobox.tsx';
@@ -28,6 +29,14 @@ type Props = {
   mocksIndicator?: ReactNode;
   permissionsAction?: ReactNode;
   onRefreshDevices: () => void;
+  onOpenWireless?: () => void;
+  onDisconnectWireless?: (serial: string) => void;
+  isDisconnectingWireless?: boolean;
+  onSwitchToWifi?: (serial: string) => void;
+  isSwitchingToWifi?: boolean;
+  pendingPublicTcpip?: PendingPublicTcpip | null;
+  onConfirmPublicTcpip?: (serial: string, port: number, confirmationId: string, target: string) => void;
+  onCancelPublicTcpip?: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;
   onPackageChange: (packageName: string) => void;
@@ -59,6 +68,14 @@ export function TopBar({
   mocksIndicator,
   permissionsAction,
   onRefreshDevices,
+  onOpenWireless,
+  onDisconnectWireless,
+  isDisconnectingWireless = false,
+  onSwitchToWifi,
+  isSwitchingToWifi = false,
+  pendingPublicTcpip = null,
+  onConfirmPublicTcpip,
+  onCancelPublicTcpip,
   apps,
   packageName,
   onPackageChange,
@@ -101,6 +118,14 @@ export function TopBar({
           onChange={onSerialChange}
           onAvdChange={onAvdChange}
           onRefresh={onRefreshDevices}
+          onOpenWireless={onOpenWireless}
+          onDisconnectWireless={onDisconnectWireless}
+          isDisconnecting={isDisconnectingWireless}
+          onSwitchToWifi={onSwitchToWifi}
+          isSwitchingToWifi={isSwitchingToWifi}
+          pendingPublicTcpip={pendingPublicTcpip}
+          onConfirmPublicTcpip={onConfirmPublicTcpip}
+          onCancelPublicTcpip={onCancelPublicTcpip}
           isLocked={isSessionActive}
           isOffline={isOffline}
           actions={emulatorActions}

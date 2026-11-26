@@ -1,6 +1,18 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { ScreenErrorCode, ScreenFpsCap, ScreenNavButton, ScreenSize } from '@lionscope/protocol/wire';
-import { DEFAULT_SCREEN_SIZE, SCREEN_SIZES } from '@lionscope/protocol/wire';
+import type {
+  DeviceStreamPreset,
+  DeviceTransport,
+  ScreenErrorCode,
+  ScreenFpsCap,
+  ScreenNavButton,
+  ScreenSize,
+} from '@lionscope/protocol/wire';
+import {
+  DEFAULT_DEVICE_STREAM_PRESET,
+  DEFAULT_SCREEN_SIZE,
+  isValidDeviceStreamPreset,
+  SCREEN_SIZES,
+} from '@lionscope/protocol/wire';
 import { useElementSize } from '../../hooks/useElementSize.ts';
 import { useStoredState } from '../../hooks/useStoredState.ts';
 import { pasteShortcut } from '../../lib/clipboard.ts';
@@ -10,6 +22,7 @@ import { fitDeviceGlass, mirrorPoint, type FramePoint } from '../../lib/screenIn
 import type { ScreenConnectionState, ScreenError } from '../../lib/screenSocket.ts';
 import type { VideoError } from '../../lib/videoDecoder.ts';
 import { Segmented } from '../ui/Segmented.tsx';
+import { Select } from '../ui/Select.tsx';
 import {
   BackIcon,
   CameraIcon,
@@ -38,6 +51,16 @@ const DEFAULT_ASPECT = 9 / 20;
 function parseScreenSize(raw: string | null): ScreenSize {
   return SCREEN_SIZES.find((size) => String(size) === raw) ?? DEFAULT_SCREEN_SIZE;
 }
+
+function parseStreamPreset(raw: string | null): DeviceStreamPreset {
+  return isValidDeviceStreamPreset(raw) ? raw : DEFAULT_DEVICE_STREAM_PRESET;
+}
+
+const STREAM_PRESET_OPTIONS: readonly { value: DeviceStreamPreset; label: string; title: string }[] = [
+  { value: 'standard', label: 'Standard', title: 'Standard (60 fps, default bitrate — best for USB)' },
+  { value: 'wifi', label: 'Wi-Fi', title: 'Wi-Fi (30 fps, 2 Mbps — lower latency over Wi-Fi)' },
+  { value: 'low', label: 'Low', title: 'Low (15 fps, 1 Mbps — saves bandwidth on weak Wi-Fi)' },
+];
 
 const SIZE_OPTIONS = SCREEN_SIZES.map((size) => ({ value: size, label: String(size), title: `${size} px` }));
 
@@ -106,21 +129,37 @@ const ERROR_TEXT: Record<ScreenErrorCode, string> = {
 };
 
 function errorText(error: ScreenError): string {
-  // The server's own reason (scrcpy's, sanitised) says more than a generic line.
+  // The server's own reason (scrcpy's or Wi-Fi drop detail, sanitised) says more than a generic line.
   if (error.code === 'mirror_failed' && error.message !== '') {
     return `Couldn’t start mirroring: ${error.message}`;
+  }
+  if (error.code === 'ended' && error.message !== '') {
+    return error.message;
   }
   return ERROR_TEXT[error.code];
 }
 
-function statusText(state: ScreenConnectionState, videoError: VideoError | null): string | null {
+function statusText(
+  state: ScreenConnectionState,
+  videoError: VideoError | null,
+  isWireless: boolean,
+): string | null {
   if (videoError !== null) return videoError.message;
   if (state.status === 'live') return null;
-  if (state.status === 'failed') return state.error ? errorText(state.error) : 'The screen stream failed.';
-  if (state.status === 'reconnecting') {
-    return `${state.error ? errorText(state.error) : 'The stream dropped'} — reconnecting…`;
+  if (state.status === 'failed') {
+    const base = state.error ? errorText(state.error) : 'The screen stream failed.';
+    return isWireless ? `${base} Check that the phone is awake and on the same Wi-Fi network.` : base;
   }
-  return 'Connecting to the screen…';
+  if (state.status === 'reconnecting') {
+    const attemptNote = state.attempt > 0 ? ` (attempt ${state.attempt})` : '';
+    const reason = state.error
+      ? errorText(state.error)
+      : isWireless
+        ? 'Wi-Fi stream dropped'
+        : 'The stream dropped';
+    return `${reason} — reconnecting${attemptNote}…`;
+  }
+  return isWireless ? 'Connecting over Wi-Fi…' : 'Connecting to the screen…';
 }
 
 /** Mirroring works but injection is refused (Xiaomi / HyperOS needs an extra developer option). */
@@ -181,6 +220,8 @@ type Props = {
   name: string;
   label: string;
   kind: ScreenTargetKind;
+  /** Device transport (`usb` / `wireless` / `emulator`), used for Wi-Fi reconnect feedback. */
+  transport?: DeviceTransport;
   /** Stream only while the panel is on screen and the tab is visible. */
   isVisible: boolean;
   /** At the far end of the toolbar, apart from the device keys (Shut down for an emulator). */
@@ -188,9 +229,11 @@ type Props = {
 };
 
 /** The live emulator or device screen in a device frame, with its controls. */
-export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Props) {
+export function ScreenView({ serial, name, label, kind, transport, isVisible, endTool }: Props) {
   const [size, setSize] = useStoredState<ScreenSize>(LAYOUT_KEYS.screenSize, parseScreenSize);
   const [fpsCap, setFpsCap] = useStoredState<ScreenFpsCap>(LAYOUT_KEYS.screenFpsCap, parseStoredFpsCap);
+  const [preset, setPreset] = useStoredState<DeviceStreamPreset>(LAYOUT_KEYS.screenPreset, parseStreamPreset);
+  const isWireless = transport === 'wireless';
   const [fpsNote, setFpsNote] = useState<string | null>(null);
   useEffect(() => {
     if (fpsNote === null) return;
@@ -205,6 +248,7 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       name,
       size,
       fpsCap: kind === 'emulator' ? fpsCap : undefined,
+      preset: kind === 'device' ? preset : undefined,
       isEnabled: isVisible,
       events: streamEvents,
     });
@@ -239,7 +283,8 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       : streamAspect;
   const glass = fitDeviceGlass(stage.width, stage.height, aspect);
   const orientation = aspect > 1 ? 'landscape' : 'portrait';
-  const status = statusText(state, videoError);
+  const status = statusText(state, videoError, isWireless);
+  const presetInfo = STREAM_PRESET_OPTIONS.find((option) => option.value === preset);
   // Many apps lock their orientation; a device only rotates when the foreground app allows it.
   const rotateNote = kind === 'device' ? ' (best effort on a device)' : '';
 
@@ -384,6 +429,11 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
               <div className="device-glass-status" data-tone={state.status} role="status">
                 {state.status !== 'failed' && <span className="banner-spinner" aria-hidden="true" />}
                 <span>{status}</span>
+                {state.status === 'reconnecting' && isWireless && (
+                  <button type="button" className="btn device-retry" onClick={retry}>
+                    Reconnect now
+                  </button>
+                )}
                 {state.status === 'failed' && (videoError === null || videoError.canRetry) && (
                   <button type="button" className="btn device-retry" onClick={retry}>
                     Try again
@@ -399,6 +449,24 @@ export function ScreenView({ serial, name, label, kind, isVisible, endTool }: Pr
       <InputDeniedBanner label={label} message={inputDenied} onDismiss={dismissInputDenied} />
       <div className="device-nav" role="group" aria-label="Navigation buttons">
         {kind === 'emulator' && <FpsCapPicker value={fpsCap} onChange={setFpsCap} onNote={setFpsNote} />}
+        {kind === 'device' && (
+          <span className="device-fps-cap device-stream-preset">
+            <Select
+              aria-label="Stream quality preset"
+              title={presetInfo?.title ?? 'Stream quality preset'}
+              value={preset}
+              onChange={(event) => {
+                if (isValidDeviceStreamPreset(event.target.value)) setPreset(event.target.value);
+              }}
+            >
+              {STREAM_PRESET_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </span>
+        )}
         <span className="device-fps mono" title="Frames per second" data-live={isLive || undefined}>
           {isLive ? fps : '–'}
           <span className="device-fps-unit"> fps</span>

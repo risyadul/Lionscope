@@ -28,26 +28,144 @@ describe('parseDevices', () => {
         product: 'sdk_gphone16k_arm64',
         model: 'sdk_gphone16k_arm64',
         transportId: '4',
+        transport: 'emulator',
       },
     ]);
   });
 
-  it('maps states, skips daemon banners and drops unsafe serials', () => {
+  it('maps states, derives transport, skips daemon banners and drops unsafe serials', () => {
     const output = [
       '* daemon not running; starting now at tcp:5037',
       '* daemon started successfully',
       'List of devices attached',
       'R58M123ABC             unauthorized usb:1-1 transport_id:7',
+      'LIBUSB999              device product:panther model:Pixel_8 transport_id:8',
       '192.168.1.5:5555       offline',
+      '[fd00::1]:5555         device product:panther model:Pixel_7 transport_id:9',
+      '[::ffff:192.168.1.20]:5555 device product:panther model:Pixel_7 transport_id:11',
+      '[192.168.1.1::1]:5555  device product:panther model:Bad_IPv6 transport_id:12',
+      'adb-R58M123ABC-xyz._adb-tls-connect._tcp device product:panther model:Pixel_7 transport_id:10',
       'weird-1                recovery',
       'bad;serial             device',
+      '-badflag               device',
       'lonely',
       '',
     ].join('\n');
     expect(parseDevices(output)).toEqual([
-      { serial: 'R58M123ABC', state: 'unauthorized', transportId: '7' },
-      { serial: '192.168.1.5:5555', state: 'offline' },
+      { serial: 'R58M123ABC', state: 'unauthorized', transportId: '7', transport: 'usb' },
+      {
+        serial: 'LIBUSB999',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_8',
+        transportId: '8',
+        transport: 'usb',
+      },
+      { serial: '192.168.1.5:5555', state: 'offline', transport: 'wireless' },
+      {
+        serial: '[fd00::1]:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '9',
+        transport: 'wireless',
+      },
+      {
+        serial: '[::ffff:192.168.1.20]:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '11',
+        transport: 'wireless',
+      },
+      {
+        serial: 'adb-R58M123ABC-xyz._adb-tls-connect._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '10',
+        transport: 'wireless',
+      },
       { serial: 'weird-1', state: 'unknown' },
+    ]);
+  });
+
+  it('preserves AOSP transport serials (vsock/usb/tcp/local) and classifies ADB mDNS service types as wireless', () => {
+    const longHost = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(56)}.test:65535`;
+    const output = [
+      'List of devices attached',
+      'vsock:2:5555           device product:cf_x86_64 model:Cuttlefish transport_id:1',
+      'vsock:2:70000          device product:cf_x86_64 model:CuttlefishHiPort transport_id:6',
+      'usb:5555               device product:panther model:AmbiguousHost transport_id:7',
+      'USB:5555               device product:panther model:UppercaseAmbiguous transport_id:8',
+      'usb:1-2.3              device product:panther model:Pixel_7 transport_id:2',
+      'adb-SAMPLE._adb._tcp   device product:panther model:Pixel_8 transport_id:3',
+      'lab._adb-tls-connect._tcp device product:panther model:Pixel_9 transport_id:4',
+      `${longHost} device product:panther model:Long_Host transport_id:5`,
+      '',
+    ].join('\n');
+
+    expect(parseDevices(output)).toEqual([
+      {
+        serial: 'vsock:2:5555',
+        state: 'device',
+        product: 'cf_x86_64',
+        model: 'Cuttlefish',
+        transportId: '1',
+      },
+      {
+        serial: 'vsock:2:70000',
+        state: 'device',
+        product: 'cf_x86_64',
+        model: 'CuttlefishHiPort',
+        transportId: '6',
+      },
+      {
+        serial: 'usb:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'AmbiguousHost',
+        transportId: '7',
+      },
+      {
+        serial: 'USB:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'UppercaseAmbiguous',
+        transportId: '8',
+      },
+      {
+        serial: 'usb:1-2.3',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '2',
+        transport: 'usb',
+      },
+      {
+        serial: 'adb-SAMPLE._adb._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_8',
+        transportId: '3',
+        transport: 'wireless',
+      },
+      {
+        serial: 'lab._adb-tls-connect._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_9',
+        transportId: '4',
+        transport: 'wireless',
+      },
+      {
+        serial: longHost,
+        state: 'device',
+        product: 'panther',
+        model: 'Long_Host',
+        transportId: '5',
+        transport: 'wireless',
+      },
     ]);
   });
 });

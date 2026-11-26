@@ -332,4 +332,51 @@ describe('physical device errors', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('sends setPreset when switching stream quality preset and shows wireless reconnect feedback on drops', async () => {
+    const wifiPhone: DeviceInfo = {
+      serial: '192.168.1.42:5555',
+      state: 'device',
+      model: 'Pixel_8',
+      transport: 'wireless',
+    };
+    render(
+      <DevicePanel
+        target={{ serial: wifiPhone.serial, emulator: null }}
+        device={wifiPhone}
+        hasDeviceList
+        isOnline
+        isVisible
+        pending={null}
+        onBoot={() => {}}
+      />,
+    );
+    const socket = FakeScreenSocket.latest();
+    act(() => {
+      socket.open();
+      socket.receiveJson({ ...DEVICE_SCREEN_INFO, serial: wifiPhone.serial });
+      socket.receive(videoMessage({ config: true }, 0, CONFIG_PAYLOAD));
+      socket.receive(videoMessage({ key: true }, 1000, IDR_PAYLOAD));
+    });
+    await flush();
+
+    const presetSelect = screen.getByLabelText('Stream quality preset') as HTMLSelectElement;
+    expect(presetSelect.value).toBe('standard');
+    fireEvent.change(presetSelect, { target: { value: 'wifi' } });
+    expect(socket.messages()).toContainEqual({ type: 'setPreset', preset: 'wifi' });
+
+    // Dropping the wireless socket shows clear Wi-Fi reconnect feedback + Reconnect now action.
+    act(() => {
+      socket.receiveJson({
+        type: 'screenError',
+        code: 'ended',
+        message: 'Wi-Fi connection dropped — waiting for the device to reconnect',
+      });
+      socket.close();
+    });
+    expect(screen.getByText(/Wi-Fi connection dropped.*reconnecting \(attempt 1\)/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect now' }));
+    expect(FakeScreenSocket.instances).toHaveLength(2);
+    expect(FakeScreenSocket.latest().url).toContain('preset=wifi');
+  });
 });

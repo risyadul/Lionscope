@@ -6,6 +6,16 @@
  * dashboard → server messages lives in `./index.ts`.
  */
 
+import {
+  isAdbMdnsTransportSerial,
+  isAdbTransportSerial,
+  isReservedTransportHostPort,
+  parseWirelessAddress,
+} from './wireless.ts';
+import type { DeviceTransport } from './wireless.ts';
+
+export * from './wireless.ts';
+
 /** Dashboard ↔ server. They ship together; a cached dashboard of another version shows a mismatch banner. */
 export const PROTOCOL_VERSION = 14;
 
@@ -19,13 +29,26 @@ export const DEFAULT_DEVICE_GATEWAY_PORT = 8700;
 // Identifiers (validated because they end up in adb arguments / device shell commands)
 // ---------------------------------------------------------------------------
 
-/** adb serials: `emulator-5554`, `R58M123ABC`, `192.168.1.5:5555`, `adb-R58M._adb-tls-connect._tcp`. */
-export const SERIAL_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+/** Maximum accepted length for any adb serial (covers 253-char RFC 1123 hostname + `:65535`). */
+export const MAX_SERIAL_LENGTH = 260;
+/** adb serials: `emulator-5554`, `R58M123ABC`, `192.168.1.5:5555`, `[fd00::1]:5555`, `[::ffff:192.168.1.20]:5555`, `vsock:2:5555`, `adb-R58M._adb-tls-connect._tcp`. */
+export const SERIAL_PATTERN =
+  /^(?:\[[0-9A-Fa-f:.]{2,45}\]:[1-9]\d{0,4}|[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127})$/;
 /** Android application id (at least two segments, Java identifier rules). */
 export const PACKAGE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 
 export function isValidSerial(value: string): boolean {
-  return SERIAL_PATTERN.test(value);
+  if (value.length === 0 || value.length > MAX_SERIAL_LENGTH || value.startsWith('-')) return false;
+  if (value.startsWith('[')) {
+    return parseWirelessAddress(value).ok;
+  }
+  if (value.includes(':')) {
+    return (
+      parseWirelessAddress(value).ok || isAdbTransportSerial(value) || isReservedTransportHostPort(value)
+    );
+  }
+  if (isAdbMdnsTransportSerial(value)) return true;
+  return value.length <= 128 && SERIAL_PATTERN.test(value);
 }
 
 export function isValidPackageName(value: string): boolean {
@@ -44,6 +67,7 @@ export interface DeviceInfo {
   model?: string;
   product?: string;
   transportId?: string;
+  transport?: DeviceTransport;
 }
 
 export interface AppInfo {
@@ -630,6 +654,32 @@ export function isValidScreenFpsCap(value: unknown): value is ScreenFpsCap {
   );
 }
 
+/**
+ * Physical-device (scrcpy) stream presets.
+ * - `standard`: 60 fps with scrcpy's default bitrate (~8 Mbps), matching existing USB behavior.
+ * - `wifi`: 30 fps at 2 Mbps for smooth, low-latency mirroring over Wi-Fi.
+ * - `low`: 15 fps at 1 Mbps for congested or weak Wi-Fi links.
+ */
+export const DEVICE_STREAM_PRESETS = ['standard', 'wifi', 'low'] as const;
+export type DeviceStreamPreset = (typeof DEVICE_STREAM_PRESETS)[number];
+export const DEFAULT_DEVICE_STREAM_PRESET: DeviceStreamPreset = 'standard';
+
+export interface DeviceStreamPresetSpec {
+  maxFps: number;
+  /** Omitted uses scrcpy's default bitrate (~8 Mbps). */
+  bitRate?: number;
+}
+
+export const DEVICE_STREAM_PRESET_SPECS: Readonly<Record<DeviceStreamPreset, DeviceStreamPresetSpec>> = {
+  standard: { maxFps: 60 },
+  wifi: { maxFps: 30, bitRate: 2_000_000 },
+  low: { maxFps: 15, bitRate: 1_000_000 },
+};
+
+export function isValidDeviceStreamPreset(value: unknown): value is DeviceStreamPreset {
+  return typeof value === 'string' && (DEVICE_STREAM_PRESETS as readonly string[]).includes(value);
+}
+
 /** The emulator accepts up to 10 concurrent touch points. */
 export const MAX_TOUCH_POINTS = 10;
 export const MAX_SCREEN_TEXT_CHARS = 256;
@@ -750,6 +800,8 @@ export type ScreenClientMessage =
    * any other value is ignored like every invalid message. Ignored for physical devices.
    */
   | { type: 'setFpsCap'; fps: ScreenFpsCap }
+  /** Physical devices: switch scrcpy stream preset (`standard`, `wifi`, `low`); restarts capture. Ignored for emulators. */
+  | { type: 'setPreset'; preset: DeviceStreamPreset }
   /** Answered with one SCREEN_BINARY_KIND.screenshot message (full resolution, as shown). */
   | { type: 'screenshot' }
   /**
@@ -1758,6 +1810,85 @@ export const DEFAULT_PERMISSIONS: Readonly<Permissions> = Object.freeze({
   storageWrite: true,
 });
 
+export interface DiscoveredWirelessDevice {
+  instanceName: string;
+  host: string;
+  port: number;
+  target: string;
+  serial: string;
+  connected: boolean;
+}
+
+export type QrPairingUpdate =
+  | { sessionId: string; status: 'waiting' }
+  | { sessionId: string; status: 'pairing'; target: string }
+  | {
+      sessionId: string;
+      status: 'paired';
+      target: string;
+      host: string;
+      connectedSerial: string | null;
+      /** Discovered connect endpoint when automatic connect was skipped (e.g. public IP requiring review). */
+      discoveredTarget?: string;
+      connectNote?: string;
+    }
+  | { sessionId: string; status: 'failed'; message: string }
+  | { sessionId: string; status: 'expired' }
+  | { sessionId: string; status: 'cancelled' };
+
+export type WirelessActionResult =
+  | { action: 'connect'; ok: true; serial: string; target: string; alreadyConnected: boolean }
+  | { action: 'connect'; ok: false; message: string }
+  | { action: 'disconnect'; ok: true; target: string }
+  | { action: 'disconnect'; ok: false; message: string }
+  | {
+      action: 'pair';
+      ok: true;
+      target: string;
+      host: string;
+      /** Serial connected after pairing (from explicit connect port or mDNS discovery), or null if user must enter connect port. */
+      connectedSerial: string | null;
+      /** Discovered connect endpoint when automatic connect was skipped (e.g. public IP requiring review). */
+      discoveredTarget?: string;
+      /** Non-fatal note if pairing succeeded but follow-up connect failed or needs a manual connect port. */
+      connectNote?: string;
+    }
+  | { action: 'pair'; ok: false; message: string }
+  | { action: 'mdns'; ok: true; services: DiscoveredWirelessDevice[] }
+  | { action: 'mdns'; ok: false; message: string }
+  | {
+      action: 'startQr';
+      ok: true;
+      sessionId: string;
+      payload: string;
+      serviceName: string;
+      expiresAt: number;
+    }
+  | { action: 'startQr'; ok: false; message: string }
+  | {
+      action: 'tcpip';
+      ok: true;
+      usbSerial: string;
+      serial: string;
+      target: string;
+      port: number;
+      alreadyConnected: boolean;
+    }
+  | {
+      action: 'tcpip';
+      ok: false;
+      /** True when the device reported a public Wi-Fi IP and the user must confirm exact serial + host + port first. */
+      needsPublicConfirmation: true;
+      /** One-shot confirmation token bound on the server to the WS connection, USB serial, and exact target. */
+      confirmationId: string;
+      usbSerial: string;
+      host: string;
+      port: number;
+      target: string;
+      message: string;
+    }
+  | { action: 'tcpip'; ok: false; needsPublicConfirmation?: false; message: string };
+
 export type ServerMessage =
   | {
       type: 'hello';
@@ -1837,6 +1968,10 @@ export type ServerMessage =
    * commit that finished after a `provisional` answer), to every client. Never undoable.
    */
   | { type: 'storageOutcome'; serial: string; outcome: StorageWriteOutcome }
+  /** Answer to this client's wireless device action (`connectDevice` / `disconnectDevice` / ...). */
+  | { type: 'wirelessResult'; requestId: number; result: WirelessActionResult }
+  /** Status transition of a client's active QR pairing session (`startQrPairing`). */
+  | { type: 'qrPairing'; update: QrPairingUpdate }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -1863,6 +1998,8 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'locations',
   'storage',
   'storageOutcome',
+  'wirelessResult',
+  'qrPairing',
   'error',
 ]);
 
@@ -1967,7 +2104,37 @@ export type ClientMessage =
   | { type: 'storageWrite'; requestId: number; write: StorageWriteInput }
   | { type: 'storageQuery'; requestId: number; query: StorageQueryInput }
   /** 0.13.0. The server's storage write audit (needs --allow-storage-read): answered with `storage` (`kind: 'audit'`). */
-  | { type: 'storageAudit'; requestId: number };
+  | { type: 'storageAudit'; requestId: number }
+  /** Connect to a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
+  | { type: 'connectDevice'; requestId: number; address: string }
+  /** Disconnect a wireless ADB device (`host:port` or mDNS serial); answered with `wirelessResult`. */
+  | { type: 'disconnectDevice'; requestId: number; serial: string }
+  /**
+   * Pair an Android 11+ wireless device (`adb pair <address> <code>`) and optionally connect on the
+   * separate connect port (or via mDNS discovery). The pairing code is never stored, logged, or echoed.
+   */
+  | {
+      type: 'pairDevice';
+      requestId: number;
+      address: string;
+      code: string;
+      connectAddress?: string;
+    }
+  /** List wireless devices discovered via `adb mdns services` (`_adb-tls-connect._tcp`). */
+  | { type: 'listMdnsServices'; requestId: number }
+  /** Start an ephemeral QR pairing session; answered with `wirelessResult` (`startQr`) + `qrPairing` updates. */
+  | { type: 'startQrPairing'; requestId: number }
+  /** Cancel an active QR pairing session (stops polling and erases its ephemeral password). */
+  | { type: 'cancelQrPairing'; sessionId: string }
+  /** Switch a USB physical device to TCP/IP mode (`adb tcpip <port>`) and connect over Wi-Fi. */
+  | {
+      type: 'enableWirelessTcpip';
+      requestId: number;
+      serial: string;
+      port?: number;
+      /** One-shot dashboard confirmation bound to the server-issued confirmationId, serial, and exact `host:port`. */
+      confirmPublic?: { confirmationId: string; target: string };
+    };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

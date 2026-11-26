@@ -20,7 +20,12 @@ import {
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
+  DEVICE_STREAM_PRESETS,
+  isAdbMdnsTransportSerial,
+  isMdnsSerial,
   isValidPackageName,
+  isValidPairingCode,
+  parseWirelessAddress,
   LINK_NONCE_PATTERN,
   MAX_CLIENT_MESSAGE_BYTES,
   MAX_HTTP_BODY_BYTES,
@@ -76,13 +81,15 @@ import {
   MAX_VIEW_PATH_NODES,
   MAX_VIEW_TREE_CLASSES,
   MAX_TOUCH_POINTS,
+  MAX_WIRELESS_PORT,
   MIN_DEVICE_PROTOCOL_VERSION,
+  MIN_WIRELESS_PORT,
   normalizeViewValue,
   PACKAGE_NAME_PATTERN,
   MAX_SCREEN_FPS_CAP,
   MIN_SCREEN_FPS_CAP,
   SCREEN_SIZES,
-  SERIAL_PATTERN,
+  isValidSerial,
   STALL_THRESHOLDS_MS,
   VIEW_PROPERTIES,
   VIEW_PROPERTY_GROUPS,
@@ -121,7 +128,25 @@ import {
   storageWriteInputSchema,
 } from './storage.ts';
 
-export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
+export const serialSchema = z.string().refine(isValidSerial, 'invalid adb serial');
+export const wirelessTargetSchema = z
+  .string()
+  .min(1)
+  .max(260)
+  .refine(
+    (value) => isMdnsSerial(value) || isAdbMdnsTransportSerial(value) || parseWirelessAddress(value).ok,
+    'invalid wireless ADB address',
+  );
+export const wirelessAddressSchema = z
+  .string()
+  .min(1)
+  .max(260)
+  .refine((value) => parseWirelessAddress(value).ok, 'invalid wireless ADB host:port');
+export const pairingCodeSchema = z
+  .string()
+  .refine(isValidPairingCode, 'Pairing code must be exactly 6 digits');
+export const qrSessionIdSchema = z.string().regex(/^[0-9a-f]{16}$/, 'invalid QR pairing session id');
+export const tcpipConfirmationIdSchema = z.string().regex(/^[0-9a-f]{16}$/, 'invalid confirmation id');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
 export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
 /** Inspector snapshot ids as the server assigns them (`InspectorSnapshot.id`). */
@@ -336,6 +361,39 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
     .object({ type: z.literal('storageQuery'), requestId: clientRequestId, query: storageQueryInputSchema })
     .strict(),
   z.object({ type: z.literal('storageAudit'), requestId: clientRequestId }).strict(),
+  z
+    .object({ type: z.literal('connectDevice'), requestId: clientRequestId, address: wirelessTargetSchema })
+    .strict(),
+  z
+    .object({ type: z.literal('disconnectDevice'), requestId: clientRequestId, serial: wirelessTargetSchema })
+    .strict(),
+  z
+    .object({
+      type: z.literal('pairDevice'),
+      requestId: clientRequestId,
+      address: wirelessAddressSchema,
+      code: pairingCodeSchema,
+      connectAddress: wirelessTargetSchema.optional(),
+    })
+    .strict(),
+  z.object({ type: z.literal('listMdnsServices'), requestId: clientRequestId }).strict(),
+  z.object({ type: z.literal('startQrPairing'), requestId: clientRequestId }).strict(),
+  z.object({ type: z.literal('cancelQrPairing'), sessionId: qrSessionIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal('enableWirelessTcpip'),
+      requestId: clientRequestId,
+      serial: serialSchema,
+      port: z.number().int().min(MIN_WIRELESS_PORT).max(MAX_WIRELESS_PORT).optional(),
+      confirmPublic: z
+        .object({
+          confirmationId: tcpipConfirmationIdSchema,
+          target: wirelessAddressSchema,
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -467,6 +525,7 @@ export const screenClientMessageSchema = z.discriminatedUnion('type', [
       fps: z.number().int().min(MIN_SCREEN_FPS_CAP).max(MAX_SCREEN_FPS_CAP),
     })
     .strict(),
+  z.object({ type: z.literal('setPreset'), preset: z.literal(DEVICE_STREAM_PRESETS) }).strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
   z.object({ type: z.literal('keyFrame') }).strict(),
   z.object({ type: z.literal('clipboardSync'), enabled: z.boolean() }).strict(),

@@ -39,6 +39,12 @@ import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTool
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
 import { scrollToTool, tapElementTool, typeTextTool, uiTreeTool, waitForTool } from './uiTools.ts';
+import {
+  connectDeviceTool,
+  disconnectDeviceTool,
+  enableWirelessAdbTool,
+  pairDeviceTool,
+} from './wirelessTools.ts';
 import { ToolError } from './tool.ts';
 import type { AgentBaseContext, AgentTool } from './tool.ts';
 
@@ -88,6 +94,10 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   clearLocationTool,
   bootEmulatorTool,
   shutdownEmulatorTool,
+  connectDeviceTool,
+  disconnectDeviceTool,
+  pairDeviceTool,
+  enableWirelessAdbTool,
   listStorageTool,
   readStorageTool,
   writeStorageTool,
@@ -105,7 +115,13 @@ export const MAX_DEVICE_CALLS = 2;
 /** The device a device tool will act on, as far as its arguments say (an unnamed device shares one key). */
 function deviceKey(ctx: AgentBaseContext, args: Record<string, unknown>): string {
   const named =
-    typeof args.serial === 'string' ? args.serial : typeof args.avdName === 'string' ? args.avdName : null;
+    typeof args.serial === 'string'
+      ? args.serial
+      : typeof args.avdName === 'string'
+        ? args.avdName
+        : typeof args.address === 'string'
+          ? args.address
+          : null;
   return named ?? ctx.sessions.getSessionState().serial ?? 'default';
 }
 

@@ -6,6 +6,30 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Physical-device stream presets and wireless resilience: selectable **Standard** (60 fps, default bitrate),
+  **Wi-Fi** (30 fps, 2 Mbps), and **Low** (15 fps, 1 Mbps) scrcpy stream presets in the Device column (keeping
+  existing USB behavior as default), validated `max_fps` and `video_bit_rate` in `scrcpyServerArgs`, automatic
+  leftover scrcpy/forward cleanup and clear reconnect feedback on Wi-Fi drops, and documentation for battery
+  screen-sleep behavior over Wi-Fi.
+- USB → Wi-Fi handoff: **Use Wi-Fi** button beside the device picker for ready USB phones (with a confirmation
+  dialog noting that port 5555 stays open until reboot) and `enable_wireless_adb` agent tool to read the phone's
+  Wi-Fi IP, run `adb tcpip 5555`, and connect wirelessly.
+- Wireless QR pairing and mDNS discovery: **Pair with QR** generates an ephemeral
+  `WIFI:T:ADB;S:<name>;P:<password>;;` QR code (using `uqr`), polls `adb mdns services` for the matching
+  `_adb-tls-pairing._tcp` service, pairs, and connects automatically; the **Connect** tab lists discovered
+  `_adb-tls-connect._tcp` wireless devices for one-click connection.
+- Android 11+ wireless pairing by 6-digit code: **Pair with code** tab in the dashboard Wireless dialog and
+  `pair_device` agent tool (`adb pair`), followed by automatic connection via an explicit connect port or mDNS
+  (`_adb-tls-connect._tcp`) discovery, or pre-filled fallback to the Connect tab when the separate connect port is
+  needed. Pairing codes are redacted in `describeArgs`, scrubbed from errors, and never stored, logged, or echoed.
+- Wireless ADB connect and disconnect: connect physical Android devices by `host:port` (IPv4, bracketed IPv6, or
+  hostname) or mDNS serial from the dashboard's **Connect wireless device** dialog (with a warning for public IP
+  addresses) or the `connect_device` / `disconnect_device` agent tools (restricted to private/LAN, link-local, IPv6
+  ULA, Tailscale, mDNS serials, or a `host:port` connected from the dashboard in the current server run). The device
+  picker shows **USB** / **Wi-Fi** transport badges and a **Disconnect** action for wireless devices.
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

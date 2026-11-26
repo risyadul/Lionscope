@@ -92,6 +92,27 @@ describe('scrcpy server options', () => {
     }
   });
 
+  it('accepts validated maxFps and bitRate options and rejects out-of-range values', () => {
+    const wifiArgs = scrcpyServerArgs('0a1b2c3d', 1200, { maxFps: 30, bitRate: 2_000_000 });
+    expect(wifiArgs).toContain('max_fps=30');
+    expect(wifiArgs).toContain('video_bit_rate=2000000');
+
+    const usbDefault = scrcpyServerArgs('0a1b2c3d', 1200, { maxFps: 60 });
+    expect(usbDefault).toContain('max_fps=60');
+    expect(usbDefault.some((arg) => arg.startsWith('video_bit_rate='))).toBe(false);
+
+    for (const bad of [
+      { maxFps: 4 },
+      { maxFps: 61 },
+      { maxFps: 30.5 },
+      { bitRate: 100_000 },
+      { bitRate: 50_000_000 },
+      { bitRate: 2_000_000.5 },
+    ]) {
+      expect(() => scrcpyServerArgs('0a1b2c3d', 1200, bad)).toThrow();
+    }
+  });
+
   it('generates 31-bit hex scids', () => {
     for (let i = 0; i < 50; i += 1) {
       const scid = randomScid();

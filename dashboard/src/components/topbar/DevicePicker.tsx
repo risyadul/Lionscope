@@ -1,5 +1,11 @@
-import type { ReactNode } from 'react';
-import type { DeviceInfo, EmulatorInfo } from '@lionscope/protocol/wire';
+import { useState, type ReactNode } from 'react';
+import {
+  isUsbTcpipEligible,
+  resolveDeviceTransport,
+  type DeviceInfo,
+  type DeviceTransport,
+  type EmulatorInfo,
+} from '@lionscope/protocol/wire';
 import { deviceName, deviceStateReason, isReady } from '../../lib/devices.ts';
 import {
   avdValue,
@@ -9,7 +15,9 @@ import {
   parseAvdValue,
   standaloneAvds,
 } from '../../lib/emulators.ts';
+import { ConfirmDialog } from '../ui/ConfirmDialog.tsx';
 import { Select } from '../ui/Select.tsx';
+import type { PendingPublicTcpip } from '../../hooks/useWirelessActions.ts';
 
 export const DEVICE_PICKER_ID = 'device-picker';
 
@@ -23,11 +31,31 @@ type Props = {
   onChange: (serial: string) => void;
   onAvdChange: (avdName: string) => void;
   onRefresh: () => void;
+  /** Opens the wireless ADB connect/pair dialog. */
+  onOpenWireless?: () => void;
+  /** Disconnects the selected wireless device (`adb disconnect`). */
+  onDisconnectWireless?: (serial: string) => void;
+  /** True while the selected wireless device is disconnecting. */
+  isDisconnecting?: boolean;
+  /** Switches a USB physical device to TCP/IP mode (`adb tcpip 5555`) and connects over Wi-Fi. */
+  onSwitchToWifi?: (serial: string) => void;
+  /** True while the selected USB device is switching to Wi-Fi. */
+  isSwitchingToWifi?: boolean;
+  /** Pending public-IP confirmation returned by the server before `adb tcpip` runs. */
+  pendingPublicTcpip?: PendingPublicTcpip | null;
+  onConfirmPublicTcpip?: (serial: string, port: number, confirmationId: string, target: string) => void;
+  onCancelPublicTcpip?: () => void;
   isLocked: boolean;
   isOffline: boolean;
   /** Boot / Shut down for the selected emulator, beside the select. */
   actions?: ReactNode;
 };
+
+function transportBadgeLabel(transport: DeviceTransport | undefined): string | null {
+  if (transport === 'wireless') return 'Wi-Fi';
+  if (transport === 'usb') return 'USB';
+  return null;
+}
 
 function deviceOptionLabel(device: DeviceInfo, emulators: readonly EmulatorInfo[] | null): string {
   const emulator = emulatorForSerial(emulators, device.serial);
@@ -35,7 +63,9 @@ function deviceOptionLabel(device: DeviceInfo, emulators: readonly EmulatorInfo[
   const isTransient = emulator?.state === 'booting' || emulator?.state === 'shutting_down';
   const reason = emulator && isTransient ? emulatorStateNote(emulator) : deviceStateReason(device.state);
   const name = emulator ? emulatorLabel(emulator) : deviceName(device);
-  return `${name} · ${device.serial}${reason ? ` — ${reason}` : ''}`;
+  const badge = emulator ? null : transportBadgeLabel(resolveDeviceTransport(device));
+  const suffix = badge ? ` (${badge})` : '';
+  return `${name} · ${device.serial}${suffix}${reason ? ` — ${reason}` : ''}`;
 }
 
 export function DevicePicker({
@@ -46,10 +76,20 @@ export function DevicePicker({
   onChange,
   onAvdChange,
   onRefresh,
+  onOpenWireless,
+  onDisconnectWireless,
+  isDisconnecting = false,
+  onSwitchToWifi,
+  isSwitchingToWifi = false,
+  pendingPublicTcpip = null,
+  onConfirmPublicTcpip,
+  onCancelPublicTcpip,
   isLocked,
   isOffline,
   actions,
 }: Props) {
+  const [confirmDisconnectSerial, setConfirmDisconnectSerial] = useState<string | null>(null);
+  const [confirmWifiHandoffSerial, setConfirmWifiHandoffSerial] = useState<string | null>(null);
   const list = devices ?? [];
   const avds = standaloneAvds(emulators, devices);
   const hasReady = list.some(isReady);
@@ -70,7 +110,52 @@ export function DevicePicker({
       : emulatorSerial !== null && list.some((d) => d.serial === emulatorSerial)
         ? emulatorSerial
         : value;
-  const isListed = selected !== null && list.some((d) => d.serial === selected);
+  const selectedDevice = selected !== null ? (list.find((d) => d.serial === selected) ?? null) : null;
+  const isListed = selectedDevice !== null;
+  const selectedTransport = selectedDevice ? resolveDeviceTransport(selectedDevice) : undefined;
+  const selectedBadge = emulator === null ? transportBadgeLabel(selectedTransport) : null;
+  const canDisconnect =
+    emulator === null && selectedTransport === 'wireless' && onDisconnectWireless !== undefined;
+  const canSwitchToWifi =
+    emulator === null &&
+    selectedDevice !== null &&
+    isUsbTcpipEligible(selectedDevice) &&
+    onSwitchToWifi !== undefined;
+
+  // Resolve confirmation targets by the serial captured when opening, never by the current selection.
+  const disconnectTarget =
+    confirmDisconnectSerial !== null
+      ? (list.find((d) => d.serial === confirmDisconnectSerial) ?? null)
+      : null;
+  const disconnectTargetEligible =
+    disconnectTarget !== null &&
+    resolveDeviceTransport(disconnectTarget) === 'wireless' &&
+    onDisconnectWireless !== undefined;
+
+  const handoffTarget =
+    confirmWifiHandoffSerial !== null
+      ? (list.find((d) => d.serial === confirmWifiHandoffSerial) ?? null)
+      : null;
+  const handoffTargetEligible =
+    handoffTarget !== null && isUsbTcpipEligible(handoffTarget) && !isLocked && onSwitchToWifi !== undefined;
+
+  const publicTcpipTarget =
+    pendingPublicTcpip !== null
+      ? (list.find((d) => d.serial === pendingPublicTcpip.usbSerial) ?? null)
+      : null;
+  const publicTcpipEligible =
+    pendingPublicTcpip !== null &&
+    publicTcpipTarget !== null &&
+    isUsbTcpipEligible(publicTcpipTarget) &&
+    !isLocked &&
+    onConfirmPublicTcpip !== undefined;
+
+  if (confirmDisconnectSerial !== null && !disconnectTargetEligible) {
+    setConfirmDisconnectSerial(null);
+  }
+  if (confirmWifiHandoffSerial !== null && !handoffTargetEligible) {
+    setConfirmWifiHandoffSerial(null);
+  }
 
   const deviceOptions = list.map((device) => (
     <option key={device.serial} value={device.serial} disabled={deviceStateReason(device.state) !== null}>
@@ -78,11 +163,28 @@ export function DevicePicker({
     </option>
   ));
 
+  const requestDisconnect = () => {
+    if (!selectedDevice || !onDisconnectWireless) return;
+    if (isLocked) setConfirmDisconnectSerial(selectedDevice.serial);
+    else onDisconnectWireless(selectedDevice.serial);
+  };
+
   return (
     <div className="field">
-      <label className="overline" htmlFor={DEVICE_PICKER_ID}>
-        Device
-      </label>
+      <div className="field-head">
+        <label className="overline" htmlFor={DEVICE_PICKER_ID}>
+          Device
+        </label>
+        {selectedBadge !== null && (
+          <span
+            className="transport-badge"
+            data-transport={selectedTransport}
+            title={selectedTransport === 'wireless' ? 'Connected over Wi-Fi' : 'Connected over USB'}
+          >
+            {selectedBadge}
+          </span>
+        )}
+      </div>
       <div className="field-row">
         <Select
           id={DEVICE_PICKER_ID}
@@ -122,6 +224,60 @@ export function DevicePicker({
           )}
         </Select>
         {actions}
+        {canDisconnect && selectedDevice && (
+          <button
+            type="button"
+            className="btn emu-action"
+            onClick={requestDisconnect}
+            disabled={isOffline || isDisconnecting}
+            title={
+              isOffline
+                ? 'Offline — waiting for the server'
+                : `Disconnect wireless device ${selectedDevice.serial}`
+            }
+          >
+            {isDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        )}
+        {canSwitchToWifi && selectedDevice && (
+          <button
+            type="button"
+            className="btn emu-action"
+            onClick={() => setConfirmWifiHandoffSerial(selectedDevice.serial)}
+            disabled={isOffline || isSwitchingToWifi || isLocked}
+            title={
+              isOffline
+                ? 'Offline — waiting for the server'
+                : isLocked
+                  ? 'Stop the session before switching to Wi-Fi'
+                  : `Switch ${deviceName(selectedDevice)} from USB to Wi-Fi (adb tcpip 5555)`
+            }
+          >
+            {isSwitchingToWifi ? 'Switching…' : 'Use Wi-Fi'}
+          </button>
+        )}
+        {onOpenWireless && (
+          <button
+            type="button"
+            className="btn btn--icon"
+            onClick={onOpenWireless}
+            disabled={isOffline}
+            aria-label="Connect wireless device"
+            aria-haspopup="dialog"
+            title={isOffline ? 'Offline — waiting for the server' : 'Connect wireless device'}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <path
+                d="M1.5 5.2a7.8 7.8 0 0 1 11 0M3.7 7.6a4.7 4.7 0 0 1 6.6 0M5.8 9.9a1.8 1.8 0 0 1 2.4 0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <circle cx="7" cy="11.8" r="0.9" fill="currentColor" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           className="btn btn--icon"
@@ -142,6 +298,72 @@ export function DevicePicker({
           </svg>
         </button>
       </div>
+      {disconnectTarget && disconnectTargetEligible && onDisconnectWireless && (
+        <ConfirmDialog
+          title={`Disconnect ${deviceName(disconnectTarget)}?`}
+          confirmLabel="Disconnect"
+          onConfirm={() => {
+            const targetSerial = disconnectTarget.serial;
+            setConfirmDisconnectSerial(null);
+            onDisconnectWireless(targetSerial);
+          }}
+          onCancel={() => setConfirmDisconnectSerial(null)}
+        >
+          <p>
+            The active profiling session on <strong className="mono">{disconnectTarget.serial}</strong> will
+            stop before disconnecting wireless ADB.
+          </p>
+        </ConfirmDialog>
+      )}
+      {handoffTarget && handoffTargetEligible && onSwitchToWifi && (
+        <ConfirmDialog
+          title={`Switch ${deviceName(handoffTarget)} to Wi-Fi?`}
+          confirmLabel="Enable Wi-Fi ADB"
+          onConfirm={() => {
+            const targetSerial = handoffTarget.serial;
+            setConfirmWifiHandoffSerial(null);
+            onSwitchToWifi(targetSerial);
+          }}
+          onCancel={() => setConfirmWifiHandoffSerial(null)}
+        >
+          <p>
+            Lionscope will read this phone’s Wi-Fi IP, run <code className="mono">adb tcpip 5555</code>, and
+            connect wirelessly so you can unplug the USB cable.
+          </p>
+          <p>
+            <strong>
+              TCP/IP port 5555 stays open on the phone’s Wi-Fi network until the phone is rebooted
+            </strong>{' '}
+            (or switched back with <code className="mono">adb usb</code>). Only enable this on a network you
+            trust.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingPublicTcpip && publicTcpipTarget && publicTcpipEligible && onConfirmPublicTcpip && (
+        <ConfirmDialog
+          title={`Public IP on ${deviceName(publicTcpipTarget)}`}
+          confirmLabel={`Enable on ${pendingPublicTcpip.target}`}
+          onConfirm={() => {
+            const { usbSerial, port, confirmationId, target } = pendingPublicTcpip;
+            onConfirmPublicTcpip(usbSerial, port, confirmationId, target);
+          }}
+          onCancel={() => onCancelPublicTcpip?.()}
+        >
+          <p>
+            USB device <strong className="mono">{pendingPublicTcpip.usbSerial}</strong> reported a{' '}
+            <strong>public Wi-Fi IP address</strong>:{' '}
+            <strong className="mono">{pendingPublicTcpip.host}</strong> (port{' '}
+            <strong className="mono">{pendingPublicTcpip.port}</strong>).
+          </p>
+          <p>
+            <strong>
+              Enabling <code className="mono">adb tcpip {pendingPublicTcpip.port}</code> exposes ADB and the
+              Lionscope SDK reverse tunnel on this public address until the phone is rebooted.
+            </strong>{' '}
+            Only continue if you trust this exact address and network.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

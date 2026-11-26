@@ -204,6 +204,21 @@ export function createFixtureServices(): DashboardServices {
     probeTs: createSignal(null),
     cursorX: createSignal(null),
     send(message) {
+      if (
+        message.type === 'connectDevice' ||
+        message.type === 'disconnectDevice' ||
+        message.type === 'pairDevice' ||
+        message.type === 'listMdnsServices' ||
+        message.type === 'startQrPairing' ||
+        message.type === 'cancelQrPairing' ||
+        message.type === 'enableWirelessTcpip'
+      ) {
+        window.setTimeout(
+          () => window.dispatchEvent(new CustomEvent('fixture-send', { detail: message })),
+          0,
+        );
+        return true;
+      }
       if (!('requestId' in message)) return false;
       const requestId = message.requestId;
       const response = answer(message);

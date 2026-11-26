@@ -10,13 +10,20 @@ import {
   PROTOCOL_VERSION,
   WS_PATH,
 } from '@lionscope/protocol';
-import type { ClientMessage, ServerMessage, StorageResponse } from '@lionscope/protocol';
+import type {
+  ClientMessage,
+  ServerMessage,
+  StorageResponse,
+  WirelessActionResult,
+} from '@lionscope/protocol';
+import { scrubSecret } from '../adb/adb.ts';
 import { DEV_ORIGINS } from '../config.ts';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import { TokenBucket } from '../net/tokenBucket.ts';
 import type { EmulatorManager } from '../emulator/emulatorManager.ts';
 import type { InspectLinks } from '../device/inspectLinks.ts';
+import type { WirelessService } from '../device/wirelessService.ts';
 import type { InspectorService } from '../inspector/inspectorService.ts';
 import type { LocationService } from '../location/locationService.ts';
 import type { ViewEditOutcome, ViewEdits } from '../inspector/viewEdits.ts';
@@ -122,6 +129,20 @@ export type GatewayStorage = Pick<
 /** What the gateway needs from the device locations. */
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
+/** What the gateway needs from the wireless ADB service. */
+export type GatewayWireless = Pick<
+  WirelessService,
+  | 'connect'
+  | 'disconnect'
+  | 'pair'
+  | 'enableTcpipHandoff'
+  | 'listMdnsConnectDevices'
+  | 'startQrPairing'
+  | 'cancelQrPairing'
+  | 'cancelQrForOwner'
+  | 'cancelPendingPublicTcpipForOwner'
+>;
+
 export interface WsGatewayOptions {
   permissions?: () => Readonly<Permissions>;
   server: Server;
@@ -136,6 +157,8 @@ export interface WsGatewayOptions {
   locations?: GatewayLocations;
   /** The storage inspector (`storageList` / `storageRead` / `storageWrite`); omitted = consent `off`. */
   storage?: GatewayStorage;
+  /** Wireless ADB actions (`connectDevice` / `disconnectDevice`); omitted = they are refused. */
+  wireless?: GatewayWireless;
   serverVersion: string;
   bufferWindowMs: number;
   /** Read on every upgrade, so it can reflect the port bound by listen(). */
@@ -174,6 +197,13 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   storageWrite: 'Could not change the app storage',
   storageQuery: 'Could not run the SQL query',
   storageAudit: 'Could not read the storage audit',
+  connectDevice: 'Could not connect to the wireless device',
+  disconnectDevice: 'Could not disconnect the wireless device',
+  pairDevice: 'Could not pair with the wireless device',
+  listMdnsServices: 'Could not list discovered wireless devices',
+  startQrPairing: 'Could not start QR pairing',
+  cancelQrPairing: 'Could not cancel QR pairing',
+  enableWirelessTcpip: 'Could not switch the USB device to Wi-Fi',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -367,6 +397,142 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         send(ws, { type: 'storage', requestId: message.requestId, response });
         return;
       }
+      case 'connectDevice':
+      case 'disconnectDevice':
+      case 'pairDevice': {
+        const action =
+          message.type === 'connectDevice'
+            ? 'connect'
+            : message.type === 'disconnectDevice'
+              ? 'disconnect'
+              : 'pair';
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action, ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            if (message.type === 'connectDevice') {
+              const connected = await wireless.connect(message.address, 'dashboard');
+              result = { action: 'connect', ok: true, ...connected };
+            } else if (message.type === 'disconnectDevice') {
+              const disconnected = await wireless.disconnect(message.serial, 'dashboard');
+              result = { action: 'disconnect', ok: true, ...disconnected };
+            } else {
+              const paired = await wireless.pair(message.address, message.code, 'dashboard', {
+                ...(message.connectAddress !== undefined ? { connectAddress: message.connectAddress } : {}),
+              });
+              result = { action: 'pair', ok: true, ...paired };
+            }
+          } catch (error) {
+            const secret = message.type === 'pairDevice' ? message.code : '';
+            const safeDetail = scrubSecret(errorMessage(error), secret);
+            if (!(error instanceof PublicError)) log.warn(`${message.type} failed: ${safeDetail}`);
+            result = {
+              action,
+              ok: false,
+              message: error instanceof PublicError ? safeDetail : PUBLIC_FAILURES[message.type],
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
+      case 'listMdnsServices': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'mdns', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            result = { action: 'mdns', ok: true, services: await wireless.listMdnsConnectDevices() };
+          } catch (error) {
+            if (!(error instanceof PublicError)) log.warn(`listMdnsServices failed: ${errorMessage(error)}`);
+            result = {
+              action: 'mdns',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.listMdnsServices,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
+      case 'startQrPairing': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'startQr', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            const started = wireless.startQrPairing(ws, (update) => {
+              send(ws, { type: 'qrPairing', update });
+            });
+            result = { action: 'startQr', ok: true, ...started };
+          } catch (error) {
+            if (!(error instanceof PublicError)) log.warn(`startQrPairing failed: ${errorMessage(error)}`);
+            result = {
+              action: 'startQr',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.startQrPairing,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
+      case 'cancelQrPairing':
+        options.wireless?.cancelQrPairing(message.sessionId);
+        return;
+      case 'enableWirelessTcpip': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'tcpip', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            const handedOff = await wireless.enableTcpipHandoff(message.serial, 'dashboard', {
+              owner: ws,
+              isOwnerAlive: () => clients.has(ws) && ws.readyState === WebSocket.OPEN,
+              ...(message.port !== undefined ? { port: message.port } : {}),
+              ...(message.confirmPublic !== undefined ? { confirmPublic: message.confirmPublic } : {}),
+            });
+            if (handedOff.status === 'confirm_public') {
+              result = {
+                action: 'tcpip',
+                ok: false,
+                needsPublicConfirmation: true,
+                confirmationId: handedOff.confirmationId,
+                usbSerial: handedOff.usbSerial,
+                host: handedOff.host,
+                port: handedOff.port,
+                target: handedOff.target,
+                message: handedOff.message,
+              };
+            } else {
+              result = {
+                action: 'tcpip',
+                ok: true,
+                usbSerial: handedOff.usbSerial,
+                serial: handedOff.serial,
+                target: handedOff.target,
+                port: handedOff.port,
+                alreadyConnected: handedOff.alreadyConnected,
+              };
+            }
+          } catch (error) {
+            if (!(error instanceof PublicError))
+              log.warn(`enableWirelessTcpip failed: ${errorMessage(error)}`);
+            result = {
+              action: 'tcpip',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.enableWirelessTcpip,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
     }
   };
 
@@ -403,6 +569,8 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     ws.on('close', () => {
       clients.delete(ws);
       options.inspectLinks?.setFocus(ws, null);
+      options.wireless?.cancelQrForOwner(ws);
+      options.wireless?.cancelPendingPublicTcpipForOwner(ws);
     });
     ws.on('pong', () => {
       state.alive = true;

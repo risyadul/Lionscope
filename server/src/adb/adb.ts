@@ -38,22 +38,76 @@ const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /** An intent's `key` extra: the link key handed to the app (device/linkKey.ts). */
 const KEY_EXTRA = /(--es key )\S+/g;
+/** Global adb flags that consume a following argument before the subcommand. */
+const ADB_FLAGS_WITH_VALUE: ReadonlySet<string> = new Set(['-s', '-t', '-H', '-P', '-L']);
+
+/** Index of the adb subcommand (skipping leading global options), or -1 if none. */
+function adbSubcommandIndex(args: readonly string[]): number {
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i]!;
+    if (ADB_FLAGS_WITH_VALUE.has(arg)) {
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      i += 1;
+      continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/** Replace every literal occurrence of `secret` with `<redacted>` so errors and logs never echo it. */
+export function scrubSecret(text: string, secret: string): string {
+  return secret.length > 0 ? text.replaceAll(secret, '<redacted>') : text;
+}
 
 /**
- * Typed text can be a password and a link key is a secret: `input text …` and `--es key …` never reach an error
- * message or a log line.
+ * Typed text can be a password, a link key is a secret, and `adb pair <host:port> <code>` carries a
+ * pairing code/password: none of them may ever reach an error message or a log line.
  */
 export function describeArgs(args: readonly string[]): string {
+  const subcommandIdx = adbSubcommandIndex(args);
+  const isPair = subcommandIdx !== -1 && args[subcommandIdx] === 'pair';
   return args
-    .map((arg) =>
-      /^input text\b/.test(arg) ? 'input text <redacted>' : arg.replace(KEY_EXTRA, '$1<redacted>'),
-    )
+    .map((arg, index) => {
+      if (isPair && index >= subcommandIdx + 2) return '<redacted>';
+      return /^input text\b/.test(arg) ? 'input text <redacted>' : arg.replace(KEY_EXTRA, '$1<redacted>');
+    })
     .join(' ');
 }
 
+/** Secret values present in an adb argv array that must never leak via stderr into constructed errors. */
+function extractArgSecrets(args: readonly string[]): string[] {
+  const secrets: string[] = [];
+  const subcommandIdx = adbSubcommandIndex(args);
+  if (subcommandIdx !== -1 && args[subcommandIdx] === 'pair') {
+    for (let i = subcommandIdx + 2; i < args.length; i += 1) {
+      const value = args[i];
+      if (value) secrets.push(value);
+    }
+  }
+  for (const arg of args) {
+    for (const match of arg.matchAll(/--es key (\S+)/g)) {
+      if (match[1]) secrets.push(match[1]);
+    }
+  }
+  return secrets;
+}
+
+function scrubArgSecrets(text: string, args: readonly string[]): string {
+  let clean = text;
+  for (const secret of extractArgSecrets(args)) {
+    clean = scrubSecret(clean, secret);
+  }
+  return clean;
+}
+
 /** stderr, else why the process ended; never Node's message, which repeats the whole command line. */
-function failureDetail(error: ExecFileException, stderr: string): string {
-  if (stderr.trim() !== '') return stderr.trim();
+function failureDetail(error: ExecFileException, stderr: string, args: readonly string[]): string {
+  if (stderr.trim() !== '') return scrubArgSecrets(stderr.trim(), args);
   if (error.killed) return 'timed out';
   return typeof error.code === 'number' ? `exit code ${error.code}` : (error.code ?? 'failed');
 }
@@ -72,7 +126,7 @@ export function createAdb(adbPath: string): Adb {
         },
         (error, stdout, stderr) => {
           if (error) {
-            reject(new Error(`adb ${describeArgs(args)} failed: ${failureDetail(error, stderr)}`));
+            reject(new Error(`adb ${describeArgs(args)} failed: ${failureDetail(error, stderr, args)}`));
             return;
           }
           resolve(stdout);
@@ -133,7 +187,10 @@ export function execBinary(adb: Adb, args: readonly string[], options: ExecBinar
     const maybeDone = () => {
       if (!ended || exitCode === undefined) return;
       if (exitCode === 0) finish(null);
-      else finish(new Error(`adb ${describeArgs(args)} failed: ${stderr.trim() || `exit code ${exitCode}`}`));
+      else {
+        const detail = scrubArgSecrets(stderr.trim() || `exit code ${exitCode}`, args);
+        finish(new Error(`adb ${describeArgs(args)} failed: ${detail}`));
+      }
     };
     const timer = setTimeout(
       () => finish(new Error(`adb ${describeArgs(args)} timed out`)),

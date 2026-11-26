@@ -14,6 +14,7 @@ import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway, SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND } from './device/deviceGateway.ts';
 import type { DeviceGatewayLimits } from './device/deviceGateway.ts';
 import { InspectLinks } from './device/inspectLinks.ts';
+import { WirelessService } from './device/wirelessService.ts';
 import { LocationService } from './location/locationService.ts';
 import { createEmulatorHost } from './emulator/emulatorHost.ts';
 import type { EmulatorHost } from './emulator/emulatorHost.ts';
@@ -168,6 +169,12 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     target: () => manager.storageTarget(),
     broadcast: (message) => gateway?.broadcast(message),
   });
+  const wireless = new WirelessService({
+    adb: options.adb,
+    refreshDevices: () => manager.refreshDevices(),
+    stopSessionOn: (serial) => manager.stopSessionOn(serial),
+    getDevices: () => manager.getDevices(),
+  });
   const deviceGateway = createDeviceGateway({
     port: options.devicePort,
     target: manager,
@@ -233,6 +240,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     dontKeepActivities,
     deviceCalls: new Map(),
     storage,
+    wireless,
   };
   const agentHttp = createAgentHttp({
     ctx: agent,
@@ -303,6 +311,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     viewEdits,
     locations,
     storage,
+    wireless,
     permissions: () => permissions.value,
     serverVersion: SERVER_VERSION,
     bufferWindowMs,
@@ -386,6 +395,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         agentHttp.close(),
       ]);
       viewEdits.close();
+      wireless.close();
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

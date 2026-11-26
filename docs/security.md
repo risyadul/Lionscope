@@ -17,6 +17,21 @@
   local processes (which can already run adb). App data in tool results is marked as untrusted.
 - Device serials and package names are checked against strict patterns and passed to `adb` as argument arrays,
   never through a host shell.
+- Wireless ADB targets (`adb pair`, `adb connect`, `adb disconnect`) reject leading `-`, whitespace, control
+  characters, and shell metacharacters, enforce ports 1–65535 and 6-digit pairing codes, and always run via
+  argument arrays. Pairing codes and QR pairing passwords are redacted in `describeArgs`, scrubbed from any error
+  text, and never stored, logged, or echoed in tool responses or audit records. The dashboard warns before
+  connecting or pairing to a public IP; AI agent wireless tools (`connect_device`, `disconnect_device`,
+  `pair_device`, `enable_wireless_adb`) are gated by the **Agent device control** permission and restricted to
+  private IPv4 (`10/8`, `172.16/12`, `192.168/16`), link-local, IPv6 ULA (`fc00::/7`), Tailscale (`100.64/10`),
+  mDNS serials, or a `host:port` the user already connected from the dashboard during the current server run,
+  because untrusted app data could otherwise steer an agent to attach a foreign host that receives `adb reverse`
+  traffic.
+- USB → Wi-Fi handoff (`adb tcpip 5555`) leaves TCP/IP port 5555 listening on the phone's Wi-Fi interface until
+  the phone is rebooted (or switched back with `adb usb`), so other hosts on the same network can probe or reach
+  an already-authorized `adbd` listener. The dashboard always asks for confirmation explaining this before running
+  `adb tcpip`, and `enable_wireless_adb` validates the phone-reported Wi-Fi IP against the agent host policy before
+  enabling TCP/IP or connecting. Only enable TCP/IP mode on a trusted network.
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and answers nothing (not even `welcome`) until the hello's PID is verified with `pidof` on the
@@ -35,7 +50,8 @@
   an emulator this server didn't boot is shut down only after the user confirms it in the dashboard, and only through
   its own gRPC endpoint or `adb emu kill` on its serial (never a process signal).
 - For physical devices, the scrcpy server jar is checked against its SHA-256 before every push, the command line
-  on the phone is built from fixed presets (no dashboard values reach the device shell), and the phone process
+  on the phone is built from fixed presets (`max_size`, `max_fps`, and optional `video_bit_rate` from validated
+  presets only — no raw dashboard values reach the device shell), and the phone process
   and adb forward are removed on every exit path. Video and device messages from the phone are size-checked.
   While mirroring starts, adb briefly forwards a local port to the phone; it is removed as soon as Lionscope is
   connected. If you run the adb server with `adb -a` (listen on all interfaces), that port is reachable from your

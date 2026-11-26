@@ -1,4 +1,4 @@
-import { Activity, memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SdkOptions } from '@lionscope/protocol/wire';
 import { DEFAULT_SDK_OPTIONS, isValidSerial, STALL_THRESHOLDS_MS } from '@lionscope/protocol/wire';
 import { exchangesInWindow } from '@lionscope/protocol/insights';
@@ -32,6 +32,7 @@ import { MocksIndicator } from './components/topbar/MocksIndicator.tsx';
 import { TopBar } from './components/topbar/TopBar.tsx';
 import { PermissionsMenu } from './components/topbar/PermissionsMenu.tsx';
 import { ViewSwitch } from './components/topbar/ViewSwitch.tsx';
+import { WirelessDialog } from './components/topbar/WirelessDialog.tsx';
 import { useAppList } from './hooks/useAppList.ts';
 import { useDeviceColumn } from './hooks/useDeviceColumn.ts';
 import { useDeviceTarget } from './hooks/useDeviceTarget.ts';
@@ -44,6 +45,7 @@ import { useMockRules } from './hooks/useMockRules.ts';
 import { useNow } from './hooks/useNow.ts';
 import { useSdkOptions } from './hooks/useSdkOptions.ts';
 import { useViewMode } from './hooks/useViewMode.ts';
+import { useWirelessActions } from './hooks/useWirelessActions.ts';
 import type { ViewMode } from './lib/viewMode.ts';
 import { serialUnavailableReason } from './lib/devices.ts';
 import { emulatorLabel, isSoftwareRendered } from './lib/emulators.ts';
@@ -112,6 +114,9 @@ export function App() {
   const [selectedStall, setSelectedStall] = useState<string | null>(null);
   const [selectedHttp, setSelectedHttp] = useState<number | null>(null);
   const [networkView, setNetworkView] = useState<NetworkView>('requests');
+  const [wirelessDialogId, setWirelessDialogId] = useState<number | null>(null);
+  const nextWirelessDialogIdRef = useRef(1);
+  const [selectionVersion, setSelectionVersion] = useState(0);
   // Same request, read synchronously: two clicks in one task both run before React re-renders.
   const inFlight = useRef<PendingRequest | null>(null);
   // The 1-minute window moves ~15 px/s, so it ticks faster to stay smooth.
@@ -145,7 +150,33 @@ export function App() {
     serial: inspector.canInspect ? inspectorSerial : null,
     isOpen,
   });
+  const chooseSerialRef = useRef(selection.chooseSerial);
+  useEffect(() => {
+    chooseSerialRef.current = selection.chooseSerial;
+  }, [selection.chooseSerial]);
+  const changeSerial = useCallback((next: string) => {
+    chooseSerialRef.current(next);
+    setChosenPackage(null);
+    setSelectionVersion((v) => v + 1);
+  }, []);
+  const openWireless = useCallback(() => setWirelessDialogId(nextWirelessDialogIdRef.current++), []);
+  const closeWireless = useCallback(() => setWirelessDialogId(null), []);
+  const consumeQrPayload = useCallback(
+    (sessionId?: string) => store.dispatch({ kind: 'clearQrPayload', ...(sessionId ? { sessionId } : {}) }),
+    [store],
+  );
   const emulatorActions = useEmulatorActions({ send, emulators: state.emulators, errorSeq: state.errorSeq });
+  const wirelessActions = useWirelessActions({
+    send,
+    answers: state.wirelessAnswers,
+    qrPairing: state.qrPairing,
+    isOpen,
+    currentSerial: serial,
+    selectionVersion,
+    activeDialogId: wirelessDialogId,
+    onConsumeQrPayload: consumeQrPayload,
+    onLateConnected: changeSerial,
+  });
   // Shutting it down stops this session first (the server does; the confirmation says so).
   const isInSession = isActive && emulator !== null && emulator.serial === state.session.serial;
   const deviceReason = serial === null || isActive ? null : serialUnavailableReason(state.devices, serial);
@@ -188,14 +219,10 @@ export function App() {
     if (send({ type: 'stopSession' })) markPending();
   };
 
-  const changeSerial = (next: string) => {
-    selection.chooseSerial(next);
-    setChosenPackage(null);
-  };
-
   const changeAvd = (avdName: string) => {
     selection.chooseAvd(avdName);
     setChosenPackage(null);
+    setSelectionVersion((v) => v + 1);
   };
 
   const dismissError = useCallback((id: number) => store.dispatch({ kind: 'dismissError', id }), [store]);
@@ -428,6 +455,21 @@ export function App() {
             viewSwitch={null}
             mocksIndicator={mocksState && <MocksIndicator indicator={mocksState} onOpen={openMocks} />}
             onRefreshDevices={() => send({ type: 'refreshDevices' })}
+            onOpenWireless={openWireless}
+            onDisconnectWireless={(targetSerial) => void wirelessActions.disconnect(targetSerial)}
+            isDisconnectingWireless={serial !== null && wirelessActions.disconnectingSerial === serial}
+            onSwitchToWifi={(usbSerial) => {
+              void wirelessActions.enableTcpip(usbSerial);
+            }}
+            isSwitchingToWifi={
+              serial !== null &&
+              (wirelessActions.handoffSerial === serial || wirelessActions.provisionalTcpipSerial === serial)
+            }
+            pendingPublicTcpip={wirelessActions.pendingPublicTcpip}
+            onConfirmPublicTcpip={(usbSerial, port, confirmationId, target) => {
+              void wirelessActions.enableTcpip(usbSerial, port, { confirmationId, target });
+            }}
+            onCancelPublicTcpip={wirelessActions.clearPendingPublicTcpip}
             apps={apps}
             packageName={packageName}
             onPackageChange={setChosenPackage}
@@ -450,6 +492,32 @@ export function App() {
               protocolMismatch={isProtocolMismatch(state)}
             />
             <ErrorBanner error={state.lastError} onDismiss={dismissError} />
+            {wirelessActions.actionError && (
+              <ErrorBanner
+                error={{ id: -1, message: wirelessActions.actionError }}
+                onDismiss={wirelessActions.clearActionError}
+              />
+            )}
+            {wirelessActions.actionNotice && (
+              <div className="banner" data-tone="quiet" role="status">
+                <span>{wirelessActions.actionNotice}</span>
+                <button
+                  type="button"
+                  className="banner-close"
+                  onClick={wirelessActions.clearActionNotice}
+                  aria-label="Dismiss notice"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                    <path
+                      d="m1.5 1.5 7 7m0-7-7 7"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
             <SoftwareRendererBanner
               deviceLabel={emulator !== null && isSoftwareRendered(emulator) ? emulatorLabel(emulator) : null}
             />
@@ -669,6 +737,23 @@ export function App() {
               </Activity>
             </main>
           </div>
+          {wirelessDialogId !== null && (
+            <WirelessDialog
+              key={wirelessDialogId}
+              dialogInstanceId={wirelessDialogId}
+              isOnline={isOpen}
+              onConnect={wirelessActions.connect}
+              onPair={wirelessActions.pair}
+              onListMdns={wirelessActions.listMdns}
+              onStartQrPairing={wirelessActions.startQrPairing}
+              onCancelQrPairing={wirelessActions.cancelQrPairing}
+              onSupersedeDialog={wirelessActions.supersedeDialog}
+              qrPairing={wirelessActions.qrPairing}
+              lateResult={wirelessActions.lateResult}
+              onConnected={changeSerial}
+              onClose={closeWireless}
+            />
+          )}
           {mockRules.editor && (
             <MockEditor
               key={mockRules.editor.openId}

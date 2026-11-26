@@ -1,4 +1,4 @@
-import { isValidSerial } from '@lionscope/protocol';
+import { deriveDeviceTransport, isValidSerial } from '@lionscope/protocol';
 import type { DeviceInfo, DeviceState } from '@lionscope/protocol';
 
 const KNOWN_STATES: ReadonlySet<string> = new Set<DeviceState>(['device', 'offline', 'unauthorized']);
@@ -16,6 +16,7 @@ export function parseDevices(output: string): DeviceInfo[] {
       serial,
       state: KNOWN_STATES.has(rawState) ? (rawState as DeviceState) : 'unknown',
     };
+    let hasUsbProp = false;
     for (const prop of props) {
       const sep = prop.indexOf(':');
       if (sep <= 0) continue;
@@ -24,7 +25,10 @@ export function parseDevices(output: string): DeviceInfo[] {
       if (key === 'model') device.model = value;
       else if (key === 'product') device.product = value;
       else if (key === 'transport_id') device.transportId = value;
+      else if (key === 'usb') hasUsbProp = true;
     }
+    const transport = deriveDeviceTransport(serial, device.state, hasUsbProp);
+    if (transport !== undefined) device.transport = transport;
     devices.push(device);
   }
   return devices;

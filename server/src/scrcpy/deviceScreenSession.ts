@@ -1,6 +1,13 @@
 import type { Socket } from 'node:net';
-import { SCREEN_BINARY_KIND, SCREEN_VIDEO_FLAG, SCREEN_VIDEO_HEADER_BYTES } from '@lionscope/protocol';
+import {
+  DEFAULT_DEVICE_STREAM_PRESET,
+  DEVICE_STREAM_PRESET_SPECS,
+  SCREEN_BINARY_KIND,
+  SCREEN_VIDEO_FLAG,
+  SCREEN_VIDEO_HEADER_BYTES,
+} from '@lionscope/protocol';
 import type {
+  DeviceStreamPreset,
   ScreenClientMessage,
   ScreenErrorCode,
   ScreenRotation,
@@ -31,7 +38,13 @@ import {
   VideoStreamParser,
 } from './protocol.ts';
 import type { ScrcpyPosition, VideoPacket } from './protocol.ts';
-import { maxSizeFor, MirrorStartError, parseWmSize, ScrcpyServer } from './scrcpyServer.ts';
+import {
+  cleanupScrcpySession,
+  maxSizeFor,
+  MirrorStartError,
+  parseWmSize,
+  ScrcpyServer,
+} from './scrcpyServer.ts';
 import type { ScrcpyConnection, Size } from './scrcpyServer.ts';
 
 /** Above this much unsent data, video packets are dropped until the next key frame (config packets never). */
@@ -59,6 +72,7 @@ const SCREENSHOT_KIND = Buffer.from([SCREEN_BINARY_KIND.screenshot]);
 const INJECT_DENIED_MARKER = 'INJECT_EVENTS permission';
 
 export const DEVICE_ENDED_MESSAGE = 'The device stopped streaming its screen';
+export const WIRELESS_ENDED_MESSAGE = 'Wi-Fi connection dropped — waiting for the device to reconnect';
 export const INPUT_DENIED_MESSAGE =
   'The device refused touch and key input (the screen is still mirrored). On Xiaomi / HyperOS, turn on ' +
   '"USB debugging (Security settings)" in Developer options, then reboot the device.';
@@ -68,6 +82,10 @@ export interface DeviceScreenSessionOptions {
   adb: Adb;
   serial: string;
   size: ScreenSize;
+  /** Physical-device stream preset (`standard`, `wifi`, `low`); defaults to `standard`. */
+  preset?: DeviceStreamPreset;
+  /** True when the device is connected over wireless ADB (affects reconnect messaging and cleanup). */
+  isWireless?: boolean;
   /** The vendored scrcpy-server (resolveScrcpyJar). */
   jarPath: string;
 }
@@ -81,6 +99,7 @@ export class DeviceScreenSession {
   readonly serial: string;
   private readonly socket: ScreenSocket;
   private size: ScreenSize;
+  private preset: DeviceStreamPreset;
   private display: Size | null = null;
   private server: ScrcpyServer | null = null;
   private control: Socket | null = null;
@@ -112,6 +131,7 @@ export class DeviceScreenSession {
     this.serial = options.serial;
     this.socket = options.socket;
     this.size = options.size;
+    this.preset = options.preset ?? DEFAULT_DEVICE_STREAM_PRESET;
   }
 
   get isClosed(): boolean {
@@ -180,7 +200,12 @@ export class DeviceScreenSession {
         void this.restart();
         return;
       case 'setFpsCap':
-        // Emulators only: scrcpy keeps its own max_fps.
+        // Emulators only: physical devices use `setPreset`.
+        return;
+      case 'setPreset':
+        if (message.preset === this.preset) return;
+        this.preset = message.preset;
+        void this.restart();
         return;
       case 'screenshot':
         void this.screenshot();
@@ -234,10 +259,13 @@ export class DeviceScreenSession {
     this.received = false;
     this.dropping = false;
     this.stderrWindow = '';
+    const spec = DEVICE_STREAM_PRESET_SPECS[this.preset];
     const server = new ScrcpyServer({
       adb: this.options.adb,
       serial: this.serial,
       maxSize: maxSizeFor(display, this.size),
+      maxFps: spec.maxFps,
+      ...(spec.bitRate !== undefined ? { bitRate: spec.bitRate } : {}),
       jarPath: this.options.jarPath,
       onStderr: (text) => {
         if (generation === this.generation) this.onStderr(text);
@@ -344,12 +372,18 @@ export class DeviceScreenSession {
     await server.waitForExit(EXIT_SETTLE_MS);
     if (this.closed || generation !== this.generation) return;
     const summary = server.errorSummary;
-    if (this.received) this.fail('ended', DEVICE_ENDED_MESSAGE);
-    else
+    if (this.options.isWireless) {
+      // Clean up only this ended session's own forward and scid process so other mirrors are untouched.
+      void cleanupScrcpySession(this.options.adb, this.serial, server.scid);
+    }
+    if (this.received) {
+      this.fail('ended', this.options.isWireless ? WIRELESS_ENDED_MESSAGE : DEVICE_ENDED_MESSAGE);
+    } else {
       this.fail(
         'mirror_failed',
         summary ? `scrcpy stopped: ${summary}` : 'scrcpy stopped before sending video',
       );
+    }
   }
 
   private onStderr(text: string): void {

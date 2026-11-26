@@ -3,6 +3,7 @@
  * devices) in, JSON input out, reconnect with backoff.
  */
 import type {
+  DeviceStreamPreset,
   ScreenClientMessage,
   ScreenErrorCode,
   ScreenFpsCap,
@@ -25,10 +26,12 @@ export function screenUrl(
   serial: string,
   size: ScreenSize,
   fpsCap?: ScreenFpsCap,
+  preset?: DeviceStreamPreset,
 ): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const query = new URLSearchParams({ serial, size: String(size) });
   if (fpsCap !== undefined) query.set('fps', String(fpsCap));
+  if (preset !== undefined && preset !== 'standard') query.set('preset', preset);
   return `${scheme}://${location.host}${SCREEN_WS_PATH}?${query.toString()}`;
 }
 
@@ -146,10 +149,10 @@ const OPEN = 1;
 const encoder = new TextEncoder();
 
 /** Stream settings: held until the socket opens (the URL it was opened with may predate them). */
-type HeldSetting = Extract<ScreenClientMessage, { type: 'setSize' | 'setFpsCap' }>;
+type HeldSetting = Extract<ScreenClientMessage, { type: 'setSize' | 'setFpsCap' | 'setPreset' }>;
 
 function isHeldSetting(msg: ScreenClientMessage): msg is HeldSetting {
-  return msg.type === 'setSize' || msg.type === 'setFpsCap';
+  return msg.type === 'setSize' || msg.type === 'setFpsCap' || msg.type === 'setPreset';
 }
 
 export function createScreenConnection(options: ScreenConnectionOptions): ScreenConnection {

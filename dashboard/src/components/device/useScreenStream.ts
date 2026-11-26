@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { ScreenClientMessage, ScreenFpsCap, ScreenSize } from '@lionscope/protocol/wire';
+import type {
+  DeviceStreamPreset,
+  ScreenClientMessage,
+  ScreenFpsCap,
+  ScreenSize,
+} from '@lionscope/protocol/wire';
 import { downloadBlob, screenshotFileName } from '../../lib/download.ts';
 import { createFpsMeter, createFrameDecoder } from '../../lib/frameQueue.ts';
 import {
@@ -35,6 +40,8 @@ interface Input {
   size: ScreenSize;
   /** Emulators: the most frames per second the server streams; undefined for physical devices (scrcpy paces). */
   fpsCap?: ScreenFpsCap;
+  /** Physical devices: scrcpy stream quality preset; undefined for emulators. */
+  preset?: DeviceStreamPreset;
   /** False while the panel is collapsed or the tab is hidden: no socket, no decoding. */
   isEnabled: boolean;
   events?: RefObject<ScreenStreamEvents>;
@@ -73,11 +80,20 @@ function drawFrame(
  * One screen socket per visible panel: PNG frames (emulators) and H.264 video (physical devices) go straight
  * to the canvas, screenshots to a download.
  */
-export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events }: Input): ScreenStream {
+export function useScreenStream({
+  serial,
+  name,
+  size,
+  fpsCap,
+  preset,
+  isEnabled,
+  events,
+}: Input): ScreenStream {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const connectionRef = useRef<ScreenConnection | null>(null);
   const sizeRef = useRef(size);
   const fpsCapRef = useRef(fpsCap);
+  const presetRef = useRef(preset);
   const nameRef = useRef(name);
   const [state, setState] = useState<ScreenConnectionState>(CONNECTING);
   const [info, setInfo] = useState<ScreenInfo | null>(null);
@@ -103,6 +119,13 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
     fpsCapRef.current = fpsCap;
     if (fpsCap !== undefined) connectionRef.current?.send({ type: 'setFpsCap', fps: fpsCap });
   }, [fpsCap]);
+
+  // Physical device stream preset: restarts scrcpy with the new max_fps / video_bit_rate.
+  useEffect(() => {
+    if (presetRef.current === preset) return;
+    presetRef.current = preset;
+    if (preset !== undefined) connectionRef.current?.send({ type: 'setPreset', preset });
+  }, [preset]);
 
   useEffect(() => {
     if (!isEnabled) return;
@@ -142,7 +165,7 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
       return video;
     };
     const connection = createScreenConnection({
-      url: () => screenUrl(window.location, serial, sizeRef.current, fpsCapRef.current),
+      url: () => screenUrl(window.location, serial, sizeRef.current, fpsCapRef.current, presetRef.current),
       onBinary: (msg) => {
         if (msg.kind === 'frame') decoder.push(msg.png);
         else if (msg.kind === 'video') videoPipeline()?.push(msg.packet);

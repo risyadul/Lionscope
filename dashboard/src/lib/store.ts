@@ -19,6 +19,7 @@ import type {
   LogEntry,
   MemorySample,
   NetworkMocksState,
+  QrPairingUpdate,
   SavedStateInstance,
   SavedStateSample,
   ScreenSpan,
@@ -34,6 +35,7 @@ import type {
   TransactionFailure,
   ViewEditError,
   ViewTreeSample,
+  WirelessActionResult,
 } from '@lionscope/protocol/wire';
 import { PROTOCOL_VERSION } from '@lionscope/protocol/wire';
 import { pruneSavedStateInstances } from '@lionscope/protocol/insights';
@@ -147,6 +149,10 @@ export interface DashboardState {
   storageAnswers: StorageAnswer[];
   /** Final outcomes of writes that came after their answer (late, or after `provisional`), oldest first. */
   storageOutcomes: StorageOutcomeNotice[];
+  /** Answers to this client's wireless device actions (connect, disconnect, pair, ...), oldest first. */
+  wirelessAnswers: WirelessAnswer[];
+  /** Latest status push for an active QR pairing session; null until one starts. */
+  qrPairing: QrPairingUpdate | null;
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
@@ -172,6 +178,12 @@ export interface DashboardState {
 export interface StorageAnswer {
   requestId: number;
   response: StorageResponse;
+}
+
+/** The answer to one of this client's wireless device requests (`requestId` is the client's own). */
+export interface WirelessAnswer {
+  requestId: number;
+  result: WirelessActionResult;
 }
 
 /** A write's final outcome that came after its answer, for the device `serial`. */
@@ -211,6 +223,7 @@ export const MAX_VIEW_EDIT_ANSWERS = 64;
 /** Storage answers kept for their readers (one request per device runs at a time). */
 export const MAX_STORAGE_ANSWERS = 16;
 export const MAX_STORAGE_OUTCOMES = 50;
+export const MAX_WIRELESS_ANSWERS = 16;
 /** A span start this far past the laptop clock can't move the pruning reference further. */
 export const FUTURE_SLACK_MS = 5000;
 /** A laptop clock step back larger than this resets the timeline instead of dropping samples. */
@@ -261,6 +274,8 @@ export function createInitialState(): DashboardState {
     storageConsent: 'off',
     storageAnswers: [],
     storageOutcomes: [],
+    wirelessAnswers: [],
+    qrPairing: null,
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -850,6 +865,25 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
           MAX_STORAGE_OUTCOMES,
         ),
       };
+    case 'wirelessResult': {
+      const base =
+        msg.result.action === 'startQr' ? scrubQrAnswers(state.wirelessAnswers) : state.wirelessAnswers;
+      return {
+        ...state,
+        wirelessAnswers: capTail(
+          [...base, { requestId: msg.requestId, result: msg.result }],
+          MAX_WIRELESS_ANSWERS,
+        ),
+      };
+    }
+    case 'qrPairing':
+      return {
+        ...state,
+        qrPairing: msg.update,
+        wirelessAnswers: TERMINAL_QR_STATUSES.has(msg.update.status)
+          ? scrubQrAnswers(state.wirelessAnswers, msg.update.sessionId)
+          : state.wirelessAnswers,
+      };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =
@@ -874,8 +908,34 @@ export function setConnection(state: DashboardState, connection: ConnectionState
   ) {
     return state;
   }
-  return { ...state, connection: { ...connection } };
+  if (connection.status === 'open') {
+    return { ...state, connection: { ...connection } };
+  }
+  return {
+    ...state,
+    connection: { ...connection },
+    wirelessAnswers: scrubQrAnswers(state.wirelessAnswers),
+    qrPairing: null,
+  };
 }
+
+function scrubQrAnswers(answers: WirelessAnswer[], sessionId?: string): WirelessAnswer[] {
+  let changed = false;
+  const next = answers.filter((entry) => {
+    if (entry.result.action !== 'startQr' || !entry.result.ok) return true;
+    if (sessionId !== undefined && entry.result.sessionId !== sessionId) return true;
+    changed = true;
+    return false;
+  });
+  return changed ? next : answers;
+}
+
+const TERMINAL_QR_STATUSES: ReadonlySet<QrPairingUpdate['status']> = new Set([
+  'paired',
+  'expired',
+  'failed',
+  'cancelled',
+]);
 
 export function dismissError(state: DashboardState, id: number): DashboardState {
   return state.lastError?.id === id ? { ...state, lastError: null } : state;
@@ -888,7 +948,8 @@ export function dismissError(state: DashboardState, id: number): DashboardState 
 export type Action =
   | { kind: 'server'; msg: ServerMessage }
   | { kind: 'connection'; connection: ConnectionState }
-  | { kind: 'dismissError'; id: number };
+  | { kind: 'dismissError'; id: number }
+  | { kind: 'clearQrPayload'; sessionId?: string };
 
 export function reduce(state: DashboardState, action: Action): DashboardState {
   switch (action.kind) {
@@ -898,6 +959,10 @@ export function reduce(state: DashboardState, action: Action): DashboardState {
       return setConnection(state, action.connection);
     case 'dismissError':
       return dismissError(state, action.id);
+    case 'clearQrPayload': {
+      const wirelessAnswers = scrubQrAnswers(state.wirelessAnswers, action.sessionId);
+      return wirelessAnswers === state.wirelessAnswers ? state : { ...state, wirelessAnswers };
+    }
   }
 }
 
