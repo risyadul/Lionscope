@@ -153,6 +153,20 @@ function isUnambiguousUsbTransportSerial(value: string): boolean {
   return parseWirelessPort(value.slice(4)) === null;
 }
 
+/**
+ * True when `value` is a `<reserved-prefix>:<port>` serial in any ASCII case (e.g. `usb:5555` or
+ * `USB:5555`) that collides with an AOSP ADB socket_spec transport prefix. Rejected for fresh
+ * wireless connects, but still preserved verbatim in `adb devices -l` inventory as an unknown,
+ * handoff-ineligible transport.
+ */
+export function isReservedTransportHostPort(value: string): boolean {
+  const colon = value.indexOf(':');
+  if (colon <= 0 || colon !== value.lastIndexOf(':')) return false;
+  const host = value.slice(0, colon);
+  const portPart = value.slice(colon + 1);
+  return RESERVED_ADB_TRANSPORT_HOSTS.has(host.toLowerCase()) && parseWirelessPort(portPart) !== null;
+}
+
 export function parseWirelessPort(raw: number | string): number | null {
   if (typeof raw === 'number') {
     return Number.isInteger(raw) && raw >= MIN_WIRELESS_PORT && raw <= MAX_WIRELESS_PORT ? raw : null;
@@ -398,7 +412,7 @@ export function deriveDeviceTransport(
   if (hasUsbProp) return 'usb';
   if (isWirelessSerial(serial)) return 'wireless';
   if (isUnambiguousUsbTransportSerial(serial)) return 'usb';
-  if (isAdbTransportSerial(serial)) return undefined;
+  if (isAdbTransportSerial(serial) || isReservedTransportHostPort(serial)) return undefined;
   if (state === 'device') return 'usb';
   return undefined;
 }

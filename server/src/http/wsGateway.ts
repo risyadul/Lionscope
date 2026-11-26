@@ -493,6 +493,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
           try {
             const handedOff = await wireless.enableTcpipHandoff(message.serial, 'dashboard', {
               owner: ws,
+              isOwnerAlive: () => clients.has(ws) && ws.readyState === WebSocket.OPEN,
               ...(message.port !== undefined ? { port: message.port } : {}),
               ...(message.confirmPublic !== undefined ? { confirmPublic: message.confirmPublic } : {}),
             });

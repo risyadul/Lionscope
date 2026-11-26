@@ -6,7 +6,12 @@
  * dashboard → server messages lives in `./index.ts`.
  */
 
-import { isAdbMdnsTransportSerial, isAdbTransportSerial, parseWirelessAddress } from './wireless.ts';
+import {
+  isAdbMdnsTransportSerial,
+  isAdbTransportSerial,
+  isReservedTransportHostPort,
+  parseWirelessAddress,
+} from './wireless.ts';
 import type { DeviceTransport } from './wireless.ts';
 
 export * from './wireless.ts';
@@ -38,7 +43,9 @@ export function isValidSerial(value: string): boolean {
     return parseWirelessAddress(value).ok;
   }
   if (value.includes(':')) {
-    return parseWirelessAddress(value).ok || isAdbTransportSerial(value);
+    return (
+      parseWirelessAddress(value).ok || isAdbTransportSerial(value) || isReservedTransportHostPort(value)
+    );
   }
   if (isAdbMdnsTransportSerial(value)) return true;
   return value.length <= 128 && SERIAL_PATTERN.test(value);

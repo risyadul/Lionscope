@@ -175,9 +175,11 @@ describe('wireless host & port validation', () => {
       '3232235777:5555',
       '8.8.8.0x8:5555',
       '0x08080808:5555',
-      // Reserved single-label ADB socket_spec prefixes must not be accepted as connect hostnames.
+      // Reserved single-label ADB socket_spec prefixes must not be accepted as connect hostnames (any case).
       'usb:5555',
+      'USB:5555',
       'tcp:5555',
+      'TCP:5555',
       'vsock:5555',
       'localabstract:5555',
       'acceptfd:5555',
@@ -209,6 +211,8 @@ describe('wireless host & port validation', () => {
     expect(deriveDeviceTransport('vsock:2:5555', 'device', false)).toBeUndefined();
     expect(deriveDeviceTransport('vsock:2:70000', 'device', false)).toBeUndefined();
     expect(deriveDeviceTransport('usb:5555', 'device', false)).toBeUndefined();
+    expect(deriveDeviceTransport('USB:5555', 'device', false)).toBeUndefined();
+    expect(deriveDeviceTransport('TCP:5555', 'device', false)).toBeUndefined();
     expect(deriveDeviceTransport('usb:5555', 'device', true)).toBe('usb');
     expect(deriveDeviceTransport('usb:1-2.3', 'device', false)).toBe('usb');
 
@@ -221,6 +225,7 @@ describe('wireless host & port validation', () => {
     expect(isUsbTcpipEligible({ serial: 'lab._adb-tls-connect._tcp', state: 'device' })).toBe(false);
     expect(isUsbTcpipEligible({ serial: 'vsock:2:5555', state: 'device' })).toBe(false);
     expect(isUsbTcpipEligible({ serial: 'usb:5555', state: 'device' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'USB:5555', state: 'device' })).toBe(false);
     expect(isUsbTcpipEligible({ serial: 'usb:1-2.3', state: 'device' })).toBe(true);
     expect(isUsbTcpipEligible({ serial: 'emulator-5554', state: 'device' })).toBe(false);
   });

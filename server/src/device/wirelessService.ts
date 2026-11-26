@@ -138,7 +138,14 @@ export class WirelessService {
   private readonly qrSessions = new Map<string, ActiveQrSession>();
   /** One-shot public-IP USB handoff confirmations bound to owner WS connection, USB serial, and target. */
   private readonly pendingPublicTcpip = new Map<string, PendingPublicTcpipRecord>();
+  /** In-flight USB Wi-Fi IP lookups so disconnecting a socket cancels issuing a leaked confirmation. */
+  private readonly activeTcpipLookups = new Set<{ owner: unknown; cancelled: boolean }>();
   private closed = false;
+
+  /** Number of currently stored pending public-IP USB handoff confirmations. */
+  get pendingPublicConfirmationCount(): number {
+    return this.pendingPublicTcpip.size;
+  }
 
   constructor(options: WirelessServiceOptions) {
     this.adb = options.adb;
@@ -427,11 +434,16 @@ export class WirelessService {
     for (const [id, record] of this.pendingPublicTcpip) {
       if (record.owner === owner) this.pendingPublicTcpip.delete(id);
     }
+    for (const lookup of this.activeTcpipLookups) {
+      if (lookup.owner === owner) lookup.cancelled = true;
+    }
   }
 
   close(): void {
     this.closed = true;
     for (const session of this.qrSessions.values()) this.disposeQrSession(session);
+    for (const lookup of this.activeTcpipLookups) lookup.cancelled = true;
+    this.activeTcpipLookups.clear();
     this.pendingPublicTcpip.clear();
   }
 
@@ -516,12 +528,20 @@ export class WirelessService {
     port: number,
     target: string,
     message: string,
+    liveness?: { lookup: { owner: unknown; cancelled: boolean } | null; isOwnerAlive?: () => boolean },
   ): Extract<WirelessTcpipOutcome, { status: 'confirm_public' }> {
     const now = this.now();
     for (const [id, existing] of this.pendingPublicTcpip) {
       if (existing.expiresAt <= now || (existing.owner === owner && existing.usbSerial === usbSerial)) {
         this.pendingPublicTcpip.delete(id);
       }
+    }
+    if (
+      this.closed ||
+      liveness?.lookup?.cancelled ||
+      (liveness?.isOwnerAlive !== undefined && !liveness.isOwnerAlive())
+    ) {
+      throw new PublicError('Connection closed before public-IP confirmation could be issued');
     }
     const confirmationId = randomBytes(8).toString('hex');
     this.pendingPublicTcpip.set(confirmationId, {
@@ -554,6 +574,7 @@ export class WirelessService {
     source: WirelessRequestSource,
     options: {
       owner?: unknown;
+      isOwnerAlive?: () => boolean;
       port?: number;
       confirmPublic?: { confirmationId: string; target: string };
     } = {},
@@ -601,42 +622,56 @@ export class WirelessService {
       confirmedRecord = record;
     }
 
+    const lookup = options.owner !== undefined ? { owner: options.owner, cancelled: false } : null;
+    if (lookup !== null) this.activeTcpipLookups.add(lookup);
     let wifiIp: string;
     try {
       wifiIp = await readDeviceWifiIp(this.adb, usbSerial);
     } catch (error) {
+      if (lookup !== null) this.activeTcpipLookups.delete(lookup);
       throw new PublicError(errorMessage(error), { cause: error });
     }
 
-    // Validate the device-reported IP against caller host policy BEFORE opening TCP/IP or connecting.
-    const target = this.validateTarget(`${wifiIp}:${port}`, source, false);
+    const liveness = {
+      lookup,
+      ...(options.isOwnerAlive !== undefined ? { isOwnerAlive: options.isOwnerAlive } : {}),
+    };
+    let target: string;
+    try {
+      // Validate the device-reported IP against caller host policy BEFORE opening TCP/IP or connecting.
+      target = this.validateTarget(`${wifiIp}:${port}`, source, false);
 
-    if (confirmedRecord !== null) {
-      // Proceed ONLY if the freshly read address equals the confirmed one exactly (whether now public or private).
-      if (target !== confirmedRecord.target) {
-        if (isPublicWirelessHost(target)) {
-          return this.issuePublicTcpipConfirmation(
-            options.owner,
-            usbSerial,
-            wifiIp,
-            port,
-            target,
-            `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to public address ${target}. Confirm the new address before enabling ADB TCP/IP port ${port}.`,
+      if (confirmedRecord !== null) {
+        // Proceed ONLY if the freshly read address equals the confirmed one exactly (whether now public or private).
+        if (target !== confirmedRecord.target) {
+          if (isPublicWirelessHost(target)) {
+            return this.issuePublicTcpipConfirmation(
+              options.owner,
+              usbSerial,
+              wifiIp,
+              port,
+              target,
+              `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to public address ${target}. Confirm the new address before enabling ADB TCP/IP port ${port}.`,
+              liveness,
+            );
+          }
+          throw new PublicError(
+            `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to ${target}. Start USB → Wi-Fi handoff again to use the new address.`,
           );
         }
-        throw new PublicError(
-          `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to ${target}. Start USB → Wi-Fi handoff again to use the new address.`,
+      } else if (source === 'dashboard' && isPublicWirelessHost(target)) {
+        return this.issuePublicTcpipConfirmation(
+          options.owner,
+          usbSerial,
+          wifiIp,
+          port,
+          target,
+          `Device ${usbSerial} reported public Wi-Fi address ${target}. Confirm this exact address before enabling ADB TCP/IP port ${port}.`,
+          liveness,
         );
       }
-    } else if (source === 'dashboard' && isPublicWirelessHost(target)) {
-      return this.issuePublicTcpipConfirmation(
-        options.owner,
-        usbSerial,
-        wifiIp,
-        port,
-        target,
-        `Device ${usbSerial} reported public Wi-Fi address ${target}. Confirm this exact address before enabling ADB TCP/IP port ${port}.`,
-      );
+    } finally {
+      if (lookup !== null) this.activeTcpipLookups.delete(lookup);
     }
 
     try {

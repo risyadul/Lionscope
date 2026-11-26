@@ -97,6 +97,7 @@ describe('parseDevices', () => {
       'vsock:2:5555           device product:cf_x86_64 model:Cuttlefish transport_id:1',
       'vsock:2:70000          device product:cf_x86_64 model:CuttlefishHiPort transport_id:6',
       'usb:5555               device product:panther model:AmbiguousHost transport_id:7',
+      'USB:5555               device product:panther model:UppercaseAmbiguous transport_id:8',
       'usb:1-2.3              device product:panther model:Pixel_7 transport_id:2',
       'adb-SAMPLE._adb._tcp   device product:panther model:Pixel_8 transport_id:3',
       'lab._adb-tls-connect._tcp device product:panther model:Pixel_9 transport_id:4',
@@ -125,6 +126,13 @@ describe('parseDevices', () => {
         product: 'panther',
         model: 'AmbiguousHost',
         transportId: '7',
+      },
+      {
+        serial: 'USB:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'UppercaseAmbiguous',
+        transportId: '8',
       },
       {
         serial: 'usb:1-2.3',

@@ -823,4 +823,92 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     expect(updates).toEqual([{ sessionId: started.sessionId, status: 'expired' }]);
     expect(adb.execCalls.some((c) => c[0] === 'pair')).toBe(false);
   });
+
+  it('does not leak a pending public-IP confirmation when the WebSocket closes during Wi-Fi address lookup', async () => {
+    let resolveIpLookup!: (value: string) => void;
+    const adb = new FakeAdb(() => '');
+    adb.exec = (args) => {
+      adb.execCalls.push(args);
+      if (args[0] === 'devices') {
+        return Promise.resolve(
+          'List of devices attached\nUSB_A device usb:1-1 product:panther model:Pixel_A transport_id:2\n',
+        );
+      }
+      if (args[0] === '-s' && args[2] === 'shell' && args[3] === 'ip -f inet addr show wlan0') {
+        return new Promise<string>((resolve) => {
+          resolveIpLookup = resolve;
+        });
+      }
+      return Promise.resolve('');
+    };
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    await server.manager.refreshDevices();
+
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+    client.send({ type: 'enableWirelessTcpip', requestId: 91, serial: 'USB_A', port: 5555 });
+
+    // Wait for the in-flight Wi-Fi IP lookup to start.
+    const deadline = Date.now() + 1000;
+    while (!resolveIpLookup && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(resolveIpLookup).toBeDefined();
+
+    // Close the WebSocket BEFORE the IP lookup finishes, then let the lookup return a public IP.
+    await client.close();
+    client = null;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    resolveIpLookup('14: wlan0: <UP>\n    inet 192.0.2.15/24 scope global wlan0\n');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(server.agent.wireless).toBeInstanceOf(WirelessService);
+    if (server.agent.wireless instanceof WirelessService) {
+      expect(server.agent.wireless.pendingPublicConfirmationCount).toBe(0);
+    }
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+  });
+
+  it('keeps an already-listed uppercase USB:5555 device in inventory as handoff-ineligible while rejecting fresh connect', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') {
+        return 'List of devices attached\nUSB:5555 device product:panther model:Upper_USB transport_id:7\n';
+      }
+      return '';
+    });
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    const devices = await server.manager.refreshDevices();
+    expect(devices).toEqual([
+      {
+        serial: 'USB:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'Upper_USB',
+        transportId: '7',
+      },
+    ]);
+
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+
+    // Handoff refuses USB:5555 as not an eligible USB device.
+    client.send({ type: 'enableWirelessTcpip', requestId: 92, serial: 'USB:5555', port: 5555 });
+    const handoffReply = await client.next('wirelessResult');
+    expect(handoffReply.result).toMatchObject({ action: 'tcpip', ok: false });
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Fresh connect still rejects uppercase reserved transport prefix hostnames (both at WS schema and service layer).
+    client.send({ type: 'connectDevice', requestId: 93, address: 'USB:5555' });
+    const connectError = await client.next('error');
+    expect(connectError.code).toBe('bad_request');
+    await expect(server.agent.wireless!.connect('USB:5555', 'dashboard')).rejects.toThrow(
+      /conflicts with an ADB transport prefix/i,
+    );
+    expect(adb.execCalls.some((c) => c[0] === 'connect')).toBe(false);
+  });
 });
