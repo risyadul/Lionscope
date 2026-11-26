@@ -98,15 +98,39 @@ const SCID_PATTERN = /^[0-9a-f]{8}$/;
 export const KEY_FRAME_INTERVAL_S = 2;
 /** max_size is a u16 in the scrcpy client. */
 const MAX_SIZE_LIMIT = 0xffff;
+export const MIN_SCRCPY_FPS = 5;
+export const MAX_SCRCPY_FPS = 60;
+export const DEFAULT_SCRCPY_FPS = 60;
+export const MIN_SCRCPY_BITRATE = 500_000;
+export const MAX_SCRCPY_BITRATE = 16_000_000;
+
+export interface ScrcpyStreamOptions {
+  /** Maximum capture frame rate (whole number in MIN_SCRCPY_FPS..MAX_SCRCPY_FPS; default 60). */
+  maxFps?: number;
+  /** Video bitrate in bits/sec (whole number in MIN_SCRCPY_BITRATE..MAX_SCRCPY_BITRATE; omitted = scrcpy default). */
+  bitRate?: number;
+}
 
 /**
  * The `adb shell` arguments that start the server. Built from presets only: `scid` is generated here and
- * `maxSize` computed from the size preset, both validated, so nothing from a client reaches the device shell.
+ * `maxSize`, `maxFps`, and `bitRate` are validated from fixed presets, so nothing raw from a client reaches
+ * the device shell.
  */
-export function scrcpyServerArgs(scid: string, maxSize: number): string[] {
+export function scrcpyServerArgs(scid: string, maxSize: number, options: ScrcpyStreamOptions = {}): string[] {
   if (!SCID_PATTERN.test(scid)) throw new Error(`invalid scid ${scid}`);
   if (!Number.isInteger(maxSize) || maxSize < 0 || maxSize > MAX_SIZE_LIMIT) {
     throw new Error(`invalid max_size ${maxSize}`);
+  }
+  const maxFps = options.maxFps ?? DEFAULT_SCRCPY_FPS;
+  if (!Number.isInteger(maxFps) || maxFps < MIN_SCRCPY_FPS || maxFps > MAX_SCRCPY_FPS) {
+    throw new Error(`invalid max_fps ${maxFps}`);
+  }
+  const bitRate = options.bitRate;
+  if (
+    bitRate !== undefined &&
+    (!Number.isInteger(bitRate) || bitRate < MIN_SCRCPY_BITRATE || bitRate > MAX_SCRCPY_BITRATE)
+  ) {
+    throw new Error(`invalid video_bit_rate ${bitRate}`);
   }
   return [
     `CLASSPATH=${DEVICE_JAR_PATH}`,
@@ -121,7 +145,8 @@ export function scrcpyServerArgs(scid: string, maxSize: number): string[] {
     'control=true',
     'video_codec=h264',
     `max_size=${maxSize}`,
-    'max_fps=60',
+    `max_fps=${maxFps}`,
+    ...(bitRate !== undefined ? [`video_bit_rate=${bitRate}`] : []),
     `video_codec_options=i-frame-interval:int=${KEY_FRAME_INTERVAL_S}`,
     'clipboard_autosync=true',
     // Keeps the screen on while plugged in (stay_on_while_plugged_in); the server's cleanup restores it on exit.
@@ -197,6 +222,8 @@ export interface ScrcpyServerOptions {
   adb: Adb;
   serial: string;
   maxSize: number;
+  maxFps?: number;
+  bitRate?: number;
   jarPath: string;
   /** Every chunk of the server's stderr, as it arrives. Its stdout (INFO lines) is dropped. */
   onStderr?: (text: string) => void;
@@ -308,8 +335,16 @@ export class ScrcpyServer {
   }
 
   private spawnServer(): void {
-    const { adb, serial, maxSize } = this.options;
-    const child = adb.spawn(['-s', serial, 'shell', ...scrcpyServerArgs(this.scid, maxSize)]);
+    const { adb, serial, maxSize, maxFps, bitRate } = this.options;
+    const child = adb.spawn([
+      '-s',
+      serial,
+      'shell',
+      ...scrcpyServerArgs(this.scid, maxSize, {
+        ...(maxFps !== undefined ? { maxFps } : {}),
+        ...(bitRate !== undefined ? { bitRate } : {}),
+      }),
+    ]);
     this.child = child;
     child.stdout?.resume();
     child.stderr?.setEncoding('utf8');

@@ -339,7 +339,7 @@ export function WirelessDialog({
           role="tab"
           aria-selected={tab === 'connect'}
           aria-controls={`${id}-panel-connect`}
-          className="wireless-tab"
+          className={`wireless-tab${tab === 'connect' ? ' wireless-tab--active' : ''}`}
           onClick={() => switchTab('connect')}
         >
           Connect
@@ -350,7 +350,7 @@ export function WirelessDialog({
           role="tab"
           aria-selected={tab === 'pair'}
           aria-controls={`${id}-panel-pair`}
-          className="wireless-tab"
+          className={`wireless-tab${tab === 'pair' ? ' wireless-tab--active' : ''}`}
           onClick={() => switchTab('pair')}
         >
           Pair with code
@@ -362,7 +362,7 @@ export function WirelessDialog({
             role="tab"
             aria-selected={tab === 'qr'}
             aria-controls={`${id}-panel-qr`}
-            className="wireless-tab"
+            className={`wireless-tab${tab === 'qr' ? ' wireless-tab--active' : ''}`}
             onClick={() => switchTab('qr')}
           >
             Pair with QR

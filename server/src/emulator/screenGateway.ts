@@ -3,10 +3,13 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { RawData, WebSocket } from 'ws';
 import {
+  DEFAULT_DEVICE_STREAM_PRESET,
   DEFAULT_SCREEN_FPS_CAP,
   DEFAULT_SCREEN_SIZE,
+  isValidDeviceStreamPreset,
   isValidScreenFpsCap,
   isValidSerial,
+  isWirelessSerial,
   MAX_SCREEN_SOCKET_FRAME_BYTES,
   MAX_SCREEN_INPUT_PER_SECOND,
   parseScreenClientMessage,
@@ -15,6 +18,7 @@ import {
 } from '@lionscope/protocol';
 import type {
   DeviceInfo,
+  DeviceStreamPreset,
   ScreenClientMessage,
   ScreenErrorCode,
   ScreenFpsCap,
@@ -135,6 +139,11 @@ function fpsCapOf(raw: string | null): ScreenFpsCap | null {
   return isValidScreenFpsCap(fps) ? fps : null;
 }
 
+function presetOf(raw: string | null): DeviceStreamPreset | null {
+  if (raw === null) return DEFAULT_DEVICE_STREAM_PRESET;
+  return isValidDeviceStreamPreset(raw) ? raw : null;
+}
+
 function sendError(
   ws: WebSocket,
   code: Extract<ScreenServerMessage, { type: 'screenError' }>['code'],
@@ -171,12 +180,19 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     }
     const size = sizeOf(url.searchParams.get('size'));
     const fpsCap = fpsCapOf(url.searchParams.get('fps'));
-    if (size === null || fpsCap === null) return rejectUpgrade(socket, 400, 'Bad Request');
+    const preset = presetOf(url.searchParams.get('preset'));
+    if (size === null || fpsCap === null || preset === null) return rejectUpgrade(socket, 400, 'Bad Request');
     const serial = url.searchParams.get('serial') ?? '';
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size, fpsCap));
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, serial, size, fpsCap, preset));
   });
 
-  const onConnection = (ws: WebSocket, serial: string, size: ScreenSize, fpsCap: ScreenFpsCap): void => {
+  const onConnection = (
+    ws: WebSocket,
+    serial: string,
+    size: ScreenSize,
+    fpsCap: ScreenFpsCap,
+    preset: DeviceStreamPreset,
+  ): void => {
     ws.on('error', (error) => log.warn('Screen socket error:', error.message));
     if (sockets.size >= MAX_SCREEN_SOCKETS) {
       return sendError(ws, 'busy', `At most ${MAX_SCREEN_SOCKETS} screens can be mirrored at once`);
@@ -189,12 +205,16 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
       if (!options.createClient) return sendError(ws, 'unavailable', 'Emulator mirroring is not available');
       session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size, fpsCap);
     } else {
-      const { adb } = backend.mirroring;
+      const { adb, devices } = backend.mirroring;
+      const device = devices().find((candidate) => candidate.serial === serial);
+      const isWireless = device?.transport === 'wireless' || isWirelessSerial(serial);
       session = new DeviceScreenSession({
         socket: ws,
         adb,
         serial,
         size,
+        preset,
+        isWireless,
         jarPath,
       });
     }
@@ -232,7 +252,7 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
       // Rotation and size changes restart the stream, clipboard messages carry up to 32 KB: each kind has its
       // own, slower budget.
       const bucket =
-        type === 'rotate' || type === 'setSize'
+        type === 'rotate' || type === 'setSize' || type === 'setPreset'
           ? controls
           : type === 'clipboard' || type === 'paste' || type === 'clipboardSync'
             ? clipboard

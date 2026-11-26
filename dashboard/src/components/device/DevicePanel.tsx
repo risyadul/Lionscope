@@ -80,6 +80,7 @@ function PhysicalDevice({
       name={fileNamePart(device.model ?? serial)}
       label={label}
       kind="device"
+      transport={device.transport}
       isVisible={isVisible}
     />
   );

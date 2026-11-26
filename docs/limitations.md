@@ -46,6 +46,10 @@
   been tried on those systems yet.
 - **Dual USB and Wi-Fi listing.** A physical phone connected over both USB and wireless ADB at the same time is
   listed twice in the device picker (once per adb transport); Lionscope does not merge duplicate transports.
+- **Screen sleep on battery over Wi-Fi.** Physical-device mirroring passes scrcpy's `stay_awake=true`, which uses
+  Android's `stay_on_while_plugged_in` setting and only keeps the display awake while the phone has USB or AC
+  power. On battery over Wi-Fi, Android turns the screen off at its normal display timeout and the H.264 stream
+  pauses until you wake the phone (or press Power / Back in the Device column).
 - **mDNS discovery reliability.** `adb mdns services` reliability varies across Android platform-tools versions
   and host networks (particularly on macOS or networks blocking multicast). If QR pairing or nearby device
   discovery does not find your phone, use **Pair with code** and manual `IP:port` connect instead.

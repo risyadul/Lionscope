@@ -50,7 +50,8 @@
   color: var(--ink);
 }
 
-.wireless-tab[aria-selected='true'] {
+.wireless-tab[aria-selected='true'],
+.wireless-tab--active {
   border-bottom-color: var(--brand);
   color: var(--ink);
   font-weight: 600;

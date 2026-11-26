@@ -50,7 +50,8 @@
   an emulator this server didn't boot is shut down only after the user confirms it in the dashboard, and only through
   its own gRPC endpoint or `adb emu kill` on its serial (never a process signal).
 - For physical devices, the scrcpy server jar is checked against its SHA-256 before every push, the command line
-  on the phone is built from fixed presets (no dashboard values reach the device shell), and the phone process
+  on the phone is built from fixed presets (`max_size`, `max_fps`, and optional `video_bit_rate` from validated
+  presets only — no raw dashboard values reach the device shell), and the phone process
   and adb forward are removed on every exit path. Video and device messages from the phone are size-checked.
   While mirroring starts, adb briefly forwards a local port to the phone; it is removed as soon as Lionscope is
   connected. If you run the adb server with `adb -a` (listen on all interfaces), that port is reachable from your

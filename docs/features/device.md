@@ -59,6 +59,13 @@ phone's screen stays on while it is mirrored (scrcpy's `stay_awake`); the previo
 The phone's hardware encoder sends H.264 video that the browser decodes with WebCodecs (Chrome, Firefox 130+,
 Safari 16.4+; the dashboard must be opened on `localhost`).
 
+Under the mirrored screen, next to Back/Home/Recents, the stream quality preset (**Standard** at 60 fps with
+scrcpy's default bitrate, **Wi-Fi** at 30 fps / 2 Mbps, or **Low** at 15 fps / 1 Mbps; **Standard** by default,
+remembered per browser) trades smoothness for lower bandwidth and latency on congested Wi-Fi networks. When a
+Wi-Fi stream drops, Lionscope cleans up stale scrcpy forwards/processes and shows reconnect progress with a
+**Reconnect now** action. Note that `stay_awake` only keeps the screen on while plugged in; on battery over Wi-Fi,
+Android sleeps at its normal display timeout until woken.
+
 The phone's hardware encoder does add a little work while it is mirrored, so close the Device column for the
 cleanest measurements.
 

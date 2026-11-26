@@ -20,6 +20,7 @@ import {
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
+  DEVICE_STREAM_PRESETS,
   isMdnsSerial,
   isValidPackageName,
   isValidPairingCode,
@@ -512,6 +513,7 @@ export const screenClientMessageSchema = z.discriminatedUnion('type', [
       fps: z.number().int().min(MIN_SCREEN_FPS_CAP).max(MAX_SCREEN_FPS_CAP),
     })
     .strict(),
+  z.object({ type: z.literal('setPreset'), preset: z.literal(DEVICE_STREAM_PRESETS) }).strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
   z.object({ type: z.literal('keyFrame') }).strict(),
   z.object({ type: z.literal('clipboardSync'), enabled: z.boolean() }).strict(),

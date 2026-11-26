@@ -179,6 +179,9 @@ export class ScreenSession {
         // Re-time a wait that was set for the old cap.
         this.pace();
         return;
+      case 'setPreset':
+        // Physical devices only: emulators use `setFpsCap`.
+        return;
       case 'screenshot':
         void this.screenshot();
         return;

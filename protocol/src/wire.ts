@@ -636,6 +636,32 @@ export function isValidScreenFpsCap(value: unknown): value is ScreenFpsCap {
   );
 }
 
+/**
+ * Physical-device (scrcpy) stream presets.
+ * - `standard`: 60 fps with scrcpy's default bitrate (~8 Mbps), matching existing USB behavior.
+ * - `wifi`: 30 fps at 2 Mbps for smooth, low-latency mirroring over Wi-Fi.
+ * - `low`: 15 fps at 1 Mbps for congested or weak Wi-Fi links.
+ */
+export const DEVICE_STREAM_PRESETS = ['standard', 'wifi', 'low'] as const;
+export type DeviceStreamPreset = (typeof DEVICE_STREAM_PRESETS)[number];
+export const DEFAULT_DEVICE_STREAM_PRESET: DeviceStreamPreset = 'standard';
+
+export interface DeviceStreamPresetSpec {
+  maxFps: number;
+  /** Omitted uses scrcpy's default bitrate (~8 Mbps). */
+  bitRate?: number;
+}
+
+export const DEVICE_STREAM_PRESET_SPECS: Readonly<Record<DeviceStreamPreset, DeviceStreamPresetSpec>> = {
+  standard: { maxFps: 60 },
+  wifi: { maxFps: 30, bitRate: 2_000_000 },
+  low: { maxFps: 15, bitRate: 1_000_000 },
+};
+
+export function isValidDeviceStreamPreset(value: unknown): value is DeviceStreamPreset {
+  return typeof value === 'string' && (DEVICE_STREAM_PRESETS as readonly string[]).includes(value);
+}
+
 /** The emulator accepts up to 10 concurrent touch points. */
 export const MAX_TOUCH_POINTS = 10;
 export const MAX_SCREEN_TEXT_CHARS = 256;
@@ -756,6 +782,8 @@ export type ScreenClientMessage =
    * any other value is ignored like every invalid message. Ignored for physical devices.
    */
   | { type: 'setFpsCap'; fps: ScreenFpsCap }
+  /** Physical devices: switch scrcpy stream preset (`standard`, `wifi`, `low`); restarts capture. Ignored for emulators. */
+  | { type: 'setPreset'; preset: DeviceStreamPreset }
   /** Answered with one SCREEN_BINARY_KIND.screenshot message (full resolution, as shown). */
   | { type: 'screenshot' }
   /**

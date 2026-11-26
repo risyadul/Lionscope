@@ -10,6 +10,7 @@ import {
   INPUT_STALLED_MESSAGE,
   STREAM_START_TIMEOUT_MS,
   VIDEO_BACKLOG_BYTES,
+  WIRELESS_ENDED_MESSAGE,
 } from '../src/scrcpy/deviceScreenSession.ts';
 import {
   backOrScreenOn,
@@ -565,5 +566,49 @@ describe('DeviceScreenSession', () => {
     await starting;
     expect(adb.liveServers).toEqual([]);
     expect(socket.texts).toEqual([]);
+  });
+
+  it('applies wifi preset args and restarts scrcpy on setPreset', async () => {
+    const session = new DeviceScreenSession({
+      socket,
+      adb,
+      serial: PHYSICAL_SERIAL,
+      size: 540,
+      preset: 'wifi',
+      jarPath: JAR,
+    });
+    await session.start();
+    await device.waitFor(() => adb.servers.length === 1);
+    expect(adb.servers[0]?.args).toContain('max_fps=30');
+    expect(adb.servers[0]?.args).toContain('video_bit_rate=2000000');
+
+    session.handle({ type: 'setPreset', preset: 'low' });
+    await device.waitFor(() => adb.servers.length === 2);
+    expect(adb.servers[1]?.args).toContain('max_fps=15');
+    expect(adb.servers[1]?.args).toContain('video_bit_rate=1000000');
+    await session.close();
+  });
+
+  it('reports wireless drop feedback and runs leftover cleanup when a wireless stream drops', async () => {
+    const session = new DeviceScreenSession({
+      socket,
+      adb,
+      serial: PHYSICAL_SERIAL,
+      size: 540,
+      isWireless: true,
+      jarPath: JAR,
+    });
+    await session.start();
+    await device.waitFor(() => socket.binaries.length >= 2);
+    device.video?.destroy();
+    device.control?.destroy();
+    await device.waitFor(() => socket.texts.some((m) => m.type === 'screenError'));
+    expect(socket.texts.find((m) => m.type === 'screenError')).toEqual({
+      type: 'screenError',
+      code: 'ended',
+      message: WIRELESS_ENDED_MESSAGE,
+    });
+    expect(adb.execCalls.some((call) => call[0] === 'forward' && call[1] === '--list')).toBe(true);
+    await session.close();
   });
 });

@@ -8,6 +8,11 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Physical-device stream presets and wireless resilience: selectable **Standard** (60 fps, default bitrate),
+  **Wi-Fi** (30 fps, 2 Mbps), and **Low** (15 fps, 1 Mbps) scrcpy stream presets in the Device column (keeping
+  existing USB behavior as default), validated `max_fps` and `video_bit_rate` in `scrcpyServerArgs`, automatic
+  leftover scrcpy/forward cleanup and clear reconnect feedback on Wi-Fi drops, and documentation for battery
+  screen-sleep behavior over Wi-Fi.
 - USB → Wi-Fi handoff: **Use Wi-Fi** button beside the device picker for ready USB phones (with a confirmation
   dialog noting that port 5555 stays open until reboot) and `enable_wireless_adb` agent tool to read the phone's
   Wi-Fi IP, run `adb tcpip 5555`, and connect wirelessly.
