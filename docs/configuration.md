@@ -6,6 +6,7 @@
 | `--port <port>`            | `LIONSCOPE_PORT`          | `8701`         | Dashboard HTTP + WebSocket port                                            |
 | `--device-port <port>`     | `LIONSCOPE_DEVICE_PORT`   | `8700`         | SDK gateway (TCP, NDJSON); reached via `adb reverse`                       |
 | `--adb <path>`             | `LIONSCOPE_ADB`           | auto           | Path to the `adb` binary                                                   |
+|                            | `LIONSCOPE_FFMPEG`        | auto           | Path to `ffmpeg` for host-side emulator H.264 encoding                     |
 | `--disable-device-control` |                           | enabled        | Disable agent device control; dashboard device controls are independent    |
 | `--disable-network-bodies` |                           | enabled        | Hide captured body text from agents; dashboard capture is independent      |
 | `--disable-storage-read`   |                           | enabled        | Disable Storage reads and writes in dashboard and tools                    |
@@ -14,8 +15,10 @@
 |                            | `LIONSCOPE_STATE_DIR`     | `~/.lionscope` | Private background state and operational log directory                     |
 
 Flags win over environment variables. Without `LIONSCOPE_DASHBOARD_DIR`, the server serves the dashboard that
-ships next to it in the npm package, or `dashboard/dist` in a clone. There is no option to listen on anything
-but `127.0.0.1`.
+ships next to it in the npm package, or `dashboard/dist` in a clone. Without `LIONSCOPE_FFMPEG`, the server
+probes `ffmpeg` on `PATH` for a working H.264 encoder (`h264_videotoolbox`, `h264_nvenc`, `h264_vaapi`,
+`h264_qsv`, or `libx264`) and automatically falls back to gRPC `PNG` if none works. There is no option to
+listen on anything but `127.0.0.1`.
 
 ## Background lifecycle
 
