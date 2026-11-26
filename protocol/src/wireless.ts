@@ -77,6 +77,11 @@ export function isValidPairingCode(code: string): boolean {
   return PAIRING_CODE_PATTERN.test(code);
 }
 
+/** Build the Android 11+ Wireless Debugging QR code payload (`WIFI:T:ADB;S:<name>;P:<password>;;`). */
+export function formatAdbQrPayload(serviceName: string, password: string): string {
+  return `WIFI:T:ADB;S:${serviceName};P:${password};;`;
+}
+
 export function isMdnsSerial(value: string): boolean {
   return MDNS_SERIAL_PATTERN.test(value);
 }

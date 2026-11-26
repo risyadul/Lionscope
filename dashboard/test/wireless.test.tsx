@@ -219,4 +219,79 @@ describe('WirelessDialog', () => {
     expect(screen.getByText(/Paired successfully/i)).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('lists discovered mDNS devices for one-click connect and renders QR pairing SVG', async () => {
+    const onConnect = vi.fn(async (address: string) => ({
+      action: 'connect' as const,
+      ok: true as const,
+      serial: address,
+      target: address,
+      alreadyConnected: false,
+    }));
+    const onListMdns = vi.fn(async () => ({
+      action: 'mdns' as const,
+      ok: true as const,
+      services: [
+        {
+          instanceName: 'adb-PIXEL8-abc',
+          host: '192.168.1.50',
+          port: 42000,
+          target: '192.168.1.50:42000',
+          serial: 'adb-PIXEL8-abc._adb-tls-connect._tcp',
+          connected: false,
+        },
+      ],
+    }));
+    const onStartQrPairing = vi.fn(async () => ({
+      action: 'startQr' as const,
+      ok: true as const,
+      sessionId: '0123456789abcdef',
+      payload: 'WIFI:T:ADB;S:ADB_WIFI_aabbccddeeff;P:TestPass12345678;;',
+      serviceName: 'ADB_WIFI_aabbccddeeff',
+      expiresAt: Date.now() + 120_000,
+    }));
+    const onCancelQrPairing = vi.fn();
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <WirelessDialog
+        isOnline={true}
+        onConnect={onConnect}
+        onPair={noopPair}
+        onListMdns={onListMdns}
+        onStartQrPairing={onStartQrPairing}
+        onCancelQrPairing={onCancelQrPairing}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('adb-PIXEL8-abc')).toBeTruthy();
+      expect(screen.getByText('192.168.1.50:42000')).toBeTruthy();
+    });
+
+    // Switch to QR tab and verify SVG QR code is rendered.
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with QR' }));
+    await waitFor(() => {
+      expect(onStartQrPairing).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('img', { name: 'Android wireless debugging pairing QR code' })).toBeTruthy();
+    });
+
+    // Switching back cancels the active QR session.
+    fireEvent.click(screen.getByRole('tab', { name: 'Connect' }));
+    expect(onCancelQrPairing).toHaveBeenCalledWith('0123456789abcdef');
+
+    // One-click connect on the discovered mDNS device.
+    await waitFor(() => {
+      expect(screen.getByText('adb-PIXEL8-abc')).toBeTruthy();
+    });
+    const connectButtons = screen.getAllByRole('button', { name: 'Connect' });
+    fireEvent.click(connectButtons.at(-1)!);
+    await waitFor(() => {
+      expect(onConnect).toHaveBeenCalledWith('192.168.1.50:42000');
+      expect(onConnected).toHaveBeenCalledWith('192.168.1.50:42000');
+    });
+  });
 });

@@ -395,6 +395,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         agentHttp.close(),
       ]);
       viewEdits.close();
+      wireless.close();
       await deviceGateway.close();
       await gateway?.close();
       await new Promise<void>((resolve) => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ClientMessage, WirelessActionResult } from '@lionscope/protocol/wire';
+import type { ClientMessage, QrPairingUpdate, WirelessActionResult } from '@lionscope/protocol/wire';
 import type { WirelessAnswer } from '../lib/store.ts';
 
 const WIRELESS_REQUEST_TIMEOUT_MS = 20_000;
@@ -13,6 +13,7 @@ interface PendingEntry {
 interface Input {
   send: (msg: ClientMessage) => boolean;
   answers: readonly WirelessAnswer[];
+  qrPairing: QrPairingUpdate | null;
   isOpen: boolean;
 }
 
@@ -24,13 +25,17 @@ export interface WirelessActionsController {
     code: string,
     connectAddress?: string,
   ) => Promise<Extract<WirelessActionResult, { action: 'pair' }>>;
+  listMdns: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
+  startQrPairing: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
+  cancelQrPairing: (sessionId: string) => void;
+  qrPairing: QrPairingUpdate | null;
   disconnectingSerial: string | null;
   disconnectError: string | null;
   clearDisconnectError: () => void;
 }
 
 /** Sends request/response wireless ADB commands over the dashboard WebSocket and matches answers by requestId. */
-export function useWirelessActions({ send, answers, isOpen }: Input): WirelessActionsController {
+export function useWirelessActions({ send, answers, qrPairing, isOpen }: Input): WirelessActionsController {
   const nextIdRef = useRef(1);
   const pendingRef = useRef(new Map<number, PendingEntry>());
   const [disconnectingSerial, setDisconnectingSerial] = useState<string | null>(null);
@@ -146,5 +151,33 @@ export function useWirelessActions({ send, answers, isOpen }: Input): WirelessAc
 
   const clearDisconnectError = useCallback(() => setDisconnectError(null), []);
 
-  return { connect, disconnect, pair, disconnectingSerial, disconnectError, clearDisconnectError };
+  const listMdns = useCallback(
+    () => request('mdns', (requestId) => ({ type: 'listMdnsServices', requestId })),
+    [request],
+  );
+
+  const startQrPairing = useCallback(
+    () => request('startQr', (requestId) => ({ type: 'startQrPairing', requestId })),
+    [request],
+  );
+
+  const cancelQrPairing = useCallback(
+    (sessionId: string) => {
+      if (isOpen) send({ type: 'cancelQrPairing', sessionId });
+    },
+    [isOpen, send],
+  );
+
+  return {
+    connect,
+    disconnect,
+    pair,
+    listMdns,
+    startQrPairing,
+    cancelQrPairing,
+    qrPairing,
+    disconnectingSerial,
+    disconnectError,
+    clearDisconnectError,
+  };
 }

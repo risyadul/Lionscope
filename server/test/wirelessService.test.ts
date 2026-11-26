@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AGENT_HOST_POLICY_MESSAGE } from '@lionscope/protocol';
+import type { QrPairingUpdate } from '@lionscope/protocol';
 import { callTool } from '../src/agent/registry.ts';
+import { WirelessService } from '../src/device/wirelessService.ts';
 import { createLionscopeServer } from '../src/server.ts';
 import type { LionscopeServer } from '../src/server.ts';
 import { FakeAdb, fixture } from './helpers/fakes.ts';
@@ -277,5 +279,111 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
         note: 'Paired successfully. Enter the separate connect IP:port shown on the Wireless debugging screen.',
       },
     });
+  });
+
+  it('lists discovered mDNS connect devices over WS and flags already-connected entries', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') {
+        return 'List of devices attached\n192.168.1.42:41234 device product:panther model:Pixel_7 transport_id:4\n';
+      }
+      if (args[0] === 'mdns' && args[1] === 'services') {
+        return [
+          'List of discovered mdns services',
+          'adb-R58M123ABC-xyz\t_adb-tls-connect._tcp\t192.168.1.42:41234',
+          'adb-PIXEL8-abc\t_adb-tls-connect._tcp\t192.168.1.50:42000',
+          'ADB_WIFI_999\t_adb-tls-pairing._tcp\t192.168.1.50:37123',
+        ].join('\n');
+      }
+      return '';
+    });
+
+    server = makeServer(adb);
+    const address = await server.listen();
+    await server.manager.refreshDevices();
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+
+    client.send({ type: 'listMdnsServices', requestId: 21 });
+    const mdnsAnswer = await client.next('wirelessResult');
+    expect(mdnsAnswer).toEqual({
+      type: 'wirelessResult',
+      requestId: 21,
+      result: {
+        action: 'mdns',
+        ok: true,
+        services: [
+          {
+            instanceName: 'adb-R58M123ABC-xyz',
+            host: '192.168.1.42',
+            port: 41234,
+            target: '192.168.1.42:41234',
+            serial: 'adb-R58M123ABC-xyz._adb-tls-connect._tcp',
+            connected: true,
+          },
+          {
+            instanceName: 'adb-PIXEL8-abc',
+            host: '192.168.1.50',
+            port: 42000,
+            target: '192.168.1.50:42000',
+            serial: 'adb-PIXEL8-abc._adb-tls-connect._tcp',
+            connected: false,
+          },
+        ],
+      },
+    });
+  });
+
+  it('runs QR pairing lifecycle: generates payload, polls mdns, pairs on match, and connects', async () => {
+    let mdnsLines: string[] = [];
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'mdns' && args[1] === 'services') {
+        return ['List of discovered mdns services', ...mdnsLines].join('\n');
+      }
+      if (args[0] === 'pair') {
+        return 'Successfully paired to 192.168.1.50:39000 [guid=adb-PIXEL8-abc]\n';
+      }
+      if (args[0] === 'connect') return `connected to ${args[1]}\n`;
+      return '';
+    });
+
+    const service = new WirelessService({
+      adb,
+      refreshDevices: async () => [],
+      stopSessionOn: async () => undefined,
+      getDevices: () => [],
+      qrPollMs: 20,
+      qrTimeoutMs: 5000,
+    });
+
+    const updates: QrPairingUpdate[] = [];
+    const started = service.startQrPairing('owner-1', (update) => updates.push(update));
+    expect(started.payload).toMatch(/^WIFI:T:ADB;S:ADB_WIFI_[0-9a-f]{12};P:[A-Za-z0-9]{16};;$/);
+
+    // Simulate the phone scanning the QR and advertising the matching pairing service + connect service.
+    mdnsLines = [
+      `${started.serviceName}\t_adb-tls-pairing._tcp\t192.168.1.50:39000`,
+      'adb-PIXEL8-abc\t_adb-tls-connect._tcp\t192.168.1.50:42000',
+    ];
+
+    const deadline = Date.now() + 2000;
+    while (!updates.some((u) => u.status === 'paired') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    service.close();
+    expect(updates).toEqual([
+      { sessionId: started.sessionId, status: 'pairing', target: '192.168.1.50:39000' },
+      {
+        sessionId: started.sessionId,
+        status: 'paired',
+        target: '192.168.1.50:39000',
+        host: '192.168.1.50',
+        connectedSerial: '192.168.1.50:42000',
+      },
+    ]);
+    // Verify the QR password was passed to `adb pair` and never echoed in updates.
+    const pairCall = adb.execCalls.find((call) => call[0] === 'pair');
+    expect(pairCall?.[1]).toBe('192.168.1.50:39000');
+    expect(JSON.stringify(updates)).not.toContain(pairCall?.[2] ?? 'impossible');
   });
 });

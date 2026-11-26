@@ -140,6 +140,7 @@ describe('WebSocket gateway back-pressure', () => {
       'locations',
       'networkMocks',
       'permissions',
+      'qrPairing',
       'session',
       'snapshot',
       'storage',

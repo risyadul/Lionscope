@@ -138,6 +138,7 @@ export const wirelessAddressSchema = z
 export const pairingCodeSchema = z
   .string()
   .refine(isValidPairingCode, 'Pairing code must be exactly 6 digits');
+export const qrSessionIdSchema = z.string().regex(/^[0-9a-f]{16}$/, 'invalid QR pairing session id');
 export const packageNameSchema = z.string().max(255).regex(PACKAGE_NAME_PATTERN, 'invalid package name');
 export const avdNameSchema = z.string().regex(AVD_NAME_PATTERN, 'invalid AVD name');
 /** Inspector snapshot ids as the server assigns them (`InspectorSnapshot.id`). */
@@ -367,6 +368,9 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       connectAddress: wirelessTargetSchema.optional(),
     })
     .strict(),
+  z.object({ type: z.literal('listMdnsServices'), requestId: clientRequestId }).strict(),
+  z.object({ type: z.literal('startQrPairing'), requestId: clientRequestId }).strict(),
+  z.object({ type: z.literal('cancelQrPairing'), sessionId: qrSessionIdSchema }).strict(),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

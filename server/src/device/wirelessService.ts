@@ -7,14 +7,17 @@
  *   (fc00::/7), Tailscale (100.64/10), mDNS serials, or a host:port already connected from the
  *   dashboard in this server run.
  */
+import { randomBytes, randomInt } from 'node:crypto';
 import {
   checkAgentWirelessTarget,
+  formatAdbQrPayload,
   isMdnsSerial,
   isValidPairingCode,
   MDNS_CONNECT_SERVICE,
+  MDNS_PAIRING_SERVICE,
   parseWirelessAddress,
 } from '@lionscope/protocol';
-import type { DeviceInfo } from '@lionscope/protocol';
+import type { DeviceInfo, DiscoveredWirelessDevice, QrPairingUpdate } from '@lionscope/protocol';
 import { scrubSecret } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { adbConnect, adbDisconnect, adbMdnsServices, adbPair } from '../adb/wireless.ts';
@@ -24,6 +27,19 @@ import { errorMessage } from '../log.ts';
 
 export type WirelessRequestSource = 'dashboard' | 'agent';
 
+const DEFAULT_QR_POLL_MS = 1000;
+const DEFAULT_QR_TIMEOUT_MS = 120_000;
+const QR_PASSWORD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const QR_PASSWORD_LENGTH = 16;
+
+function generateQrPassword(): string {
+  let result = '';
+  for (let i = 0; i < QR_PASSWORD_LENGTH; i += 1) {
+    result += QR_PASSWORD_ALPHABET[randomInt(0, QR_PASSWORD_ALPHABET.length)]!;
+  }
+  return result;
+}
+
 export interface WirelessPairOutcome {
   target: string;
   host: string;
@@ -31,11 +47,32 @@ export interface WirelessPairOutcome {
   connectNote?: string;
 }
 
+export interface QrPairingStartResult {
+  sessionId: string;
+  payload: string;
+  serviceName: string;
+  expiresAt: number;
+}
+
+interface ActiveQrSession {
+  sessionId: string;
+  owner: unknown;
+  serviceName: string;
+  password: string;
+  expiresAt: number;
+  polling: boolean;
+  timer: ReturnType<typeof setInterval>;
+  onUpdate: (update: QrPairingUpdate) => void;
+}
+
 export interface WirelessServiceOptions {
   adb: Adb;
   refreshDevices: () => Promise<DeviceInfo[]>;
   stopSessionOn: (serial: string) => Promise<void>;
   getDevices: () => readonly DeviceInfo[];
+  now?: () => number;
+  qrPollMs?: number;
+  qrTimeoutMs?: number;
 }
 
 export class WirelessService {
@@ -43,14 +80,22 @@ export class WirelessService {
   private readonly refreshDevices: () => Promise<DeviceInfo[]>;
   private readonly stopSessionOn: (serial: string) => Promise<void>;
   private readonly getDevices: () => readonly DeviceInfo[];
+  private readonly now: () => number;
+  private readonly qrPollMs: number;
+  private readonly qrTimeoutMs: number;
   /** Normalized `host:port` endpoints connected by the user from the dashboard during this server run. */
   private readonly dashboardApproved = new Set<string>();
+  private readonly qrSessions = new Map<string, ActiveQrSession>();
+  private closed = false;
 
   constructor(options: WirelessServiceOptions) {
     this.adb = options.adb;
     this.refreshDevices = options.refreshDevices;
     this.stopSessionOn = options.stopSessionOn;
     this.getDevices = options.getDevices;
+    this.now = options.now ?? Date.now;
+    this.qrPollMs = options.qrPollMs ?? DEFAULT_QR_POLL_MS;
+    this.qrTimeoutMs = options.qrTimeoutMs ?? DEFAULT_QR_TIMEOUT_MS;
   }
 
   /** Remember a normalized `host:port` approved by the user from the dashboard. */
@@ -207,5 +252,136 @@ export class WirelessService {
       if (!check.ok) return null;
     }
     return match.target;
+  }
+
+  /** Discover wireless devices advertising `_adb-tls-connect._tcp` via `adb mdns services`. */
+  async listMdnsConnectDevices(): Promise<DiscoveredWirelessDevice[]> {
+    let services: MdnsService[];
+    try {
+      services = await adbMdnsServices(this.adb);
+    } catch (error) {
+      throw new PublicError(
+        `Could not query mDNS services (check adb version / mDNS support): ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    const connectedSerials = new Set(this.getDevices().map((d) => d.serial));
+    return services
+      .filter((service) => service.serviceType === MDNS_CONNECT_SERVICE)
+      .map((service) => ({
+        instanceName: service.instanceName,
+        host: service.host,
+        port: service.port,
+        target: service.target,
+        serial: service.serial,
+        connected: connectedSerials.has(service.target) || connectedSerials.has(service.serial),
+      }));
+  }
+
+  /**
+   * Start an ephemeral Android 11+ QR pairing session (`WIFI:T:ADB;S:<name>;P:<password>;;`) and poll
+   * `adb mdns services` for the matching `_adb-tls-pairing._tcp` advertisement.
+   */
+  startQrPairing(owner: unknown, onUpdate: (update: QrPairingUpdate) => void): QrPairingStartResult {
+    if (this.closed) throw new PublicError('Server is shutting down');
+    this.cancelQrForOwner(owner);
+    const sessionId = randomBytes(8).toString('hex');
+    const serviceName = `ADB_WIFI_${randomBytes(6).toString('hex')}`;
+    const password = generateQrPassword();
+    const expiresAt = this.now() + this.qrTimeoutMs;
+    const payload = formatAdbQrPayload(serviceName, password);
+
+    const session: ActiveQrSession = {
+      sessionId,
+      owner,
+      serviceName,
+      password,
+      expiresAt,
+      polling: false,
+      timer: setInterval(() => void this.pollQrSession(sessionId), this.qrPollMs),
+      onUpdate,
+    };
+    session.timer.unref();
+    this.qrSessions.set(sessionId, session);
+    return { sessionId, payload, serviceName, expiresAt };
+  }
+
+  cancelQrPairing(sessionId: string): void {
+    const session = this.qrSessions.get(sessionId);
+    if (!session) return;
+    this.disposeQrSession(session);
+    session.onUpdate({ sessionId, status: 'cancelled' });
+  }
+
+  cancelQrForOwner(owner: unknown): void {
+    for (const session of this.qrSessions.values()) {
+      if (session.owner === owner) this.disposeQrSession(session);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const session of this.qrSessions.values()) this.disposeQrSession(session);
+  }
+
+  private disposeQrSession(session: ActiveQrSession): void {
+    clearInterval(session.timer);
+    session.password = '';
+    this.qrSessions.delete(session.sessionId);
+  }
+
+  private async pollQrSession(sessionId: string): Promise<void> {
+    const session = this.qrSessions.get(sessionId);
+    if (!session || session.polling || this.closed) return;
+    if (this.now() >= session.expiresAt) {
+      this.disposeQrSession(session);
+      session.onUpdate({ sessionId, status: 'expired' });
+      return;
+    }
+    session.polling = true;
+    let services: MdnsService[];
+    try {
+      services = await adbMdnsServices(this.adb);
+    } catch {
+      session.polling = false;
+      return;
+    }
+    // Re-check after await in case the session was cancelled meanwhile.
+    if (!this.qrSessions.has(sessionId) || this.closed) return;
+    session.polling = false;
+
+    const match = services.find(
+      (service) =>
+        service.serviceType === MDNS_PAIRING_SERVICE && service.instanceName === session.serviceName,
+    );
+    if (!match) {
+      if (this.now() >= session.expiresAt) {
+        this.disposeQrSession(session);
+        session.onUpdate({ sessionId, status: 'expired' });
+      }
+      return;
+    }
+
+    const password = session.password;
+    const onUpdate = session.onUpdate;
+    this.disposeQrSession(session);
+    onUpdate({ sessionId, status: 'pairing', target: match.target });
+    try {
+      const outcome = await this.pair(match.target, password, 'dashboard', { allowQrPassword: true });
+      onUpdate({
+        sessionId,
+        status: 'paired',
+        target: outcome.target,
+        host: outcome.host,
+        connectedSerial: outcome.connectedSerial,
+        ...(outcome.connectNote ? { connectNote: outcome.connectNote } : {}),
+      });
+    } catch (error) {
+      onUpdate({
+        sessionId,
+        status: 'failed',
+        message: scrubSecret(errorMessage(error), password),
+      });
+    }
   }
 }

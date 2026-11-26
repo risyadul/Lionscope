@@ -19,6 +19,7 @@ import type {
   LogEntry,
   MemorySample,
   NetworkMocksState,
+  QrPairingUpdate,
   SavedStateInstance,
   SavedStateSample,
   ScreenSpan,
@@ -150,6 +151,8 @@ export interface DashboardState {
   storageOutcomes: StorageOutcomeNotice[];
   /** Answers to this client's wireless device actions (connect, disconnect, pair, ...), oldest first. */
   wirelessAnswers: WirelessAnswer[];
+  /** Latest status push for an active QR pairing session; null until one starts. */
+  qrPairing: QrPairingUpdate | null;
   /**
    * Newest laptop-clock timestamp (cpu / memory / frames / events / screens / breakdown / stalls /
    * StrictMode / inflations / view trees / HTTP starts); the pruning reference.
@@ -272,6 +275,7 @@ export function createInitialState(): DashboardState {
     storageAnswers: [],
     storageOutcomes: [],
     wirelessAnswers: [],
+    qrPairing: null,
     latestTs: 0,
     nextLogSeq: 0,
     lastError: null,
@@ -869,6 +873,8 @@ export function applyServerMessageAt(state: DashboardState, msg: ServerMessage, 
           MAX_WIRELESS_ANSWERS,
         ),
       };
+    case 'qrPairing':
+      return { ...state, qrPairing: msg.update };
     case 'error': {
       const id = state.errorSeq + 1;
       const lastError: ServerError =

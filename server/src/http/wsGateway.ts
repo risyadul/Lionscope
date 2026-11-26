@@ -130,7 +130,16 @@ export type GatewayStorage = Pick<
 export type GatewayLocations = Pick<LocationService, 'getLocations' | 'setLocation' | 'clearLocation'>;
 
 /** What the gateway needs from the wireless ADB service. */
-export type GatewayWireless = Pick<WirelessService, 'connect' | 'disconnect' | 'pair'>;
+export type GatewayWireless = Pick<
+  WirelessService,
+  | 'connect'
+  | 'disconnect'
+  | 'pair'
+  | 'listMdnsConnectDevices'
+  | 'startQrPairing'
+  | 'cancelQrPairing'
+  | 'cancelQrForOwner'
+>;
 
 export interface WsGatewayOptions {
   permissions?: () => Readonly<Permissions>;
@@ -189,6 +198,9 @@ const PUBLIC_FAILURES: Readonly<Record<ClientMessage['type'], string>> = {
   connectDevice: 'Could not connect to the wireless device',
   disconnectDevice: 'Could not disconnect the wireless device',
   pairDevice: 'Could not pair with the wireless device',
+  listMdnsServices: 'Could not list discovered wireless devices',
+  startQrPairing: 'Could not start QR pairing',
+  cancelQrPairing: 'Could not cancel QR pairing',
 };
 
 /** The `viewEdit` answer to one client's edit or revert. */
@@ -423,6 +435,52 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
         return;
       }
+      case 'listMdnsServices': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'mdns', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            result = { action: 'mdns', ok: true, services: await wireless.listMdnsConnectDevices() };
+          } catch (error) {
+            if (!(error instanceof PublicError)) log.warn(`listMdnsServices failed: ${errorMessage(error)}`);
+            result = {
+              action: 'mdns',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.listMdnsServices,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
+      case 'startQrPairing': {
+        const wireless = options.wireless;
+        let result: WirelessActionResult;
+        if (!wireless) {
+          result = { action: 'startQr', ok: false, message: 'Wireless ADB is not available on this server' };
+        } else {
+          try {
+            const started = wireless.startQrPairing(ws, (update) => {
+              send(ws, { type: 'qrPairing', update });
+            });
+            result = { action: 'startQr', ok: true, ...started };
+          } catch (error) {
+            if (!(error instanceof PublicError)) log.warn(`startQrPairing failed: ${errorMessage(error)}`);
+            result = {
+              action: 'startQr',
+              ok: false,
+              message: error instanceof PublicError ? error.message : PUBLIC_FAILURES.startQrPairing,
+            };
+          }
+        }
+        send(ws, { type: 'wirelessResult', requestId: message.requestId, result });
+        return;
+      }
+      case 'cancelQrPairing':
+        options.wireless?.cancelQrPairing(message.sessionId);
+        return;
     }
   };
 
@@ -459,6 +517,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
     ws.on('close', () => {
       clients.delete(ws);
       options.inspectLinks?.setFocus(ws, null);
+      options.wireless?.cancelQrForOwner(ws);
     });
     ws.on('pong', () => {
       state.alive = true;

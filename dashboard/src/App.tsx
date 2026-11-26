@@ -152,6 +152,7 @@ export function App() {
   const wirelessActions = useWirelessActions({
     send,
     answers: state.wirelessAnswers,
+    qrPairing: state.qrPairing,
     isOpen,
   });
   // Shutting it down stops this session first (the server does; the confirmation says so).
@@ -691,6 +692,10 @@ export function App() {
               isOnline={isOpen}
               onConnect={wirelessActions.connect}
               onPair={wirelessActions.pair}
+              onListMdns={wirelessActions.listMdns}
+              onStartQrPairing={wirelessActions.startQrPairing}
+              onCancelQrPairing={wirelessActions.cancelQrPairing}
+              qrPairing={wirelessActions.qrPairing}
               onConnected={changeSerial}
               onClose={() => setWirelessOpen(false)}
             />

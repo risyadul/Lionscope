@@ -1764,6 +1764,30 @@ export const DEFAULT_PERMISSIONS: Readonly<Permissions> = Object.freeze({
   storageWrite: true,
 });
 
+export interface DiscoveredWirelessDevice {
+  instanceName: string;
+  host: string;
+  port: number;
+  target: string;
+  serial: string;
+  connected: boolean;
+}
+
+export type QrPairingUpdate =
+  | { sessionId: string; status: 'waiting' }
+  | { sessionId: string; status: 'pairing'; target: string }
+  | {
+      sessionId: string;
+      status: 'paired';
+      target: string;
+      host: string;
+      connectedSerial: string | null;
+      connectNote?: string;
+    }
+  | { sessionId: string; status: 'failed'; message: string }
+  | { sessionId: string; status: 'expired' }
+  | { sessionId: string; status: 'cancelled' };
+
 export type WirelessActionResult =
   | { action: 'connect'; ok: true; serial: string; target: string; alreadyConnected: boolean }
   | { action: 'connect'; ok: false; message: string }
@@ -1779,7 +1803,18 @@ export type WirelessActionResult =
       /** Non-fatal note if pairing succeeded but follow-up connect failed or needs a manual connect port. */
       connectNote?: string;
     }
-  | { action: 'pair'; ok: false; message: string };
+  | { action: 'pair'; ok: false; message: string }
+  | { action: 'mdns'; ok: true; services: DiscoveredWirelessDevice[] }
+  | { action: 'mdns'; ok: false; message: string }
+  | {
+      action: 'startQr';
+      ok: true;
+      sessionId: string;
+      payload: string;
+      serviceName: string;
+      expiresAt: number;
+    }
+  | { action: 'startQr'; ok: false; message: string };
 
 export type ServerMessage =
   | {
@@ -1862,6 +1897,8 @@ export type ServerMessage =
   | { type: 'storageOutcome'; serial: string; outcome: StorageWriteOutcome }
   /** Answer to this client's wireless device action (`connectDevice` / `disconnectDevice` / ...). */
   | { type: 'wirelessResult'; requestId: number; result: WirelessActionResult }
+  /** Status transition of a client's active QR pairing session (`startQrPairing`). */
+  | { type: 'qrPairing'; update: QrPairingUpdate }
   /** `code` includes `inspect_failed` (with a human-readable message) for a failed `inspect`. */
   | { type: 'error'; message: string; code?: string };
 
@@ -1889,6 +1926,7 @@ export const CONTROL_SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new 
   'storage',
   'storageOutcome',
   'wirelessResult',
+  'qrPairing',
   'error',
 ]);
 
@@ -2008,7 +2046,13 @@ export type ClientMessage =
       address: string;
       code: string;
       connectAddress?: string;
-    };
+    }
+  /** List wireless devices discovered via `adb mdns services` (`_adb-tls-connect._tcp`). */
+  | { type: 'listMdnsServices'; requestId: number }
+  /** Start an ephemeral QR pairing session; answered with `wirelessResult` (`startQr`) + `qrPairing` updates. */
+  | { type: 'startQrPairing'; requestId: number }
+  /** Cancel an active QR pairing session (stops polling and erases its ephemeral password). */
+  | { type: 'cancelQrPairing'; sessionId: string };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
 export const MAX_CLIENT_MESSAGE_BYTES = 4096;

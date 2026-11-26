@@ -177,6 +177,106 @@
   font-size: var(--text-meta);
 }
 
+.wireless-mdns {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+.wireless-mdns-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.wireless-mdns-head .overline {
+  margin: 0;
+}
+
+.wireless-mdns-refresh {
+  height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-meta);
+}
+
+.wireless-mdns-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wireless-mdns-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+
+.wireless-mdns-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wireless-mdns-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wireless-mdns-target {
+  color: var(--ink-muted);
+  font-size: var(--text-meta);
+}
+
+.wireless-mdns-connected {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--good-wash);
+  color: var(--good);
+  font-size: var(--text-meta);
+  font-weight: 600;
+}
+
+.wireless-qr-box {
+  display: grid;
+  place-items: center;
+  margin: var(--space-3) 0;
+}
+
+.wireless-qr-svg {
+  width: 212px;
+  height: 212px;
+  max-width: 100%;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: #ffffff;
+}
+
+.wireless-qr-placeholder {
+  display: grid;
+  place-items: center;
+  width: 212px;
+  height: 212px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+  color: var(--ink-muted);
+  font-size: var(--text-small);
+}
+
 @media (max-width: 639px), (any-pointer: coarse) {
   .wireless-input {
     height: 44px;
@@ -185,7 +285,9 @@
 
   .wireless-tab,
   .wireless-heading .btn,
-  .wireless-actions .btn {
+  .wireless-actions .btn,
+  .wireless-mdns-refresh,
+  .wireless-mdns-item .btn {
     min-height: 44px;
   }
 

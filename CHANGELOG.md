@@ -8,6 +8,10 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ### Added
 
+- Wireless QR pairing and mDNS discovery: **Pair with QR** generates an ephemeral
+  `WIFI:T:ADB;S:<name>;P:<password>;;` QR code (using `uqr`), polls `adb mdns services` for the matching
+  `_adb-tls-pairing._tcp` service, pairs, and connects automatically; the **Connect** tab lists discovered
+  `_adb-tls-connect._tcp` wireless devices for one-click connection.
 - Android 11+ wireless pairing by 6-digit code: **Pair with code** tab in the dashboard Wireless dialog and
   `pair_device` agent tool (`adb pair`), followed by automatic connection via an explicit connect port or mDNS
   (`_adb-tls-connect._tcp`) discovery, or pre-filled fallback to the Connect tab when the separate connect port is

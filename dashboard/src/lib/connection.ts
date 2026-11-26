@@ -38,6 +38,7 @@ const SERVER_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<ServerMessa
   'storage',
   'storageOutcome',
   'wirelessResult',
+  'qrPairing',
   'error',
 ]);
 

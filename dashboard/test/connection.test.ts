@@ -110,6 +110,7 @@ describe('parseServerMessage', () => {
       storage: true,
       storageOutcome: true,
       wirelessResult: true,
+      qrPairing: true,
       error: true,
     };
     for (const type of Object.keys(types)) {

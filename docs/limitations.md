@@ -46,6 +46,9 @@
   been tried on those systems yet.
 - **Dual USB and Wi-Fi listing.** A physical phone connected over both USB and wireless ADB at the same time is
   listed twice in the device picker (once per adb transport); Lionscope does not merge duplicate transports.
+- **mDNS discovery reliability.** `adb mdns services` reliability varies across Android platform-tools versions
+  and host networks (particularly on macOS or networks blocking multicast). If QR pairing or nearby device
+  discovery does not find your phone, use **Pair with code** and manual `IP:port` connect instead.
 - Memory uses `dumpsys meminfo --local`: the same App Summary numbers, without asking the app to dump its
   runtime stats (which would force a GC on every poll). It still costs ~0.3–2 s, so memory is sampled every 3 s.
 - Jank follows Android's own definition on API 31+ (frame finished after its deadline); "slow" frames are those

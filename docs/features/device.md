@@ -87,3 +87,9 @@ or hostname with port, and warns whenever the address is a public IP.
   connect port blank, Lionscope checks `adb mdns services` for a matching `_adb-tls-connect._tcp` endpoint and
   connects automatically; otherwise it moves you to the **Connect** tab with the host pre-filled so you can enter
   the connect port. Pairing codes are cleared immediately and never stored, logged, or echoed.
+- **QR code pairing & mDNS discovery.** Open **Pair with QR** in the Wireless device dialog to generate an
+  ephemeral `WIFI:T:ADB;S:<name>;P:<password>;;` QR code (rendered locally with `uqr`) and scan it from Android's
+  **Wireless debugging → Pair device with QR code**. Lionscope polls `adb mdns services` for the matching
+  `_adb-tls-pairing._tcp` advertisement, pairs automatically, and connects via `_adb-tls-connect._tcp` when
+  discovered. The **Connect** tab also lists nearby `_adb-tls-connect._tcp` devices discovered via `adb mdns
+services` for one-click connection.
