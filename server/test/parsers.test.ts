@@ -89,6 +89,61 @@ describe('parseDevices', () => {
       { serial: 'weird-1', state: 'unknown' },
     ]);
   });
+
+  it('preserves AOSP transport serials (vsock/usb/tcp/local) and classifies ADB mDNS service types as wireless', () => {
+    const longHost = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(56)}.test:65535`;
+    const output = [
+      'List of devices attached',
+      'vsock:2:5555           device product:cf_x86_64 model:Cuttlefish transport_id:1',
+      'usb:1-2.3              device product:panther model:Pixel_7 transport_id:2',
+      'adb-SAMPLE._adb._tcp   device product:panther model:Pixel_8 transport_id:3',
+      'lab._adb-tls-connect._tcp device product:panther model:Pixel_9 transport_id:4',
+      `${longHost} device product:panther model:Long_Host transport_id:5`,
+      '',
+    ].join('\n');
+
+    expect(parseDevices(output)).toEqual([
+      {
+        serial: 'vsock:2:5555',
+        state: 'device',
+        product: 'cf_x86_64',
+        model: 'Cuttlefish',
+        transportId: '1',
+      },
+      {
+        serial: 'usb:1-2.3',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '2',
+        transport: 'usb',
+      },
+      {
+        serial: 'adb-SAMPLE._adb._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_8',
+        transportId: '3',
+        transport: 'wireless',
+      },
+      {
+        serial: 'lab._adb-tls-connect._tcp',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_9',
+        transportId: '4',
+        transport: 'wireless',
+      },
+      {
+        serial: longHost,
+        state: 'device',
+        product: 'panther',
+        model: 'Long_Host',
+        transportId: '5',
+        transport: 'wireless',
+      },
+    ]);
+  });
 });
 
 describe('parseProcStat', () => {

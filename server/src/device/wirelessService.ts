@@ -13,6 +13,7 @@ import {
   checkAgentWirelessTarget,
   DEFAULT_ADB_TCP_PORT,
   formatAdbQrPayload,
+  isAdbMdnsTransportSerial,
   isMdnsSerial,
   isPublicWirelessHost,
   isUsbTcpipEligible,
@@ -146,7 +147,7 @@ export class WirelessService {
       if (!check.ok) throw new PublicError(check.error);
       return check.value.target;
     }
-    if (allowMdns && isMdnsSerial(rawTarget)) return rawTarget;
+    if (allowMdns && (isMdnsSerial(rawTarget) || isAdbMdnsTransportSerial(rawTarget))) return rawTarget;
     const parsed = parseWirelessAddress(rawTarget);
     if (!parsed.ok) throw new PublicError(parsed.error);
     return parsed.value.target;

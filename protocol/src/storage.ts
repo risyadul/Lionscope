@@ -8,6 +8,8 @@ import { MAX_STORAGE_SQL_CHARS, MAX_STORAGE_QUERY_OFFSET } from './storageSql.ts
 import { isSensitiveName, redactFreeText, redactJsonText } from './insights/network.ts';
 import {
   HTTP_REDACTED,
+  isValidSerial,
+  MAX_SERIAL_LENGTH,
   MAX_STORAGE_CURSOR_CHARS,
   MAX_STORAGE_NAME_CHARS,
   MAX_STORAGE_PAGES,
@@ -31,13 +33,19 @@ import {
 
 const INT_RANGE = [-(2n ** 31n), 2n ** 31n - 1n] as const;
 
+const storageTargetSerial = z
+  .string()
+  .min(1)
+  .max(MAX_SERIAL_LENGTH)
+  .refine(isValidSerial, 'invalid adb serial');
+
 export const storageQueryInputSchema = z
   .object({
     name: z.string().min(1).max(MAX_STORAGE_NAME_CHARS),
     sql: z.string().min(1).max(MAX_STORAGE_SQL_CHARS),
     target: z
       .object({
-        serial: z.string().min(1).max(128),
+        serial: storageTargetSerial,
         packageName: z.string().min(1).max(255),
         link: z.number().int().positive(),
       })
@@ -170,7 +178,7 @@ const storageCursorInput = z
   .regex(STORAGE_CURSOR_PATTERN, 'invalid cursor: pass back a nextCursor as it came');
 export const storageTargetSchema = z
   .object({
-    serial: z.string().min(1).max(256),
+    serial: storageTargetSerial,
     packageName: z.string().min(1).max(256),
     link: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   })

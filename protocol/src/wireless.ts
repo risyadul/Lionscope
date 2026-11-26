@@ -24,6 +24,19 @@ export type MdnsServiceType = typeof MDNS_CONNECT_SERVICE | typeof MDNS_PAIRING_
  */
 export const MDNS_SERIAL_PATTERN = /^adb-[A-Za-z0-9._-]{1,80}\._adb-tls-(?:connect|pairing)\._tcp$/;
 
+/**
+ * Any ADB Wi-Fi mDNS service serial listed by `adb devices -l` (TLS or legacy `_adb._tcp`, with any
+ * service instance name and optional `.local` suffix), e.g. `adb-SAMPLE._adb._tcp` or
+ * `lab._adb-tls-connect._tcp`. Used for transport classification independent of agent-name policy.
+ */
+export const ADB_MDNS_TRANSPORT_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\._adb(?:-[A-Za-z0-9-]+)?\._tcp(?:\.local)?$/;
+
+const VSOCK_SERIAL_PATTERN = /^vsock:(\d{1,10}):([1-9]\d{0,4})$/;
+const USB_TRANSPORT_SERIAL_PATTERN = /^usb:[A-Za-z0-9._-]{1,120}$/;
+const LOCAL_TRANSPORT_SERIAL_PATTERN = /^local(?:abstract|reserved|filesystem)?:[A-Za-z0-9._-]{1,110}$/;
+const ACCEPTFD_SERIAL_PATTERN = /^acceptfd:\d{1,10}$/;
+
 export type WirelessHostKind = 'ipv4' | 'ipv6' | 'hostname';
 
 /**
@@ -86,6 +99,33 @@ export function formatAdbQrPayload(serviceName: string, password: string): strin
 
 export function isMdnsSerial(value: string): boolean {
   return MDNS_SERIAL_PATTERN.test(value);
+}
+
+/** True for any ADB Wi-Fi mDNS service serial (`._adb._tcp`, `._adb-tls-connect._tcp`, etc.). */
+export function isAdbMdnsTransportSerial(value: string): boolean {
+  return ADB_MDNS_TRANSPORT_PATTERN.test(value);
+}
+
+/**
+ * True for recognized AOSP ADB socket_spec transport serials (`vsock:<cid>:<port>`, `usb:<path>`,
+ * `tcp:<port>`, `tcp:<host>:<port>`, `local*:<name>`, `acceptfd:<fd>`).
+ */
+export function isAdbTransportSerial(value: string): boolean {
+  const vsock = VSOCK_SERIAL_PATTERN.exec(value);
+  if (vsock) {
+    const cid = Number(vsock[1]);
+    const port = parseWirelessPort(vsock[2]!);
+    return Number.isInteger(cid) && cid >= 0 && cid <= 0xffff_ffff && port !== null;
+  }
+  if (USB_TRANSPORT_SERIAL_PATTERN.test(value)) return true;
+  if (LOCAL_TRANSPORT_SERIAL_PATTERN.test(value)) return true;
+  if (ACCEPTFD_SERIAL_PATTERN.test(value)) return true;
+  if (value.startsWith('tcp:')) {
+    const rest = value.slice(4);
+    if (parseWirelessPort(rest) !== null) return true;
+    return parseWirelessAddress(rest).ok;
+  }
+  return false;
 }
 
 export function parseWirelessPort(raw: number | string): number | null {
@@ -298,9 +338,9 @@ export function parseWirelessAddress(raw: string): WirelessValidationResult<Pars
   return validateWirelessEndpoint(raw.slice(0, lastColon), raw.slice(lastColon + 1));
 }
 
-/** True when `serial` looks like a wireless ADB serial (`host:port` or mDNS TLS service serial). */
+/** True when `serial` looks like a wireless ADB serial (`host:port` or any ADB Wi-Fi mDNS service serial). */
 export function isWirelessSerial(serial: string): boolean {
-  return isMdnsSerial(serial) || parseWirelessAddress(serial).ok;
+  return isMdnsSerial(serial) || isAdbMdnsTransportSerial(serial) || parseWirelessAddress(serial).ok;
 }
 
 /** True when `serial` identifies an Android emulator (`emulator-<port>`). */
@@ -311,8 +351,9 @@ export function isEmulatorSerial(serial: string): boolean {
 /**
  * Derive transport from `adb devices -l` fields present on both native and libusb ADB backends:
  * - `emulator-*` → `'emulator'`
- * - explicit `usb:` prop → `'usb'`
- * - wireless serial (`host:port` or mDNS TLS service serial) → `'wireless'`
+ * - explicit `usb:` prop or `usb:` transport spec → `'usb'`
+ * - wireless serial (`host:port` or any ADB Wi-Fi mDNS service serial) → `'wireless'`
+ * - other AOSP transport specs (`vsock:`, `tcp:`, `local*:`, `acceptfd:`) → `undefined` (not USB)
  * - non-emulator, non-wireless ready device (`state === 'device'`) → `'usb'`
  *   (libusb ADB backends omit the `usb:` prop on physical USB devices).
  */
@@ -322,8 +363,9 @@ export function deriveDeviceTransport(
   hasUsbProp: boolean,
 ): DeviceTransport | undefined {
   if (isEmulatorSerial(serial)) return 'emulator';
-  if (hasUsbProp) return 'usb';
+  if (hasUsbProp || USB_TRANSPORT_SERIAL_PATTERN.test(serial)) return 'usb';
   if (isWirelessSerial(serial)) return 'wireless';
+  if (isAdbTransportSerial(serial)) return undefined;
   if (state === 'device') return 'usb';
   return undefined;
 }

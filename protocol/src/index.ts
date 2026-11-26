@@ -21,6 +21,7 @@ import {
   DEVICE_PROTOCOL_V13,
   DEVICE_PROTOCOL_VERSION,
   DEVICE_STREAM_PRESETS,
+  isAdbMdnsTransportSerial,
   isMdnsSerial,
   isValidPackageName,
   isValidPairingCode,
@@ -132,7 +133,10 @@ export const wirelessTargetSchema = z
   .string()
   .min(1)
   .max(260)
-  .refine((value) => isMdnsSerial(value) || parseWirelessAddress(value).ok, 'invalid wireless ADB address');
+  .refine(
+    (value) => isMdnsSerial(value) || isAdbMdnsTransportSerial(value) || parseWirelessAddress(value).ok,
+    'invalid wireless ADB address',
+  );
 export const wirelessAddressSchema = z
   .string()
   .min(1)

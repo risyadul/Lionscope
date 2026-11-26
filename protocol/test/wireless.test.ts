@@ -189,14 +189,26 @@ describe('wireless host & port validation', () => {
     expect(deriveDeviceTransport('R58M123ABC', 'device', false)).toBe('usb');
     expect(deriveDeviceTransport('R58M123ABC', 'unauthorized', true)).toBe('usb');
     expect(deriveDeviceTransport('R58M123ABC', 'unauthorized', false)).toBeUndefined();
+    expect(deriveDeviceTransport('R58M123ABC', 'offline', false)).toBeUndefined();
     expect(deriveDeviceTransport('emulator-5554', 'device', false)).toBe('emulator');
     expect(deriveDeviceTransport('192.168.1.5:5555', 'device', false)).toBe('wireless');
     expect(deriveDeviceTransport('[::ffff:192.168.1.20]:5555', 'device', false)).toBe('wireless');
+    // ADB mDNS service types (both `_adb._tcp` and arbitrary-prefix `_adb-tls-connect._tcp`) are wireless, never USB.
+    expect(deriveDeviceTransport('adb-SAMPLE._adb._tcp', 'device', false)).toBe('wireless');
+    expect(deriveDeviceTransport('lab._adb-tls-connect._tcp', 'device', false)).toBe('wireless');
+    expect(deriveDeviceTransport('lab._adb-tls-connect._tcp', 'offline', false)).toBe('wireless');
+    // AOSP vsock transport is not a USB phone.
+    expect(deriveDeviceTransport('vsock:2:5555', 'device', false)).toBeUndefined();
+    expect(deriveDeviceTransport('usb:1-2.3', 'device', false)).toBe('usb');
 
     expect(resolveDeviceTransport({ serial: 'R58M123ABC', state: 'device' })).toBe('usb');
     expect(isUsbTcpipEligible({ serial: 'R58M123ABC', state: 'device' })).toBe(true);
     expect(isUsbTcpipEligible({ serial: 'R58M123ABC', state: 'unauthorized', transport: 'usb' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'R58M123ABC', state: 'offline' })).toBe(false);
     expect(isUsbTcpipEligible({ serial: '192.168.1.5:5555', state: 'device' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'adb-SAMPLE._adb._tcp', state: 'device' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'lab._adb-tls-connect._tcp', state: 'device' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'vsock:2:5555', state: 'device' })).toBe(false);
     expect(isUsbTcpipEligible({ serial: 'emulator-5554', state: 'device' })).toBe(false);
   });
 

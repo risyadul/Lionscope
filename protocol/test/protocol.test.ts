@@ -53,7 +53,14 @@ describe('isValidSerial', () => {
     '192.168.1.5:5555',
     '[fd00::1]:5555',
     '[::ffff:192.168.1.20]:5555',
+    'vsock:2:5555',
+    'usb:1-2.3',
+    'tcp:5555',
+    'tcp:127.0.0.1:5555',
+    'localabstract:adb_test',
     'adb-R58M._adb-tls-connect._tcp',
+    'adb-SAMPLE._adb._tcp',
+    'lab._adb-tls-connect._tcp',
   ])('accepts %s', (serial) => {
     expect(isValidSerial(serial)).toBe(true);
     expect(

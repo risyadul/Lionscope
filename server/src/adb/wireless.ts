@@ -6,6 +6,7 @@
 import {
   classifyIpv4,
   DEFAULT_ADB_TCP_PORT,
+  isAdbMdnsTransportSerial,
   isMdnsSerial,
   isValidPairingCode,
   isValidSerial,
@@ -139,7 +140,7 @@ export async function adbDisconnect(
   options: ExecOptions = {},
 ): Promise<AdbDisconnectResult> {
   let target: string;
-  if (isMdnsSerial(rawTarget)) {
+  if (isMdnsSerial(rawTarget) || isAdbMdnsTransportSerial(rawTarget)) {
     target = rawTarget;
   } else {
     const parsed = parseWirelessAddress(rawTarget);
