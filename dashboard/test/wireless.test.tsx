@@ -739,10 +739,21 @@ describe('WirelessDialog', () => {
     expect(screen.getByText(/connection reset/i)).toBeTruthy();
   });
 
-  it('ignores late results belonging to an earlier dialog instance so a newer dialog is never closed', () => {
+  it('ignores late results belonging to an earlier dialog instance delivered after mount so a newer dialog is never closed', () => {
     const onConnected = vi.fn();
     const onClose = vi.fn();
-    render(
+    const { rerender } = render(
+      <WirelessDialog
+        dialogInstanceId={2}
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={noopPair}
+        lateResult={null}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+    rerender(
       <WirelessDialog
         dialogInstanceId={2}
         isOnline={true}
@@ -765,6 +776,83 @@ describe('WirelessDialog', () => {
     );
     expect(onConnected).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not let a late connect cancel a newer QR workflow in the same dialog', async () => {
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    const onCancelQrPairing = vi.fn();
+    const onSupersedeDialog = vi.fn();
+    const onStartQrPairing = vi.fn(async () => ({
+      action: 'startQr' as const,
+      ok: true as const,
+      sessionId: 'qrnewer123456789',
+      payload: 'WIFI:T:ADB;S:ADB_WIFI_newer1234567;P:NewQrSecret12345;;',
+      serviceName: 'ADB_WIFI_newer1234567',
+      expiresAt: Date.now() + 120_000,
+    }));
+
+    const { rerender } = render(
+      <WirelessDialog
+        dialogInstanceId={1}
+        isOnline={true}
+        onConnect={vi.fn(async () => ({
+          action: 'connect' as const,
+          ok: false as const,
+          message: 'Still waiting',
+        }))}
+        onPair={noopPair}
+        onStartQrPairing={onStartQrPairing}
+        onCancelQrPairing={onCancelQrPairing}
+        onSupersedeDialog={onSupersedeDialog}
+        lateResult={null}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+
+    // Start Connect A (times out), then switch to Pair with QR in the same dialog.
+    fireEvent.change(screen.getByLabelText('IP address and port'), {
+      target: { value: '192.168.1.10:5555' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Pair with QR' }));
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'Android wireless debugging pairing QR code' })).toBeTruthy();
+    });
+    expect(onSupersedeDialog).toHaveBeenCalledWith(1);
+
+    // Even if a late connect result arrives for dialogInstanceId=1, the active QR workflow survives untouched.
+    rerender(
+      <WirelessDialog
+        dialogInstanceId={1}
+        isOnline={true}
+        onConnect={vi.fn()}
+        onPair={noopPair}
+        onStartQrPairing={onStartQrPairing}
+        onCancelQrPairing={onCancelQrPairing}
+        onSupersedeDialog={onSupersedeDialog}
+        lateResult={{
+          requestId: 1,
+          dialogInstanceId: 1,
+          result: {
+            action: 'connect',
+            ok: true,
+            serial: '192.168.1.10:5555',
+            target: '192.168.1.10:5555',
+            alreadyConnected: false,
+          },
+        }}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onCancelQrPairing).not.toHaveBeenCalled();
+    expect(screen.getByRole('img', { name: 'Android wireless debugging pairing QR code' })).toBeTruthy();
   });
 
   it('prefills Connect tab and shows public-IP warning when pair discovers a public connect target', async () => {
@@ -1025,5 +1113,110 @@ describe('useWirelessActions deadlines, late reconciliation & QR payload scrubbi
     });
     expect(result.current.lateResult).toBeNull();
     expect(JSON.stringify(result.current)).not.toContain('TimedOutSecret99');
+  });
+
+  it('supersedes an earlier timed-out connect when the same dialog switches to QR and guards pre-deadline handoff completion', async () => {
+    const sent: ClientMessage[] = [];
+    const onLateConnected = vi.fn();
+    let props = {
+      answers: [] as WirelessAnswer[],
+      currentSerial: 'R58M123ABC' as string | null,
+      selectionVersion: 0,
+      activeDialogId: 1 as number | null,
+    };
+
+    const { result, rerender } = renderHook(
+      (p: typeof props) =>
+        useWirelessActions({
+          send: (msg) => {
+            sent.push(msg);
+            return true;
+          },
+          answers: p.answers,
+          qrPairing: null,
+          isOpen: true,
+          currentSerial: p.currentSerial,
+          selectionVersion: p.selectionVersion,
+          activeDialogId: p.activeDialogId,
+          onLateConnected,
+          timeouts: { connect: 20, tcpip: 5_000 },
+        }),
+      { initialProps: props },
+    );
+
+    // 1) Connect A times out in dialog #1, then dialog #1 switches to QR (superseding Connect A).
+    await act(async () => {
+      await result.current.connect('192.168.1.10:5555', 1);
+    });
+    const connectReq = sent.find((m) => m.type === 'connectDevice');
+    const connectReqId = connectReq?.type === 'connectDevice' ? connectReq.requestId : 0;
+
+    act(() => {
+      result.current.supersedeDialog(1);
+    });
+
+    props = {
+      ...props,
+      answers: [
+        {
+          requestId: connectReqId,
+          result: {
+            action: 'connect',
+            ok: true,
+            serial: '192.168.1.10:5555',
+            target: '192.168.1.10:5555',
+            alreadyConnected: false,
+          },
+        },
+      ],
+    };
+    rerender(props);
+    await waitFor(() => {
+      expect(result.current.actionNotice).toContain('192.168.1.10:5555');
+    });
+    expect(result.current.lateResult).toBeNull();
+
+    // 2) Confirmed public USB handoff completes BEFORE deadline after user switched selection to 192.168.1.42:5555.
+    let handoffPromise!: Promise<Extract<WirelessActionResult, { action: 'tcpip' }>>;
+    act(() => {
+      handoffPromise = result.current.enableTcpip('R58M123ABC', 5555, {
+        confirmationId: 'aabbccdd11223344',
+        target: '192.0.2.15:5555',
+      });
+    });
+    const tcpipReq = sent.find((m) => m.type === 'enableWirelessTcpip');
+    const tcpipReqId = tcpipReq?.type === 'enableWirelessTcpip' ? tcpipReq.requestId : 0;
+
+    // User switches to another device while handoff is still in flight (before deadline).
+    props = { ...props, currentSerial: '192.168.1.42:5555', selectionVersion: 1 };
+    rerender(props);
+
+    // Handoff succeeds before deadline: must NOT override newer selection; reports background notice only.
+    props = {
+      ...props,
+      answers: [
+        ...props.answers,
+        {
+          requestId: tcpipReqId,
+          result: {
+            action: 'tcpip',
+            ok: true,
+            usbSerial: 'R58M123ABC',
+            serial: '192.0.2.15:5555',
+            target: '192.0.2.15:5555',
+            port: 5555,
+            alreadyConnected: false,
+          },
+        },
+      ],
+    };
+    rerender(props);
+    await act(async () => {
+      await handoffPromise;
+    });
+    expect(onLateConnected).not.toHaveBeenCalled();
+    expect(result.current.actionNotice).toContain(
+      'Switched R58M123ABC to Wi-Fi (192.0.2.15:5555) in the background',
+    );
   });
 });

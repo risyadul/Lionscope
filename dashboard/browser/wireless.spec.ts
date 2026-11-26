@@ -72,7 +72,41 @@ test('wireless device picker badges, connect/pair/QR dialog, and stream preset f
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(trigger).toBeFocused();
-  expect(await page.evaluate(() => document.documentElement.dataset.qrCancelledCount)).toBe('1');
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.qrCancelledCount)).toBe('1');
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
+});
+
+test('confirmed public USB handoff completing before deadline does not override a newer device selection', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/?scenario=wireless');
+  await page.evaluate(() => document.fonts.ready);
+
+  const picker = page.locator('#device-picker');
+  await picker.selectOption('R58M123ABC');
+  await expect(picker).toHaveValue('R58M123ABC');
+
+  // Start USB -> Wi-Fi handoff, confirm TCP/IP port 5555, then confirm the public IP prompt.
+  await page.getByRole('button', { name: 'Use Wi-Fi', exact: true }).click();
+  await page.getByRole('button', { name: 'Enable Wi-Fi ADB', exact: true }).click();
+
+  const publicConfirm = page.getByRole('alertdialog');
+  await expect(publicConfirm).toContainText('R58M123ABC');
+  await expect(publicConfirm).toContainText('192.0.2.15');
+  await page.getByRole('button', { name: 'Enable on 192.0.2.15:5555', exact: true }).click();
+
+  // While the confirmed handoff is still in flight (before deadline), switch selection to 192.168.1.42:5555.
+  await picker.selectOption('192.168.1.42:5555');
+  await expect(picker).toHaveValue('192.168.1.42:5555');
+
+  // When the handoff finishes, it reports a background notice and MUST NOT override the user's newer selection.
+  await expect(
+    page.getByText(/Switched R58M123ABC to Wi-Fi \(192\.0\.2\.15:5555\) in the background/),
+  ).toBeVisible();
+  await expect(picker).toHaveValue('192.168.1.42:5555');
   expect(errors).toEqual([]);
 });

@@ -96,8 +96,12 @@ export interface WirelessActionsController {
     dialogInstanceId?: number,
   ) => Promise<Extract<WirelessActionResult, { action: 'pair' }>>;
   listMdns: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
-  startQrPairing: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
+  startQrPairing: (
+    dialogInstanceId?: number,
+  ) => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
   cancelQrPairing: (sessionId: string) => void;
+  /** Marks earlier in-flight/timed-out requests from a dialog instance as superseded (e.g. tab switch or new workflow). */
+  supersedeDialog: (dialogInstanceId: number) => void;
   enableTcpip: (
     serial: string,
     port?: number,
@@ -440,6 +444,7 @@ export function useWirelessActions({
 
   const enableTcpip = useCallback(
     async (serial: string, port?: number, confirmPublic?: TcpipPublicConfirmation) => {
+      const initiatedSelectionVersion = selectionVersionRef.current;
       setHandoffSerial(serial);
       setActionError(null);
       setActionNotice(null);
@@ -456,18 +461,30 @@ export function useWirelessActions({
           }),
           { serial },
         );
-        if (!result.ok) {
-          if (result.needsPublicConfirmation) {
-            setPendingPublicTcpip({
-              confirmationId: result.confirmationId,
-              usbSerial: result.usbSerial,
-              host: result.host,
-              port: result.port,
-              target: result.target,
-            });
+        if (result.ok) {
+          const stillOnInitiatingUsb =
+            selectionVersionRef.current === initiatedSelectionVersion &&
+            (currentSerialRef.current === undefined || currentSerialRef.current === serial);
+          if (stillOnInitiatingUsb) {
+            setActionNotice(
+              `Switched to Wi-Fi (${result.serial}). Port ${result.port} stays open until reboot.`,
+            );
+            onLateConnectedRef.current?.(result.serial);
           } else {
-            setActionError(result.message);
+            setActionNotice(
+              `Switched ${result.usbSerial} to Wi-Fi (${result.serial}) in the background. Port ${result.port} stays open until reboot.`,
+            );
           }
+        } else if (result.needsPublicConfirmation) {
+          setPendingPublicTcpip({
+            confirmationId: result.confirmationId,
+            usbSerial: result.usbSerial,
+            host: result.host,
+            port: result.port,
+            target: result.target,
+          });
+        } else {
+          setActionError(result.message);
         }
         return result;
       } finally {
@@ -487,9 +504,18 @@ export function useWirelessActions({
   );
 
   const startQrPairing = useCallback(
-    () => request('startQr', (requestId) => ({ type: 'startQrPairing', requestId })),
+    (dialogInstanceId?: number) =>
+      request(
+        'startQr',
+        (requestId) => ({ type: 'startQrPairing', requestId }),
+        dialogInstanceId !== undefined ? { dialogInstanceId } : {},
+      ),
     [request],
   );
+
+  const supersedeDialog = useCallback((dialogInstanceId: number) => {
+    latestDialogRequestRef.current.set(dialogInstanceId, -1);
+  }, []);
 
   const cancelQrPairing = useCallback(
     (sessionId: string) => {
@@ -506,6 +532,7 @@ export function useWirelessActions({
     listMdns,
     startQrPairing,
     cancelQrPairing,
+    supersedeDialog,
     enableTcpip,
     pendingPublicTcpip,
     clearPendingPublicTcpip,

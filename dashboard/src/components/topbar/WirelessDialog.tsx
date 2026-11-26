@@ -42,8 +42,11 @@ type Props = {
     dialogInstanceId?: number,
   ) => Promise<Extract<WirelessActionResult, { action: 'pair' }>>;
   onListMdns?: () => Promise<Extract<WirelessActionResult, { action: 'mdns' }>>;
-  onStartQrPairing?: () => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
+  onStartQrPairing?: (
+    dialogInstanceId?: number,
+  ) => Promise<Extract<WirelessActionResult, { action: 'startQr' }>>;
   onCancelQrPairing?: (sessionId: string) => void;
+  onSupersedeDialog?: (dialogInstanceId: number) => void;
   qrPairing?: QrPairingUpdate | null;
   lateResult?: LateWirelessResult | null;
   onConnected: (serial: string) => void;
@@ -67,6 +70,7 @@ export function WirelessDialog({
   onListMdns,
   onStartQrPairing,
   onCancelQrPairing,
+  onSupersedeDialog,
   qrPairing = null,
   lateResult = null,
   onConnected,
@@ -80,6 +84,8 @@ export function WirelessDialog({
   const publicConfirmOpenerRef = useRef<HTMLButtonElement | null>(null);
   const isMountedRef = useRef(true);
   const tabRef = useRef<Tab>('connect');
+  const workflowSeqRef = useRef(0);
+  const submittedWorkflowSeqRef = useRef<number | null>(null);
   const activeQrIdRef = useRef<string | null>(null);
   const qrStartGenRef = useRef(0);
   const connectionEpochRef = useRef(0);
@@ -243,6 +249,8 @@ export function WirelessDialog({
 
   const startQr = useCallback(async () => {
     if (!onStartQrPairing || !isOnline) return;
+    workflowSeqRef.current += 1;
+    if (dialogInstanceId !== undefined) onSupersedeDialog?.(dialogInstanceId);
     cancelActiveQr();
     const myGen = ++qrStartGenRef.current;
     const myConnEpoch = connectionEpochRef.current;
@@ -251,7 +259,8 @@ export function WirelessDialog({
     setQrDisconnectedNotice(false);
     setQrLoading(true);
     try {
-      const result = await onStartQrPairing();
+      const result =
+        dialogInstanceId !== undefined ? await onStartQrPairing(dialogInstanceId) : await onStartQrPairing();
       const stale =
         !isMountedRef.current ||
         qrStartGenRef.current !== myGen ||
@@ -281,7 +290,7 @@ export function WirelessDialog({
         setQrLoading(false);
       }
     }
-  }, [onStartQrPairing, isOnline, cancelActiveQr]);
+  }, [onStartQrPairing, isOnline, cancelActiveQr, dialogInstanceId, onSupersedeDialog]);
 
   const matchingQrUpdate =
     qrSession !== null && qrPairing !== null && qrPairing.sessionId === qrSession.sessionId
@@ -312,10 +321,19 @@ export function WirelessDialog({
     onCloseRef.current();
   }, [matchingQrUpdate, isQrTerminal]);
 
-  // Reconcile a late server result ONLY when it belongs to this exact dialog instance.
+  // Reconcile a late server result ONLY when it belongs to this exact dialog instance and active workflow.
   useEffect(() => {
     if (!lateResult || handledLateIdRef.current === lateResult.requestId) return;
     if (dialogInstanceId === undefined || lateResult.dialogInstanceId !== dialogInstanceId) return;
+    // Never let a superseded connect/pair hijack a newer workflow (e.g. switched to Pair with QR).
+    if (
+      tabRef.current === 'qr' ||
+      activeQrIdRef.current !== null ||
+      (submittedWorkflowSeqRef.current !== null && submittedWorkflowSeqRef.current !== workflowSeqRef.current)
+    ) {
+      handledLateIdRef.current = lateResult.requestId;
+      return;
+    }
     handledLateIdRef.current = lateResult.requestId;
     const { result } = lateResult;
     if (result.action === 'connect') {
@@ -347,6 +365,10 @@ export function WirelessDialog({
   }, [lateResult, dialogInstanceId]);
 
   const switchTab = (next: Tab) => {
+    if (next !== tab) {
+      workflowSeqRef.current += 1;
+      if (dialogInstanceId !== undefined) onSupersedeDialog?.(dialogInstanceId);
+    }
     tabRef.current = next;
     if (tab === 'qr' && next !== 'qr') cancelActiveQr();
     setTab(next);
@@ -395,13 +417,15 @@ export function WirelessDialog({
     connectPortError === null;
 
   const connectTarget = async (target: string) => {
+    const seq = ++workflowSeqRef.current;
+    submittedWorkflowSeqRef.current = seq;
     setPending(true);
     setConnectingTarget(target);
     setError(null);
     try {
       const result =
         dialogInstanceId !== undefined ? await onConnect(target, dialogInstanceId) : await onConnect(target);
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || workflowSeqRef.current !== seq) return;
       if (result.ok) {
         onConnected(result.serial);
         onClose();
@@ -426,6 +450,8 @@ export function WirelessDialog({
     event.preventDefault();
     if (!canPair || !parsedPair?.ok) return;
     const submittedCode = trimmedCode;
+    const seq = ++workflowSeqRef.current;
+    submittedWorkflowSeqRef.current = seq;
     // Clear the one-time pairing code from component state immediately on submit.
     setPairCode('');
     setPending(true);
@@ -441,7 +467,7 @@ export function WirelessDialog({
         dialogInstanceId !== undefined
           ? await onPair(trimmedPairAddr, submittedCode, followUpAddress, dialogInstanceId)
           : await onPair(trimmedPairAddr, submittedCode, followUpAddress);
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || workflowSeqRef.current !== seq) return;
       if (!result.ok) {
         setError(result.message);
         return;

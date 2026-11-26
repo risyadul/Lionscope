@@ -36,6 +36,7 @@ export function WirelessFixture() {
     store.dispatch({ kind: 'server', msg: { type: 'emulators', emulators: [] } });
 
     let qrTimer: ReturnType<typeof setTimeout> | null = null;
+    let tcpipTimer: ReturnType<typeof setTimeout> | null = null;
     document.documentElement.dataset.qrCancelledCount = '0';
 
     const onSend = (event: Event) => {
@@ -89,11 +90,58 @@ export function WirelessFixture() {
       } else if (msg.type === 'cancelQrPairing') {
         const prev = Number(document.documentElement.dataset.qrCancelledCount ?? '0');
         document.documentElement.dataset.qrCancelledCount = String(prev + 1);
+      } else if (msg.type === 'enableWirelessTcpip') {
+        const port = msg.port ?? 5555;
+        if (!msg.confirmPublic) {
+          reply({
+            type: 'wirelessResult',
+            requestId: msg.requestId,
+            result: {
+              action: 'tcpip',
+              ok: false,
+              needsPublicConfirmation: true,
+              confirmationId: 'aabbccdd11223344',
+              usbSerial: msg.serial,
+              host: '192.0.2.15',
+              port,
+              target: `192.0.2.15:${port}`,
+              message: `Device ${msg.serial} reported public Wi-Fi address 192.0.2.15:${port}.`,
+            },
+          });
+          return;
+        }
+        // Complete confirmed public handoff before the client deadline (350ms) so Playwright can change selection mid-flight.
+        if (tcpipTimer !== null) clearTimeout(tcpipTimer);
+        const serial = `192.0.2.15:${port}`;
+        tcpipTimer = setTimeout(() => {
+          reply({
+            type: 'devices',
+            devices: [
+              { serial: '192.168.1.42:5555', state: 'device', model: 'Pixel_8_Pro', transport: 'wireless' },
+              { serial: 'R58M123ABC', state: 'device', model: 'Pixel_7', transport: 'usb' },
+              { serial, state: 'device', model: 'Pixel_7', transport: 'wireless' },
+            ],
+          });
+          reply({
+            type: 'wirelessResult',
+            requestId: msg.requestId,
+            result: {
+              action: 'tcpip',
+              ok: true,
+              usbSerial: msg.serial,
+              serial,
+              target: serial,
+              port,
+              alreadyConnected: false,
+            },
+          });
+        }, 350);
       }
     };
     window.addEventListener('fixture-send', onSend);
     return () => {
       if (qrTimer !== null) clearTimeout(qrTimer);
+      if (tcpipTimer !== null) clearTimeout(tcpipTimer);
       window.removeEventListener('fixture-send', onSend);
     };
   }, [store]);

@@ -459,9 +459,7 @@ export function App() {
             onDisconnectWireless={(targetSerial) => void wirelessActions.disconnect(targetSerial)}
             isDisconnectingWireless={serial !== null && wirelessActions.disconnectingSerial === serial}
             onSwitchToWifi={(usbSerial) => {
-              void wirelessActions.enableTcpip(usbSerial).then((result) => {
-                if (result.ok) changeSerial(result.serial);
-              });
+              void wirelessActions.enableTcpip(usbSerial);
             }}
             isSwitchingToWifi={
               serial !== null &&
@@ -469,9 +467,7 @@ export function App() {
             }
             pendingPublicTcpip={wirelessActions.pendingPublicTcpip}
             onConfirmPublicTcpip={(usbSerial, port, confirmationId, target) => {
-              void wirelessActions.enableTcpip(usbSerial, port, { confirmationId, target }).then((result) => {
-                if (result.ok) changeSerial(result.serial);
-              });
+              void wirelessActions.enableTcpip(usbSerial, port, { confirmationId, target });
             }}
             onCancelPublicTcpip={wirelessActions.clearPendingPublicTcpip}
             apps={apps}
@@ -751,6 +747,7 @@ export function App() {
               onListMdns={wirelessActions.listMdns}
               onStartQrPairing={wirelessActions.startQrPairing}
               onCancelQrPairing={wirelessActions.cancelQrPairing}
+              onSupersedeDialog={wirelessActions.supersedeDialog}
               qrPairing={wirelessActions.qrPairing}
               lateResult={wirelessActions.lateResult}
               onConnected={changeSerial}
