@@ -1,5 +1,8 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { describeArgs, scrubSecret } from '../src/adb/adb.ts';
+import { createAdb, describeArgs, scrubSecret } from '../src/adb/adb.ts';
 import {
   adbConnect,
   adbDisconnect,
@@ -28,6 +31,31 @@ describe('describeArgs & scrubSecret', () => {
       'failed with code <redacted> (retry <redacted>)',
     );
     expect(scrubSecret('plain text', '')).toBe('plain text');
+  });
+
+  it('redacts adb pair secrets inside createAdb().exec when the first Error is constructed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lionscope-adb-redact-'));
+    const fakeBin = join(dir, 'fake-adb');
+    writeFileSync(
+      fakeBin,
+      `#!${process.execPath}\nprocess.stderr.write('Failed: invalid pairing code ' + process.argv[process.argv.length - 1] + '\\n');\nprocess.exit(1);\n`,
+    );
+    chmodSync(fakeBin, 0o755);
+    try {
+      const adb = createAdb(fakeBin);
+      let caught: Error | null = null;
+      try {
+        await adb.exec(['pair', '192.168.1.5:37123', '482910']);
+      } catch (error) {
+        caught = error as Error;
+      }
+      expect(caught).not.toBeNull();
+      expect(caught!.message).toContain('adb pair 192.168.1.5:37123 <redacted> failed:');
+      expect(caught!.message).toContain('invalid pairing code <redacted>');
+      expect(caught!.message).not.toContain('482910');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

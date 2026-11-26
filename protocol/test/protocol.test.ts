@@ -52,13 +52,33 @@ describe('isValidSerial', () => {
     'R58M123ABC',
     '192.168.1.5:5555',
     '[fd00::1]:5555',
+    '[::ffff:192.168.1.20]:5555',
     'adb-R58M._adb-tls-connect._tcp',
   ])('accepts %s', (serial) => {
     expect(isValidSerial(serial)).toBe(true);
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'listApps', serial })).ok,
+      `serialSchema accepts ${serial}`,
+    ).toBe(true);
   });
 
-  it.each(['', '-s', 'a b', 'emu;rm -rf /', '$(id)', 'x'.repeat(129), "emu'1"])('rejects %j', (serial) => {
+  it.each([
+    '',
+    '-s',
+    'a b',
+    'emu;rm -rf /',
+    '$(id)',
+    'x'.repeat(129),
+    "emu'1",
+    '[192.168.1.1::1]:5555',
+    '[fd00::1]:99999',
+    '0x7f.1:5555',
+  ])('rejects %j', (serial) => {
     expect(isValidSerial(serial)).toBe(false);
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'listApps', serial })).ok,
+      `serialSchema rejects ${serial}`,
+    ).toBe(false);
   });
 });
 

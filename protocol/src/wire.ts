@@ -6,6 +6,7 @@
  * dashboard → server messages lives in `./index.ts`.
  */
 
+import { parseWirelessAddress } from './wireless.ts';
 import type { DeviceTransport } from './wireless.ts';
 
 export * from './wireless.ts';
@@ -23,13 +24,17 @@ export const DEFAULT_DEVICE_GATEWAY_PORT = 8700;
 // Identifiers (validated because they end up in adb arguments / device shell commands)
 // ---------------------------------------------------------------------------
 
-/** adb serials: `emulator-5554`, `R58M123ABC`, `192.168.1.5:5555`, `[fd00::1]:5555`, `adb-R58M._adb-tls-connect._tcp`. */
+/** adb serials: `emulator-5554`, `R58M123ABC`, `192.168.1.5:5555`, `[fd00::1]:5555`, `[::ffff:192.168.1.20]:5555`, `adb-R58M._adb-tls-connect._tcp`. */
 export const SERIAL_PATTERN =
-  /^(?:\[[0-9A-Fa-f:]{2,45}\]:[1-9]\d{0,4}|[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127})$/;
+  /^(?:\[[0-9A-Fa-f:.]{2,45}\]:[1-9]\d{0,4}|[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127})$/;
 /** Android application id (at least two segments, Java identifier rules). */
 export const PACKAGE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 
 export function isValidSerial(value: string): boolean {
+  if (value.length === 0) return false;
+  if (value.startsWith('[') || value.includes(':')) {
+    return value.length <= 260 && parseWirelessAddress(value).ok;
+  }
   return value.length <= 128 && SERIAL_PATTERN.test(value);
 }
 

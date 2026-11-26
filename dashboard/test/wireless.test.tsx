@@ -115,6 +115,27 @@ describe('DevicePicker wireless badges & disconnect', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enable Wi-Fi ADB' }));
     expect(onSwitchToWifi).toHaveBeenCalledWith('R58M123ABC');
   });
+
+  it('shows USB badge and Use Wi-Fi for a ready USB device even when libusb adb omits transport', () => {
+    const libusbDevice: DeviceInfo = { serial: 'LIBUSB999', state: 'device', model: 'Pixel_8' };
+    render(
+      <DevicePicker
+        devices={[libusbDevice]}
+        emulators={[]}
+        value={libusbDevice.serial}
+        emulator={null}
+        onChange={vi.fn()}
+        onAvdChange={vi.fn()}
+        onRefresh={vi.fn()}
+        onSwitchToWifi={vi.fn()}
+        isLocked={false}
+        isOffline={false}
+      />,
+    );
+
+    expect(screen.getByText('USB')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Use Wi-Fi' })).toBeTruthy();
+  });
 });
 
 describe('WirelessDialog', () => {

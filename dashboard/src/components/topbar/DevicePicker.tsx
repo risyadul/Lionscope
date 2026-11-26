@@ -1,5 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import type { DeviceInfo, DeviceTransport, EmulatorInfo } from '@lionscope/protocol/wire';
+import {
+  isUsbTcpipEligible,
+  resolveDeviceTransport,
+  type DeviceInfo,
+  type DeviceTransport,
+  type EmulatorInfo,
+} from '@lionscope/protocol/wire';
 import { deviceName, deviceStateReason, isReady } from '../../lib/devices.ts';
 import {
   avdValue,
@@ -52,7 +58,7 @@ function deviceOptionLabel(device: DeviceInfo, emulators: readonly EmulatorInfo[
   const isTransient = emulator?.state === 'booting' || emulator?.state === 'shutting_down';
   const reason = emulator && isTransient ? emulatorStateNote(emulator) : deviceStateReason(device.state);
   const name = emulator ? emulatorLabel(emulator) : deviceName(device);
-  const badge = emulator ? null : transportBadgeLabel(device.transport);
+  const badge = emulator ? null : transportBadgeLabel(resolveDeviceTransport(device));
   const suffix = badge ? ` (${badge})` : '';
   return `${name} · ${device.serial}${suffix}${reason ? ` — ${reason}` : ''}`;
 }
@@ -98,13 +104,14 @@ export function DevicePicker({
         : value;
   const selectedDevice = selected !== null ? (list.find((d) => d.serial === selected) ?? null) : null;
   const isListed = selectedDevice !== null;
-  const selectedBadge = emulator === null ? transportBadgeLabel(selectedDevice?.transport) : null;
+  const selectedTransport = selectedDevice ? resolveDeviceTransport(selectedDevice) : undefined;
+  const selectedBadge = emulator === null ? transportBadgeLabel(selectedTransport) : null;
   const canDisconnect =
-    emulator === null && selectedDevice?.transport === 'wireless' && onDisconnectWireless !== undefined;
+    emulator === null && selectedTransport === 'wireless' && onDisconnectWireless !== undefined;
   const canSwitchToWifi =
     emulator === null &&
-    selectedDevice?.transport === 'usb' &&
-    selectedDevice.state === 'device' &&
+    selectedDevice !== null &&
+    isUsbTcpipEligible(selectedDevice) &&
     onSwitchToWifi !== undefined;
 
   const deviceOptions = list.map((device) => (
@@ -128,8 +135,8 @@ export function DevicePicker({
         {selectedBadge !== null && (
           <span
             className="transport-badge"
-            data-transport={selectedDevice?.transport}
-            title={selectedDevice?.transport === 'wireless' ? 'Connected over Wi-Fi' : 'Connected over USB'}
+            data-transport={selectedTransport}
+            title={selectedTransport === 'wireless' ? 'Connected over Wi-Fi' : 'Connected over USB'}
           >
             {selectedBadge}
           </span>
@@ -174,7 +181,7 @@ export function DevicePicker({
           )}
         </Select>
         {actions}
-        {canDisconnect && (
+        {canDisconnect && selectedDevice && (
           <button
             type="button"
             className="btn emu-action"

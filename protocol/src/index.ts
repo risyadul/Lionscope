@@ -88,7 +88,7 @@ import {
   MAX_SCREEN_FPS_CAP,
   MIN_SCREEN_FPS_CAP,
   SCREEN_SIZES,
-  SERIAL_PATTERN,
+  isValidSerial,
   STALL_THRESHOLDS_MS,
   VIEW_PROPERTIES,
   VIEW_PROPERTY_GROUPS,
@@ -127,7 +127,7 @@ import {
   storageWriteInputSchema,
 } from './storage.ts';
 
-export const serialSchema = z.string().regex(SERIAL_PATTERN, 'invalid adb serial');
+export const serialSchema = z.string().refine(isValidSerial, 'invalid adb serial');
 export const wirelessTargetSchema = z
   .string()
   .min(1)

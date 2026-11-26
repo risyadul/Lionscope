@@ -59,6 +59,8 @@ const IPV4_PATTERN = /^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/;
 const PORT_STRING_PATTERN = /^[1-9]\d{0,4}$/;
 const HOSTNAME_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const ALL_DIGITS_PATTERN = /^\d+$/;
+const LEGACY_IPV4_PART_PATTERN = /^(?:0[xX][0-9A-Fa-f]+|0[0-7]+|\d+)$/;
+const EMULATOR_SERIAL_PATTERN = /^emulator-\d+$/;
 const IPV6_CHARS_PATTERN = /^[0-9A-Fa-f:.]{2,45}$/;
 const IPV6_GROUP_PATTERN = /^[0-9A-Fa-f]{1,4}$/;
 const MAX_HOSTNAME_LENGTH = 253;
@@ -115,15 +117,15 @@ export function classifyIpv4(
   return 'public';
 }
 
-function parseIpv6Groups(segment: string): number[] | null {
+function parseIpv6Groups(segment: string, allowEmbeddedIpv4: boolean): number[] | null {
   if (segment === '') return [];
   const parts = segment.split(':');
   const groups: number[] = [];
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i]!;
     if (part.includes('.')) {
-      // Embedded IPv4 is only valid as the trailing 32 bits.
-      if (i !== parts.length - 1) return null;
+      // Embedded IPv4 is only valid as the trailing 32 bits of the full address (never before `::`).
+      if (!allowEmbeddedIpv4 || i !== parts.length - 1) return null;
       const ipv4 = parseIpv4(part);
       if (!ipv4) return null;
       groups.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
@@ -141,11 +143,11 @@ export function parseIpv6(host: string): number[] | null {
   const halves = host.split('::');
   if (halves.length > 2) return null;
   if (halves.length === 1) {
-    const groups = parseIpv6Groups(halves[0]!);
+    const groups = parseIpv6Groups(halves[0]!, true);
     return groups && groups.length === 8 ? groups : null;
   }
-  const left = parseIpv6Groups(halves[0]!);
-  const right = parseIpv6Groups(halves[1]!);
+  const left = parseIpv6Groups(halves[0]!, false);
+  const right = parseIpv6Groups(halves[1]!, true);
   if (!left || !right) return null;
   const missing = 8 - (left.length + right.length);
   if (missing < 1) return null;
@@ -172,13 +174,25 @@ export function classifyIpv6(
   return 'public';
 }
 
+/**
+ * True when `host` is a legacy `inet_aton` / WHATWG numeric IPv4 spelling (1–4 dot-separated
+ * decimal, octal, or hex integers such as `3232235777`, `0x7f000001`, `127.1`, `0x7f.1`, `0177.0.0.1`,
+ * or `8.8.8.0x8`), which resolvers interpret as an IPv4 address rather than a DNS hostname.
+ */
+export function isLegacyNumericIpv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length < 1 || parts.length > 4) return false;
+  return parts.every((part) => LEGACY_IPV4_PART_PATTERN.test(part));
+}
+
 export function isValidHostname(host: string): boolean {
   if (host.length === 0 || host.length > MAX_HOSTNAME_LENGTH) return false;
   if (host.startsWith('-') || host.startsWith('.') || host.endsWith('.')) return false;
   if (UNSAFE_INPUT_CHARS.test(host)) return false;
+  if (isLegacyNumericIpv4(host)) return false;
   const labels = host.split('.');
   if (labels.some((label) => !HOSTNAME_LABEL_PATTERN.test(label))) return false;
-  // Reject all-numeric final labels (e.g. "12345" or malformed IPv4 "1.2.3" / "999.1.1.1").
+  // Reject all-numeric final labels (e.g. "12345" or malformed IPv4 "1.2.3.4.5").
   const last = labels[labels.length - 1]!;
   if (ALL_DIGITS_PATTERN.test(last)) return false;
   return true;
@@ -213,6 +227,10 @@ export function classifyWirelessHost(rawHost: string): WirelessValidationResult<
       ok: true,
       value: { host: rawHost.toLowerCase(), kind: 'ipv6', scope, isPublicIp: scope === 'public' },
     };
+  }
+
+  if (isLegacyNumericIpv4(rawHost)) {
+    return { ok: false, error: 'Use standard dotted-decimal IPv4 (e.g. 192.168.1.5)' };
   }
 
   if (isValidHostname(rawHost)) {
@@ -283,6 +301,50 @@ export function parseWirelessAddress(raw: string): WirelessValidationResult<Pars
 /** True when `serial` looks like a wireless ADB serial (`host:port` or mDNS TLS service serial). */
 export function isWirelessSerial(serial: string): boolean {
   return isMdnsSerial(serial) || parseWirelessAddress(serial).ok;
+}
+
+/** True when `serial` identifies an Android emulator (`emulator-<port>`). */
+export function isEmulatorSerial(serial: string): boolean {
+  return EMULATOR_SERIAL_PATTERN.test(serial);
+}
+
+/**
+ * Derive transport from `adb devices -l` fields present on both native and libusb ADB backends:
+ * - `emulator-*` → `'emulator'`
+ * - explicit `usb:` prop → `'usb'`
+ * - wireless serial (`host:port` or mDNS TLS service serial) → `'wireless'`
+ * - non-emulator, non-wireless ready device (`state === 'device'`) → `'usb'`
+ *   (libusb ADB backends omit the `usb:` prop on physical USB devices).
+ */
+export function deriveDeviceTransport(
+  serial: string,
+  state: string,
+  hasUsbProp: boolean,
+): DeviceTransport | undefined {
+  if (isEmulatorSerial(serial)) return 'emulator';
+  if (hasUsbProp) return 'usb';
+  if (isWirelessSerial(serial)) return 'wireless';
+  if (state === 'device') return 'usb';
+  return undefined;
+}
+
+/** Resolve transport for a `DeviceInfo`, falling back to serial/state rules when `transport` is omitted. */
+export function resolveDeviceTransport(device: {
+  serial: string;
+  state: string;
+  transport?: DeviceTransport;
+}): DeviceTransport | undefined {
+  if (device.transport !== undefined) return device.transport;
+  return deriveDeviceTransport(device.serial, device.state, false);
+}
+
+/** Shared eligibility rule for USB → Wi-Fi handoff (`adb tcpip`) across dashboard and server. */
+export function isUsbTcpipEligible(device: {
+  serial: string;
+  state: string;
+  transport?: DeviceTransport;
+}): boolean {
+  return device.state === 'device' && resolveDeviceTransport(device) === 'usb';
 }
 
 /** True when `rawHostOrAddress` is a syntactically valid public IP address (IPv4 or IPv6). */

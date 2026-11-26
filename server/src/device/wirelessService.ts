@@ -14,12 +14,14 @@ import {
   DEFAULT_ADB_TCP_PORT,
   formatAdbQrPayload,
   isMdnsSerial,
+  isUsbTcpipEligible,
   isValidPairingCode,
   isValidSerial,
   MDNS_CONNECT_SERVICE,
   MDNS_PAIRING_SERVICE,
   parseWirelessAddress,
   parseWirelessPort,
+  resolveDeviceTransport,
 } from '@lionscope/protocol';
 import type { DeviceInfo, DiscoveredWirelessDevice, QrPairingUpdate } from '@lionscope/protocol';
 import { scrubSecret } from '../adb/adb.ts';
@@ -426,11 +428,15 @@ export class WirelessService {
     const device = this.getDevices().find((candidate) => candidate.serial === usbSerial);
     if (!device) throw new PublicError(`Device ${usbSerial} is not connected`);
     if (device.state !== 'device') throw new PublicError(`Device ${usbSerial} is ${device.state}`);
-    if (device.transport === 'emulator') {
+    const transport = resolveDeviceTransport(device);
+    if (transport === 'emulator') {
       throw new PublicError('Emulators cannot be switched to wireless TCP/IP mode');
     }
-    if (device.transport === 'wireless') {
+    if (transport === 'wireless') {
       throw new PublicError(`Device ${usbSerial} is already connected wirelessly`);
+    }
+    if (!isUsbTcpipEligible(device)) {
+      throw new PublicError(`Device ${usbSerial} is not an eligible USB device`);
     }
 
     let wifiIp: string;

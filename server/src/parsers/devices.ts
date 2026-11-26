@@ -1,15 +1,7 @@
-import { isValidSerial, isWirelessSerial } from '@lionscope/protocol';
-import type { DeviceInfo, DeviceState, DeviceTransport } from '@lionscope/protocol';
+import { deriveDeviceTransport, isValidSerial } from '@lionscope/protocol';
+import type { DeviceInfo, DeviceState } from '@lionscope/protocol';
 
 const KNOWN_STATES: ReadonlySet<string> = new Set<DeviceState>(['device', 'offline', 'unauthorized']);
-const EMULATOR_SERIAL = /^emulator-\d+$/;
-
-function deriveTransport(serial: string, hasUsbProp: boolean): DeviceTransport | undefined {
-  if (EMULATOR_SERIAL.test(serial)) return 'emulator';
-  if (hasUsbProp) return 'usb';
-  if (isWirelessSerial(serial)) return 'wireless';
-  return undefined;
-}
 
 /** Parse `adb devices -l`. Lines with invalid serials are dropped (they could never be used safely). */
 export function parseDevices(output: string): DeviceInfo[] {
@@ -35,7 +27,7 @@ export function parseDevices(output: string): DeviceInfo[] {
       else if (key === 'transport_id') device.transportId = value;
       else if (key === 'usb') hasUsbProp = true;
     }
-    const transport = deriveTransport(serial, hasUsbProp);
+    const transport = deriveDeviceTransport(serial, device.state, hasUsbProp);
     if (transport !== undefined) device.transport = transport;
     devices.push(device);
   }

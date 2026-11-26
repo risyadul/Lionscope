@@ -39,8 +39,11 @@ describe('parseDevices', () => {
       '* daemon started successfully',
       'List of devices attached',
       'R58M123ABC             unauthorized usb:1-1 transport_id:7',
+      'LIBUSB999              device product:panther model:Pixel_8 transport_id:8',
       '192.168.1.5:5555       offline',
       '[fd00::1]:5555         device product:panther model:Pixel_7 transport_id:9',
+      '[::ffff:192.168.1.20]:5555 device product:panther model:Pixel_7 transport_id:11',
+      '[192.168.1.1::1]:5555  device product:panther model:Bad_IPv6 transport_id:12',
       'adb-R58M123ABC-xyz._adb-tls-connect._tcp device product:panther model:Pixel_7 transport_id:10',
       'weird-1                recovery',
       'bad;serial             device',
@@ -50,6 +53,14 @@ describe('parseDevices', () => {
     ].join('\n');
     expect(parseDevices(output)).toEqual([
       { serial: 'R58M123ABC', state: 'unauthorized', transportId: '7', transport: 'usb' },
+      {
+        serial: 'LIBUSB999',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_8',
+        transportId: '8',
+        transport: 'usb',
+      },
       { serial: '192.168.1.5:5555', state: 'offline', transport: 'wireless' },
       {
         serial: '[fd00::1]:5555',
@@ -57,6 +68,14 @@ describe('parseDevices', () => {
         product: 'panther',
         model: 'Pixel_7',
         transportId: '9',
+        transport: 'wireless',
+      },
+      {
+        serial: '[::ffff:192.168.1.20]:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'Pixel_7',
+        transportId: '11',
         transport: 'wireless',
       },
       {

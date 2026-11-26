@@ -79,9 +79,35 @@ export function describeArgs(args: readonly string[]): string {
     .join(' ');
 }
 
+/** Secret values present in an adb argv array that must never leak via stderr into constructed errors. */
+function extractArgSecrets(args: readonly string[]): string[] {
+  const secrets: string[] = [];
+  const subcommandIdx = adbSubcommandIndex(args);
+  if (subcommandIdx !== -1 && args[subcommandIdx] === 'pair') {
+    for (let i = subcommandIdx + 2; i < args.length; i += 1) {
+      const value = args[i];
+      if (value) secrets.push(value);
+    }
+  }
+  for (const arg of args) {
+    for (const match of arg.matchAll(/--es key (\S+)/g)) {
+      if (match[1]) secrets.push(match[1]);
+    }
+  }
+  return secrets;
+}
+
+function scrubArgSecrets(text: string, args: readonly string[]): string {
+  let clean = text;
+  for (const secret of extractArgSecrets(args)) {
+    clean = scrubSecret(clean, secret);
+  }
+  return clean;
+}
+
 /** stderr, else why the process ended; never Node's message, which repeats the whole command line. */
-function failureDetail(error: ExecFileException, stderr: string): string {
-  if (stderr.trim() !== '') return stderr.trim();
+function failureDetail(error: ExecFileException, stderr: string, args: readonly string[]): string {
+  if (stderr.trim() !== '') return scrubArgSecrets(stderr.trim(), args);
   if (error.killed) return 'timed out';
   return typeof error.code === 'number' ? `exit code ${error.code}` : (error.code ?? 'failed');
 }
@@ -100,7 +126,7 @@ export function createAdb(adbPath: string): Adb {
         },
         (error, stdout, stderr) => {
           if (error) {
-            reject(new Error(`adb ${describeArgs(args)} failed: ${failureDetail(error, stderr)}`));
+            reject(new Error(`adb ${describeArgs(args)} failed: ${failureDetail(error, stderr, args)}`));
             return;
           }
           resolve(stdout);
@@ -161,7 +187,10 @@ export function execBinary(adb: Adb, args: readonly string[], options: ExecBinar
     const maybeDone = () => {
       if (!ended || exitCode === undefined) return;
       if (exitCode === 0) finish(null);
-      else finish(new Error(`adb ${describeArgs(args)} failed: ${stderr.trim() || `exit code ${exitCode}`}`));
+      else {
+        const detail = scrubArgSecrets(stderr.trim() || `exit code ${exitCode}`, args);
+        finish(new Error(`adb ${describeArgs(args)} failed: ${detail}`));
+      }
     };
     const timer = setTimeout(
       () => finish(new Error(`adb ${describeArgs(args)} timed out`)),

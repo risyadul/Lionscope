@@ -1,16 +1,23 @@
+// Test-only: the package itself stays free of Node types (it is shared with the browser dashboard).
+/// <reference types="node" />
+import { isIP } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   AGENT_HOST_POLICY_MESSAGE,
   checkAgentWirelessTarget,
   classifyWirelessHost,
+  deriveDeviceTransport,
+  isLegacyNumericIpv4,
   isMdnsSerial,
   isPublicWirelessHost,
+  isUsbTcpipEligible,
   isValidPairingCode,
   isWirelessSerial,
   parseIpv4,
   parseIpv6,
   parseWirelessAddress,
   parseWirelessPort,
+  resolveDeviceTransport,
   validateWirelessEndpoint,
 } from '../src/wireless.ts';
 
@@ -73,6 +80,12 @@ describe('wireless host & port validation', () => {
     expect(parseIpv6('fd00:::1')).toBeNull();
     expect(parseIpv6('fd00::1::2')).toBeNull();
     expect(parseIpv6('fd00::gggg')).toBeNull();
+    // Embedded IPv4 before `::` is invalid per RFC 4291 and node:net isIP.
+    for (const badIpv6 of ['192.168.1.1::1', '192.168.1.1::', 'fd00:192.168.1.1::1']) {
+      expect(isIP(badIpv6)).toBe(0);
+      expect(parseIpv6(badIpv6), badIpv6).toBeNull();
+      expect(parseWirelessAddress(`[${badIpv6}]:5555`).ok, badIpv6).toBe(false);
+    }
 
     const cases: readonly [string, string, boolean][] = [
       ['fc00::1', 'private', false],
@@ -153,10 +166,38 @@ describe('wireless host & port validation', () => {
       '999.1.1.1:5555',
       '12345:5555',
       'bad_host:5555',
+      // Legacy inet_aton numeric IPv4 forms (hex, octal, short integer) must never slip through as hostnames.
+      '0x7f.1:5555',
+      '0x7f.0x1:5555',
+      '0x7f000001:5555',
+      '0177.0.0.1:5555',
+      '127.1:5555',
+      '3232235777:5555',
+      '8.8.8.0x8:5555',
+      '0x08080808:5555',
     ];
     for (const addr of badAddresses) {
       expect(parseWirelessAddress(addr).ok, addr).toBe(false);
     }
+    expect(isLegacyNumericIpv4('0x7f.1')).toBe(true);
+    expect(isLegacyNumericIpv4('3232235777')).toBe(true);
+    expect(isLegacyNumericIpv4('0x7f000001')).toBe(true);
+    expect(isLegacyNumericIpv4('my-phone.local')).toBe(false);
+  });
+
+  it('derives USB transport even when libusb adb omits the usb: prop and shares handoff eligibility', () => {
+    expect(deriveDeviceTransport('R58M123ABC', 'device', false)).toBe('usb');
+    expect(deriveDeviceTransport('R58M123ABC', 'unauthorized', true)).toBe('usb');
+    expect(deriveDeviceTransport('R58M123ABC', 'unauthorized', false)).toBeUndefined();
+    expect(deriveDeviceTransport('emulator-5554', 'device', false)).toBe('emulator');
+    expect(deriveDeviceTransport('192.168.1.5:5555', 'device', false)).toBe('wireless');
+    expect(deriveDeviceTransport('[::ffff:192.168.1.20]:5555', 'device', false)).toBe('wireless');
+
+    expect(resolveDeviceTransport({ serial: 'R58M123ABC', state: 'device' })).toBe('usb');
+    expect(isUsbTcpipEligible({ serial: 'R58M123ABC', state: 'device' })).toBe(true);
+    expect(isUsbTcpipEligible({ serial: 'R58M123ABC', state: 'unauthorized', transport: 'usb' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: '192.168.1.5:5555', state: 'device' })).toBe(false);
+    expect(isUsbTcpipEligible({ serial: 'emulator-5554', state: 'device' })).toBe(false);
   });
 
   it('detects public IPs for dashboard warnings and wireless/mDNS serials', () => {
