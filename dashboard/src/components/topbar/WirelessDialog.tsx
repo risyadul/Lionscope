@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import {
+  isAdbMdnsTransportSerial,
   isMdnsSerial,
   isPublicWirelessHost,
   isValidPairingCode,
@@ -360,7 +361,8 @@ export function WirelessDialog({
 
   // Connect tab validation
   const trimmedAddress = address.trim();
-  const isMdns = trimmedAddress !== '' && isMdnsSerial(trimmedAddress);
+  const isMdns =
+    trimmedAddress !== '' && (isMdnsSerial(trimmedAddress) || isAdbMdnsTransportSerial(trimmedAddress));
   const parsedConnect = trimmedAddress !== '' && !isMdns ? parseWirelessAddress(trimmedAddress) : null;
   const connectSyntaxError =
     trimmedAddress !== '' && !isMdns && parsedConnect !== null && !parsedConnect.ok

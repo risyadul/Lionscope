@@ -95,6 +95,8 @@ describe('parseDevices', () => {
     const output = [
       'List of devices attached',
       'vsock:2:5555           device product:cf_x86_64 model:Cuttlefish transport_id:1',
+      'vsock:2:70000          device product:cf_x86_64 model:CuttlefishHiPort transport_id:6',
+      'usb:5555               device product:panther model:AmbiguousHost transport_id:7',
       'usb:1-2.3              device product:panther model:Pixel_7 transport_id:2',
       'adb-SAMPLE._adb._tcp   device product:panther model:Pixel_8 transport_id:3',
       'lab._adb-tls-connect._tcp device product:panther model:Pixel_9 transport_id:4',
@@ -109,6 +111,20 @@ describe('parseDevices', () => {
         product: 'cf_x86_64',
         model: 'Cuttlefish',
         transportId: '1',
+      },
+      {
+        serial: 'vsock:2:70000',
+        state: 'device',
+        product: 'cf_x86_64',
+        model: 'CuttlefishHiPort',
+        transportId: '6',
+      },
+      {
+        serial: 'usb:5555',
+        state: 'device',
+        product: 'panther',
+        model: 'AmbiguousHost',
+        transportId: '7',
       },
       {
         serial: 'usb:1-2.3',

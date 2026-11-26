@@ -176,6 +176,46 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     });
   });
 
+  it('connects consistently to arbitrary ADB mDNS transport serials over WS and refuses ambiguous usb:5555 handoff', async () => {
+    const adb = new FakeAdb((args) => {
+      if (args[0] === 'devices') {
+        return 'List of devices attached\nusb:5555 device product:panther model:AmbiguousHost transport_id:7\n';
+      }
+      if (args[0] === 'connect') return `connected to ${args[1]}\n`;
+      return '';
+    });
+    server = makeServer(adb);
+    const address = await server.listen();
+    await server.manager.refreshDevices();
+
+    // Ambiguous `usb:5555` without a `usb:` prop must NOT qualify for USB handoff.
+    const refusedHandoff = await callTool(
+      server.agent,
+      'enable_wireless_adb',
+      { serial: 'usb:5555', port: 5555 },
+      true,
+    );
+    expect(refusedHandoff.ok).toBe(false);
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Dashboard `connectDevice` with `lab._adb-tls-connect._tcp` succeeds consistently end-to-end.
+    client = await Client.open(address.port);
+    await client.waitFor('locations');
+    client.send({ type: 'connectDevice', requestId: 8, address: 'lab._adb-tls-connect._tcp' });
+    const connected = await client.next('wirelessResult');
+    expect(connected).toEqual({
+      type: 'wirelessResult',
+      requestId: 8,
+      result: {
+        action: 'connect',
+        ok: true,
+        target: 'lab._adb-tls-connect._tcp',
+        serial: 'lab._adb-tls-connect._tcp',
+        alreadyConnected: false,
+      },
+    });
+  });
+
   it('pairs via 6-digit code, connects via mDNS or explicit connect port, and never leaks the pairing code', async () => {
     const adb = new FakeAdb((args) => {
       if (args[0] === 'devices') return 'List of devices attached\n';

@@ -90,6 +90,7 @@ describe('adb wireless helpers', () => {
       if (args[1] === '192.168.1.7:5555') return 'cannot connect to 192.168.1.7:5555: Connection refused\n';
       if (args[1] === 'adb-R58M._adb-tls-connect._tcp')
         return 'connected to adb-R58M._adb-tls-connect._tcp\n';
+      if (args[1] === 'lab._adb-tls-connect._tcp') return 'connected to lab._adb-tls-connect._tcp\n';
       return '';
     });
 
@@ -106,6 +107,11 @@ describe('adb wireless helpers', () => {
     expect(await adbConnect(adb, 'adb-R58M._adb-tls-connect._tcp')).toEqual({
       target: 'adb-R58M._adb-tls-connect._tcp',
       serial: 'adb-R58M._adb-tls-connect._tcp',
+      alreadyConnected: false,
+    });
+    expect(await adbConnect(adb, 'lab._adb-tls-connect._tcp')).toEqual({
+      target: 'lab._adb-tls-connect._tcp',
+      serial: 'lab._adb-tls-connect._tcp',
       alreadyConnected: false,
     });
     await expect(adbConnect(adb, '192.168.1.7:5555')).rejects.toThrow(/Connection refused/);

@@ -32,10 +32,21 @@ export const MDNS_SERIAL_PATTERN = /^adb-[A-Za-z0-9._-]{1,80}\._adb-tls-(?:conne
 export const ADB_MDNS_TRANSPORT_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\._adb(?:-[A-Za-z0-9-]+)?\._tcp(?:\.local)?$/;
 
-const VSOCK_SERIAL_PATTERN = /^vsock:(\d{1,10}):([1-9]\d{0,4})$/;
+const VSOCK_SERIAL_PATTERN = /^vsock:(\d{1,10}):(\d{1,10})$/;
 const USB_TRANSPORT_SERIAL_PATTERN = /^usb:[A-Za-z0-9._-]{1,120}$/;
 const LOCAL_TRANSPORT_SERIAL_PATTERN = /^local(?:abstract|reserved|filesystem)?:[A-Za-z0-9._-]{1,110}$/;
 const ACCEPTFD_SERIAL_PATTERN = /^acceptfd:\d{1,10}$/;
+/** Single-label hostnames that collide with AOSP ADB socket_spec transport prefixes. */
+const RESERVED_ADB_TRANSPORT_HOSTS: ReadonlySet<string> = new Set([
+  'usb',
+  'tcp',
+  'vsock',
+  'local',
+  'localabstract',
+  'localreserved',
+  'localfilesystem',
+  'acceptfd',
+]);
 
 export type WirelessHostKind = 'ipv4' | 'ipv6' | 'hostname';
 
@@ -109,13 +120,21 @@ export function isAdbMdnsTransportSerial(value: string): boolean {
 /**
  * True for recognized AOSP ADB socket_spec transport serials (`vsock:<cid>:<port>`, `usb:<path>`,
  * `tcp:<port>`, `tcp:<host>:<port>`, `local*:<name>`, `acceptfd:<fd>`).
+ * Per AOSP `socket_spec.cpp`, VSOCK CID and port are unsigned 32-bit integers.
  */
 export function isAdbTransportSerial(value: string): boolean {
   const vsock = VSOCK_SERIAL_PATTERN.exec(value);
   if (vsock) {
     const cid = Number(vsock[1]);
-    const port = parseWirelessPort(vsock[2]!);
-    return Number.isInteger(cid) && cid >= 0 && cid <= 0xffff_ffff && port !== null;
+    const port = Number(vsock[2]);
+    return (
+      Number.isInteger(cid) &&
+      cid >= 0 &&
+      cid <= 0xffff_ffff &&
+      Number.isInteger(port) &&
+      port >= 0 &&
+      port <= 0xffff_ffff
+    );
   }
   if (USB_TRANSPORT_SERIAL_PATTERN.test(value)) return true;
   if (LOCAL_TRANSPORT_SERIAL_PATTERN.test(value)) return true;
@@ -126,6 +145,12 @@ export function isAdbTransportSerial(value: string): boolean {
     return parseWirelessAddress(rest).ok;
   }
   return false;
+}
+
+/** True for a `usb:<path>` transport spec that cannot be confused with a `usb:<port>` wireless endpoint. */
+function isUnambiguousUsbTransportSerial(value: string): boolean {
+  if (!USB_TRANSPORT_SERIAL_PATTERN.test(value)) return false;
+  return parseWirelessPort(value.slice(4)) === null;
 }
 
 export function parseWirelessPort(raw: number | string): number | null {
@@ -275,6 +300,12 @@ export function classifyWirelessHost(rawHost: string): WirelessValidationResult<
 
   if (isValidHostname(rawHost)) {
     const normalized = rawHost.toLowerCase();
+    if (RESERVED_ADB_TRANSPORT_HOSTS.has(normalized)) {
+      return {
+        ok: false,
+        error: `Hostname "${rawHost}" conflicts with an ADB transport prefix; use an IP address or qualified hostname`,
+      };
+    }
     const scope = normalized === 'localhost' ? 'loopback' : 'hostname';
     return { ok: true, value: { host: normalized, kind: 'hostname', scope, isPublicIp: false } };
   }
@@ -351,9 +382,10 @@ export function isEmulatorSerial(serial: string): boolean {
 /**
  * Derive transport from `adb devices -l` fields present on both native and libusb ADB backends:
  * - `emulator-*` → `'emulator'`
- * - explicit `usb:` prop or `usb:` transport spec → `'usb'`
+ * - explicit `usb:` prop → `'usb'`
  * - wireless serial (`host:port` or any ADB Wi-Fi mDNS service serial) → `'wireless'`
- * - other AOSP transport specs (`vsock:`, `tcp:`, `local*:`, `acceptfd:`) → `undefined` (not USB)
+ * - unambiguous `usb:<path>` transport spec (where `<path>` is not a TCP port) → `'usb'`
+ * - other AOSP transport specs (`vsock:`, `tcp:`, `local*:`, `acceptfd:`, ambiguous `usb:<port>`) → `undefined` (not USB)
  * - non-emulator, non-wireless ready device (`state === 'device'`) → `'usb'`
  *   (libusb ADB backends omit the `usb:` prop on physical USB devices).
  */
@@ -363,8 +395,9 @@ export function deriveDeviceTransport(
   hasUsbProp: boolean,
 ): DeviceTransport | undefined {
   if (isEmulatorSerial(serial)) return 'emulator';
-  if (hasUsbProp || USB_TRANSPORT_SERIAL_PATTERN.test(serial)) return 'usb';
+  if (hasUsbProp) return 'usb';
   if (isWirelessSerial(serial)) return 'wireless';
+  if (isUnambiguousUsbTransportSerial(serial)) return 'usb';
   if (isAdbTransportSerial(serial)) return undefined;
   if (state === 'device') return 'usb';
   return undefined;

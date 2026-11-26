@@ -108,7 +108,7 @@ export async function adbConnect(
   options: ExecOptions = {},
 ): Promise<AdbConnectResult> {
   let target: string;
-  if (isMdnsSerial(rawTarget)) {
+  if (isMdnsSerial(rawTarget) || isAdbMdnsTransportSerial(rawTarget)) {
     target = rawTarget;
   } else {
     const parsed = parseWirelessAddress(rawTarget);
