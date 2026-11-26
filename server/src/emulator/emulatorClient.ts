@@ -15,6 +15,14 @@ export interface ScreenFrame {
   png: Buffer;
 }
 
+/** An RGBA8888 frame as the emulator delivers it: already rotated, `width` × `height` as shown. */
+export interface RawScreenFrame {
+  width: number;
+  height: number;
+  rotation: ScreenRotation;
+  rgba: Buffer;
+}
+
 /** A gRPC failure; `code` is the gRPC status (16 = UNAUTHENTICATED: the token was refused). */
 export class EmulatorRpcError extends Error {
   override name = 'EmulatorRpcError';
@@ -34,6 +42,12 @@ export function isAuthError(error: unknown): boolean {
 
 export interface FrameStreamHandlers {
   onFrame(frame: ScreenFrame): void;
+  /** The stream ended without cancel(): null when the emulator closed it, else the error. */
+  onEnd(error: EmulatorRpcError | null): void;
+}
+
+export interface RawFrameStreamHandlers {
+  onFrame(frame: RawScreenFrame): void;
   /** The stream ended without cancel(): null when the emulator closed it, else the error. */
   onEnd(error: EmulatorRpcError | null): void;
 }
@@ -74,6 +88,8 @@ export interface EmulatorClient {
   getScreenshot(box?: Size): Promise<ScreenFrame>;
   /** PNG frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
   streamScreenshot(box: Size, handlers: FrameStreamHandlers): FrameStream;
+  /** RGBA8888 frames scaled into `box` (set both sides or the emulator does not scale). Frames come on change only. */
+  streamRawScreenshot?(box: Size, handlers: RawFrameStreamHandlers): FrameStream;
   /** One long-lived input stream; `onEnd` fires when it fails or ends (also after end()). */
   openInput(onEnd: (error: EmulatorRpcError | null) => void): InputStream;
   /** Physical model ROTATION z, in degrees. */
@@ -188,11 +204,31 @@ function rpcError(method: string, error: grpc.ServiceError): EmulatorRpcError {
   return new EmulatorRpcError(error.code, `${method} failed: ${details}`);
 }
 
-function toFrame(raw: RawImage): ScreenFrame | null {
+function readImageHeader(
+  raw: RawImage,
+): { width: number; height: number; rotation: ScreenRotation; image: Buffer } | null {
   const width = raw.format?.width ?? 0;
   const height = raw.format?.height ?? 0;
-  if (width <= 0 || height <= 0 || !raw.image?.length) return null;
-  return { width, height, rotation: rotationOf(raw.format?.rotation?.rotation), png: raw.image };
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  if (!raw.image?.length) return null;
+  return { width, height, rotation: rotationOf(raw.format?.rotation?.rotation), image: raw.image };
+}
+
+function toFrame(raw: RawImage): ScreenFrame | null {
+  const parsed = readImageHeader(raw);
+  return parsed
+    ? { width: parsed.width, height: parsed.height, rotation: parsed.rotation, png: parsed.image }
+    : null;
+}
+
+function toRawFrame(raw: RawImage): RawScreenFrame | null {
+  const parsed = readImageHeader(raw);
+  if (!parsed) return null;
+  const requiredBytes = parsed.width * parsed.height * 4;
+  if (!Number.isSafeInteger(requiredBytes) || parsed.image.length < requiredBytes) return null;
+  return { width: parsed.width, height: parsed.height, rotation: parsed.rotation, rgba: parsed.image };
 }
 
 /** Clients for every emulator from one loaded proto; each client has its own channel to 127.0.0.1. */
@@ -218,6 +254,44 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
       return frame;
     };
 
+    const startFrameStream = <F>(
+      format: 'PNG' | 'RGBA8888',
+      box: Size,
+      decode: (image: RawImage) => F | null,
+      handlers: { onFrame(frame: F): void; onEnd(error: EmulatorRpcError | null): void },
+    ): FrameStream => {
+      const stream = raw.streamScreenshot({ format, width: box.width, height: box.height }, metadata());
+      limitReadAhead(stream);
+      let cancelled = false;
+      let ended = false;
+      const end = (error: EmulatorRpcError | null): void => {
+        if (ended || cancelled) return;
+        ended = true;
+        handlers.onEnd(error);
+      };
+      stream.on('data', (image: RawImage) => {
+        // A newer image already read behind this one (read ahead while paused) makes it stale. The first image
+        // of a stream can be empty (0×0).
+        if (cancelled || stream.readableLength > 0) return;
+        const frame = decode(image);
+        if (frame) handlers.onFrame(frame);
+      });
+      stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamScreenshot', error)));
+      stream.on('end', () => end(null));
+      return {
+        pause() {
+          if (!cancelled) stream.pause();
+        },
+        resume() {
+          if (!cancelled) stream.resume();
+        },
+        cancel() {
+          cancelled = true;
+          stream.cancel();
+        },
+      };
+    };
+
     return {
       async getStatus() {
         return { booted: (await unary('getStatus', raw.getStatus, {})).booted === true };
@@ -238,39 +312,10 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
       },
       getScreenshot: (box) => screenshot(box),
       streamScreenshot(box, handlers) {
-        const stream = raw.streamScreenshot(
-          { format: 'PNG', width: box.width, height: box.height },
-          metadata(),
-        );
-        limitReadAhead(stream);
-        let cancelled = false;
-        let ended = false;
-        const end = (error: EmulatorRpcError | null): void => {
-          if (ended || cancelled) return;
-          ended = true;
-          handlers.onEnd(error);
-        };
-        stream.on('data', (image: RawImage) => {
-          // A newer image already read behind this one (read ahead while paused) makes it stale. The first image
-          // of a stream can be empty (0×0).
-          if (cancelled || stream.readableLength > 0) return;
-          const frame = toFrame(image);
-          if (frame) handlers.onFrame(frame);
-        });
-        stream.on('error', (error: grpc.ServiceError) => end(rpcError('streamScreenshot', error)));
-        stream.on('end', () => end(null));
-        return {
-          pause() {
-            if (!cancelled) stream.pause();
-          },
-          resume() {
-            if (!cancelled) stream.resume();
-          },
-          cancel() {
-            cancelled = true;
-            stream.cancel();
-          },
-        };
+        return startFrameStream('PNG', box, toFrame, handlers);
+      },
+      streamRawScreenshot(box, handlers) {
+        return startFrameStream('RGBA8888', box, toRawFrame, handlers);
       },
       openInput(onEnd) {
         let ended = false;

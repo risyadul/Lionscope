@@ -11,8 +11,25 @@ import {
   limitReadAhead,
   loadEmulatorController,
 } from '../src/emulator/emulatorClient.ts';
-import type { EmulatorClient, ScreenFrame } from '../src/emulator/emulatorClient.ts';
+import type {
+  EmulatorClient,
+  FrameStream,
+  RawFrameStreamHandlers,
+  RawScreenFrame,
+  ScreenFrame,
+} from '../src/emulator/emulatorClient.ts';
 import { FAKE_TOKEN, FakeEmulator, FIXTURE_PROTO } from './helpers/fakeEmulator.ts';
+
+function requireRawStream(
+  target: EmulatorClient,
+  box: { width: number; height: number },
+  handlers: RawFrameStreamHandlers,
+): FrameStream {
+  if (!target.streamRawScreenshot) {
+    throw new Error('expected streamRawScreenshot on EmulatorClient');
+  }
+  return target.streamRawScreenshot(box, handlers);
+}
 
 async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -173,6 +190,90 @@ describe('EmulatorController client', () => {
     const other = factory({ port, token: new Secret('nope') });
     other.streamScreenshot(
       { width: 1, height: 1 },
+      { onFrame: () => undefined, onEnd: (error) => denied.push(error) },
+    );
+    await waitUntil(() => denied.length === 1);
+    expect(denied[0]).toMatchObject({ code: 16 });
+    other.close();
+  });
+
+  it('streams RGBA8888 raw frames, skipping empty or short buffers, until cancelled', async () => {
+    const frames: RawScreenFrame[] = [];
+    const ended: (EmulatorRpcError | null)[] = [];
+    const priorStreams = emulator.streams.length;
+    const stream = requireRawStream(
+      connect(),
+      { width: 540, height: 1212 },
+      { onFrame: (frame) => frames.push(frame), onEnd: (error) => ended.push(error) },
+    );
+    await waitUntil(() => emulator.streams.length > priorStreams);
+    expect(emulator.streams.at(-1)?.request).toMatchObject({
+      format: 'RGBA8888',
+      width: 540,
+      height: 1212,
+    });
+    // FakeEmulator's initial 0x0 and short PNG placeholder buffers are both smaller than width*height*4.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(frames).toHaveLength(0);
+
+    // 1 byte short of 4 * 2 * 4 = 32 bytes: rejected.
+    emulator.pushFrame({ width: 4, height: 2, bytes: Buffer.alloc(31, 0xaa) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(frames).toHaveLength(0);
+
+    const rgba1 = Buffer.alloc(4 * 2 * 4, 0x11);
+    emulator.pushFrame({ rotation: 'PORTRAIT', width: 4, height: 2, bytes: rgba1 });
+    await waitUntil(() => frames.length === 1);
+    expect(frames[0]).toMatchObject({ width: 4, height: 2, rotation: 0 });
+    expect(frames[0]?.rgba.equals(rgba1)).toBe(true);
+
+    const rgba2 = Buffer.alloc(6 * 3 * 4 + 8, 0x22);
+    emulator.pushFrame({ rotation: 'REVERSE_LANDSCAPE', width: 6, height: 3, bytes: rgba2 });
+    await waitUntil(() => frames.length === 2);
+    expect(frames[1]).toMatchObject({ width: 6, height: 3, rotation: 90 });
+    expect(frames[1]?.rgba.equals(rgba2)).toBe(true);
+
+    stream.cancel();
+    await waitUntil(() => emulator.openStreams.length === 0);
+    emulator.pushFrame({ width: 4, height: 2, bytes: Buffer.alloc(32, 0x33) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(frames).toHaveLength(2);
+    expect(ended).toEqual([]);
+  });
+
+  it('pauses raw streams, skips stale read-ahead frames on resume, and reports stream end', async () => {
+    const frames: RawScreenFrame[] = [];
+    const ends: (EmulatorRpcError | null)[] = [];
+    const stream = requireRawStream(
+      connect(),
+      { width: 2, height: 2 },
+      { onFrame: (frame) => frames.push(frame), onEnd: (error) => ends.push(error) },
+    );
+    await waitUntil(() => emulator.openStreams.length === 1);
+    emulator.pushFrame({ width: 2, height: 2, bytes: Buffer.alloc(16, 0x01) });
+    await waitUntil(() => frames.length === 1);
+
+    stream.pause();
+    for (const byte of [0x02, 0x03, 0x04]) {
+      emulator.pushFrame({ width: 2, height: 2, bytes: Buffer.alloc(16, byte) });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(frames).toHaveLength(1);
+
+    stream.resume();
+    await waitUntil(() => frames.at(-1)?.rgba[0] === 0x04);
+    expect(frames[0]?.rgba[0]).toBe(0x01);
+    expect(frames.at(-1)?.rgba[0]).toBe(0x04);
+
+    emulator.openStreams.at(-1)?.call.end();
+    await waitUntil(() => ends.length === 1);
+    expect(ends).toEqual([null]);
+
+    const denied: (EmulatorRpcError | null)[] = [];
+    const other = factory({ port, token: new Secret('nope') });
+    requireRawStream(
+      other,
+      { width: 2, height: 2 },
       { onFrame: () => undefined, onEnd: (error) => denied.push(error) },
     );
     await waitUntil(() => denied.length === 1);

@@ -33,14 +33,25 @@ import {
   parseClientMessage,
   parseDeviceMessage,
   parseScreenClientMessage,
+  DEFAULT_SCREEN_CODEC_MODE,
+  isValidScreenCodecMode,
   isValidScreenFpsCap,
   MAX_SCREEN_FPS_CAP,
   MIN_SCREEN_FPS_CAP,
+  SCREEN_BINARY_KIND,
+  SCREEN_CODEC_MODES,
   SCREEN_FPS_CAPS,
   SCREEN_SIZES,
+  SCREEN_VIDEO_FLAG,
+  SCREEN_VIDEO_HEADER_BYTES,
   STALL_THRESHOLDS_MS,
 } from '../src/index.ts';
-import type { DeviceMessage, SdkFrame, StackFrame } from '../src/index.ts';
+import type { DeviceMessage, ScreenCodec, ScreenCodecMode, SdkFrame, StackFrame } from '../src/index.ts';
+import {
+  DEFAULT_SCREEN_CODEC_MODE as WIRE_DEFAULT_SCREEN_CODEC_MODE,
+  isValidScreenCodecMode as wireIsValidScreenCodecMode,
+  SCREEN_CODEC_MODES as WIRE_SCREEN_CODEC_MODES,
+} from '../src/wire.ts';
 
 const GOLDEN_LINES = readFileSync(new URL('../fixtures/device-messages.ndjson', import.meta.url), 'utf8')
   .split('\n')
@@ -302,6 +313,30 @@ describe('isValidScreenFpsCap', () => {
     for (const fps of [5, 6, 15, 30, 45, 59, 60]) expect(isValidScreenFpsCap(fps)).toBe(true);
     for (const fps of [0, 4, 61, -5, 4.99, 45.5, 60.0001, NaN, Infinity, '45', null, undefined])
       expect(isValidScreenFpsCap(fps)).toBe(false);
+  });
+});
+
+describe('isValidScreenCodecMode', () => {
+  it('accepts auto, png, and h264 from both index and wire exports and rejects everything else', () => {
+    expect(SCREEN_CODEC_MODES).toEqual(['auto', 'png', 'h264']);
+    expect(DEFAULT_SCREEN_CODEC_MODE).toBe('auto');
+    expect(WIRE_SCREEN_CODEC_MODES).toBe(SCREEN_CODEC_MODES);
+    expect(WIRE_DEFAULT_SCREEN_CODEC_MODE).toBe(DEFAULT_SCREEN_CODEC_MODE);
+    expect(wireIsValidScreenCodecMode).toBe(isValidScreenCodecMode);
+
+    const accepted: ScreenCodecMode[] = ['auto', 'png', 'h264'];
+    for (const mode of accepted) expect(isValidScreenCodecMode(mode)).toBe(true);
+
+    for (const bad of ['', 'AUTO', 'vp8', 'raw', 0, null, undefined, {}, ['auto']]) {
+      expect(isValidScreenCodecMode(bad)).toBe(false);
+    }
+
+    // Backwards-compatible existing video contracts remain intact.
+    const codecs: ScreenCodec[] = ['png', 'h264'];
+    expect(codecs).toEqual(['png', 'h264']);
+    expect(SCREEN_BINARY_KIND).toEqual({ frame: 1, screenshot: 2, video: 3 });
+    expect(SCREEN_VIDEO_HEADER_BYTES).toBe(10);
+    expect(SCREEN_VIDEO_FLAG).toEqual({ config: 1, key: 2 });
   });
 });
 

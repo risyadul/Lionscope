@@ -598,8 +598,8 @@ export interface EmulatorInfo {
 
 /**
  * Screen mirror WebSocket on the dashboard HTTP server:
- * `/ws/screen?serial=<serial>&size=<SCREEN_SIZES>&fps=<5–60>` (`size` and `fps` optional; `fps` is a whole number
- * in decimal, anything else is refused with HTTP 400).
+ * `/ws/screen?serial=<serial>&size=<SCREEN_SIZES>&fps=<5–60>&codec=<SCREEN_CODEC_MODES>` (`size`, `fps` and
+ * `codec` optional; `fps` is a whole number in decimal, anything else is refused with HTTP 400).
  */
 export const SCREEN_WS_PATH = '/ws/screen';
 
@@ -659,8 +659,18 @@ export const SCREEN_BINARY_KIND = { frame: 1, screenshot: 2, video: 3 } as const
 export const SCREEN_VIDEO_HEADER_BYTES = 1 + 1 + 8;
 export const SCREEN_VIDEO_FLAG = { config: 1, key: 2 } as const;
 
-/** How a screen socket delivers pixels: PNG frames (emulator gRPC) or an H.264 stream (scrcpy on a device). */
+/** How a screen socket delivers pixels: PNG frames (emulator gRPC) or an H.264 stream (scrcpy or host encoder). */
 export type ScreenCodec = 'png' | 'h264';
+
+/** Requested screen codec preference on `/ws/screen?codec=...` (`auto` prefers H.264 when available). */
+export const SCREEN_CODEC_MODES = ['auto', 'png', 'h264'] as const;
+export type ScreenCodecMode = (typeof SCREEN_CODEC_MODES)[number];
+export const DEFAULT_SCREEN_CODEC_MODE: ScreenCodecMode = 'auto';
+
+/** Whether `value` is a supported `/ws/screen` codec preference. */
+export function isValidScreenCodecMode(value: unknown): value is ScreenCodecMode {
+  return typeof value === 'string' && SCREEN_CODEC_MODES.some((mode) => mode === value);
+}
 
 /** Degrees clockwise from the display's natural (portrait) orientation, as the frame is shown. */
 export type ScreenRotation = 0 | 90 | 180 | 270;
