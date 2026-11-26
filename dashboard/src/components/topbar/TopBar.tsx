@@ -35,7 +35,7 @@ type Props = {
   onSwitchToWifi?: (serial: string) => void;
   isSwitchingToWifi?: boolean;
   pendingPublicTcpip?: PendingPublicTcpip | null;
-  onConfirmPublicTcpip?: (serial: string, port: number, target: string) => void;
+  onConfirmPublicTcpip?: (serial: string, port: number, confirmationId: string, target: string) => void;
   onCancelPublicTcpip?: () => void;
   apps: readonly AppInfo[] | null;
   packageName: string | null;

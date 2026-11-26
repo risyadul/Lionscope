@@ -44,6 +44,7 @@ export type WirelessRequestSource = 'dashboard' | 'agent';
 
 const DEFAULT_QR_POLL_MS = 1000;
 const DEFAULT_QR_TIMEOUT_MS = 120_000;
+const DEFAULT_PUBLIC_TCPIP_CONFIRM_TTL_MS = 120_000;
 const DEFAULT_TCPIP_RETRY_DELAY_MS = 750;
 const TCPIP_CONNECT_ATTEMPTS = 3;
 const QR_PASSWORD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -83,12 +84,23 @@ export type WirelessTcpipOutcome =
     }
   | {
       status: 'confirm_public';
+      confirmationId: string;
       usbSerial: string;
       host: string;
       port: number;
       target: string;
       message: string;
     };
+
+interface PendingPublicTcpipRecord {
+  confirmationId: string;
+  owner: unknown;
+  usbSerial: string;
+  host: string;
+  port: number;
+  target: string;
+  expiresAt: number;
+}
 
 interface ActiveQrSession {
   sessionId: string;
@@ -124,6 +136,8 @@ export class WirelessService {
   /** Normalized `host:port` endpoints connected by the user from the dashboard during this server run. */
   private readonly dashboardApproved = new Set<string>();
   private readonly qrSessions = new Map<string, ActiveQrSession>();
+  /** One-shot public-IP USB handoff confirmations bound to owner WS connection, USB serial, and target. */
+  private readonly pendingPublicTcpip = new Map<string, PendingPublicTcpipRecord>();
   private closed = false;
 
   constructor(options: WirelessServiceOptions) {
@@ -409,9 +423,16 @@ export class WirelessService {
     }
   }
 
+  cancelPendingPublicTcpipForOwner(owner: unknown): void {
+    for (const [id, record] of this.pendingPublicTcpip) {
+      if (record.owner === owner) this.pendingPublicTcpip.delete(id);
+    }
+  }
+
   close(): void {
     this.closed = true;
     for (const session of this.qrSessions.values()) this.disposeQrSession(session);
+    this.pendingPublicTcpip.clear();
   }
 
   private disposeQrSession(session: ActiveQrSession): void {
@@ -488,6 +509,41 @@ export class WirelessService {
     }
   }
 
+  private issuePublicTcpipConfirmation(
+    owner: unknown,
+    usbSerial: string,
+    host: string,
+    port: number,
+    target: string,
+    message: string,
+  ): Extract<WirelessTcpipOutcome, { status: 'confirm_public' }> {
+    const now = this.now();
+    for (const [id, existing] of this.pendingPublicTcpip) {
+      if (existing.expiresAt <= now || (existing.owner === owner && existing.usbSerial === usbSerial)) {
+        this.pendingPublicTcpip.delete(id);
+      }
+    }
+    const confirmationId = randomBytes(8).toString('hex');
+    this.pendingPublicTcpip.set(confirmationId, {
+      confirmationId,
+      owner,
+      usbSerial,
+      host,
+      port,
+      target,
+      expiresAt: now + DEFAULT_PUBLIC_TCPIP_CONFIRM_TTL_MS,
+    });
+    return {
+      status: 'confirm_public',
+      confirmationId,
+      usbSerial,
+      host,
+      port,
+      target,
+      message,
+    };
+  }
+
   /**
    * USB → Wi-Fi handoff: read the USB-connected phone's Wi-Fi IP, validate it against the caller's
    * host policy, switch adbd to TCP/IP mode (`adb tcpip <port>`), and connect over Wi-Fi.
@@ -496,7 +552,11 @@ export class WirelessService {
   async enableTcpipHandoff(
     usbSerial: string,
     source: WirelessRequestSource,
-    options: { port?: number; confirmPublicTarget?: string } = {},
+    options: {
+      owner?: unknown;
+      port?: number;
+      confirmPublic?: { confirmationId: string; target: string };
+    } = {},
   ): Promise<WirelessTcpipOutcome> {
     if (!isValidSerial(usbSerial)) throw new PublicError('Invalid adb serial');
     const port = parseWirelessPort(options.port ?? DEFAULT_ADB_TCP_PORT);
@@ -516,6 +576,31 @@ export class WirelessService {
       throw new PublicError(`Device ${usbSerial} is not an eligible USB device`);
     }
 
+    // Validate and consume one-shot public confirmation BEFORE re-reading the address or restarting adbd.
+    let confirmedRecord: PendingPublicTcpipRecord | null = null;
+    if (options.confirmPublic !== undefined) {
+      if (source !== 'dashboard') {
+        throw new PublicError('Public-IP handoff confirmation is only supported from the dashboard');
+      }
+      const record = this.pendingPublicTcpip.get(options.confirmPublic.confirmationId);
+      if (record) this.pendingPublicTcpip.delete(record.confirmationId);
+      const parsedConfirm = parseWirelessAddress(options.confirmPublic.target);
+      const matchesBinding =
+        record !== undefined &&
+        this.now() < record.expiresAt &&
+        record.owner === options.owner &&
+        record.usbSerial === usbSerial &&
+        record.port === port &&
+        parsedConfirm.ok &&
+        parsedConfirm.value.target === record.target;
+      if (!matchesBinding) {
+        throw new PublicError(
+          'Public-IP confirmation expired or does not match this device, address, or connection. Start USB → Wi-Fi handoff again.',
+        );
+      }
+      confirmedRecord = record;
+    }
+
     let wifiIp: string;
     try {
       wifiIp = await readDeviceWifiIp(this.adb, usbSerial);
@@ -526,21 +611,32 @@ export class WirelessService {
     // Validate the device-reported IP against caller host policy BEFORE opening TCP/IP or connecting.
     const target = this.validateTarget(`${wifiIp}:${port}`, source, false);
 
-    // On the dashboard path, never restart adbd on a public IP without an explicit confirmation bound to
-    // the exact serial, IP address, and port just read from the phone.
-    if (source === 'dashboard' && isPublicWirelessHost(target)) {
-      const confirmed =
-        options.confirmPublicTarget !== undefined ? parseWirelessAddress(options.confirmPublicTarget) : null;
-      if (!confirmed || !confirmed.ok || confirmed.value.target !== target) {
-        return {
-          status: 'confirm_public',
-          usbSerial,
-          host: wifiIp,
-          port,
-          target,
-          message: `Device ${usbSerial} reported public Wi-Fi address ${target}. Confirm this exact address before enabling ADB TCP/IP port ${port}.`,
-        };
+    if (confirmedRecord !== null) {
+      // Proceed ONLY if the freshly read address equals the confirmed one exactly (whether now public or private).
+      if (target !== confirmedRecord.target) {
+        if (isPublicWirelessHost(target)) {
+          return this.issuePublicTcpipConfirmation(
+            options.owner,
+            usbSerial,
+            wifiIp,
+            port,
+            target,
+            `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to public address ${target}. Confirm the new address before enabling ADB TCP/IP port ${port}.`,
+          );
+        }
+        throw new PublicError(
+          `Device ${usbSerial} Wi-Fi address changed from ${confirmedRecord.target} to ${target}. Start USB → Wi-Fi handoff again to use the new address.`,
+        );
       }
+    } else if (source === 'dashboard' && isPublicWirelessHost(target)) {
+      return this.issuePublicTcpipConfirmation(
+        options.owner,
+        usbSerial,
+        wifiIp,
+        port,
+        target,
+        `Device ${usbSerial} reported public Wi-Fi address ${target}. Confirm this exact address before enabling ADB TCP/IP port ${port}.`,
+      );
     }
 
     try {

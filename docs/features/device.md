@@ -94,8 +94,9 @@ picked from mDNS discovery, or discovered after pairing).
 - **USB → Wi-Fi handoff.** Select a ready USB physical phone and click **Use Wi-Fi** next to the device picker.
   After confirming that TCP/IP port `5555` stays open on the phone's Wi-Fi network until reboot (or `adb usb`),
   Lionscope reads the phone's Wi-Fi IP first — if it is a public IP, Lionscope pauses before running `adb tcpip`
-  and asks you to confirm the exact serial, IP address, and port (agents refuse public IPs outright) — then runs
-  `adb tcpip 5555`, connects wirelessly, and selects the new Wi-Fi entry so you can unplug USB.
+  and asks you to confirm a one-shot prompt bound to the exact serial, IP address, and port (agents refuse public
+  IPs unless that exact `host:port` was already connected from the dashboard during the current server run) — then
+  runs `adb tcpip 5555`, connects wirelessly, and selects the new Wi-Fi entry so you can unplug USB.
 - **Android 11+ pairing code.** Switch to **Pair with code** in the Wireless device dialog, enter the pairing
   IP:port and the 6-digit code shown on the phone, and optionally enter the separate connect port. If you leave the
   connect port blank, Lionscope checks `adb mdns services` for a matching `_adb-tls-connect._tcp` endpoint and

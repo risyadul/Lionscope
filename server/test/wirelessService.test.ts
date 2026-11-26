@@ -618,17 +618,26 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     service.close();
   });
 
-  it('requires bound public-IP confirmation before running adb tcpip on dashboard and refuses on agent', async () => {
-    let devicesOutput =
-      'List of devices attached\nR58M123ABC device usb:1-1 product:panther model:Pixel_7 transport_id:2\n';
+  it('requires one-shot server-bound public-IP confirmation before adb tcpip and blocks stale IP changes, cross-device reuse, and agent public handoff', async () => {
+    let devicesOutput = [
+      'List of devices attached',
+      'USB_A device usb:1-1 product:panther model:Pixel_A transport_id:2',
+      'USB_B device usb:1-2 product:panther model:Pixel_B transport_id:3',
+      '',
+    ].join('\n');
+    const wifiIpBySerial: Record<string, string> = {
+      USB_A: '192.0.2.15',
+      USB_B: '192.0.2.15',
+    };
     const adb = new FakeAdb((args) => {
       if (args[0] === 'devices') return devicesOutput;
       if (args[0] === '-s' && args[2] === 'shell' && args[3] === 'ip -f inet addr show wlan0') {
-        return '14: wlan0: <UP>\n    inet 192.0.2.15/24 scope global wlan0\n';
+        const ip = wifiIpBySerial[args[1] ?? ''] ?? '';
+        return `14: wlan0: <UP>\n    inet ${ip}/24 scope global wlan0\n`;
       }
       if (args[0] === '-s' && args[2] === 'tcpip') return `restarting in TCP mode port: ${args[3]}\n`;
       if (args[0] === 'connect') {
-        devicesOutput += `${args[1]} device product:panther model:Pixel_7 transport_id:9\n`;
+        devicesOutput += `${args[1]} device product:panther model:Pixel_A transport_id:9\n`;
         return `connected to ${args[1]}\n`;
       }
       return '';
@@ -642,72 +651,131 @@ describe('wireless connect & disconnect (WS + agent tools)', () => {
     const agentRefused = await callTool(
       server.agent,
       'enable_wireless_adb',
-      { serial: 'R58M123ABC', port: 5555 },
+      { serial: 'USB_A', port: 5555 },
       true,
     );
     expect(agentRefused.ok).toBe(false);
     expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
 
-    // Dashboard path returns pending confirmation with exact serial, IP, and port without running tcpip or approving.
+    // Dashboard path returns a one-shot pending confirmation with confirmationId, serial, IP, and port.
     client = await Client.open(address.port);
     await client.waitFor('locations');
-    client.send({ type: 'enableWirelessTcpip', requestId: 41, serial: 'R58M123ABC', port: 5555 });
+    client.send({ type: 'enableWirelessTcpip', requestId: 41, serial: 'USB_A', port: 5555 });
     const pending = await client.next('wirelessResult');
-    expect(pending).toEqual({
-      type: 'wirelessResult',
-      requestId: 41,
-      result: {
-        action: 'tcpip',
-        ok: false,
-        needsPublicConfirmation: true,
-        usbSerial: 'R58M123ABC',
-        host: '192.0.2.15',
-        port: 5555,
-        target: '192.0.2.15:5555',
-        message:
-          'Device R58M123ABC reported public Wi-Fi address 192.0.2.15:5555. Confirm this exact address before enabling ADB TCP/IP port 5555.',
-      },
+    expect(pending.result).toMatchObject({
+      action: 'tcpip',
+      ok: false,
+      needsPublicConfirmation: true,
+      usbSerial: 'USB_A',
+      host: '192.0.2.15',
+      port: 5555,
+      target: '192.0.2.15:5555',
     });
+    const firstConfirmId =
+      pending.result.action === 'tcpip' && !pending.result.ok && pending.result.needsPublicConfirmation
+        ? pending.result.confirmationId
+        : '';
+    expect(firstConfirmId).toMatch(/^[0-9a-f]{16}$/);
     expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
     // Not dashboard-approved before user confirmation.
     const stillRefused = await callTool(server.agent, 'connect_device', { address: '192.0.2.15:5555' }, true);
     expect(stillRefused.ok).toBe(false);
 
-    // Confirmation bound to a different IP or port is NOT accepted — still refuses to run tcpip.
+    // (b) USB_B reporting the same public endpoint MUST NOT accept USB_A's confirmationId (and consumes it).
     client.send({
       type: 'enableWirelessTcpip',
       requestId: 42,
-      serial: 'R58M123ABC',
+      serial: 'USB_B',
       port: 5555,
-      confirmPublicTarget: '192.0.2.99:5555',
+      confirmPublic: { confirmationId: firstConfirmId, target: '192.0.2.15:5555' },
     });
-    const wrongTarget = await client.next('wirelessResult');
-    expect(wrongTarget.result).toMatchObject({ action: 'tcpip', ok: false, needsPublicConfirmation: true });
+    const crossDevice = await client.next('wirelessResult');
+    expect(crossDevice.result).toMatchObject({ action: 'tcpip', ok: false });
+    expect(
+      'needsPublicConfirmation' in crossDevice.result && crossDevice.result.needsPublicConfirmation,
+    ).toBe(false);
     expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
 
-    // Exact confirmation bound to serial + address + port proceeds and approves for this server run.
+    // (a) Re-issue for USB_A, then USB_A's reported IP changes from public 192.0.2.15 to private 192.168.0.19:
+    // confirming the old public prompt MUST fail and MUST NOT run tcpip on the new address.
+    client.send({ type: 'enableWirelessTcpip', requestId: 43, serial: 'USB_A', port: 5555 });
+    const pending2 = await client.next('wirelessResult');
+    const secondConfirmId =
+      pending2.result.action === 'tcpip' && !pending2.result.ok && pending2.result.needsPublicConfirmation
+        ? pending2.result.confirmationId
+        : '';
+    wifiIpBySerial.USB_A = '192.168.0.19';
     client.send({
       type: 'enableWirelessTcpip',
-      requestId: 43,
-      serial: 'R58M123ABC',
+      requestId: 44,
+      serial: 'USB_A',
       port: 5555,
-      confirmPublicTarget: '192.0.2.15:5555',
+      confirmPublic: { confirmationId: secondConfirmId, target: '192.0.2.15:5555' },
+    });
+    const changedToPrivate = await client.next('wirelessResult');
+    expect(changedToPrivate.result).toMatchObject({
+      action: 'tcpip',
+      ok: false,
+    });
+    expect(changedToPrivate.result.ok ? '' : changedToPrivate.result.message).toMatch(
+      /changed from 192\.0\.2\.15:5555 to 192\.168\.0\.19:5555/i,
+    );
+    expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+
+    // Another WS connection cannot use client 1's confirmation token either.
+    wifiIpBySerial.USB_A = '192.0.2.15';
+    client.send({ type: 'enableWirelessTcpip', requestId: 45, serial: 'USB_A', port: 5555 });
+    const pending3 = await client.next('wirelessResult');
+    const thirdConfirmId =
+      pending3.result.action === 'tcpip' && !pending3.result.ok && pending3.result.needsPublicConfirmation
+        ? pending3.result.confirmationId
+        : '';
+    const otherClient = await Client.open(address.port);
+    try {
+      await otherClient.waitFor('locations');
+      otherClient.send({
+        type: 'enableWirelessTcpip',
+        requestId: 1,
+        serial: 'USB_A',
+        port: 5555,
+        confirmPublic: { confirmationId: thirdConfirmId, target: '192.0.2.15:5555' },
+      });
+      const wrongConn = await otherClient.next('wirelessResult');
+      expect(wrongConn.result).toMatchObject({ action: 'tcpip', ok: false });
+      expect(adb.execCalls.some((c) => c[2] === 'tcpip')).toBe(false);
+    } finally {
+      await otherClient.close();
+    }
+
+    // Fresh token confirmed on the same WS connection with matching USB_A + 192.0.2.15:5555 succeeds.
+    client.send({ type: 'enableWirelessTcpip', requestId: 46, serial: 'USB_A', port: 5555 });
+    const pending4 = await client.next('wirelessResult');
+    const fourthConfirmId =
+      pending4.result.action === 'tcpip' && !pending4.result.ok && pending4.result.needsPublicConfirmation
+        ? pending4.result.confirmationId
+        : '';
+    client.send({
+      type: 'enableWirelessTcpip',
+      requestId: 47,
+      serial: 'USB_A',
+      port: 5555,
+      confirmPublic: { confirmationId: fourthConfirmId, target: '192.0.2.15:5555' },
     });
     const confirmed = await client.next('wirelessResult');
     expect(confirmed).toEqual({
       type: 'wirelessResult',
-      requestId: 43,
+      requestId: 47,
       result: {
         action: 'tcpip',
         ok: true,
-        usbSerial: 'R58M123ABC',
+        usbSerial: 'USB_A',
         serial: '192.0.2.15:5555',
         target: '192.0.2.15:5555',
         port: 5555,
         alreadyConnected: false,
       },
     });
-    expect(adb.execCalls.some((c) => c[2] === 'tcpip' && c[3] === '5555')).toBe(true);
+    expect(adb.execCalls.some((c) => c[1] === 'USB_A' && c[2] === 'tcpip' && c[3] === '5555')).toBe(true);
   });
 
   it('rechecks QR expiry after an in-flight mDNS discovery finishes and does not pair once expired', async () => {

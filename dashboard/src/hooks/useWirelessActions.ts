@@ -52,9 +52,15 @@ export interface LateWirelessResult {
 }
 
 export interface PendingPublicTcpip {
+  confirmationId: string;
   usbSerial: string;
   host: string;
   port: number;
+  target: string;
+}
+
+export interface TcpipPublicConfirmation {
+  confirmationId: string;
   target: string;
 }
 
@@ -95,7 +101,7 @@ export interface WirelessActionsController {
   enableTcpip: (
     serial: string,
     port?: number,
-    confirmPublicTarget?: string,
+    confirmPublic?: TcpipPublicConfirmation,
   ) => Promise<Extract<WirelessActionResult, { action: 'tcpip' }>>;
   pendingPublicTcpip: PendingPublicTcpip | null;
   clearPendingPublicTcpip: () => void;
@@ -245,6 +251,7 @@ export function useWirelessActions({
           setActionNotice(null);
           if (stillOnInitiatingUsb) {
             setPendingPublicTcpip({
+              confirmationId: result.confirmationId,
               usbSerial: result.usbSerial,
               host: result.host,
               port: result.port,
@@ -432,7 +439,7 @@ export function useWirelessActions({
   );
 
   const enableTcpip = useCallback(
-    async (serial: string, port?: number, confirmPublicTarget?: string) => {
+    async (serial: string, port?: number, confirmPublic?: TcpipPublicConfirmation) => {
       setHandoffSerial(serial);
       setActionError(null);
       setActionNotice(null);
@@ -445,13 +452,14 @@ export function useWirelessActions({
             requestId,
             serial,
             ...(port !== undefined ? { port } : {}),
-            ...(confirmPublicTarget !== undefined ? { confirmPublicTarget } : {}),
+            ...(confirmPublic !== undefined ? { confirmPublic } : {}),
           }),
           { serial },
         );
         if (!result.ok) {
           if (result.needsPublicConfirmation) {
             setPendingPublicTcpip({
+              confirmationId: result.confirmationId,
               usbSerial: result.usbSerial,
               host: result.host,
               port: result.port,

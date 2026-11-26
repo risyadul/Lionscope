@@ -274,6 +274,7 @@ describe('DevicePicker wireless badges & disconnect', () => {
         onRefresh={vi.fn()}
         onSwitchToWifi={vi.fn()}
         pendingPublicTcpip={{
+          confirmationId: '0123456789abcdef',
           usbSerial: 'R58M123ABC',
           host: '192.0.2.15',
           port: 5555,
@@ -291,7 +292,7 @@ describe('DevicePicker wireless badges & disconnect', () => {
     expect(dialog.textContent).toContain('192.0.2.15');
     expect(dialog.textContent).toContain('5555');
     fireEvent.click(screen.getByRole('button', { name: 'Enable on 192.0.2.15:5555' }));
-    expect(onConfirmPublic).toHaveBeenCalledWith('R58M123ABC', 5555, '192.0.2.15:5555');
+    expect(onConfirmPublic).toHaveBeenCalledWith('R58M123ABC', 5555, '0123456789abcdef', '192.0.2.15:5555');
   });
 });
 

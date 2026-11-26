@@ -140,6 +140,7 @@ export type GatewayWireless = Pick<
   | 'startQrPairing'
   | 'cancelQrPairing'
   | 'cancelQrForOwner'
+  | 'cancelPendingPublicTcpipForOwner'
 >;
 
 export interface WsGatewayOptions {
@@ -491,16 +492,16 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
         } else {
           try {
             const handedOff = await wireless.enableTcpipHandoff(message.serial, 'dashboard', {
+              owner: ws,
               ...(message.port !== undefined ? { port: message.port } : {}),
-              ...(message.confirmPublicTarget !== undefined
-                ? { confirmPublicTarget: message.confirmPublicTarget }
-                : {}),
+              ...(message.confirmPublic !== undefined ? { confirmPublic: message.confirmPublic } : {}),
             });
             if (handedOff.status === 'confirm_public') {
               result = {
                 action: 'tcpip',
                 ok: false,
                 needsPublicConfirmation: true,
+                confirmationId: handedOff.confirmationId,
                 usbSerial: handedOff.usbSerial,
                 host: handedOff.host,
                 port: handedOff.port,
@@ -568,6 +569,7 @@ export function createWsGateway(options: WsGatewayOptions): WsGateway {
       clients.delete(ws);
       options.inspectLinks?.setFocus(ws, null);
       options.wireless?.cancelQrForOwner(ws);
+      options.wireless?.cancelPendingPublicTcpipForOwner(ws);
     });
     ws.on('pong', () => {
       state.alive = true;

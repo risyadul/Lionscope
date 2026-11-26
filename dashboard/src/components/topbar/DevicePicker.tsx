@@ -43,7 +43,7 @@ type Props = {
   isSwitchingToWifi?: boolean;
   /** Pending public-IP confirmation returned by the server before `adb tcpip` runs. */
   pendingPublicTcpip?: PendingPublicTcpip | null;
-  onConfirmPublicTcpip?: (serial: string, port: number, target: string) => void;
+  onConfirmPublicTcpip?: (serial: string, port: number, confirmationId: string, target: string) => void;
   onCancelPublicTcpip?: () => void;
   isLocked: boolean;
   isOffline: boolean;
@@ -344,8 +344,8 @@ export function DevicePicker({
           title={`Public IP on ${deviceName(publicTcpipTarget)}`}
           confirmLabel={`Enable on ${pendingPublicTcpip.target}`}
           onConfirm={() => {
-            const { usbSerial, port, target } = pendingPublicTcpip;
-            onConfirmPublicTcpip(usbSerial, port, target);
+            const { usbSerial, port, confirmationId, target } = pendingPublicTcpip;
+            onConfirmPublicTcpip(usbSerial, port, confirmationId, target);
           }}
           onCancel={() => onCancelPublicTcpip?.()}
         >

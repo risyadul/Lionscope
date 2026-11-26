@@ -1872,6 +1872,8 @@ export type WirelessActionResult =
       ok: false;
       /** True when the device reported a public Wi-Fi IP and the user must confirm exact serial + host + port first. */
       needsPublicConfirmation: true;
+      /** One-shot confirmation token bound on the server to the WS connection, USB serial, and exact target. */
+      confirmationId: string;
       usbSerial: string;
       host: string;
       port: number;
@@ -2123,8 +2125,8 @@ export type ClientMessage =
       requestId: number;
       serial: string;
       port?: number;
-      /** Dashboard confirmation bound to the exact `host:port` previously returned for a public Wi-Fi IP. */
-      confirmPublicTarget?: string;
+      /** One-shot dashboard confirmation bound to the server-issued confirmationId, serial, and exact `host:port`. */
+      confirmPublic?: { confirmationId: string; target: string };
     };
 
 /** Max accepted size of a dashboard → server frame, in bytes (`setNetworkMock` excepted). */
