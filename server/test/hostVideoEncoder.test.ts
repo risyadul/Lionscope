@@ -28,6 +28,53 @@ function bytes(...parts: number[][]): Buffer {
   return Buffer.from(parts.flat());
 }
 
+function flvHeader(): Buffer {
+  const buf = Buffer.alloc(13);
+  buf.write('FLV', 0, 'ascii');
+  buf[3] = 1;
+  buf[4] = 1;
+  buf.writeUInt32BE(9, 5);
+  return buf;
+}
+
+function flvTag(tagType: number, body: Buffer): Buffer {
+  const out = Buffer.alloc(11 + body.length + 4);
+  out[0] = tagType;
+  out[1] = (body.length >> 16) & 0xff;
+  out[2] = (body.length >> 8) & 0xff;
+  out[3] = body.length & 0xff;
+  body.copy(out, 11);
+  out.writeUInt32BE(11 + body.length, 11 + body.length);
+  return out;
+}
+
+function flvConfigTag(sps: number[], pps: number[]): Buffer {
+  const spsLen = [(sps.length >> 8) & 0xff, sps.length & 0xff];
+  const ppsLen = [(pps.length >> 8) & 0xff, pps.length & 0xff];
+  return flvTag(
+    9,
+    bytes(
+      [0x17, 0x00, 0x00, 0x00, 0x00],
+      [0x01, sps[1] ?? 0x64, sps[2] ?? 0x00, sps[3] ?? 0x28, 0xff, 0xe1],
+      spsLen,
+      sps,
+      [0x01],
+      ppsLen,
+      pps,
+    ),
+  );
+}
+
+function flvNaluTag(nal: number[], isKey: boolean): Buffer {
+  const len = [
+    (nal.length >>> 24) & 0xff,
+    (nal.length >>> 16) & 0xff,
+    (nal.length >>> 8) & 0xff,
+    nal.length & 0xff,
+  ];
+  return flvTag(9, bytes([((isKey ? 1 : 2) << 4) | 7, 0x01, 0x00, 0x00, 0x00], len, nal));
+}
+
 function execError(message: string, code: number): ExecFileException {
   return Object.assign(new Error(message), { code, cmd: 'ffmpeg' });
 }
@@ -162,7 +209,7 @@ describe('probeHostH264Encoder', () => {
 });
 
 describe('buildFfmpegArgs', () => {
-  it('validates dimensions and fpsCap and pads odd dimensions to even', () => {
+  it('validates dimensions and fpsCap, pads odd dimensions, and outputs FLV H.264', () => {
     const even = buildFfmpegArgs('h264_videotoolbox', { width: 540, height: 1200, fpsCap: 30 });
     expect(even.encodedWidth).toBe(540);
     expect(even.encodedHeight).toBe(1200);
@@ -172,6 +219,11 @@ describe('buildFfmpegArgs', () => {
     expect(even.args).toContain('-g');
     expect(even.args).toContain('60');
     expect(even.args).toContain('-realtime');
+    expect(even.args).toContain('-prio_speed');
+    expect(even.args).toContain('-max_ref_frames');
+    expect(even.args).toContain('-probesize');
+    expect(even.args).toContain('flv');
+    expect(even.args).not.toContain('low_delay');
     expect(even.args).not.toContain('-vf');
 
     const odd = buildFfmpegArgs('libx264', { width: 541, height: 1201, fpsCap: 24 });
@@ -179,6 +231,8 @@ describe('buildFfmpegArgs', () => {
     expect(odd.encodedHeight).toBe(1202);
     expect(odd.args).toContain('pad=542:1202:0:0:black');
     expect(odd.args).toContain('48');
+    expect(odd.args).toContain('low_delay');
+    expect(odd.args).toContain('flv');
 
     expect(() => buildFfmpegArgs('libx264', { width: 1, height: 100, fpsCap: 30 })).toThrow(RangeError);
     expect(() => buildFfmpegArgs('libx264', { width: 540.5, height: 100, fpsCap: 30 })).toThrow(RangeError);
@@ -193,7 +247,7 @@ describe('HostVideoEncoder', () => {
     hardware: true,
   };
 
-  it('writes RGBA frames, pairs coded H.264 packets with queued PTS, and respects stdin backpressure', async () => {
+  it('writes RGBA frames, emits FLV packets immediately with queued PTS, and respects stdin backpressure', async () => {
     const fake = new FakeFfmpegProcess();
     const packets: HostVideoPacket[] = [];
     const exits: (Error | undefined)[] = [];
@@ -236,25 +290,59 @@ describe('HostVideoEncoder', () => {
     expect(encoder.writeFrame(frame, 3000)).toBe(true);
     expect(writeSpy).toHaveBeenCalledTimes(2);
 
-    // Emit Annex B stream for frame 1 (IDR) and frame 2 (delta, pts 3000)
-    fake.stdout.write(bytes(SC4, SPS, SC4, PPS, SC4, IDR, SC4, DELTA));
+    // Emit FLV stream for frame 1 (IDR) and frame 2 (delta, pts 3000) without ending stdout
+    fake.stdout.write(
+      Buffer.concat([flvHeader(), flvConfigTag(SPS, PPS), flvNaluTag(IDR, true), flvNaluTag(DELTA, false)]),
+    );
     await new Promise((r) => setTimeout(r, 10));
 
-    // Close encoder cleanly (EOF triggers parser.flush() for the final delta frame)
-    fake.stdout.end();
-    fake.emit('close', 0, null);
-    await encoder.close();
-
+    // All packets already arrived immediately without waiting for EOF!
     expect(packets).toEqual([
       { isConfig: true, isKey: false, pts: 0, data: bytes(SC4, SPS, SC4, PPS) },
       { isConfig: false, isKey: true, pts: 1000, data: bytes(SC4, IDR) },
       // Second frame was dropped while backpressured, so the 2nd coded frame takes PTS 3000.
       { isConfig: false, isKey: false, pts: 3000, data: bytes(SC4, DELTA) },
     ]);
+
+    fake.stdout.end();
+    fake.emit('close', 0, null);
+    await encoder.close();
     expect(exits).toEqual([undefined]);
   });
 
-  it('probes the real host ffmpeg without throwing and runs a live smoke encode only if available', async () => {
+  it('flushes a held single frame by repeating it until coded output arrives, then stops', async () => {
+    const fake = new FakeFfmpegProcess();
+    const packets: HostVideoPacket[] = [];
+    const encoder = new HostVideoEncoder(
+      probe,
+      { width: 4, height: 4, fpsCap: 30, onPacket: (p) => packets.push(p), onExit: () => undefined },
+      { spawn: () => fake, eofGraceMs: 10, termGraceMs: 10, flushDelayMs: 10, flushIntervalMs: 10 },
+    );
+
+    const writeSpy = vi.spyOn(fake.stdin, 'write');
+    expect(encoder.writeFrame(Buffer.alloc(64, 0x33), 5000)).toBe(true);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    await new Promise((r) => setTimeout(r, 35));
+    expect(writeSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    fake.stdout.write(Buffer.concat([flvHeader(), flvConfigTag(SPS, PPS), flvNaluTag(IDR, true)]));
+    await new Promise((r) => setTimeout(r, 15));
+    const writesAfterOutput = writeSpy.mock.calls.length;
+
+    await new Promise((r) => setTimeout(r, 35));
+    expect(writeSpy.mock.calls.length).toBe(writesAfterOutput);
+    expect(packets).toEqual([
+      { isConfig: true, isKey: false, pts: 0, data: bytes(SC4, SPS, SC4, PPS) },
+      { isConfig: false, isKey: true, pts: 5000, data: bytes(SC4, IDR) },
+    ]);
+
+    fake.stdout.end();
+    fake.emit('close', 0, null);
+    await encoder.close();
+  });
+
+  it('probes the real host ffmpeg and delivers config + keyframe for 1 RGBA frame without closing stdin', async () => {
     clearHostH264EncoderProbeCache();
     const info = await probeHostH264Encoder();
     if (!info) {
@@ -262,21 +350,40 @@ describe('HostVideoEncoder', () => {
       return;
     }
 
-    const packets: HostVideoPacket[] = [];
-    const exits: (Error | undefined)[] = [];
-    const encoder = new HostVideoEncoder(info, {
-      width: 64,
-      height: 64,
-      fpsCap: 30,
-      onPacket: (packet) => packets.push(packet),
-      onExit: (error) => exits.push(error),
-    });
-    const frame = Buffer.alloc(64 * 64 * 4, 0x40);
-    expect(encoder.writeFrame(frame, 1000)).toBe(true);
-    await encoder.close();
-    expect(exits).toEqual([undefined]);
-    expect(packets.some((packet) => packet.isConfig)).toBe(true);
-    expect(packets.some((packet) => !packet.isConfig && packet.isKey)).toBe(true);
+    const targets: HostH264EncoderInfo[] = [info];
+    if (info.encoder !== 'libx264') {
+      const sw = await probeHostH264Encoder({ platform: 'linux' });
+      if (sw?.encoder === 'libx264') targets.push(sw);
+    }
+
+    for (const target of targets) {
+      const packets: HostVideoPacket[] = [];
+      const exits: (Error | undefined)[] = [];
+      const encoder = new HostVideoEncoder(target, {
+        width: 128,
+        height: 128,
+        fpsCap: 30,
+        onPacket: (packet) => packets.push(packet),
+        onExit: (error) => exits.push(error),
+      });
+      const frame = Buffer.alloc(128 * 128 * 4, 0x40);
+      expect(encoder.writeFrame(frame, 1000)).toBe(true);
+
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        (!packets.some((p) => p.isConfig) || !packets.some((p) => !p.isConfig && p.isKey))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Delivered BEFORE closing stdin!
+      expect(packets.some((packet) => packet.isConfig)).toBe(true);
+      expect(packets.some((packet) => !packet.isConfig && packet.isKey && packet.pts === 1000)).toBe(true);
+
+      await encoder.close();
+      expect(exits).toEqual([undefined]);
+    }
   });
 
   it('rejects undersized RGBA buffers', () => {

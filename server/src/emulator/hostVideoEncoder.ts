@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import type { ChildProcess, ExecFileException, SpawnOptions } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { errorMessage, log } from '../log.ts';
-import { H264AnnexBParser } from './h264AnnexB.ts';
+import { FlvH264Parser } from './flvH264.ts';
 
 const MAX_VIDEO_DIMENSION = 16_384;
 const MAX_FPS_CAP = 240;
@@ -15,6 +15,10 @@ const STDERR_CAP_BYTES = 8 * 1024;
 const MAX_ERROR_SUMMARY_CHARS = 300;
 const DEFAULT_EOF_GRACE_MS = 200;
 const DEFAULT_TERM_GRACE_MS = 500;
+const DEFAULT_FLUSH_DELAY_MS = 35;
+const DEFAULT_FLUSH_INTERVAL_MS = 20;
+const MAX_FLUSH_IN_FLIGHT = 8;
+const MAX_FLUSH_ATTEMPTS = 12;
 const DEFAULT_VAAPI_DEVICE = '/dev/dri/renderD128';
 
 export type HostH264EncoderName = 'h264_videotoolbox' | 'h264_nvenc' | 'h264_vaapi' | 'h264_qsv' | 'libx264';
@@ -102,6 +106,8 @@ export interface HostVideoEncoderDeps {
   spawn?: SpawnFfmpegLike;
   eofGraceMs?: number;
   termGraceMs?: number;
+  flushDelayMs?: number;
+  flushIntervalMs?: number;
 }
 
 const probeCache = new Map<string, Promise<HostH264EncoderInfo | null>>();
@@ -292,20 +298,21 @@ function assertFpsCap(fpsCap: number): number {
 function encoderTuningArgs(encoder: HostH264EncoderName): string[] {
   switch (encoder) {
     case 'h264_videotoolbox':
-      return ['-realtime', 'true', '-profile:v', 'high'];
+      // VideoToolbox rejects `-flags low_delay` without an explicit `-b:v`; realtime + prio_speed + 1 ref frame keeps latency low.
+      return ['-realtime', 'true', '-prio_speed', 'true', '-max_ref_frames', '1', '-profile:v', 'high'];
     case 'h264_nvenc':
-      return ['-preset', 'p1', '-tune', 'ull', '-zerolatency', '1'];
+      return ['-preset', 'p1', '-tune', 'ull', '-zerolatency', '1', '-flags', 'low_delay'];
     case 'h264_vaapi':
-      return [];
+      return ['-flags', 'low_delay'];
     case 'h264_qsv':
-      return ['-preset', 'veryfast', '-look_ahead', '0'];
+      return ['-preset', 'veryfast', '-look_ahead', '0', '-flags', 'low_delay'];
     case 'libx264':
-      return ['-preset', 'ultrafast', '-tune', 'zerolatency'];
+      return ['-preset', 'ultrafast', '-tune', 'zerolatency', '-flags', 'low_delay'];
   }
 }
 
 /**
- * Build strictly validated `ffmpeg` argument array for low-latency RGBA -> Annex B H.264 encoding.
+ * Build strictly validated `ffmpeg` argument array for low-latency RGBA -> FLV H.264 encoding.
  * Odd dimensions are padded by 1px to an even integer so YUV420p H.264 encoding always succeeds.
  */
 export function buildFfmpegArgs(
@@ -319,7 +326,17 @@ export function buildFfmpegArgs(
   const encodedHeight = height + (height & 1);
   const gopSize = Math.max(1, fps * KEY_FRAME_INTERVAL_S);
 
-  const args: string[] = ['-hide_banner', '-loglevel', 'error', '-fflags', 'nobuffer'];
+  const args: string[] = [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-fflags',
+    'nobuffer',
+    '-probesize',
+    '32',
+    '-analyzeduration',
+    '0',
+  ];
   if (encoder === 'h264_vaapi') {
     args.push('-vaapi_device', DEFAULT_VAAPI_DEVICE);
   }
@@ -359,12 +376,10 @@ export function buildFfmpegArgs(
     '-g',
     String(gopSize),
     ...encoderTuningArgs(encoder),
-    '-flags',
-    'low_delay',
     '-flush_packets',
     '1',
     '-f',
-    'h264',
+    'flv',
     'pipe:1',
   );
 
@@ -386,8 +401,8 @@ function formatStderrSummary(chunks: readonly Buffer[]): string {
 }
 
 /**
- * Spawns and manages one `ffmpeg` encoder process converting RGBA frames on stdin to Annex B H.264
- * packets on stdout.
+ * Spawns and manages one `ffmpeg` encoder process converting RGBA frames on stdin to FLV-delimited
+ * H.264 packets on stdout, emitted as Annex B packets with zero frame holdback.
  */
 export class HostVideoEncoder implements HostVideoEncoderHandle {
   readonly width: number;
@@ -396,15 +411,24 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
   readonly encodedHeight: number;
 
   private readonly child: SpawnedFfmpegProcess;
-  private readonly parser = new H264AnnexBParser();
+  private readonly parser = new FlvH264Parser();
   private readonly ptsQueue: number[] = [];
   private readonly stderrChunks: Buffer[] = [];
   private readonly expectedFrameBytes: number;
   private readonly eofGraceMs: number;
   private readonly termGraceMs: number;
+  private readonly flushDelayMs: number;
+  private readonly flushIntervalMs: number;
 
   private stderrBytes = 0;
   private lastPts = 0;
+  private lastRealFrame: Buffer | null = null;
+  private lastRealPts = 0;
+  private writtenTotalFrames = 0;
+  private targetCodedIndex = 0;
+  private emittedCodedFrames = 0;
+  private flushAttempts = 0;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private backpressured = false;
   private closing = false;
   private exited = false;
@@ -422,6 +446,8 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     this.expectedFrameBytes = this.width * this.height * 4;
     this.eofGraceMs = deps.eofGraceMs ?? DEFAULT_EOF_GRACE_MS;
     this.termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
+    this.flushDelayMs = deps.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS;
+    this.flushIntervalMs = deps.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
 
     const { args, encodedWidth, encodedHeight } = buildFfmpegArgs(probe.encoder, {
       width: this.width,
@@ -443,6 +469,9 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     this.child.stdin?.on('error', () => undefined);
     this.child.stdin?.on('drain', () => {
       this.backpressured = false;
+      if (this.emittedCodedFrames < this.targetCodedIndex) {
+        this.scheduleFlush(this.flushDelayMs);
+      }
     });
     this.child.stdout?.on('error', () => undefined);
     this.child.stdout?.on('data', (chunk: Buffer | string) => {
@@ -491,10 +520,16 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     }
 
     const slice = rgba.length === this.expectedFrameBytes ? rgba : rgba.subarray(0, this.expectedFrameBytes);
+    this.lastRealFrame = Buffer.from(slice);
+    this.lastRealPts = ptsUs;
     this.ptsQueue.push(ptsUs);
     try {
       const ready = stdin.write(slice);
+      this.writtenTotalFrames += 1;
+      this.targetCodedIndex = this.writtenTotalFrames;
+      this.flushAttempts = 0;
       if (!ready) this.backpressured = true;
+      else this.scheduleFlush(this.flushDelayMs);
       return true;
     } catch (error) {
       this.ptsQueue.pop();
@@ -507,8 +542,74 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
+    this.clearFlushTimer();
+    this.lastRealFrame = null;
     this.closePromise = this.performClose();
     return this.closePromise;
+  }
+
+  private scheduleFlush(delayMs: number): void {
+    this.clearFlushTimer();
+    if (
+      delayMs < 0 ||
+      this.closing ||
+      this.exited ||
+      this.backpressured ||
+      this.emittedCodedFrames >= this.targetCodedIndex ||
+      !this.lastRealFrame
+    ) {
+      return;
+    }
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushPipeline();
+    }, delayMs);
+    this.flushTimer.unref?.();
+  }
+
+  private clearFlushTimer(): void {
+    if (this.flushTimer === null) return;
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+  }
+
+  /**
+   * `ffmpeg` CLI (`dmx0`) and hardware encoders (`h264_videotoolbox`) buffer 1–5 frames in flight before
+   * emitting packet #1. When a static or settled frame has not emerged after `flushDelayMs`, repeat the
+   * identical frame until that target frame exits `stdout`, then stop so idle bandwidth stays zero.
+   */
+  private flushPipeline(): void {
+    if (
+      this.closing ||
+      this.exited ||
+      this.backpressured ||
+      this.emittedCodedFrames >= this.targetCodedIndex ||
+      this.flushAttempts >= MAX_FLUSH_ATTEMPTS
+    ) {
+      return;
+    }
+    const frame = this.lastRealFrame;
+    const stdin = this.child.stdin;
+    if (!frame || !stdin || stdin.destroyed || !stdin.writable) return;
+
+    if (this.writtenTotalFrames - this.emittedCodedFrames >= MAX_FLUSH_IN_FLIGHT) {
+      this.flushAttempts += 1;
+      this.scheduleFlush(this.flushIntervalMs);
+      return;
+    }
+
+    this.ptsQueue.push(this.lastRealPts);
+    try {
+      const ready = stdin.write(frame);
+      this.writtenTotalFrames += 1;
+      this.flushAttempts += 1;
+      if (!ready) this.backpressured = true;
+      else if (this.emittedCodedFrames < this.targetCodedIndex) {
+        this.scheduleFlush(this.flushIntervalMs);
+      }
+    } catch {
+      this.ptsQueue.pop();
+    }
   }
 
   private async performClose(): Promise<void> {
@@ -554,20 +655,27 @@ export class HostVideoEncoder implements HostVideoEncoderHandle {
     });
   }
 
-  private emitParsedPackets(packets: ReturnType<H264AnnexBParser['push']>): void {
+  private emitParsedPackets(packets: ReturnType<FlvH264Parser['push']>): void {
     for (const packet of packets) {
       if (this.closing) return;
       if (packet.isConfig) {
         this.options.onPacket({ isConfig: true, isKey: false, pts: 0, data: packet.data });
         continue;
       }
+      this.emittedCodedFrames += 1;
       const pts = this.ptsQueue.shift() ?? this.lastPts;
       this.lastPts = pts;
       this.options.onPacket({ isConfig: false, isKey: packet.isKey, pts, data: packet.data });
     }
+    if (this.emittedCodedFrames >= this.targetCodedIndex) {
+      this.clearFlushTimer();
+      this.flushAttempts = 0;
+    }
   }
 
   private onProcessFinish(error?: Error): void {
+    this.clearFlushTimer();
+    this.lastRealFrame = null;
     if (!this.closing) {
       try {
         this.emitParsedPackets(this.parser.flush());
