@@ -1,9 +1,10 @@
 /**
- * Screen mirror WebSocket (`SCREEN_WS_PATH`): binary PNG frames (emulators) or H.264 access units (physical
- * devices) in, JSON input out, reconnect with backoff.
+ * Screen mirror WebSocket (`SCREEN_WS_PATH`): binary PNG frames or H.264 access units in, JSON input out,
+ * reconnect with backoff.
  */
 import type {
   ScreenClientMessage,
+  ScreenCodecMode,
   ScreenErrorCode,
   ScreenFpsCap,
   ScreenServerMessage,
@@ -25,10 +26,12 @@ export function screenUrl(
   serial: string,
   size: ScreenSize,
   fpsCap?: ScreenFpsCap,
+  codec?: ScreenCodecMode,
 ): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const query = new URLSearchParams({ serial, size: String(size) });
   if (fpsCap !== undefined) query.set('fps', String(fpsCap));
+  if (codec !== undefined && codec !== 'auto') query.set('codec', codec);
   return `${scheme}://${location.host}${SCREEN_WS_PATH}?${query.toString()}`;
 }
 
