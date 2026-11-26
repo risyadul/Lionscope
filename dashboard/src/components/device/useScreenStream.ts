@@ -130,6 +130,8 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
       setVideoError(error);
     };
     const fallbackToPng = (message: string) => {
+      video?.dispose();
+      video = null;
       if (isEmulator && !forcePng) {
         connection.close();
         setPngFallbackSerial(serial);
@@ -153,7 +155,7 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
           connection.markLive();
         },
         onUnsupported: fallbackToPng,
-        onFailed: (message) => failVideo({ message, canRetry: true }),
+        onFailed: (message) => (isEmulator ? fallbackToPng(message) : failVideo({ message, canRetry: true })),
         // Request a fresh IDR instead of waiting for the encoder's next periodic key frame.
         onKeyFrameNeeded: () => connection.send({ type: 'keyFrame' }),
       });
@@ -167,8 +169,13 @@ export function useScreenStream({ serial, name, size, fpsCap, isEnabled, events 
         else downloadBlob(msg.png, screenshotFileName(nameRef.current, new Date()));
       },
       onInfo: (next) => {
-        // A new capture session (rotation, size): its own SPS / PPS and key frame follow.
-        if (next.codec === 'h264') video?.reset();
+        if (next.codec === 'h264') {
+          // A new capture session (rotation, size): its own SPS / PPS and key frame follow.
+          video?.reset();
+        } else if (video !== null) {
+          video.dispose();
+          video = null;
+        }
         setInfo(next);
       },
       onState: setState,

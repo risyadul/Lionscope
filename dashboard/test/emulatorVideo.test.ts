@@ -276,10 +276,45 @@ describe('emulator H.264 mirroring', () => {
     expect(screen.getByText(UNSUPPORTED_VIDEO_MESSAGE)).toBeTruthy();
   });
 
-  it('shows retryable videoError on repeated decoder failures for an emulator H.264 stream', async () => {
+  it('falls back to codec=png on repeated decoder failures (onFailed) for an emulator H.264 stream', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     renderEmulator();
-    const { socket } = await connectEmulatorH264();
+    const { socket: first } = await connectEmulatorH264();
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        FakeVideoDecoder.latest().fail();
+        vi.advanceTimersByTime(5000);
+      });
+    }
+    expect(first.readyState).toBe(3);
+    expect(screen.queryByText(DECODER_FAILED_MESSAGE)).toBeNull();
+    expect(FakeScreenSocket.instances).toHaveLength(2);
+    const fallback = FakeScreenSocket.latest();
+    expect(fallback.url).toMatch(/&codec=png$/);
+
+    act(() => {
+      fallback.open();
+      fallback.receiveJson(SCREEN_INFO);
+      fallback.receive(binaryMessage('frame'));
+    });
+    vi.useRealTimers();
+    await flush();
+    expect(canvas.drawImage).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Connecting to the screen…')).toBeNull();
+  });
+
+  it('keeps physical-device retryable videoError on repeated decoder failures', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    renderPhone();
+    const socket = FakeScreenSocket.latest();
+    act(() => {
+      socket.open();
+      socket.receiveJson(DEVICE_SCREEN_INFO);
+      socket.receive(videoMessage({ config: true }, 0, CONFIG_PAYLOAD));
+      socket.receive(videoMessage({ key: true }, 1000, IDR_PAYLOAD));
+    });
+    await Promise.resolve();
+    await Promise.resolve();
     for (let i = 0; i < 3; i++) {
       act(() => {
         FakeVideoDecoder.latest().fail();
@@ -291,5 +326,22 @@ describe('emulator H.264 mirroring', () => {
     expect(FakeScreenSocket.instances).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(FakeScreenSocket.instances).toHaveLength(2);
+  });
+
+  it('disposes the active video pipeline cleanly when onInfo switches from h264 to png on the same socket', async () => {
+    renderEmulator();
+    const { socket, decoder } = await connectEmulatorH264();
+    expect(decoder.state).toBe('configured');
+
+    act(() => {
+      socket.receiveJson(SCREEN_INFO);
+      socket.receive(binaryMessage('frame'));
+    });
+    await flush();
+
+    expect(decoder.state).toBe('closed');
+    expect(FakeScreenSocket.instances).toHaveLength(1);
+    expect(canvas.drawImage).toHaveBeenCalledOnce();
+    expect(screen.queryByText(DECODER_FAILED_MESSAGE)).toBeNull();
   });
 });
