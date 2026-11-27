@@ -3,6 +3,8 @@
 
     <!-- The network demo talks to sample-api.mjs on the laptop (10.0.2.2 from an emulator). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Allows testing runtime permission grants and get_notifications on Android 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".SampleApplication"
@@ -21,8 +23,17 @@
         </activity>
         <activity
             android:name=".DetailActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
+            android:exported="true"
+            android:parentActivityName=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="detail"
+                    android:scheme="lionscope" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".ComposeShopActivity"
             android:exported="true"
