@@ -56,12 +56,15 @@ after the app changes its top screen (never continuously), and the refresh butto
   - **Compatibility and fallback.** Apps on Compose < 1.9 or minified/shrunk builds report `unsupported` (visible
     header note: "Requires Compose 1.9+") and keep regular Compose hierarchy inspection unchanged; consistent with
     Compose inspection overall, recomposition tracking requires a non-minified debug build. If another Compose
-    observer (for example, Android Studio's Layout Inspector) already occupies a composition's observer slot,
-    Lionscope leaves it untouched and reports `conflict` ("Another Compose observer is already attached"). To
-    distinguish skips from recompositions without relying on hardcoded flag masks, the SDK resolves and calls
-    `RecomposeScopeImpl`'s skip/rereading getters directly and fails closed to `unsupported` if any required symbol
-    is missing or fails at runtime. When the 16,384-scope cap is reached, the snapshot sets `recompositionTruncated`
-    (`counts capped` badge) and leaves newly seen scopes' counts unavailable until **Reset**.
+    observer (for example, Android Studio's Layout Inspector) already occupies a composition's observer slot — or
+    takes over the slot after Lionscope attached — Lionscope leaves it untouched, stops reporting counts, and
+    reports `conflict` ("Another Compose observer is already attached") with a **Retry** button in the Inspector
+    header so you can re-attach on the same link once the other observer detaches. To distinguish skips from
+    recompositions without relying on hardcoded flag masks, the SDK resolves and calls `RecomposeScopeImpl`'s
+    skip/rereading getters directly and fails closed to `unsupported` if any required symbol is missing or fails at
+    runtime. When the 16,384-scope cap is reached (or a composition created after enable attaches after it has
+    already composed), the snapshot sets `recompositionTruncated` (`counts capped` badge) and keeps newly seen or
+    previously dropped scopes unavailable rather than showing partial counts until **Reset**.
   - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
     `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
     ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time

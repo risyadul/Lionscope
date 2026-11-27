@@ -129,7 +129,8 @@ releaseImplementation("com.github.risyadul.Lionscope:lionscope-noop:0.13.0")
 4. For Compose recomposition and skip counts (Compose 1.9+, works with or without a session): first establish the
    SDK link with `inspect_screen` (or `start_session`), enable tracking with
    `set_sdk_options --composeRecompositionTracking true` (checking `delivery: "applied"`), call `inspect_screen` to
-   confirm `recompositionTracking: "active"` (and optionally clear counters with `reset_compose_recompositions`),
+   confirm `recompositionTracking: "active"` (if `"conflict"`, retry `set_sdk_options --composeRecompositionTracking true`
+   once the other Compose observer detaches; optionally clear counters with `reset_compose_recompositions`),
    then reproduce the interaction and read `recompositions` and `skips` from `inspect_screen` or
    `get_inspector_selection`. Turn tracking off with `set_sdk_options --composeRecompositionTracking false` when
    done.

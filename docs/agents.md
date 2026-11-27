@@ -39,9 +39,10 @@ snapshot comes from uiautomator, without layout sources or owners. On Compose 1.
 recomposition and skip counts without starting a profiling session: first establish the SDK link (via `inspect_screen`
 or `start_session`), enable tracking with `set_sdk_options { composeRecompositionTracking: true }` (checking
 `delivery: "applied"` rather than `"pending"`), confirm `snapshot.recompositionTracking === "active"` with
-`inspect_screen` (and optionally `reset_compose_recompositions`), then reproduce the interaction and read
-per-composable `recompositions` and `skips` from `inspect_screen` or `get_inspector_selection` (turn tracking back
-off when finished). With device control, SDK 0.9.0+ and a profiling
+`inspect_screen` (and optionally `reset_compose_recompositions`; if `recompositionTracking` reports `"conflict"`,
+retry `set_sdk_options { composeRecompositionTracking: true }` once the other Compose observer detaches), then
+reproduce the interaction and read per-composable `recompositions` and `skips` from `inspect_screen` or
+`get_inspector_selection` (turn tracking back off when finished). With device control, SDK 0.9.0+ and a profiling
 session the agent can also try its fix on the running app: `set_view_property { nodeId, property: "padding", value: [16, 8, 16, 8] }`
 answers with the element as the next snapshot shows it, and `revert_view_properties` undoes it (the edits are
 temporary either way; see [Editing views live](features/layout-inspector.md#editing-views-live)).

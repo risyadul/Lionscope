@@ -99,16 +99,37 @@ test('Compose recomposition controls show visible reasons for disabled/conflict/
     // Touch users cannot hover tooltips: the reason must be visible text in the header.
     await expect(page.locator('.inspect-head .inspect-hint')).toBeVisible();
     await expect(page.locator('.inspect-head .inspect-hint')).toContainText(description);
+    const retry = page.getByRole('button', { name: 'Retry', exact: true });
+    if (state === 'conflict') {
+      await expect(retry).toBeVisible();
+      await expect(retry).toBeEnabled();
+      if (info.project.use.hasTouch) {
+        const retryBox = await retry.evaluate((el) => el.getBoundingClientRect());
+        expect(retryBox.height).toBeGreaterThanOrEqual(44);
+      }
+    } else {
+      await expect(retry).toHaveCount(0);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(
       1,
     );
   }
 
   await page.screenshot({
-    path: info.outputPath('inspector-recompositions-unsupported.png'),
+    path: info.outputPath('inspector-recompositions-conflict.png'),
     fullPage: true,
     animations: 'disabled',
   });
+
+  // Clicking Retry on conflict re-requests tracking and recovers to active on the same link.
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Recompositions', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Recompositions', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByRole('button', { name: 'Reset', exact: true })).toBeEnabled();
 
   // Capped / truncated tracking exposes a visible warning badge, header hint, and unavailable count message.
   await page.goto('/?scenario=inspector&state=truncated');

@@ -186,6 +186,20 @@ export const InspectorPanel = memo(function InspectorPanel() {
                 <span id={resetDescId} className="sr-only">
                   {resetDesc}
                 </span>
+                {tracking === 'conflict' && (
+                  <button
+                    type="button"
+                    className="btn inspect-recomp-retry"
+                    title="Retry attaching Compose recomposition tracking once the other observer detaches"
+                    disabled={controller.isCapturing || !controller.canInspect}
+                    onClick={(event) => {
+                      keepFocusNear(event, '.inspect-recomp', '.inspect-recomp-toggle');
+                      controller.setRecompositionTracking(true);
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
               </div>
             )}
             <button

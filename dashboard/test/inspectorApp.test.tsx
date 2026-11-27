@@ -774,6 +774,57 @@ describe('badges', () => {
     expect(screen.getByText('truncated at 5,000 nodes').getAttribute('title')).toBeNull();
     expect(screen.getByText('uiautomator — Compose screen')).toBeTruthy();
   });
+
+  it('offers Retry on a Compose observer conflict and sends setComposeRecompositionTracking(true) to recover', async () => {
+    const { push, sent } = setup();
+    await push(
+      snapshotMsg({
+        id: 'snap-conflict',
+        recompositionTracking: 'conflict',
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400]),
+          node(1, 0, [0, 0, 1080, 2400], {
+            className: 'CatalogScreen',
+            composable: { file: 'CatalogScreen.kt', line: 10 },
+          }),
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
+    const toggle = screen.getByRole('button', { name: 'Recompositions' });
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      screen.getByText('Recompositions unavailable: Another Compose observer is already attached.'),
+    ).toBeTruthy();
+
+    fireEvent.click(retry);
+    expect(sent.at(-1)).toEqual({
+      type: 'setComposeRecompositionTracking',
+      serial: 'emulator-5554',
+      enabled: true,
+    });
+
+    await push(
+      snapshotMsg({
+        id: 'snap-recovered',
+        recompositionTracking: 'active',
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400]),
+          node(1, 0, [0, 0, 1080, 2400], {
+            className: 'CatalogScreen',
+            composable: { file: 'CatalogScreen.kt', line: 10, recompositions: 1, skips: 0 },
+          }),
+        ],
+      }),
+    );
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Recompositions' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.getByRole('button', { name: 'Recompositions' }).getAttribute('aria-pressed')).toBe('true');
+  });
 });
 
 describe('rendering cost', () => {
