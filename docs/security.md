@@ -15,8 +15,22 @@
   Typed text never appears in errors or logs. Device-control tools follow the enabled-by-default device permission and client restrictions; disabled server
   permissions cannot be overridden by legacy allow headers. These settings are not a security boundary against
   local processes (which can already run adb). App data in tool results is marked as untrusted.
-- Device serials and package names are checked against strict patterns and passed to `adb` as argument arrays,
-  never through a host shell.
+- Device serials, package names, permission names, deep-link URIs, and host APK paths are checked against strict
+  patterns and passed to `adb` as argument arrays, never through a host shell (with POSIX single-quoting for remote
+  device shell metacharacters). Failed ADB calls sanitize `-d` intent URIs and redact credentials in stderr before
+  logging or returning errors. `install_apk` accepts only an absolute path to an existing regular `.apk` file on the
+  host (rejecting symlinks), opens the descriptor once, stages a private temporary snapshot for `adb install`, and
+  deletes it afterwards. `clear_app_data`, `set_app_permissions`, and `get_notifications` are restricted to the
+  profiling session's target device and package (`clear_app_data` also refuses all system packages;
+  `set_app_permissions` validates every permission against declared permissions and Android's runtime/dangerous class
+  before applying changes). `get_notifications` requests a package-filtered active dump, redacts credentials with the
+  same rules as `search_logcat`, and marks all app-derived notification text as untrusted data. `set_orientation` and
+  `set_display_options` record original device values before the first change and restore them automatically on
+  `stop_session`, emulator shutdown, or server close (or explicitly via `restore_device_settings`). `pinch` runs
+  through an exclusive multi-touch lease on the active mirror session (scrcpy or emulator gRPC) and lifts accepted
+  down pointers in cleanup. All mutating E2E tools and screen/notification readers require enabled device-control
+  permission and respect `--disable-device-control` (`wait_for_screen` without device control is restricted to the
+  active session's device and package).
 - The SDK gateway (TCP, `127.0.0.1` only) requires a valid `hello` as the first line within 1 s, closes
   HTTP-looking requests (browsers can POST to localhost), rate-limits hellos and lines, caps line size and
   connections, and answers nothing (not even `welcome`) until the hello's PID is verified with `pidof` on the

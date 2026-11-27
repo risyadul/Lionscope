@@ -27,12 +27,38 @@ export const stopSessionTool = defineTool({
   name: 'stop_session',
   title: 'Stop profiling',
   description:
-    'Stops the profiling session. Its recording stays readable (the read tools then use the window ending at the last sample) until a new session starts.',
+    'Stops the profiling session and automatically restores any device orientation or display options changed during the session (reporting restored, outstanding, and any restore errors). Its recording stays readable (the read tools then use the window ending at the last sample) until a new session starts.',
   access: 'session',
   input: z.object({}),
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async run(_args, ctx) {
-    return { data: { session: sessionView(await ctx.sessions.stopSession()) } };
+    const serial = ctx.sessions.getSessionState().serial;
+    const session = await ctx.sessions.stopSession();
+    let deviceSettings:
+      { restored: string[]; outstanding: string[]; errors?: string[]; note?: string } | undefined;
+    if (serial) {
+      // Unconditional restore barrier: waits behind any setter whose first original-value read is still in flight.
+      const outcome = await ctx.deviceSettings.restore(serial);
+      if (
+        outcome.settings.length > 0 ||
+        outcome.outstanding.length > 0 ||
+        outcome.errors.length > 0 ||
+        outcome.note
+      ) {
+        deviceSettings = {
+          restored: outcome.settings,
+          outstanding: outcome.outstanding,
+          ...(outcome.errors.length > 0 ? { errors: outcome.errors } : {}),
+          ...(outcome.note ? { note: outcome.note } : {}),
+        };
+      }
+    }
+    return {
+      data: {
+        session: sessionView(session),
+        ...(deviceSettings ? { deviceSettings } : {}),
+      },
+    };
   },
 });
 

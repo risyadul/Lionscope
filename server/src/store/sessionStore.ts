@@ -259,6 +259,12 @@ export class SessionStore {
     return span.screen?.name ?? null;
   }
 
+  /** Currently active SDK screen from the open span (`end === null`), or null when none is open. */
+  currentScreen(): ScreenRef | null {
+    const last = this.screens.last()?.span;
+    return last && last.end === null ? last.screen : null;
+  }
+
   /** The newest `ts` of a log line already dropped (window, line or byte cap); null while none was. */
   logsDroppedThrough(): number | null {
     return this.buffers.logs.droppedThroughTs;

@@ -97,16 +97,26 @@ class McpBackend {
     throw new Error(`Could not start or attach to a Lionscope server on port ${port}`);
   }
 
-  readonly invoke: ToolInvoker = async (name, args) => {
+  readonly invoke: ToolInvoker = async (name, args, extra) => {
     const local = this.server;
     if (local) {
-      return callTool(local.agent, name, args, this.deviceControl, { networkBodies: this.networkBodies });
+      return callTool(local.agent, name, args, this.deviceControl, {
+        networkBodies: this.networkBodies,
+        ...(extra?.signal ? { signal: extra.signal } : {}),
+      });
+    }
+    if (extra?.signal?.aborted) {
+      return { ok: false, code: 'failed', error: 'Cancelled' };
     }
     const outcome = await callRemoteTool(this.config.port, name, args, {
       deviceControl: this.deviceControl,
       networkBodies: this.networkBodies,
+      ...(extra?.signal ? { signal: extra.signal } : {}),
     });
     if (outcome.ok || outcome.code !== 'unreachable') return outcome;
+    if (extra?.signal?.aborted) {
+      return { ok: false, code: 'failed', error: 'Cancelled' };
+    }
     if (findTool(name)?.access === 'storage_write') {
       return {
         ...outcome,
@@ -121,7 +131,10 @@ class McpBackend {
     } catch (error) {
       return { ok: false, code: 'failed', error: errorMessage(error) };
     }
-    return this.invoke(name, args);
+    if (extra?.signal?.aborted) {
+      return { ok: false, code: 'failed', error: 'Cancelled' };
+    }
+    return this.invoke(name, args, extra);
   };
 
   shutdown(reason: string): void {

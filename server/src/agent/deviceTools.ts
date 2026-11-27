@@ -133,7 +133,9 @@ export async function toDevicePoints(
   space: Partial<Size>,
   points: readonly { x: number; y: number }[],
 ): Promise<{ x: number; y: number }[]> {
-  const cached = ctx.screenshots.get(serial);
+  const rawCached = ctx.screenshots.get(serial);
+  const cached =
+    rawCached && (!rawCached.token || ctx.diffBaselines.isCurrent(rawCached.token)) ? rawCached : undefined;
   const explicit =
     space.width !== undefined && space.height !== undefined
       ? { width: space.width, height: space.height }
@@ -182,12 +184,28 @@ export const screenshotTool = defineTool({
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async run({ serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
+    const baselineToken = ctx.diffBaselines.token(serial);
     const full = await screencap(ctx, serial);
     const device = pngSize(full);
     const decoded = decodeScreenshot(full);
     // A capture that failed to decode is decoded (and fails) in scalePng as before, when it has to be scaled.
     const { png, size } = scalePng(full, SCREENSHOT_SHORT_EDGE, decoded ?? undefined);
-    ctx.screenshots.set(serial, { shot: size, device });
+    const tokenCurrent = ctx.diffBaselines.isCurrent(baselineToken);
+    if (tokenCurrent) {
+      ctx.screenshots.set(serial, { shot: size, device, token: baselineToken });
+    }
+    const retained =
+      decoded && tokenCurrent
+        ? ctx.diffBaselines.setScreenshot(
+            serial,
+            { at: ctx.now(), image: decoded, shotSize: size },
+            baselineToken,
+          )
+        : null;
+    const baselineNote =
+      retained && !retained.saved && retained.reason === 'too_large'
+        ? `Decoded screenshot (${retained.bytes} bytes) exceeds baseline budget (${retained.maxBytes} bytes): not saved as diff_screenshot baseline.`
+        : null;
     return {
       data: {
         serial,
@@ -199,6 +217,7 @@ export const screenshotTool = defineTool({
         ...(decoded
           ? screenStats(decoded)
           : { meanLuminance: null, nonBlackRatio: null, dominantRatio: null, blank: null }),
+        ...(baselineNote ? { note: baselineNote } : {}),
       },
       image: { mimeType: 'image/png', data: png },
     };
@@ -217,7 +236,7 @@ const readBackInput = z
  * `insets`' system bars, or null with a note when the screen can't be compared. A screenshot that can't be taken
  * or read before the input fails the call (nothing was sent); nothing after the input does.
  */
-async function withReadBack(
+export async function withReadBack(
   ctx: AgentContext,
   serial: string,
   readBack: boolean,
@@ -467,22 +486,63 @@ export const shutdownEmulatorTool = defineTool({
   name: 'shutdown_emulator',
   title: 'Shut down an emulator',
   description:
-    'Shuts down a running emulator (ending a profiling session on it first), saving its Quick Boot snapshot. Calling it again while it is shutting down (or once it is off) changes nothing; force: true kills one that is stuck shutting down. One this server did not boot (started from Android Studio or a terminal) needs confirm: true; ask the user before doing that. Device control.',
+    'Shuts down a running emulator (ending a profiling session and restoring modified device settings in one serialized operation before shutdown), saving its Quick Boot snapshot. Calling it again while it is shutting down (or once it is off) changes nothing; force: true kills an emulator stuck shutting down and also overrides failed device-settings cleanup (reporting any outstanding settings in deviceSettings). One this server did not boot (started from Android Studio or a terminal) needs confirm: true; ask the user before doing that. Device control.',
   access: 'device',
   input: z.object({
     avdName: avdInput,
     confirm: z.boolean().default(false).describe('Required for an emulator this server did not boot.'),
-    force: z.boolean().default(false).describe('Kill an emulator that is stuck shutting down.'),
+    force: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Kill an emulator that is stuck shutting down, or proceed with shutdown even if restoring modified device settings fails.',
+      ),
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async run({ avdName, confirm, force }, ctx) {
-    const state = emulatorView(ctx, avdName)?.state;
+    const current = emulatorView(ctx, avdName);
+    const state = current?.state;
     // A repeated request would force-kill it in the emulator manager: only `force` does that here.
     if (state === 'off' || (state === 'shutting_down' && !force)) {
-      return { data: { emulator: emulatorView(ctx, avdName), changed: false } };
+      return { data: { emulator: current, changed: false } };
     }
-    await ctx.emulators.shutdown(avdName, confirm);
+    const cleanup = force
+      ? await ctx.emulators.shutdown(avdName, confirm, { force: true })
+      : await ctx.emulators.shutdown(avdName, confirm);
+    let deviceSettings:
+      { restored: string[]; outstanding: string[]; errors?: string[]; note?: string } | undefined;
+    if (
+      cleanup &&
+      typeof cleanup === 'object' &&
+      'settings' in cleanup &&
+      'outstanding' in cleanup &&
+      'errors' in cleanup &&
+      Array.isArray(cleanup.settings) &&
+      Array.isArray(cleanup.outstanding) &&
+      Array.isArray(cleanup.errors)
+    ) {
+      const note = 'note' in cleanup && typeof cleanup.note === 'string' ? cleanup.note : undefined;
+      if (
+        cleanup.settings.length > 0 ||
+        cleanup.outstanding.length > 0 ||
+        cleanup.errors.length > 0 ||
+        note
+      ) {
+        deviceSettings = {
+          restored: cleanup.settings.map(String),
+          outstanding: cleanup.outstanding.map(String),
+          ...(cleanup.errors.length > 0 ? { errors: cleanup.errors.map(String) } : {}),
+          ...(note ? { note } : {}),
+        };
+      }
+    }
     invalidateUi(ctx);
-    return { data: { emulator: emulatorView(ctx, avdName), changed: true } };
+    return {
+      data: {
+        emulator: emulatorView(ctx, avdName),
+        changed: true,
+        ...(deviceSettings ? { deviceSettings } : {}),
+      },
+    };
   },
 });

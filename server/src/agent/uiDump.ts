@@ -9,12 +9,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { adbShell } from '../adb/adb.ts';
 import { errorMessage } from '../log.ts';
 import { parseWmSize, rotate, sameSize, SCREENSHOT_SHORT_EDGE } from './display.ts';
+import type { BaselineToken } from './diffBaselines.ts';
 import { fitShortEdge } from './png.ts';
 import { ToolError } from './tool.ts';
 import type { AgentContext } from './tool.ts';
 import { buildUiTree } from './uiTree.ts';
 import type { UiTree } from './uiTree.ts';
-import { UiHelperError } from './uiHelper.ts';
+import { UiHelperAbortError, UiHelperError } from './uiHelper.ts';
 import { parseUiXml, UiXmlError } from './uiXml.ts';
 
 const DUMP_TIMEOUT_MS = 20_000;
@@ -116,7 +117,9 @@ async function uiautomatorAttempt(
   serial: string,
   withActivity: boolean,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Dump | string> {
+  if (signal?.aborted) throw new ToolError('Wait cancelled');
   const token = randomBytes(6).toString('hex');
   const file = `/data/local/tmp/lionscope-ui-${token}.xml`;
   const display = displayCommand(token, withActivity);
@@ -124,10 +127,11 @@ async function uiautomatorAttempt(
   const command = `uiautomator dump ${file} 2>&1; echo ${markers[0]}; cat ${file} 2>/dev/null; rm -f ${file}; ${display.command}`;
   let output: string;
   try {
-    output = await adbShell(ctx.adb, serial, command, { timeoutMs });
+    output = await adbShell(ctx.adb, serial, command, { timeoutMs, signal });
   } catch (error) {
-    // Killed on the timeout: the dump may still land on the device.
+    // Killed on timeout or abort: the dump may still land on the device.
     removeFile(ctx, serial, file);
+    if (signal?.aborted) throw new ToolError('Wait cancelled');
     throw shellError(error);
   }
   const [status = '', xml = '', wm = '', top = ''] = sections(output, markers);
@@ -145,7 +149,9 @@ async function helperAttempt(
   withActivity: boolean,
   timeoutMs: number,
   failures: string[],
+  signal?: AbortSignal,
 ): Promise<Dump | string | null> {
+  if (signal?.aborted) throw new ToolError('Wait cancelled');
   const helper = ctx.uiHelper;
   if (!helper) return null;
   const unavailable = helper.unavailable(serial);
@@ -156,13 +162,14 @@ async function helperAttempt(
   if (timeoutMs < HELPER_START_MIN_MS && !helper.isRunning(serial)) return null;
   const token = randomBytes(6).toString('hex');
   const display = displayCommand(token, withActivity);
-  const shell = adbShell(ctx.adb, serial, display.command, { timeoutMs });
+  const shell = adbShell(ctx.adb, serial, display.command, { timeoutMs, signal });
   // Settled even when the helper fails first and nobody waits for it.
   shell.catch(() => undefined);
   let dump;
   try {
-    dump = await helper.dump(serial, Math.min(HELPER_DUMP_TIMEOUT_MS, timeoutMs));
+    dump = await helper.dump(serial, Math.min(HELPER_DUMP_TIMEOUT_MS, timeoutMs), signal);
   } catch (error) {
+    if (error instanceof UiHelperAbortError || signal?.aborted) throw new ToolError('Wait cancelled');
     if (!(error instanceof UiHelperError)) throw error;
     failures.push(error.message);
     return null;
@@ -172,25 +179,29 @@ async function helperAttempt(
   try {
     output = await shell;
   } catch (error) {
+    if (signal?.aborted) throw new ToolError('Wait cancelled');
     throw shellError(error);
   }
   const [, wm = '', top = ''] = sections(output, display.markers);
   return readDump(dump.xml, wm, top);
 }
 
-/** One attempt: the helper's dump, else uiautomator's, bounded by `deadline`. */
+/** One attempt: the helper's dump, else uiautomator's, bounded by `deadline` and `signal`. */
 async function attempt(
   ctx: AgentContext,
   serial: string,
   withActivity: boolean,
   deadline: number,
   failures: string[],
+  signal?: AbortSignal,
 ): Promise<Dump | string> {
+  if (signal?.aborted) throw new ToolError('Wait cancelled');
   const timeout = () => Math.floor(Math.min(DUMP_TIMEOUT_MS, deadline - performance.now()));
-  const fromHelper = await helperAttempt(ctx, serial, withActivity, timeout(), failures);
+  const fromHelper = await helperAttempt(ctx, serial, withActivity, timeout(), failures, signal);
   if (fromHelper !== null) return fromHelper;
+  if (signal?.aborted) throw new ToolError('Wait cancelled');
   if (timeout() < MIN_ATTEMPT_MS) throw new ToolError(UI_DUMP_TIMEOUT);
-  return uiautomatorAttempt(ctx, serial, withActivity, timeout());
+  return uiautomatorAttempt(ctx, serial, withActivity, timeout(), signal);
 }
 
 function readDump(xml: string, wm: string, top: string): Dump | string {
@@ -209,14 +220,18 @@ function readDump(xml: string, wm: string, top: string): Dump | string {
 }
 
 /** Remembers the dump; screenshot coordinates of that size map onto it unless a screenshot of this size exists. */
-function remember(ctx: AgentContext, serial: string, tree: UiTree): void {
-  const listing = ctx.uiDumps.get(serial)?.listing ?? null;
-  ctx.uiDumps.set(serial, { at: performance.now(), tree, listing });
+function remember(ctx: AgentContext, serial: string, tree: UiTree, token: BaselineToken): void {
+  const previous = ctx.uiDumps.get(serial);
+  const listing =
+    previous && (!previous.token || ctx.diffBaselines.isCurrent(previous.token)) ? previous.listing : null;
+  ctx.uiDumps.set(serial, { at: performance.now(), tree, listing, token });
   const shot = ctx.screenshots.get(serial);
-  if (!shot || !sameSize(shot.device, tree.screen)) {
+  const shotValid = shot && (!shot.token || ctx.diffBaselines.isCurrent(shot.token));
+  if (!shotValid || !sameSize(shot.device, tree.screen)) {
     ctx.screenshots.set(serial, {
       shot: fitShortEdge(tree.screen, SCREENSHOT_SHORT_EDGE),
       device: tree.screen,
+      token,
     });
   }
 }
@@ -228,8 +243,16 @@ function remember(ctx: AgentContext, serial: string, tree: UiTree): void {
 export async function dumpUi(
   ctx: AgentContext,
   serial: string,
-  options: { withActivity?: boolean; deadline?: number } = {},
+  options: {
+    withActivity?: boolean;
+    deadline?: number;
+    signal?: AbortSignal | undefined;
+    token?: BaselineToken;
+  } = {},
 ): Promise<Dump> {
+  const signal = options.signal ?? ctx.signal;
+  if (signal?.aborted) throw new ToolError('Wait cancelled');
+  const captureToken = options.token ?? ctx.diffBaselines.token(serial);
   const deadline = options.deadline ?? performance.now() + 60_000;
   /** Why the helper gave no dump in this call: named when uiautomator fails too. */
   const failures: string[] = [];
@@ -239,7 +262,21 @@ export async function dumpUi(
   };
   let lastStatus = '';
   for (let i = 0; i <= DUMP_RETRY_MS.length; i++) {
-    if (i > 0) await sleep(DUMP_RETRY_MS[i - 1]);
+    if (signal?.aborted) throw new ToolError('Wait cancelled');
+    if (i > 0) {
+      const waitMs = Math.min(DUMP_RETRY_MS[i - 1] ?? 0, Math.max(0, deadline - performance.now()));
+      if (waitMs > 0) {
+        try {
+          await sleep(waitMs, undefined, signal ? { signal } : undefined);
+        } catch (error) {
+          if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+            throw new ToolError('Wait cancelled');
+          }
+          throw error;
+        }
+      }
+    }
+    if (signal?.aborted) throw new ToolError('Wait cancelled');
     const remaining = deadline - performance.now();
     if (remaining < MIN_ATTEMPT_MS) {
       if (i === 0) throw new ToolError(UI_DUMP_TIMEOUT);
@@ -247,14 +284,19 @@ export async function dumpUi(
     }
     let result;
     try {
-      result = await attempt(ctx, serial, options.withActivity === true, deadline, failures);
+      result = await attempt(ctx, serial, options.withActivity === true, deadline, failures, signal);
     } catch (error) {
+      if (signal?.aborted) throw new ToolError('Wait cancelled');
       if (error instanceof ToolError && failures.length > 0)
         throw new ToolError(`${error.message}${helperNote()}`);
       throw error;
     }
+    if (signal?.aborted) throw new ToolError('Wait cancelled');
     if (typeof result !== 'string') {
-      remember(ctx, serial, result.tree);
+      // Never publish a stale tree or coordinate mapping across a device/session change.
+      if (ctx.diffBaselines.isCurrent(captureToken)) {
+        remember(ctx, serial, result.tree, captureToken);
+      }
       return result;
     }
     lastStatus = result;
@@ -264,9 +306,15 @@ export async function dumpUi(
   );
 }
 
-/** The latest dump if it is under a second old, else a new one. */
+/** The latest dump if it is under a second old and still belongs to the current device/session, else a new one. */
 export async function recentTree(ctx: AgentContext, serial: string, deadline?: number): Promise<UiTree> {
   const cached = ctx.uiDumps.get(serial);
-  if (cached && performance.now() - cached.at <= FRESH_DUMP_MS) return cached.tree;
+  if (
+    cached &&
+    performance.now() - cached.at <= FRESH_DUMP_MS &&
+    (!cached.token || ctx.diffBaselines.isCurrent(cached.token))
+  ) {
+    return cached.tree;
+  }
   return (await dumpUi(ctx, serial, { deadline })).tree;
 }

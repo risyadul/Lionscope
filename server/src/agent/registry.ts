@@ -4,6 +4,13 @@ import type { StorageConsent } from '@lionscope/protocol';
 import { PublicError } from '../errors.ts';
 import { errorMessage, log } from '../log.ts';
 import {
+  clearAppDataTool,
+  installApkTool,
+  listAppPermissionsTool,
+  openDeepLinkTool,
+  setAppPermissionsTool,
+} from './appSetupTools.ts';
+import {
   bootEmulatorTool,
   launchAppTool,
   pressKeyTool,
@@ -13,6 +20,9 @@ import {
   swipeTool,
   tapTool,
 } from './deviceTools.ts';
+import { diffScreenshotTool, diffUiTreeTool } from './diffTools.ts';
+import { restoreDeviceSettingsTool, setDisplayOptionsTool, setOrientationTool } from './environmentTools.ts';
+import { dragTool, longPressElementTool, pinchTool } from './gestureTools.ts';
 import { runInputsTool } from './inputTools.ts';
 import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
 import { clearLocationTool, getLocationTool, setLocationTool } from './locationTools.ts';
@@ -26,6 +36,7 @@ import {
   networkTool,
   setNetworkMockTool,
 } from './networkTools.ts';
+import { getNotificationsTool } from './notificationTools.ts';
 import {
   bringToFrontTool,
   getActivityInstanceTool,
@@ -38,6 +49,7 @@ import { executeStorageSqlTool, queryStorageSqlTool } from './storageSqlTools.ts
 import { sdkOptionsTool, startSessionTool, stopSessionTool } from './sessionTools.ts';
 import { strictModeTool, stallsTool } from './stallTools.ts';
 import { listAppsTool, statusTool } from './statusTools.ts';
+import { waitForIdleTool, waitForNetworkTool, waitForScreenTool } from './syncTools.ts';
 import { scrollToTool, tapElementTool, typeTextTool, uiTreeTool, waitForTool } from './uiTools.ts';
 import { ToolError } from './tool.ts';
 import type { AgentBaseContext, AgentTool } from './tool.ts';
@@ -45,6 +57,7 @@ import type { AgentBaseContext, AgentTool } from './tool.ts';
 export const AGENT_TOOLS: readonly AgentTool[] = [
   statusTool,
   listAppsTool,
+  listAppPermissionsTool,
   summaryTool,
   screensTool,
   stallsTool,
@@ -58,6 +71,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   savedStateTool,
   networkTool,
   networkRequestTool,
+  waitForNetworkTool,
+  waitForScreenTool,
   getLocationTool,
   startSessionTool,
   stopSessionTool,
@@ -65,19 +80,33 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   markTool,
   screenshotTool,
   uiTreeTool,
+  diffUiTreeTool,
+  diffScreenshotTool,
+  getNotificationsTool,
   inspectScreenTool,
   setViewPropertyTool,
   revertViewPropertiesTool,
   tapElementTool,
+  longPressElementTool,
   waitForTool,
+  waitForIdleTool,
   scrollToTool,
   tapTool,
   swipeTool,
+  dragTool,
+  pinchTool,
   typeTextTool,
   pressKeyTool,
   runInputsTool,
   launchAppTool,
   stopAppTool,
+  openDeepLinkTool,
+  setAppPermissionsTool,
+  clearAppDataTool,
+  installApkTool,
+  setOrientationTool,
+  setDisplayOptionsTool,
+  restoreDeviceSettingsTool,
   getActivityInstanceTool,
   setDontKeepActivitiesTool,
   simulateProcessDeathTool,
@@ -152,10 +181,12 @@ function invalidArguments(error: z.ZodError): string {
     .join('; ');
 }
 
-/** Per-call permissions beyond device control. */
+/** Per-call permissions and cancellation beyond device control. */
 export interface CallOptions {
   /** --allow-network-bodies: get_network_request returns body texts. */
   networkBodies?: boolean;
+  /** Optional caller abort signal propagated into polling/wait tools. */
+  signal?: AbortSignal | undefined;
 }
 
 /** Validates and runs one call. Never throws: failures come back as `{ ok: false }` with a message for the caller. */
@@ -208,6 +239,7 @@ export async function callTool(
       ...ctx,
       deviceControl,
       networkBodies: (options.networkBodies ?? false) && (ctx.permissions?.().networkBodies ?? true),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
     return image
       ? { ok: true, result: data, image: { mimeType: image.mimeType, data: image.data.toString('base64') } }

@@ -1,6 +1,11 @@
 package io.github.risyadul.lionscope.sample
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -21,11 +26,42 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         view.findViewById<View>(R.id.show_dialog).setOnClickListener {
             PromoDialogFragment().show(childFragmentManager, PromoDialogFragment.TAG)
         }
+        view.findViewById<View>(R.id.post_notification).setOnClickListener {
+            postSampleNotification()
+        }
         view.findViewById<ComposeView>(R.id.compose_card).setContent {
             ComposeNoteCard(onOpenShop = { startActivity(Intent(requireContext(), ComposeShopActivity::class.java)) })
         }
         val results = view.findViewById<ViewGroup>(R.id.off_main_results)
         view.findViewById<View>(R.id.inflate_off_main).setOnClickListener { inflateOffMain(results) }
+    }
+
+    private fun postSampleNotification() {
+        val context = requireContext()
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                getString(R.string.sample_notification_channel),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            )
+            manager.createNotificationChannel(channel)
+            Notification.Builder(context, NOTIFICATION_CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(getString(R.string.sample_notification_title))
+            .setContentText(getString(R.string.sample_notification_text))
+            .setAutoCancel(true)
+            .build()
+        try {
+            manager.notify(SAMPLE_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // POST_NOTIFICATIONS not granted on Android 13+.
+        }
     }
 
     /**
@@ -46,5 +82,10 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
                 results.addView(note)
             }
         }.start()
+    }
+
+    private companion object {
+        const val NOTIFICATION_CHANNEL_ID = "lionscope_sample"
+        const val SAMPLE_NOTIFICATION_ID = 1001
     }
 }

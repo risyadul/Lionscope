@@ -48,6 +48,11 @@ export class UiHelperError extends Error {
 /** The helper process ended while it was needed: worth one restart. */
 class UiHelperCrash extends UiHelperError {}
 
+/** Caller cancelled the request before the helper completed; does not put the helper into backoff. */
+export class UiHelperAbortError extends Error {
+  override name = 'UiHelperAbortError';
+}
+
 export const HELPER_BUSY = 'another UI automation (Appium, a uiautomator test or dump) is connected';
 export const HELPER_CONNECT = 'it could not connect to the accessibility service';
 export const HELPER_NO_START = 'it did not start';
@@ -100,7 +105,9 @@ async function pushJar(
   jar: Buffer,
   devicePath: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw new UiHelperAbortError('cancelled');
   const dir = await mkdtemp(path.join(tmpdir(), 'lionscope-ui-helper-'));
   try {
     const copy = path.join(dir, UI_HELPER_JAR_NAME);
@@ -108,8 +115,10 @@ async function pushJar(
     await execBinary(adb, ['-s', serial, 'push', copy, devicePath], {
       timeoutMs: Math.max(1, Math.min(PUSH_TIMEOUT_MS, Math.floor(timeoutMs))),
       maxBytes: PUSH_OUTPUT_BYTES,
+      ...(signal ? { signal } : {}),
     });
   } catch (error) {
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     log.warn(`Pushing the UI helper to ${serial} failed: ${errorMessage(error)}`);
     throw new UiHelperError(HELPER_NO_PUSH);
   } finally {
@@ -143,6 +152,7 @@ class HelperProcess {
   readonly devicePath = devicePathFor(this.token);
   private child: ChildProcessLike | null = null;
   private exited = false;
+  private isReady = false;
   private readonly exitWaiters = new Set<() => void>();
   private buffer = '';
   /** The READY line, then each response. */
@@ -163,11 +173,18 @@ class HelperProcess {
     return this.child !== null && !this.exited && this.stopping === null;
   }
 
-  async start(jar: Buffer, timeoutMs: number): Promise<void> {
+  /** True only after `READY <protocol>` succeeded and the process is still alive and not stopping. */
+  get readyForRequests(): boolean {
+    return this.alive && this.isReady;
+  }
+
+  async start(jar: Buffer, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     const deadline = performance.now() + timeoutMs;
-    await pushJar(this.adb, this.serial, jar, this.devicePath, timeoutMs);
+    await pushJar(this.adb, this.serial, jar, this.devicePath, timeoutMs, signal);
     // Stopped (the server is closing) while the jar was on its way: nothing is started.
     if (this.stopping) throw new UiHelperError(HELPER_CLOSED);
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     const remaining = deadline - performance.now();
     if (remaining <= 0) throw new UiHelperError(HELPER_TIMEOUT);
     // The token is an argument only so that stop() can find the process (pkill -f); the helper ignores it.
@@ -200,17 +217,21 @@ class HelperProcess {
       log.warn(`UI helper on ${this.serial}: ${error.message}`);
       this.onExit();
     });
-    const line = await this.awaitLine(null, remaining);
-    if (line === `READY ${UI_HELPER_PROTOCOL}`) return;
+    const line = await this.awaitLine(null, remaining, undefined, signal);
+    if (line === `READY ${UI_HELPER_PROTOCOL}`) {
+      this.isReady = true;
+      return;
+    }
     throw new UiHelperError(
       line === 'ERR - busy' ? HELPER_BUSY : line === 'ERR - connect' ? HELPER_CONNECT : HELPER_NO_START,
     );
   }
 
   /** The dump, or null for no active window; throws UiHelperError (UiHelperCrash when the process ended). */
-  async dump(timeoutMs: number): Promise<HelperDump> {
+  async dump(timeoutMs: number, signal?: AbortSignal): Promise<HelperDump> {
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     const nonce = randomBytes(8).toString('hex');
-    const line = await this.awaitLine(nonce, timeoutMs, `dump ${nonce}\n`);
+    const line = await this.awaitLine(nonce, timeoutMs, `dump ${nonce}\n`, signal);
     const ok = `OK ${nonce} `;
     if (line.startsWith(ok)) return { xml: line.slice(ok.length) };
     if (line === `ERR ${nonce} no-root`) return null;
@@ -218,12 +239,25 @@ class HelperProcess {
   }
 
   /** The next line answering `nonce` (null: the READY line), after writing `request`. */
-  private awaitLine(nonce: string | null, timeoutMs: number, request?: string): Promise<string> {
+  private awaitLine(
+    nonce: string | null,
+    timeoutMs: number,
+    request?: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new UiHelperAbortError('cancelled'));
+        return;
+      }
       if (!this.alive) {
         reject(new UiHelperCrash(HELPER_CRASHED));
         return;
       }
+      const onAbort = () => {
+        settle();
+        reject(new UiHelperAbortError('cancelled'));
+      };
       const timer = setTimeout(
         () => {
           settle();
@@ -233,9 +267,11 @@ class HelperProcess {
       );
       const settle = () => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         if (nonce === null) this.ready = null;
         else this.pending = null;
       };
+      signal?.addEventListener('abort', onAbort, { once: true });
       const waiter: Pending = {
         nonce: nonce ?? '',
         resolve: (line) => {
@@ -284,6 +320,7 @@ class HelperProcess {
   private onExit(): void {
     if (this.exited) return;
     this.exited = true;
+    this.isReady = false;
     this.ready?.reject(new UiHelperCrash(HELPER_NO_START));
     this.pending?.reject(new UiHelperCrash(HELPER_CRASHED));
     for (const waiter of this.exitWaiters) waiter();
@@ -307,6 +344,7 @@ class HelperProcess {
 
   /** Idempotent: `exit`, then a kill (also on the device, by token) if needed, and the jar removed. */
   stop(): Promise<void> {
+    this.isReady = false;
     this.stopping ??= this.cleanup();
     return this.stopping;
   }
@@ -330,6 +368,50 @@ class HelperProcess {
       () => undefined,
     );
   }
+}
+
+/** Waits for `previous` to settle, rejecting immediately if `signal` aborts or `deadline` expires first. */
+function waitForTurn(previous: Promise<unknown>, deadline: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new UiHelperAbortError('cancelled'));
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) return Promise.reject(new UiHelperError(HELPER_TIMEOUT));
+  return new Promise<void>((resolve, reject) => {
+    let done = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new UiHelperAbortError('cancelled'));
+    };
+    const timer = setTimeout(
+      () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        reject(new UiHelperError(HELPER_TIMEOUT));
+      },
+      Math.max(0, remaining),
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    void previous.then(
+      () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve();
+      },
+      () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve();
+      },
+    );
+  });
 }
 
 /** The helpers of every device this server dumps. */
@@ -357,9 +439,9 @@ export class UiHelpers {
     return null;
   }
 
-  /** A helper is running on this device: a dump does not have to start one first. */
+  /** A helper is running and ready on this device: a dump does not have to start one first. */
   isRunning(serial: string): boolean {
-    return this.helpers.get(serial)?.alive === true;
+    return this.helpers.get(serial)?.readyForRequests === true;
   }
 
   /** The device's API level (ro.build.version.sdk), read once; null when getprop gave none in `timeoutMs`. */
@@ -368,25 +450,38 @@ export class UiHelpers {
     return this.apiLevels.get(serial) ?? null;
   }
 
-  /** A dump within `timeoutMs`; throws UiHelperError, after which the helper on that device is stopped. */
-  dump(serial: string, timeoutMs: number): Promise<HelperDump> {
-    return this.serialized(serial, async () => {
-      const deadline = performance.now() + timeoutMs;
-      if (!this.apiLevels.has(serial)) await this.readApiLevel(serial, timeoutMs);
+  /** A dump within `timeoutMs`; throws UiHelperError (or UiHelperAbortError on caller abort). */
+  dump(serial: string, timeoutMs: number, signal?: AbortSignal): Promise<HelperDump> {
+    if (signal?.aborted) return Promise.reject(new UiHelperAbortError('cancelled'));
+    // Start the deadline at invocation so time spent waiting in the per-device queue counts against timeoutMs.
+    const deadline = performance.now() + timeoutMs;
+    if (timeoutMs <= 0) return Promise.reject(new UiHelperError(HELPER_TIMEOUT));
+    return this.serializedBounded(serial, deadline, signal, async () => {
+      if (signal?.aborted) throw new UiHelperAbortError('cancelled');
+      if (deadline - performance.now() <= 0) throw new UiHelperError(HELPER_TIMEOUT);
+      if (!this.apiLevels.has(serial)) {
+        await this.readApiLevel(serial, deadline - performance.now(), signal);
+      }
+      if (signal?.aborted) throw new UiHelperAbortError('cancelled');
+      if (deadline - performance.now() <= 0) throw new UiHelperError(HELPER_TIMEOUT);
       const reason = this.unavailable(serial);
       if (reason !== null) throw new UiHelperError(reason);
       this.clearIdle(serial);
       try {
         for (let attempt = 0; ; attempt++) {
-          const helper = await this.running(serial, deadline);
+          const helper = await this.running(serial, deadline, signal);
           try {
-            return await helper.dump(deadline - performance.now());
+            const remaining = deadline - performance.now();
+            if (remaining <= 0) throw new UiHelperError(HELPER_TIMEOUT);
+            return await helper.dump(remaining, signal);
           } catch (error) {
+            if (error instanceof UiHelperAbortError) throw error;
             // A crash is restarted once, time permitting (never once the server is closing).
             const retry =
               error instanceof UiHelperCrash &&
               attempt === 0 &&
               !this.closed &&
+              !signal?.aborted &&
               deadline - performance.now() >= 1000;
             if (!retry) throw error;
             log.warn(`UI helper on ${serial} stopped; starting it again`);
@@ -394,6 +489,12 @@ export class UiHelpers {
           }
         }
       } catch (error) {
+        if (error instanceof UiHelperAbortError) {
+          // Stop any child that was cancelled before READY succeeded so it is never reused unready.
+          const current = this.helpers.get(serial);
+          if (current && !current.readyForRequests) await this.stopHelper(serial);
+          throw error;
+        }
         const reason = error instanceof UiHelperError ? error.message : HELPER_FAILED;
         if (!(error instanceof UiHelperError)) log.warn(`UI helper on ${serial}: ${errorMessage(error)}`);
         if (!this.closed && reason !== HELPER_OLD_API) {
@@ -485,32 +586,39 @@ export class UiHelpers {
   }
 
   /** Unread (no failure counted) when getprop fails: it is asked again next time. */
-  private async readApiLevel(serial: string, timeoutMs: number): Promise<void> {
+  private async readApiLevel(serial: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     try {
       const output = await adbShell(this.options.adb, serial, 'getprop ro.build.version.sdk', {
         timeoutMs: Math.max(1, Math.min(ADB_TIMEOUT_MS, Math.floor(timeoutMs))),
+        signal,
       });
       const api = Number(output.trim());
       if (Number.isInteger(api) && api > 0) this.apiLevels.set(serial, api);
     } catch (error) {
+      if (signal?.aborted) throw new UiHelperAbortError('cancelled');
       log.warn(`Reading the API level of ${serial} failed: ${errorMessage(error)}`);
     }
   }
 
-  private async running(serial: string, deadline: number): Promise<HelperProcess> {
+  private async running(serial: string, deadline: number, signal?: AbortSignal): Promise<HelperProcess> {
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     if (this.closed) throw new UiHelperError(HELPER_CLOSED);
     const current = this.helpers.get(serial);
-    if (current?.alive) return current;
+    if (current?.readyForRequests) return current;
     if (current) await this.stopHelper(serial);
     const jar = await readVerifiedHelperJar(
       this.options.jarPath ?? resolveUiHelperJar(),
       this.options.jarSha256 ?? UI_HELPER_JAR_SHA256,
     );
+    if (signal?.aborted) throw new UiHelperAbortError('cancelled');
     if (this.closed) throw new UiHelperError(HELPER_CLOSED);
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new UiHelperError(HELPER_TIMEOUT);
     const helper = new HelperProcess(this.options.adb, serial);
     this.helpers.set(serial, helper);
-    const timeoutMs = Math.min(this.options.startMs ?? UI_HELPER_START_MS, deadline - performance.now());
-    await helper.start(jar, timeoutMs);
+    const timeoutMs = Math.min(this.options.startMs ?? UI_HELPER_START_MS, remaining);
+    await helper.start(jar, timeoutMs, signal);
     // close() stopped it meanwhile.
     if (helper.stopped) throw new UiHelperError(HELPER_CLOSED);
     return helper;
@@ -550,5 +658,40 @@ export class UiHelpers {
       if (this.queues.get(serial) === settled) this.queues.delete(serial);
     });
     return result;
+  }
+
+  /**
+   * Queues `operation` behind active work for `serial`, but settles the caller immediately if `signal` aborts
+   * or `deadline` expires while queued (becoming a no-op once its turn arrives so the active caller is never
+   * disturbed).
+   */
+  private serializedBounded<T>(
+    serial: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.queues.get(serial);
+    let skipped = false;
+    const slotReady = previous ? waitForTurn(previous, deadline, signal) : Promise.resolve();
+    const queued = (previous ?? Promise.resolve()).then(() => {
+      if (skipped) return undefined as unknown as T;
+      if (signal?.aborted) throw new UiHelperAbortError('cancelled');
+      if (deadline - performance.now() <= 0) throw new UiHelperError(HELPER_TIMEOUT);
+      return operation();
+    });
+    const settled = queued.catch(() => undefined);
+    this.queues.set(serial, settled);
+    void settled.then(() => {
+      if (this.queues.get(serial) === settled) this.queues.delete(serial);
+    });
+    if (!previous) return queued;
+    return slotReady.then(
+      () => queued,
+      (error: unknown) => {
+        skipped = true;
+        throw error;
+      },
+    );
   }
 }

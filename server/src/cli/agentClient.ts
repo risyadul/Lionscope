@@ -37,7 +37,10 @@ async function post(
   args: unknown,
   permissions: CallPermissions,
   timeoutMs: number,
+  callerSignal?: AbortSignal,
 ) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
   return fetch(`http://${HOST}:${port}${AGENT_API_PREFIX}${tool}`, {
     method: 'POST',
     headers: {
@@ -51,7 +54,7 @@ async function post(
         : {}),
     },
     body: JSON.stringify(args ?? {}),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal,
   });
 }
 
@@ -84,11 +87,11 @@ export async function callRemoteTool(
   port: number,
   tool: string,
   args: unknown,
-  options: CallPermissions & { timeoutMs?: number } = {},
+  options: CallPermissions & { timeoutMs?: number; signal?: AbortSignal | undefined } = {},
 ): Promise<ToolOutcome> {
   let response: Response;
   try {
-    response = await post(port, tool, args, options, options.timeoutMs ?? CALL_TIMEOUT_MS);
+    response = await post(port, tool, args, options, options.timeoutMs ?? CALL_TIMEOUT_MS, options.signal);
   } catch (error) {
     if (isConnectionRefused(error)) {
       return {

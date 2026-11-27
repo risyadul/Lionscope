@@ -6,6 +6,20 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Deterministic E2E reproduce and verify tools for MCP and `lionscope query`:
+  - App setup: `open_deep_link`, `list_app_permissions`, `set_app_permissions`, `clear_app_data`, and `install_apk`
+    (with symlink rejection and descriptor-backed staging).
+  - Device environment: `set_orientation`, `set_display_options` (dark mode where `cmd uimode night` is supported,
+    and font scale), and `restore_device_settings` with automatic restore on `stop_session` and server close.
+  - Synchronization: `wait_for_network`, `wait_for_screen`, and `wait_for_idle`.
+  - Gestures and verification: `long_press_element`, `drag`, `pinch` (two-finger zoom over active scrcpy or emulator
+    mirroring), `diff_ui_tree`, `diff_screenshot`, and `get_notifications` (session target package only, redacted like
+    logcat).
+- Sample app hooks for E2E verification (`lionscope://detail/<id>` deep link, long-press context action, and test
+  notification trigger).
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

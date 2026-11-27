@@ -353,3 +353,180 @@ export function screenDifference(
   }
   return { changed, cells, blank: !lit };
 }
+
+export interface DiffRegion {
+  /** Bounding box `[x1, y1, x2, y2]` in full image (device) pixels. */
+  bounds: [number, number, number, number];
+  /** Number of changed 8×8 cells inside this region. */
+  cells: number;
+}
+
+export interface ScreenDiffResult {
+  sizeChanged: boolean;
+  changedCells: number;
+  totalCells: number;
+  /** Share of compared cells whose mean absolute per-pixel delta was at least `cellDelta` (0..1, rounded to 4 decimals). */
+  changedRatio: number;
+  /** Maximum per-channel mean absolute pixel delta across all compared 8×8 cells (0..255). */
+  maxChannelDelta: number;
+  /** Mean of per-cell max-channel mean absolute deltas across all compared cells (0..255). */
+  meanChannelDelta: number;
+  /** True when every compared cell is black in both images (e.g. FLAG_SECURE window). */
+  blank: boolean;
+  /** Connected changed regions, largest area first (capped to `maxRegions`). */
+  regions: DiffRegion[];
+  totalRegions: number;
+}
+
+/**
+ * Compares two screenshots on an 8×8 px cell grid (skipping `skip` rectangles such as system bars) and groups
+ * adjacent changed cells (8-connected) into merged bounding boxes.
+ */
+export function screenDiffRegions(
+  a: DecodedPng,
+  b: DecodedPng,
+  skip: readonly (readonly [number, number, number, number])[] = [],
+  cellDelta = CELL_DELTA,
+  maxRegions = 20,
+): ScreenDiffResult {
+  const cols = Math.ceil(b.width / CELL_PX);
+  const rows = Math.ceil(b.height / CELL_PX);
+  if (a.width !== b.width || a.height !== b.height) {
+    const totalCells = cols * rows;
+    return {
+      sizeChanged: true,
+      changedCells: totalCells,
+      totalCells,
+      changedRatio: 1,
+      maxChannelDelta: 255,
+      meanChannelDelta: 255,
+      blank: false,
+      regions: [{ bounds: [0, 0, b.width, b.height], cells: totalCells }],
+      totalRegions: 1,
+    };
+  }
+
+  const changedMask = new Uint8Array(cols * rows);
+  let totalCells = 0;
+  let changedCells = 0;
+  let maxChannelDelta = 0;
+  let deltaSum = 0;
+  let lit = false;
+
+  for (let row = 0; row < rows; row++) {
+    const cy = row * CELL_PX;
+    const yEnd = Math.min(a.height, cy + CELL_PX);
+    const midY = (cy + yEnd) / 2;
+    for (let col = 0; col < cols; col++) {
+      const cx = col * CELL_PX;
+      const xEnd = Math.min(a.width, cx + CELL_PX);
+      const midX = (cx + xEnd) / 2;
+      if (skip.some(([x1, y1, x2, y2]) => midX >= x1 && midX < x2 && midY >= y1 && midY < y2)) continue;
+
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let total = 0;
+      for (let y = cy; y < yEnd; y++) {
+        for (let x = cx; x < xEnd; x++) {
+          const from = (y * a.width + x) * a.channels;
+          const to = (y * b.width + x) * b.channels;
+          const r1 = a.pixels[from] ?? 0;
+          const g1 = a.pixels[from + 1] ?? 0;
+          const b1 = a.pixels[from + 2] ?? 0;
+          const r2 = b.pixels[to] ?? 0;
+          const g2 = b.pixels[to + 1] ?? 0;
+          const b2 = b.pixels[to + 2] ?? 0;
+          red += Math.abs(r1 - r2);
+          green += Math.abs(g1 - g2);
+          blue += Math.abs(b1 - b2);
+          total += r1 + g1 + b1 + r2 + g2 + b2;
+        }
+      }
+      const area = (yEnd - cy) * (xEnd - cx);
+      const cellMax = Math.max(red, green, blue) / area;
+      totalCells++;
+      deltaSum += cellMax;
+      if (cellMax > maxChannelDelta) maxChannelDelta = cellMax;
+      if (total > 0) lit = true;
+      if (cellMax >= cellDelta) {
+        changedMask[row * cols + col] = 1;
+        changedCells++;
+      }
+    }
+  }
+
+  // Group changed cells into 8-connected components to produce bounding boxes.
+  const visited = new Uint8Array(cols * rows);
+  const allRegions: DiffRegion[] = [];
+  const queue: number[] = [];
+
+  for (let startRow = 0; startRow < rows; startRow++) {
+    for (let startCol = 0; startCol < cols; startCol++) {
+      const startIdx = startRow * cols + startCol;
+      if (!changedMask[startIdx] || visited[startIdx]) continue;
+      visited[startIdx] = 1;
+      queue.length = 0;
+      queue.push(startIdx);
+      let minCol = startCol;
+      let maxCol = startCol;
+      let minRow = startRow;
+      let maxRow = startRow;
+      let cells = 0;
+
+      for (let head = 0; head < queue.length; head++) {
+        const idx = queue[head]!;
+        const r = Math.floor(idx / cols);
+        const c = idx - r * cols;
+        cells++;
+        if (c < minCol) minCol = c;
+        if (c > maxCol) maxCol = c;
+        if (r < minRow) minRow = r;
+        if (r > maxRow) maxRow = r;
+        for (let dr = -1; dr <= 1; dr++) {
+          const nr = r + dr;
+          if (nr < 0 || nr >= rows) continue;
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nc = c + dc;
+            if (nc < 0 || nc >= cols) continue;
+            const nIdx = nr * cols + nc;
+            if (changedMask[nIdx] && !visited[nIdx]) {
+              visited[nIdx] = 1;
+              queue.push(nIdx);
+            }
+          }
+        }
+      }
+
+      allRegions.push({
+        bounds: [
+          minCol * CELL_PX,
+          minRow * CELL_PX,
+          Math.min(a.width, (maxCol + 1) * CELL_PX),
+          Math.min(a.height, (maxRow + 1) * CELL_PX),
+        ],
+        cells,
+      });
+    }
+  }
+
+  allRegions.sort((left, right) => {
+    const areaLeft = (left.bounds[2] - left.bounds[0]) * (left.bounds[3] - left.bounds[1]);
+    const areaRight = (right.bounds[2] - right.bounds[0]) * (right.bounds[3] - right.bounds[1]);
+    return areaRight - areaLeft || right.cells - left.cells;
+  });
+
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  return {
+    sizeChanged: false,
+    changedCells,
+    totalCells,
+    changedRatio: totalCells > 0 ? Math.round((changedCells / totalCells) * 10_000) / 10_000 : 0,
+    maxChannelDelta: round1(maxChannelDelta),
+    meanChannelDelta: totalCells > 0 ? round1(deltaSum / totalCells) : 0,
+    blank: !lit,
+    regions: allRegions.slice(0, maxRegions),
+    totalRegions: allRegions.length,
+  };
+}

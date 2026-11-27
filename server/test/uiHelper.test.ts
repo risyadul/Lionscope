@@ -21,6 +21,7 @@ import {
   resolveUiHelperJar,
   UI_HELPER_IDLE_MS,
   UI_HELPER_MAIN,
+  UiHelperAbortError,
   UiHelperError,
   UiHelpers,
 } from '../src/agent/uiHelper.ts';
@@ -544,5 +545,56 @@ describe("the helper's one-shot always-finish run", () => {
     const closed = helpers(oneShotAdb('OK always-finish 1\n'));
     await closed.close();
     await expect(closed.setAlwaysFinish(SERIAL, true, 5000)).rejects.toThrow(HELPER_CLOSED);
+  });
+
+  it('settles queued dump requests on timeout or abort without disturbing the active request, and never reuses an unready child after startup abort', async () => {
+    // 1. Queued request expires on its invocation-based deadline and aborts promptly while request #1 stays active.
+    const adb = new FakeHelperAdb({ starts: ['ready'], replies: ['hang'] });
+    const manager = helpers(adb);
+    const first = manager.dump(SERIAL, 5000);
+    // Wait until the helper child has received the first dump request.
+    while ((adb.helpers[0]?.requests.length ?? 0) === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const helperChild = adb.helpers[0]!;
+    const firstNonce = /^dump ([0-9a-f]+)$/.exec(helperChild.requests[0]!)![1]!;
+
+    // Queued request with 55ms deadline must time out promptly while request #1 is still pending.
+    const t0 = performance.now();
+    await expect(manager.dump(SERIAL, 55)).rejects.toThrow(HELPER_TIMEOUT);
+    expect(performance.now() - t0).toBeLessThan(400);
+
+    // Queued request aborted via AbortController must reject immediately with UiHelperAbortError.
+    const controller = new AbortController();
+    const t1 = performance.now();
+    const aborted = manager.dump(SERIAL, 5000, controller.signal);
+    setTimeout(() => controller.abort(), 20);
+    await expect(aborted).rejects.toBeInstanceOf(UiHelperAbortError);
+    expect(performance.now() - t1).toBeLessThan(400);
+
+    // Active request #1 was never disturbed and completes cleanly once answered.
+    helperChild.stdout.write(`OK ${firstNonce} ${DUMP}\n`);
+    await expect(first).resolves.toEqual({ xml: DUMP });
+    expect(helperChild.requests).toHaveLength(1);
+    await manager.close();
+
+    // 2. Cancelling during startup (before READY) stops the unready child and does not reuse it.
+    const startAdb = new FakeHelperAdb({ starts: ['silent', 'ready'], replies: [DUMP] });
+    const startManager = helpers(startAdb);
+    const startCtrl = new AbortController();
+    const starting = startManager.dump(SERIAL, 5000, startCtrl.signal);
+    while (startAdb.helpers.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    startCtrl.abort();
+    await expect(starting).rejects.toBeInstanceOf(UiHelperAbortError);
+    expect(startManager.isRunning(SERIAL)).toBe(false);
+    expect(startManager.unavailable(SERIAL)).toBeNull();
+
+    // Next caller spawns a fresh helper (second child) and succeeds cleanly.
+    await expect(startManager.dump(SERIAL, 5000)).resolves.toEqual({ xml: DUMP });
+    expect(startAdb.helpers).toHaveLength(2);
+    expect(startManager.isRunning(SERIAL)).toBe(true);
+    await startManager.close();
   });
 });
