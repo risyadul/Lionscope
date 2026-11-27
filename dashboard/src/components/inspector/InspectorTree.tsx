@@ -3,12 +3,16 @@ import type { InspectorNode } from '@lionscope/protocol/wire';
 import type { InspectorSnapshot } from '@lionscope/protocol/wire';
 import type { InspectorController } from '../../hooks/useInspector.ts';
 import { useHoverId } from './InspectorContext.tsx';
+import { formatInteger } from '../../lib/format.ts';
 import {
   ancestorsOf,
   defaultExpanded,
+  HIGH_RECOMPOSITION_COUNT,
   idLabel,
   isComposable,
   isTreeKey,
+  RECOMPOSITION_SEMANTICS_HINT,
+  recompositionLabel,
   shortClass,
   treeMove,
   treeRows,
@@ -54,6 +58,9 @@ const TreeRow = memo(function TreeRow({
   onPick,
   onToggle,
 }: RowProps) {
+  const recomps = node.composable?.recompositions;
+  const skips = node.composable?.skips ?? 0;
+  const showCounts = recomps !== undefined && (recomps > 0 || skips > 0);
   return (
     <div
       data-node={node.id}
@@ -105,6 +112,17 @@ const TreeRow = memo(function TreeRow({
         <span className="inspect-text">“{preview(node.text)}”</span>
       )}
       {node.visibility !== 'visible' && <span className="inspect-vis">{node.visibility}</span>}
+      {showCounts && (
+        <span
+          className="inspect-recomp-count mono"
+          data-high={recomps >= HIGH_RECOMPOSITION_COUNT || undefined}
+          title={`${recompositionLabel(recomps, skips)} (${RECOMPOSITION_SEMANTICS_HINT})`}
+          aria-label={recompositionLabel(recomps, skips)}
+        >
+          {formatInteger(recomps)}
+          <span className="inspect-recomp-skips"> / {formatInteger(skips)}</span>
+        </span>
+      )}
     </div>
   );
 });

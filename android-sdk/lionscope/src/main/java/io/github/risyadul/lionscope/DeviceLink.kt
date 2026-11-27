@@ -75,6 +75,7 @@ internal class DeviceLink(
     private val mocksListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
     private val viewEditListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
     private val storageListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
+    private val recompositionListeners = CopyOnWriteArrayList<(GatewayMessage) -> Unit>()
 
     fun start() {
         val thread = Thread(::runForever, "lionscope-link")
@@ -163,6 +164,10 @@ internal class DeviceLink(
 
     override fun addStorageListener(listener: (GatewayMessage) -> Unit) {
         storageListeners.add(listener)
+    }
+
+    override fun addComposeRecompositionListener(listener: (GatewayMessage) -> Unit) {
+        recompositionListeners.add(listener)
     }
 
     private fun speaksV2(): Boolean = speaksV2(negotiatedVersion)
@@ -309,11 +314,12 @@ internal class DeviceLink(
                     byeReason = message.reason
                     close()
                 }
-                is GatewayMessage.Config -> onConfig(message.options)
+                is GatewayMessage.Config -> onConfig(message)
                 is GatewayMessage.Inspect -> onInspect(message.requestId)
                 is GatewayMessage.Mocks, is GatewayMessage.Mock -> onMocks(message)
                 is GatewayMessage.SetViewProperty, is GatewayMessage.RevertViewProperties -> onViewEdit(message)
                 is GatewayMessage.StorageList, is GatewayMessage.StorageRead, is GatewayMessage.StorageWrite, is GatewayMessage.StorageQuery -> onStorage(message)
+                is GatewayMessage.ResetComposeRecompositions -> onResetComposeRecompositions(message)
             }
         }
 
@@ -347,9 +353,18 @@ internal class DeviceLink(
 
         /** Ignored before `welcome`, after close, and on a link negotiated below v2. */
         @Synchronized
-        private fun onConfig(options: SdkOptions) {
+        private fun onConfig(message: GatewayMessage.Config) {
             if (!welcomed || closed || !speaksV2()) return
-            dispatch(configListeners, options)
+            dispatch(configListeners, message.options)
+            // v15 Compose recomposition tracking applies on both session and inspect-only links.
+            if (speaks(negotiatedVersion, DEVICE_PROTOCOL_V15)) dispatch(recompositionListeners, message)
+        }
+
+        /** Ignored before `welcome`, after close, and on a link negotiated below v15. */
+        @Synchronized
+        private fun onResetComposeRecompositions(message: GatewayMessage.ResetComposeRecompositions) {
+            if (!welcomed || closed || !speaks(negotiatedVersion, DEVICE_PROTOCOL_V15)) return
+            dispatch(recompositionListeners, message)
         }
 
         /** Synchronized with [close] so a late welcome can never outlive its connection. */

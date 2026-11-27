@@ -57,6 +57,12 @@ export function changedFields(patch: Partial<SdkOptions>, current: SdkOptions): 
   ) {
     changed.savedStateTracking = patch.savedStateTracking;
   }
+  if (
+    patch.composeRecompositionTracking !== undefined &&
+    patch.composeRecompositionTracking !== (current.composeRecompositionTracking ?? false)
+  ) {
+    changed.composeRecompositionTracking = patch.composeRecompositionTracking;
+  }
   return Object.keys(changed).length === 0 ? null : changed;
 }
 

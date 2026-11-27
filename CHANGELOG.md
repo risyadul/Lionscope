@@ -6,6 +6,15 @@ All notable changes to Lionscope are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Compose recomposition and skip counts in the Layout Inspector and AI agent tools (device protocol 15, Compose
+  runtime 1.9+). Opt-in and off by default, toggleable live with a **Reset** action on both inspect-only links and
+  profiling-session links, with per-composable `recompositions` / `skips` counters in the Inspector tree, Attributes
+  panel, `inspect_screen`, and `get_inspector_selection`, plus `set_sdk_options --composeRecompositionTracking` and
+  `reset_compose_recompositions`. Apps on Compose < 1.9 fail closed to `unsupported` without changing existing
+  Compose inspection. See [Layout Inspector](docs/features/layout-inspector.md).
+
 ## [0.13.0] - 2026-11-17
 
 ### Added

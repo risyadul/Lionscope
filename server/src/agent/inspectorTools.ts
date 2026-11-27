@@ -89,6 +89,11 @@ function snapshotView(snapshot: InspectorSnapshot, ctx: AgentContext) {
     truncated: snapshot.truncated,
     captureMs: snapshot.captureMs,
     ...(snapshot.liveEdits === undefined ? {} : { liveEdits: snapshot.liveEdits }),
+    ...(snapshot.recompositionTracking === undefined
+      ? {}
+      : { recompositionTracking: snapshot.recompositionTracking }),
+    ...(snapshot.recompositionTruncated ? { recompositionTruncated: true } : {}),
+    ...(snapshot.recompositionIncomplete ? { recompositionIncomplete: true } : {}),
     ...(snapshot.editBlocked ? { editBlocked: EDIT_BLOCKED_MESSAGES[snapshot.editBlocked] } : {}),
   };
 }
@@ -157,6 +162,16 @@ function elementView(snapshot: InspectorSnapshot, node: InspectorNode, withText:
     activity: node.activity,
     ...(node.destination ? { destination: node.destination } : {}),
     ...(node.composition ? { composition: node.composition } : {}),
+    ...(node.composable?.recompositions === undefined
+      ? snapshot.recompositionTracking === 'active' &&
+        node.composable !== undefined &&
+        node.composable.restartable !== false &&
+        (node.composable.restartable === true ||
+          snapshot.recompositionTruncated === true ||
+          snapshot.recompositionIncomplete === true)
+        ? { recompositionCountsUnavailable: true }
+        : {}
+      : { recompositions: node.composable.recompositions, skips: node.composable.skips ?? 0 }),
     ...editView(node, snapshot),
   };
 }
@@ -197,7 +212,7 @@ function crop(
 export const inspectorSelectionTool = defineTool({
   name: 'get_inspector_selection',
   title: 'Inspector selection',
-  description: `The element the user selected in the dashboard's Layout Inspector: call this when the user says "this element", "the one I selected", "this button" or similar. Returns its attributes (class, resource id, text, content description, bounds and visible bounds in device pixels, visibility, alpha, flags, padding, margins, layout width/height), its source: for a view the XML layout file and line it was inflated from (the line is where the start tag ENDS, its \`>\`), for a composable (kind composable: its name as class, its testTag as resource id) the Kotlin file and line it is CALLED from, the owning Fragment and Activity (and navigation destination), its ancestor path (Class#id, root first), its children, what can be edited live (\`editable\`: the properties set_view_property accepts, with \`viewState\` for the ones the attributes above lack and \`edited\` for live edits in effect; SDK 0.9.0+ views, during a profiling session: snapshot.editBlocked says why not), the snapshot it belongs to (device, app, screen, age, source sdk or uiautomator and why, liveEdits in the app) and a cropped screenshot of the element (at most ${CROP_MAX_EDGE} px; none for window roots or elements covering more than half of the screen). When the selection was made by an agent (select_inspector_node) only its structure comes back: no text, content description or image. SDK-only fields (source, owners, padding, margins, layout params) are null for uiautomator snapshots. Fails when nothing is selected. ${UNTRUSTED_DESCRIPTION}`,
+  description: `The element the user selected in the dashboard's Layout Inspector: call this when the user says "this element", "the one I selected", "this button" or similar. Returns its attributes (class, resource id, text, content description, bounds and visible bounds in device pixels, visibility, alpha, flags, padding, margins, layout width/height), its source: for a view the XML layout file and line it was inflated from (the line is where the start tag ENDS, its \`>\`), for a composable (kind composable: its name as class, its testTag as resource id) the Kotlin file and line it is CALLED from plus \`recompositions\` and \`skips\` when Compose recomposition tracking is active, the owning Fragment and Activity (and navigation destination), its ancestor path (Class#id, root first), its children, what can be edited live (\`editable\`: the properties set_view_property accepts, with \`viewState\` for the ones the attributes above lack and \`edited\` for live edits in effect; SDK 0.9.0+ views, during a profiling session: snapshot.editBlocked says why not), the snapshot it belongs to (device, app, screen, age, source sdk or uiautomator and why, liveEdits, recompositionTracking) and a cropped screenshot of the element (at most ${CROP_MAX_EDGE} px; none for window roots or elements covering more than half of the screen). When the selection was made by an agent (select_inspector_node) only its structure comes back: no text, content description or image. SDK-only fields (source, owners, padding, margins, layout params) are null for uiautomator snapshots. Fails when nothing is selected. ${UNTRUSTED_DESCRIPTION}`,
   access: 'read',
   input: z.object({}),
   annotations: READ_ONLY,
@@ -239,7 +254,12 @@ export const inspectorSelectionTool = defineTool({
 });
 
 /** `isEditing`: the snapshot's link takes live edits (no `editBlocked`). */
-function compactNode(node: InspectorNode, isEditing: boolean) {
+function compactNode(
+  node: InspectorNode,
+  isEditing: boolean,
+  recompositionActive = false,
+  recompositionCountsIncomplete = false,
+) {
   const flags = [
     ...(node.clickable ? ['clickable'] : []),
     ...(node.checked !== null ? [node.checked ? 'checked' : 'unchecked'] : []),
@@ -256,6 +276,14 @@ function compactNode(node: InspectorNode, isEditing: boolean) {
     bounds: node.visibleBounds,
     ...(sourceText(node) !== null ? { source: sourceText(node) } : {}),
     ...(node.composition && node.composition !== 'read' ? { composition: node.composition } : {}),
+    ...(node.composable?.recompositions === undefined
+      ? recompositionActive &&
+        node.composable !== undefined &&
+        node.composable.restartable !== false &&
+        (node.composable.restartable === true || recompositionCountsIncomplete)
+        ? { recompositionCountsUnavailable: true }
+        : {}
+      : { recompositions: node.composable.recompositions, skips: node.composable.skips ?? 0 }),
     ...(flags.length > 0 ? { flags } : {}),
     ...(node.view && isEditing ? { editable: true } : {}),
     ...(node.view?.edited ? { edited: node.view.edited } : {}),
@@ -277,7 +305,7 @@ function matchesQuery(node: InspectorNode, needle: string): boolean {
 export const inspectScreenTool = defineTool({
   name: 'inspect_screen',
   title: 'Inspect the screen',
-  description: `Captures a Layout Inspector snapshot of the device screen now (the dashboard shows it too) and lists its visible nodes: nodeId, parent, label (Class#id, or a composable's name#testTag), text, content description, visible bounds in device pixels, the source (a view's XML layout file:line, where the start tag ends; a composable's Kotlin file:line, where it is called), flags, \`editable: true\` for views set_view_property can change (SDK 0.9.0+, during a profiling session; snapshot.editBlocked says why not) and \`edited\` for their live edits. From the in-app SDK when its app is on top, with or without a profiling session (SDK 0.9.0+; 0.5.0-0.5.1 only during a session), with sources and owners (composables from SDK 0.9.0); or else uiautomator (fallbackReason says why: sdk_linking = the SDK is still connecting, call it again; sdk_needs_session = the app's SDK is older than 0.9.0, start a session; sdk_link_busy = another Lionscope server holds the device link; compose* = a Compose screen the SDK could not read). query keeps nodes whose class, id, text, description, source file or destination contains it. Pass a nodeId to select_inspector_node to point the user at it. It replaces the snapshot every dashboard shows and may clear the user's selection: when the user means an element they selected, call get_inspector_selection first. Device control. ${UNTRUSTED_DESCRIPTION}`,
+  description: `Captures a Layout Inspector snapshot of the device screen now (the dashboard shows it too) and lists its visible nodes: nodeId, parent, label (Class#id, or a composable's name#testTag), text, content description, visible bounds in device pixels, the source (a view's XML layout file:line, where the start tag ends; a composable's Kotlin file:line, where it is called), \`recompositions\` and \`skips\` on restartable composables when tracking is active (\`snapshot.recompositionTracking\`), flags, \`editable: true\` for views set_view_property can change (SDK 0.9.0+, during a profiling session; snapshot.editBlocked says why not) and \`edited\` for their live edits. From the in-app SDK when its app is on top, with or without a profiling session (SDK 0.9.0+; 0.5.0-0.5.1 only during a session), with sources and owners (composables from SDK 0.9.0); or else uiautomator (fallbackReason says why: sdk_linking = the SDK is still connecting, call it again; sdk_needs_session = the app's SDK is older than 0.9.0, start a session; sdk_link_busy = another Lionscope server holds the device link; compose* = a Compose screen the SDK could not read). query keeps nodes whose class, id, text, description, source file or destination contains it. Pass a nodeId to select_inspector_node to point the user at it. It replaces the snapshot every dashboard shows and may clear the user's selection: when the user means an element they selected, call get_inspector_selection first. Device control. ${UNTRUSTED_DESCRIPTION}`,
   access: 'device',
   input: z.object({
     serial: optionalSerial,
@@ -313,7 +341,17 @@ export const inspectScreenTool = defineTool({
         snapshot: snapshotView(snapshot, ctx),
         matched: visible.length,
         shown: Math.min(limit, visible.length),
-        nodes: visible.slice(0, limit).map((node) => compactNode(node, !snapshot.editBlocked)),
+        nodes: visible
+          .slice(0, limit)
+          .map((node) =>
+            compactNode(
+              node,
+              !snapshot.editBlocked,
+              snapshot.recompositionTracking === 'active',
+              snapshot.recompositionTracking === 'active' &&
+                (snapshot.recompositionTruncated === true || snapshot.recompositionIncomplete === true),
+            ),
+          ),
       },
     };
   },
@@ -360,6 +398,31 @@ export const selectInspectorNodeTool = defineTool({
         untrusted: UNTRUSTED_NOTE,
         snapshotId: current.id,
         selected: node ? { nodeId: node.id, label: nodeLabel(node) } : null,
+      },
+    };
+  },
+});
+
+export const resetComposeRecompositionsTool = defineTool({
+  name: 'reset_compose_recompositions',
+  title: 'Reset Compose recomposition counts',
+  description:
+    'Resets accumulated Jetpack Compose recomposition and skip counts on the connected app (both profiling-session and inspect-only SDK links; requires Compose runtime 1.9+ and a compatible SDK). Call before reproducing an interaction, then call inspect_screen to read the new counts.',
+  access: 'session',
+  input: z.object({ serial: optionalSerial }),
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  async run({ serial: requested }, ctx) {
+    const serial = targetSerial(ctx, requested);
+    const reset = ctx.sessions.resetComposeRecompositions(serial);
+    return {
+      data: {
+        serial,
+        reset,
+        ...(reset
+          ? {}
+          : {
+              note: 'No live SDK link supporting Compose recomposition tracking was connected on this device; call inspect_screen first if inspecting without a session.',
+            }),
       },
     };
   },

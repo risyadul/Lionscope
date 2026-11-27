@@ -97,6 +97,65 @@ class ModeGatingTest {
         }
     }
 
+    @Test(timeout = 20_000)
+    fun v15InspectLinkDrivesRecompositionTrackingWithoutActivatingSessionCollectorsAndDetachesOnDisconnect() {
+        val server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 10_000 }
+        server.use {
+            val v15Hello = "{\"type\":\"hello\",\"protocolVersion\":15}"
+            val link = DeviceLink(
+                helloLine = { v15Hello },
+                port = server.localPort,
+                policy = ReconnectPolicy(System.currentTimeMillis(), Backoff(longArrayOf(50))),
+                heartbeatIntervalMs = 200,
+            )
+            val main = LockedScheduler()
+            val frames = FrameTracker(ContextWrapper(null), link, main) {}
+            val watchdog = FakeWatchdog()
+            val strictMode = FakeStrictMode()
+            val diagnostics = DiagnosticsController(link, main, watchdog, strictMode)
+            diagnostics.onActivityStarted(PlainTestActivity())
+            var enabledState = false
+            var resets = 0
+            val tracker = object : ComposeRecompositionTracker {
+                override val status: RecompositionStatus
+                    get() = if (enabledState) RecompositionStatus.ACTIVE else RecompositionStatus.OFF
+                override val truncated: Boolean = false
+                override fun setEnabled(enabled: Boolean) {
+                    enabledState = enabled
+                }
+                override fun rescan() = Unit
+                override fun reset() {
+                    resets++
+                }
+                override fun countsFor(scope: Any): RecompositionCounts? = null
+            }
+            ComposeRecompositionController(link, main, tracker)
+            link.start()
+
+            it.accept().use { client ->
+                val input = client.getInputStream().bufferedReader(Charsets.UTF_8)
+                assertEquals(v15Hello, input.readLine())
+                client.reply("{\"type\":\"welcome\",\"protocolVersion\":15,\"mode\":\"inspect\"}")
+                client.reply(
+                    "{\"type\":\"config\",\"stallThresholdMs\":150,\"strictMode\":true,\"inflateTracking\":true," +
+                        "\"rxTracking\":true,\"savedStateTracking\":true,\"storageConsent\":\"off\",\"composeRecompositionTracking\":true}",
+                )
+                waitFor { main.sync { enabledState } }
+                // Session-only collectors stay inactive on an inspect link even when config arrives.
+                main.sync {
+                    assertFalse(frames.isActive)
+                    assertFalse(watchdog.isRunning)
+                    assertTrue(strictMode.changes.isEmpty())
+                }
+                client.reply("{\"type\":\"resetComposeRecompositions\"}")
+                waitFor { main.sync { resets == 1 } }
+            }
+            // Disconnect automatically detaches observers.
+            waitFor { !link.isConnected }
+            waitFor { main.sync { !enabledState } }
+        }
+    }
+
     private fun java.net.Socket.reply(line: String) {
         getOutputStream().write("$line\n".toByteArray(Charsets.UTF_8))
         getOutputStream().flush()

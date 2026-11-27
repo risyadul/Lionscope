@@ -352,6 +352,209 @@ describe('Inspector tab', () => {
     expect(within(attrs).queryByText('No padding or margin.')).toBeNull();
   });
 
+  it('controls Compose recomposition tracking, shows tree counters, attributes, and disabled reasons', async () => {
+    const composeNodes = [
+      node(0, null, [0, 0, 1080, 2400], { className: 'com.android.internal.policy.DecorView' }),
+      node(1, 0, [0, 0, 1080, 2400], {
+        className: 'androidx.compose.ui.platform.AndroidComposeView',
+        composition: 'read',
+      }),
+      node(2, 1, [0, 0, 1080, 400], {
+        className: 'ProductCard',
+        composable: { file: 'CatalogScreen.kt', line: 42, recompositions: 12, skips: 3 },
+      }),
+      node(3, 2, [0, 0, 500, 100], {
+        className: 'Row',
+        composable: { file: 'CatalogScreen.kt', line: 45, restartable: false },
+      }),
+      node(4, 1, [0, 400, 1080, 520], {
+        className: 'CatalogFooter',
+        composable: { file: 'CatalogScreen.kt', line: 60, restartable: true },
+      }),
+      node(5, 1, [0, 520, 1080, 620], {
+        className: 'UnmarkedComposable',
+        composable: { file: 'CatalogScreen.kt', line: 72 },
+      }),
+    ];
+    const { push, sent } = setup();
+
+    // Older SDK (< v15): recompositionTracking omitted -> disabled with upgrade hint, no unreleased version number.
+    await push(
+      snapshotMsg({
+        id: 'snap-old',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    openTab();
+    const toggle = () => screen.getByRole('button', { name: 'Recompositions' });
+    const reset = () => screen.getByRole('button', { name: 'Reset' });
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle().getAttribute('title')).toContain('Requires a newer Lionscope SDK');
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Compose < 1.9: unsupported -> disabled with Compose 1.9+ reason.
+    await push(
+      snapshotMsg({
+        id: 'snap-unsupported',
+        recompositionTracking: 'unsupported',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle().getAttribute('title')).toContain('Requires Compose 1.9+');
+    expect(screen.getByText(/Recompositions unavailable: Requires Compose 1\.9\+/)).toBeTruthy();
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Observer conflict: disabled with visible conflict explanation.
+    await push(
+      snapshotMsg({
+        id: 'snap-conflict',
+        recompositionTracking: 'conflict',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText(/Recompositions unavailable: Another Compose observer is already attached/),
+    ).toBeTruthy();
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Supported but off: toggle enabled (unpressed), Reset disabled.
+    await push(
+      snapshotMsg({
+        id: 'snap-off',
+        recompositionTracking: 'off',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(false);
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Clicking toggle sends setComposeRecompositionTracking(enabled: true).
+    fireEvent.click(toggle());
+    expect(sent.at(-1)).toEqual({
+      type: 'setComposeRecompositionTracking',
+      serial: 'emulator-5554',
+      enabled: true,
+    });
+
+    // Active snapshot: pressed toggle, Reset enabled, tree row count with high-count highlight, attributes rows.
+    await push(
+      snapshotMsg({
+        id: 'snap-active',
+        recompositionTracking: 'active',
+        nodes: composeNodes,
+      }),
+    );
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    expect((reset() as HTMLButtonElement).disabled).toBe(false);
+
+    // Select ProductCard (node 2) -> tree row shows 12 / 3 with data-high, attributes show Recompositions & Skips.
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 2, ts: 1, origin: 'user' },
+    });
+    const cardRow = document.querySelector('[data-node="2"]')!;
+    const badge = cardRow.querySelector('.inspect-recomp-count')!;
+    expect(badge.textContent).toBe('12 / 3');
+    expect(badge.getAttribute('data-high')).toBe('true');
+    const attrs = screen.getByRole('region', { name: 'Attributes' });
+    expect(within(attrs).getByText('Recompositions')).toBeTruthy();
+    expect(within(attrs).getByText('12')).toBeTruthy();
+    expect(within(attrs).getByText('Skips')).toBeTruthy();
+    expect(within(attrs).getByText('3')).toBeTruthy();
+
+    // Select inline composable (node 3, restartable: false) -> shows muted non-restartable note.
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 3, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+
+    // Restartable node without counts (node 4, restartable: true) and unmarked node without counts (node 5)
+    // must NEVER be mislabeled as "Not independently restartable".
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 4, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText('Unavailable')).toBeTruthy();
+    expect(within(attrs).queryByText(/Not independently restartable/)).toBeNull();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 5, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText('Unavailable')).toBeTruthy();
+    expect(within(attrs).queryByText(/Not independently restartable/)).toBeNull();
+
+    // Clicking Reset sends resetComposeRecompositions.
+    fireEvent.click(reset());
+    expect(sent.at(-1)).toEqual({
+      type: 'resetComposeRecompositions',
+      serial: 'emulator-5554',
+    });
+
+    // Truncated / capped active snapshot shows warning badge, header hint, and unavailable count message
+    // for restartable nodes without counts, while truly non-restartable inline nodes stay labeled accurately.
+    await push(
+      snapshotMsg({
+        id: 'snap-truncated',
+        recompositionTracking: 'active',
+        recompositionTruncated: true,
+        nodes: composeNodes,
+      }),
+    );
+    expect(screen.getByText('counts capped')).toBeTruthy();
+    expect(screen.queryByText('partial coverage')).toBeNull();
+    expect(screen.getByText(/reached capacity/i)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-truncated', nodeId: 3, ts: 3, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-truncated', nodeId: 4, ts: 3, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Unavailable \(tracking capacity reached\)/)).toBeTruthy();
+
+    // Incomplete per-composition coverage shows its own badge and explanation (distinct from capacity cap)
+    // while keeping exact counts on fully attached sibling composables.
+    await push(
+      snapshotMsg({
+        id: 'snap-incomplete',
+        recompositionTracking: 'active',
+        recompositionIncomplete: true,
+        nodes: composeNodes,
+      }),
+    );
+    expect(screen.getByText('partial coverage')).toBeTruthy();
+    expect(screen.queryByText('counts capped')).toBeNull();
+    expect(screen.getByText(/Coverage is incomplete for some compositions/i)).toBeTruthy();
+    expect(screen.queryByText(/reached capacity/i)).toBeNull();
+    expect(document.querySelector('[data-node="2"] .inspect-recomp-count')?.textContent).toBe('12 / 3');
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-incomplete', nodeId: 3, ts: 4, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-incomplete', nodeId: 4, ts: 4, origin: 'user' },
+    });
+    expect(
+      within(attrs).getByText(/Unavailable \(incomplete coverage for this composition — Reset to baseline\)/),
+    ).toBeTruthy();
+  });
+
   it('says why an AndroidComposeView shows no composables', async () => {
     const unread = inspectorSnapshot({
       nodes: [
@@ -628,6 +831,57 @@ describe('badges', () => {
     );
     expect(screen.getByText('truncated at 5,000 nodes').getAttribute('title')).toBeNull();
     expect(screen.getByText('uiautomator — Compose screen')).toBeTruthy();
+  });
+
+  it('offers Retry on a Compose observer conflict and sends setComposeRecompositionTracking(true) to recover', async () => {
+    const { push, sent } = setup();
+    await push(
+      snapshotMsg({
+        id: 'snap-conflict',
+        recompositionTracking: 'conflict',
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400]),
+          node(1, 0, [0, 0, 1080, 2400], {
+            className: 'CatalogScreen',
+            composable: { file: 'CatalogScreen.kt', line: 10 },
+          }),
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'Layout Inspector' }));
+    const toggle = screen.getByRole('button', { name: 'Recompositions' });
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      screen.getByText('Recompositions unavailable: Another Compose observer is already attached.'),
+    ).toBeTruthy();
+
+    fireEvent.click(retry);
+    expect(sent.at(-1)).toEqual({
+      type: 'setComposeRecompositionTracking',
+      serial: 'emulator-5554',
+      enabled: true,
+    });
+
+    await push(
+      snapshotMsg({
+        id: 'snap-recovered',
+        recompositionTracking: 'active',
+        nodes: [
+          node(0, null, [0, 0, 1080, 2400]),
+          node(1, 0, [0, 0, 1080, 2400], {
+            className: 'CatalogScreen',
+            composable: { file: 'CatalogScreen.kt', line: 10, recompositions: 1, skips: 0 },
+          }),
+        ],
+      }),
+    );
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Recompositions' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.getByRole('button', { name: 'Recompositions' }).getAttribute('aria-pressed')).toBe('true');
   });
 });
 

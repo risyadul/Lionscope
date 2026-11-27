@@ -110,11 +110,14 @@ internal class ViewScene(
     private val sdkInt: Int = Build.VERSION.SDK_INT,
     private val compose: () -> ComposeReading? = { ComposeSupport.reading },
     private val editor: ViewEditor<View>? = null,
+    private val recompositionStatus: () -> RecompositionStatus? = { ComposeSupport.recompositionTracker?.status },
+    private val recompositionTruncated: () -> Boolean = { ComposeSupport.recompositionTracker?.truncated == true },
+    private val recompositionIncomplete: () -> Boolean = { ComposeSupport.recompositionTracker?.incompleteCoverage == true },
 ) : InspectorScene<Any> {
     override val isForeground: Boolean
         get() = known.hasStartedActivity
 
-    override fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<Any>? {
+    override fun prepare(readCompose: Boolean, viewState: Boolean, recompositionCounts: Boolean): PreparedScene<Any>? {
         val global = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) globalWindows() else emptyList() }
         val roots = WindowRoots.select(sdkInt, global, known::knownRoots, ::isShownWindow)
         if (roots.isEmpty()) return null
@@ -134,7 +137,7 @@ internal class ViewScene(
         val edits = editor?.takeIf { viewState }
         val keys = edits?.beginCapture()
         val views = ViewInspectorAccess(if (sdkInt >= Build.VERSION_CODES.Q) origins else null, fragments, keys)
-        val reading = if (readCompose) compose()?.also { it.beginCapture() } else null
+        val reading = if (readCompose) compose()?.also { it.beginCapture(recompositionCounts) } else null
         val captured = if (edits != null && keys != null) {
             {
                 keys.commit()
@@ -143,7 +146,19 @@ internal class ViewScene(
         } else {
             null
         }
-        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading), captured)
+        val tracking: (() -> RecompositionStatus?)? = if (recompositionCounts && reading != null) recompositionStatus else null
+        val trackingTruncated: (() -> Boolean)? = if (recompositionCounts && reading != null) recompositionTruncated else null
+        val trackingIncomplete: (() -> Boolean)? = if (recompositionCounts && reading != null) recompositionIncomplete else null
+        return PreparedScene(
+            windows,
+            display(roots.last()),
+            SceneTreeAccess(views, reading),
+            captured,
+            tracking,
+            trackingTruncated,
+            trackingIncomplete,
+            onCaptureFinished = if (reading != null) { { reading.endCapture() } } else null,
+        )
     }
 
     @RequiresApi(29)
@@ -265,7 +280,12 @@ internal class SceneTreeAccess(
             layoutWidth = null,
             layoutHeight = null,
             source = null,
-            composable = composable.source.copy(draws = composable.draws),
+            composable = composable.source.copy(
+                draws = composable.draws,
+                recompositions = composable.recompositions?.recompositions,
+                skips = composable.recompositions?.skips,
+                restartable = composable.restartable,
+            ),
             destination = composable.destination,
         )
     }

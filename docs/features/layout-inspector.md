@@ -42,6 +42,43 @@ after the app changes its top screen (never continuously), and the refresh butto
   screen) and have no text, content description, test tag or click; they stay in the tree. Clicking again on the
   same spot steps to the view below. Works with Jetpack Compose 1.6 and later and Compose Multiplatform 1.8+ on
   Android, compiled with source information (the default for debug builds).
+- **Compose recomposition and skip counts.** On Compose runtime 1.9 and later (device protocol 15), press
+  **Recompositions** in the Inspector header to opt in to counting recompositions and skips, and **Reset** to clear
+  the counters back to zero. Tracking starts **off** by default, works both with and without a profiling session
+  (inspect-only links too), and detaches its Compose runtime observers automatically when turned off or when the
+  link disconnects.
+  - **What the numbers mean.** Tree rows show `recompositions / skips` for restartable composables with non-zero
+    counts (highlighting counts ≥ 10), and the Attributes panel lists `Recompositions` and `Skips` separately.
+    Counts follow Android Studio's semantics: they accumulate from when tracking was enabled (with each pre-existing
+    composition's baseline taken when its observer attaches, and executions before attach left outside that baseline)
+    or last reset, and a composable that first composes while tracking is active (for example, a `LazyColumn` item
+    scrolled into view) counts its initial composition as `1`. Inline and non-restartable composables (such as `Row`
+    or `Column`) have no restartable scope, so they show no row counter and note this in Attributes.
+  - **Compatibility and fallback.** Apps on Compose < 1.9 or minified/shrunk builds report `unsupported` (visible
+    header note: "Requires Compose 1.9+") and keep regular Compose hierarchy inspection unchanged; consistent with
+    Compose inspection overall, recomposition tracking requires a non-minified debug build. If another Compose
+    observer (for example, Android Studio's Layout Inspector) already occupies a composition's observer slot — or
+    takes over the slot after Lionscope attached — Lionscope leaves it untouched, stops reporting counts, and
+    reports `conflict` ("Another Compose observer is already attached") with a **Retry** button in the Inspector
+    header so you can re-attach on the same link once the other observer detaches. To distinguish skips from
+    recompositions without relying on hardcoded flag masks, the SDK resolves and calls `RecomposeScopeImpl`'s
+    skip/rereading getters directly and fails closed to `unsupported` if any required symbol is missing or fails at
+    runtime. When the 16,384-scope cap is reached, the snapshot sets `recompositionTruncated` (`counts capped` badge)
+    and keeps newly seen or previously dropped scopes unavailable rather than showing partial counts until **Reset**.
+    Separately, pre-existing compositions attach asynchronously on a background serial worker and report
+    `recompositionIncomplete` (`partial coverage` badge, counts unavailable for those compositions) until their
+    observer attaches and takes an implicit per-composition baseline; compositions discovered post-enable after they
+    had already composed also set `recompositionIncomplete` and stay unavailable until **Reset**, while other
+    attached compositions keep exact counts.
+  - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
+    `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
+    ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time
+    moved from `22 ms` (OFF) to `23 ms` (ON) at p50 (`21.8 ms` vs `22.2 ms` mean), `32 ms` vs `32 ms` at p90
+    (`31.4 ms` vs `31.8 ms` mean), `34 ms` vs `36 ms` at p95 (`34.8 ms` vs `36.0 ms` mean), and `48 ms` vs `46 ms`
+    at p99 (`46.4 ms` vs `46.0 ms` mean) — within emulator run-to-run noise. Because tracking is opt-in, detaches
+    its Compose runtime observers when off, and skips recompose-scope extraction during captures while disabled,
+    recomposition tracking adds no extra runtime or capture overhead when off (Compose's standard tooling data
+    remains enabled for Layout Inspector hierarchy capture).
 - **When Compose falls back.** A Compose screen that was composed before the SDK started (Lionscope installed by
   hand late, or the app opted out with `<meta-data android:name="io.github.risyadul.lionscope.composeInspection"
 android:value="false" />`) cannot be read: the badge says why (restart the app). So does a build without

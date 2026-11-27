@@ -7,8 +7,10 @@
  */
 import type { AddressInfo } from 'node:net';
 import {
+  DEFAULT_SDK_OPTIONS,
   DEVICE_LINK_PORT,
   DEVICE_PROTOCOL_V5,
+  DEVICE_PROTOCOL_V15,
   INSPECT_LINK_LINGER_MS,
   INSPECT_LINK_WAIT_MS,
 } from '@lionscope/protocol';
@@ -82,6 +84,18 @@ export interface InspectLinkReadiness {
   reason: InspectLinkFallback | null;
   /** It waited (for a pending mapping step or the wait window): a screenshot taken before is stale. */
   waited: boolean;
+}
+
+/** Delivery status when toggling Compose recomposition tracking on a device's live SDK link(s). */
+export interface ComposeRecompositionDelivery {
+  /**
+   * `applied`: pushed immediately to at least one live v15+ SDK link on the device.
+   * `unsupported_sdk`: a live SDK link exists on the device, but below device protocol v15.
+   * `pending`: no live SDK link on the device yet (remembered and pushed once a v15+ link connects).
+   */
+  state: 'applied' | 'pending' | 'unsupported_sdk';
+  /** True when at least one live SDK link is currently connected on the device. */
+  sdkConnected: boolean;
 }
 
 /** A loopback SDK listener (the device gateway). */
@@ -164,6 +178,8 @@ export class InspectLinks {
   private readonly oldSdks = new Map<string, number>();
   /** `serial package pid` → whether that app is debuggable (it can't change without a new process). */
   private readonly debuggable = new Map<string, Promise<boolean>>();
+  /** Per-device opt-in Compose recomposition tracking for inspect-only v15+ links (default off). */
+  private readonly recompositionTracking = new Map<string, boolean>();
   private readyDevices = new Set<string>();
   /** The device and app of the session that maps its device to the session gateway. */
   private session: { serial: string; packageName: string; since: number } | null = null;
@@ -195,6 +211,44 @@ export class InspectLinks {
     timer.unref();
     this.lingers.set(serial, timer);
     this.update(serial, true);
+  }
+
+  /** Whether Compose recomposition tracking is enabled for `serial`'s inspect-only links. */
+  getComposeRecompositionTracking(serial: string): boolean {
+    return this.recompositionTracking.get(serial) ?? false;
+  }
+
+  /**
+   * Toggle Compose recomposition tracking on `serial` (default off) and push `config` immediately to any live v15+
+   * inspect-only link on that device. Returns whether it was applied immediately or queued pending a link.
+   */
+  setComposeRecompositionTracking(serial: string, enabled: boolean): ComposeRecompositionDelivery {
+    if (enabled) this.recompositionTracking.set(serial, true);
+    else this.recompositionTracking.delete(serial);
+    const entry = this.entries.get(serial);
+    if (!entry || entry.links.size === 0) return { state: 'pending', sdkConnected: false };
+    let applied = false;
+    for (const record of entry.links.values()) {
+      if (record.link.protocolVersion >= DEVICE_PROTOCOL_V15) {
+        record.link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: enabled }, 'off');
+        applied = true;
+      }
+    }
+    return { state: applied ? 'applied' : 'unsupported_sdk', sdkConnected: true };
+  }
+
+  /** Reset accumulated Compose recomposition counters on every live v15+ inspect-only link of `serial`. */
+  resetComposeRecompositions(serial: string): boolean {
+    const entry = this.entries.get(serial);
+    if (!entry) return false;
+    let sent = false;
+    for (const record of entry.links.values()) {
+      if (record.link.protocolVersion >= DEVICE_PROTOCOL_V15) {
+        record.link.resetComposeRecompositions();
+        sent = true;
+      }
+    }
+    return sent;
   }
 
   /**
@@ -279,6 +333,9 @@ export class InspectLinks {
       topSince: 0,
     };
     entry.links.set(hello.packageName, record);
+    if (link.protocolVersion >= DEVICE_PROTOCOL_V15 && this.getComposeRecompositionTracking(serial)) {
+      link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: true }, 'off');
+    }
     return {
       ok: true,
       mode: 'inspect',
@@ -519,6 +576,7 @@ export class InspectLinks {
    */
   private teardown(entry: DeviceEntry): void {
     this.entries.delete(entry.serial);
+    this.recompositionTracking.delete(entry.serial);
     if (entry.teardownTimer) clearTimeout(entry.teardownTimer);
     entry.teardownTimer = null;
     for (const record of entry.links.values()) record.link.close('no_session');

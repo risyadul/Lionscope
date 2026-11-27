@@ -14,6 +14,7 @@ import { StatStrip } from '../../src/components/stats/StatStrip.tsx';
 import { DeviceColumn, DeviceToggle } from '../../src/components/device/DeviceColumn.tsx';
 import { useDeviceColumn } from '../../src/hooks/useDeviceColumn.ts';
 import { createFixtureServices, stats } from './data.ts';
+import { InspectorFixture } from './InspectorFixture.tsx';
 import { NetworkFixture } from './NetworkFixture.tsx';
 import { PermissionsFixture } from './PermissionsFixture.tsx';
 
@@ -99,6 +100,8 @@ if (!container) throw new Error('Fixture root is missing');
 const root = createRoot(container);
 function Fixture() {
   switch (query.get('scenario')) {
+    case 'inspector':
+      return <InspectorFixture state={query.get('state')} />;
     case 'permissions':
       return <PermissionsFixture />;
     case 'network':

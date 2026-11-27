@@ -19,6 +19,7 @@ import {
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
+  DEVICE_PROTOCOL_V15,
   DEVICE_PROTOCOL_VERSION,
   isValidPackageName,
   LINK_NONCE_PATTERN,
@@ -262,6 +263,7 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
       inflateTracking: z.boolean().optional(),
       rxTracking: z.boolean().optional(),
       savedStateTracking: z.boolean().optional(),
+      composeRecompositionTracking: z.boolean().optional(),
     })
     .strict()
     .refine(
@@ -270,9 +272,18 @@ export const clientMessageSchema = z.discriminatedUnion('type', [
         message.strictMode !== undefined ||
         message.inflateTracking !== undefined ||
         message.rxTracking !== undefined ||
-        message.savedStateTracking !== undefined,
+        message.savedStateTracking !== undefined ||
+        message.composeRecompositionTracking !== undefined,
       'no SDK option given',
     ),
+  z
+    .object({
+      type: z.literal('setComposeRecompositionTracking'),
+      serial: serialSchema,
+      enabled: z.boolean(),
+    })
+    .strict(),
+  z.object({ type: z.literal('resetComposeRecompositions'), serial: serialSchema }).strict(),
   z.object({ type: z.literal('inspect'), serial: serialSchema }).strict(),
   z
     .object({
@@ -674,6 +685,9 @@ const inspectorNodeSchema = z
         file: layoutText.nullable(),
         line: z.number().int().min(1).max(MAX_JAVA_INT).nullable(),
         draws: z.boolean().optional(),
+        recompositions: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
+        skips: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
+        restartable: z.boolean().optional(),
       })
       .strip()
       .optional(),
@@ -913,6 +927,9 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       captureMs: durationMs,
       compose: z.boolean(),
       liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS).optional(),
+      recompositionTracking: z.enum(['off', 'active', 'unsupported', 'conflict']).optional(),
+      recompositionTruncated: z.boolean().optional(),
+      recompositionIncomplete: z.boolean().optional(),
     })
     .strip(),
   z
@@ -1266,6 +1283,43 @@ export function parseDeviceMessage(
       error: 'SQL outcomes need protocol version 13',
       unnegotiated: { type, since: DEVICE_PROTOCOL_V13 },
     };
+  }
+  if (
+    type === 'inspectBegin' &&
+    protocolVersion < DEVICE_PROTOCOL_V15 &&
+    object &&
+    (Object.hasOwn(object, 'recompositionTracking') ||
+      Object.hasOwn(object, 'recompositionTruncated') ||
+      Object.hasOwn(object, 'recompositionIncomplete'))
+  ) {
+    return {
+      ok: false,
+      error: 'recompositionTracking needs protocol version 15',
+      unnegotiated: { type, since: DEVICE_PROTOCOL_V15 },
+    };
+  }
+  if (type === 'inspectNodes' && protocolVersion < DEVICE_PROTOCOL_V15 && object) {
+    const nodes: unknown = Reflect.get(object, 'nodes');
+    if (
+      Array.isArray(nodes) &&
+      nodes.some((node) => {
+        if (typeof node !== 'object' || node === null) return false;
+        const composable: unknown = Reflect.get(node, 'composable');
+        return (
+          typeof composable === 'object' &&
+          composable !== null &&
+          (Object.hasOwn(composable, 'recompositions') ||
+            Object.hasOwn(composable, 'skips') ||
+            Object.hasOwn(composable, 'restartable'))
+        );
+      })
+    ) {
+      return {
+        ok: false,
+        error: 'Compose recomposition counts need protocol version 15',
+        unnegotiated: { type, since: DEVICE_PROTOCOL_V15 },
+      };
+    }
   }
   const version: unknown = object && type === 'hello' ? Reflect.get(object, 'protocolVersion') : undefined;
   if (typeof version === 'number' && !isSupportedProtocolVersion(version)) {

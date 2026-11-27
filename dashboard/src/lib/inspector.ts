@@ -155,6 +155,26 @@ export function isComposable(node: InspectorNode): boolean {
   return node.composable !== undefined;
 }
 
+/** Composable recomposition counts at or above this threshold get a subtle amber highlight. */
+export const HIGH_RECOMPOSITION_COUNT = 10;
+
+export const RECOMPOSITION_SEMANTICS_HINT =
+  'Counts since tracking started or last reset; initial composition while active counts as 1.';
+
+/** True when an SDK snapshot has Compose nodes (or active recomposition tracking) and should show Compose controls. */
+export function hasComposeContent(snapshot: InspectorSnapshot): boolean {
+  if (snapshot.source !== 'sdk') return false;
+  if (snapshot.recompositionTracking === 'active') return true;
+  return snapshot.nodes.some((n) => n.composable !== undefined || n.composition !== undefined);
+}
+
+/** Accessible label for a composable's recomposition and skip counts. */
+export function recompositionLabel(recompositions: number, skips: number): string {
+  const r = `${recompositions} ${recompositions === 1 ? 'recomposition' : 'recompositions'}`;
+  const s = `${skips} ${skips === 1 ? 'skip' : 'skips'}`;
+  return `${r}, ${s}`;
+}
+
 /** What follows `#`: a view's id entry name, a composable's whole testTag. */
 export function idLabel(node: InspectorNode): string | null {
   if (node.resourceId === null) return null;

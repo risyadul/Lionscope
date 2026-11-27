@@ -39,6 +39,8 @@ const manager: GatewayManager = {
   startSession: async () => IDLE_SESSION,
   stopSession: async () => IDLE_SESSION,
   setSdkOptions: () => false,
+  setComposeRecompositionTracking: () => ({ state: 'pending', sdkConnected: false }),
+  resetComposeRecompositions: () => false,
   getHttpExchange: () => null,
   getNetworkMocks: () => EMPTY_MOCKS,
   setNetworkMock: () => {
@@ -56,6 +58,7 @@ const emulators: GatewayEmulators = {
 
 const inspector: GatewayInspector = {
   inspect: () => Promise.reject(new PublicError('no device')),
+  inspectFresh: () => Promise.reject(new PublicError('no device')),
   select: () => null,
   current: null,
   selection: null,
@@ -716,5 +719,73 @@ describe('WebSocket gateway locations', () => {
       expect(await client.waitFor('error')).toMatchObject({ code: 'clearLocation_failed' });
       client.close();
     });
+  });
+});
+
+describe('WebSocket gateway Compose recomposition commands', () => {
+  it('forwards setComposeRecompositionTracking and resetComposeRecompositions then refreshes inspection', async () => {
+    const calls: string[] = [];
+    const customManager: GatewayManager = {
+      ...manager,
+      setComposeRecompositionTracking: (serial, enabled) => {
+        calls.push(`track:${serial}:${enabled}`);
+        return { state: 'applied', sdkConnected: true };
+      },
+      resetComposeRecompositions: (serial) => {
+        calls.push(`reset:${serial}`);
+        return true;
+      },
+    };
+    const customInspector: GatewayInspector = {
+      ...inspector,
+      inspectFresh: async (serial) => {
+        calls.push(`inspectFresh:${serial}`);
+        return {
+          id: '0123456789abcdef',
+          ts: 1,
+          serial,
+          packageName: 'com.example.shop',
+          source: 'sdk',
+          screen: 'Home',
+          display: { width: 1080, height: 2400, rotation: 0 },
+          windows: [],
+          nodes: [],
+          truncated: false,
+          captureMs: 1,
+          fallbackReason: null,
+          recompositionTracking: 'active',
+        };
+      },
+    };
+    const server = createServer();
+    let port = 0;
+    const gateway = createWsGateway({
+      server,
+      manager: customManager,
+      emulators,
+      inspector: customInspector,
+      serverVersion: '0.0.0',
+      bufferWindowMs: 1000,
+      allowedOrigins: () => buildAllowedOrigins(port, false),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+    try {
+      const client = await Client.open(port);
+      await client.waitFor('locations');
+      client.send({ type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: true });
+      client.send({ type: 'resetComposeRecompositions', serial: 'emulator-5554' });
+      await waitUntil(() => calls.length === 4);
+      expect(calls).toEqual([
+        'track:emulator-5554:true',
+        'inspectFresh:emulator-5554',
+        'reset:emulator-5554',
+        'inspectFresh:emulator-5554',
+      ]);
+      client.close();
+    } finally {
+      await gateway.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

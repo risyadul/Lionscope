@@ -28,3 +28,5 @@
 {"type":"storageWrite","requestId":34,"opId":"0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d","store":"db","name":"app.db","op":"update","table":"user","column":"name","pk":"[{\"t\":\"integer\",\"v\":\"1\"}]","expected":"{\"t\":\"string\",\"v\":\"Ana \\\"A\\\" \\ud800\"}","value":"{\"t\":\"string\",\"v\":\"Ann\"}"}
 {"type":"storageWrite","requestId":35,"opId":"3c9e7f20-58a1-4b6d-9e02-7d4f1a6b8c35","store":"db","name":"app.db","op":"delete","table":"user","pk":"[{\"t\":\"integer\",\"v\":\"9223372036854775807\"}]","rowDigest":"5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f"}
 {"type":"welcome","protocolVersion":14,"mode":"session","proof":"7cf2f4708552e1bb1ac4373dab7279d776f7075265d43ecc43cdc89ffd0208e0"}
+{"type":"config","stallThresholdMs":250,"strictMode":true,"inflateTracking":true,"rxTracking":false,"savedStateTracking":false,"storageConsent":"off","composeRecompositionTracking":true}
+{"type":"resetComposeRecompositions"}

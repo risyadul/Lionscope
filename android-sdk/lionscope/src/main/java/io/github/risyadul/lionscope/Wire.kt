@@ -3,7 +3,7 @@ package io.github.risyadul.lionscope
 // Mirrors protocol/src/wire.ts, section "In-app SDK ↔ server (device gateway)".
 
 /** Highest device protocol version this SDK speaks, sent in `hello`; the server answers min(sdk, server). */
-internal const val DEVICE_PROTOCOL_VERSION = 14
+internal const val DEVICE_PROTOCOL_VERSION = 15
 internal const val MIN_DEVICE_PROTOCOL_VERSION = 1
 /** First version with `stall` / `strictmode` (SDK → server) and `config` (server → SDK). */
 internal const val DEVICE_PROTOCOL_V2 = 2
@@ -53,6 +53,8 @@ internal const val DEVICE_PROTOCOL_V12 = 12
 internal const val DEVICE_PROTOCOL_V13 = 13
 /** Original Network values and lossless request capture metadata. */
 internal const val DEVICE_PROTOCOL_V14 = 14
+/** Compose recomposition and skip tracking (Compose 1.9+, session and inspect links). */
+internal const val DEVICE_PROTOCOL_V15 = 15
 /** Failure messages were capped at 160 chars after redaction on legacy Network links. */
 internal const val MAX_HTTP_LEGACY_FAILURE_CHARS = 160
 /** Which lifecycle point saw the complete bundle: `onActivityPostSaveInstanceState` (API 29+), or a main-thread post. */
@@ -144,6 +146,8 @@ internal data class SdkOptions(
     val savedStateTracking: Boolean = true,
     /** v11: what the server lets the storage inspector do; [StorageConsent.OFF] unless a config names another. */
     val storageConsent: StorageConsent = StorageConsent.OFF,
+    /** v15: opt-in Compose recomposition and skip tracking (default false; works on session and inspect links). */
+    val composeRecompositionTracking: Boolean = false,
 ) {
     companion object {
         val DEFAULT = SdkOptions(stallThresholdMs = 150, strictMode = false, inflateTracking = true, rxTracking = true)
@@ -188,9 +192,18 @@ internal data class ViewSource(val layout: String, val line: Int)
 
 /**
  * Where a composable was called: the Kotlin file name and 1-based line, each null when the compiler recorded none;
- * [draws]: whether its own layout nodes paint anything (not its children), null when unknown.
+ * [draws]: whether its own layout nodes paint anything (not its children), null when unknown;
+ * [recompositions] / [skips] (v15): counts since tracking was enabled or last reset when active and the composable
+ * has a RecomposeScope, else null.
  */
-internal data class ComposableSource(val file: String?, val line: Int?, val draws: Boolean? = null)
+internal data class ComposableSource(
+    val file: String?,
+    val line: Int?,
+    val draws: Boolean? = null,
+    val recompositions: Int? = null,
+    val skips: Int? = null,
+    val restartable: Boolean? = null,
+)
 
 /**
  * Whether an AndroidComposeView's composition was read (v6): [READ] its composables are its children; [DISABLED] it

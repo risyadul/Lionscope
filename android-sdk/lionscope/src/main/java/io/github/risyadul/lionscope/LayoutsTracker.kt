@@ -104,8 +104,9 @@ internal class LayoutsTracker(
         if (version >= DEVICE_PROTOCOL_V3) requestSnapshot() else snapshotter.cancel()
     }
 
-    /** `config` only arrives on v2+ links; a v2 server never sends `inflateTracking` (parsed as on). */
+    /** `config` only applies to an active session link (v2+); a v2 server never sends `inflateTracking` (parsed as on). */
     private fun onConfig(options: SdkOptions) {
+        if (linkVersion == 0) return
         reporter.setTracking(options.inflateTracking)
     }
 

@@ -12,6 +12,7 @@ internal class FakeGroup(
     val info: String? = null,
     val layout: FakeLayout? = null,
     val destination: String? = null,
+    val scope: Any? = null,
     val children: List<FakeGroup> = emptyList(),
 )
 
@@ -24,10 +25,12 @@ internal class FakeLayout(
 
 internal object FakeSlots : SlotTableAccess<FakeGroup, FakeLayout> {
     var reads = 0
+    var scopeReads = 0
     override fun children(group: FakeGroup): Iterable<FakeGroup> = group.children.also { reads++ }
     override fun sourceInfo(group: FakeGroup): String? = group.info
     override fun layoutNode(group: FakeGroup): FakeLayout? = group.layout
     override fun destination(group: FakeGroup): String? = group.destination
+    override fun recomposeScope(group: FakeGroup): Any? = group.scope.also { scopeReads++ }
     override fun parent(node: FakeLayout): FakeLayout? = node.parent
     override fun isPlaced(node: FakeLayout): Boolean = node.placed
     override fun bounds(node: FakeLayout): PixelRect = node.bounds
@@ -56,8 +59,11 @@ class ComposeTreeTest {
         children = listOf(function("BasicText", "BasicText.kt", ui, 20, children = listOf(FakeGroup(layout = layout)))),
     )
 
-    private fun build(vararg compositions: List<FakeGroup>, budget: ComposeBudget = ComposeBudget()) =
-        ComposeTreeBuilder(FakeSlots, budget).build(compositions.toList(), root)
+    private fun build(
+        vararg compositions: List<FakeGroup>,
+        budget: ComposeBudget = ComposeBudget(),
+        includeRecomposeScopes: Boolean = false,
+    ) = ComposeTreeBuilder(FakeSlots, budget, includeRecomposeScopes = includeRecomposeScopes).build(compositions.toList(), root)
 
     private fun names(node: ComposeNode): String =
         node.name + node.children.filterIsInstance<ComposeNode>().takeIf { it.isNotEmpty() }
@@ -251,5 +257,33 @@ class ComposeTreeTest {
         val orphan = tree.roots.single()
         assertNull(orphan.source.file)
         assertNull(orphan.source.line)
+    }
+
+    @Test
+    fun recomposeScopesAttachByIdentityAndStayNullForNonRestartableGroups() {
+        val cardScope = Any()
+        val cardLayout = FakeLayout("card", root)
+        val rowLayout = FakeLayout("row", cardLayout)
+        val rowGroup = FakeGroup(
+            info = "C(Row):Home.kt#$app",
+            scope = null,
+            children = listOf(FakeGroup(layout = rowLayout)),
+        )
+        val cardGroup = FakeGroup(
+            info = "C(ProductCard)10@0L1:Home.kt#$app",
+            scope = cardScope,
+            children = listOf(FakeGroup(layout = cardLayout), rowGroup),
+        )
+        FakeSlots.scopeReads = 0
+        val treeDisabled = build(listOf(lambda("Home.kt", app, 5, children = listOf(cardGroup))), includeRecomposeScopes = false)
+        assertEquals(0, FakeSlots.scopeReads)
+        assertNull(treeDisabled.roots.single().recomposeScope)
+
+        val treeEnabled = build(listOf(lambda("Home.kt", app, 5, children = listOf(cardGroup))), includeRecomposeScopes = true)
+        val card = treeEnabled.roots.single()
+        val row = card.children.single() as ComposeNode
+        assertEquals(2, FakeSlots.scopeReads)
+        assertSame(cardScope, card.recomposeScope)
+        assertNull(row.recomposeScope)
     }
 }

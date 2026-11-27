@@ -63,9 +63,9 @@ class DeviceMessagesTest {
     }
 
     @Test
-    fun helloAnnouncesProtocolVersionFourteen() {
-        assertEquals(14, DEVICE_PROTOCOL_VERSION)
-        assertEquals(DEVICE_PROTOCOL_V14, DEVICE_PROTOCOL_VERSION)
+    fun helloAnnouncesProtocolVersionFifteen() {
+        assertEquals(15, DEVICE_PROTOCOL_VERSION)
+        assertEquals(DEVICE_PROTOCOL_V15, DEVICE_PROTOCOL_VERSION)
     }
 
     @Test
@@ -110,6 +110,41 @@ class DeviceMessagesTest {
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to false), composable(false))
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0, "draws" to true), composable(true))
         assertEquals(mapOf("file" to "ShopApp.kt", "line" to 41.0), composable(null))
+    }
+
+    @Test
+    fun composableRecompositionCountsAreWrittenOnlyWhenPresentAndClampedNonNegative() {
+        val card = InspectorFixtures.plainNode(1, 0, className = "ProductCard")
+        val withCounts = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, true, recompositions = -3, skips = 5))),
+        ) as Map<*, *>
+        assertServerAcceptsNode(withCounts)
+        assertEquals(
+            mapOf("file" to "CatalogScreen.kt", "line" to 64.0, "draws" to true, "recompositions" to 0.0, "skips" to 5.0),
+            withCounts["composable"],
+        )
+        val withoutCounts = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, false))),
+        ) as Map<*, *>
+        val composable = withoutCounts["composable"] as Map<*, *>
+        assertFalse(composable.containsKey("recompositions"))
+        assertFalse(composable.containsKey("skips"))
+        assertFalse(composable.containsKey("restartable"))
+
+        val nonRestartable = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, false, restartable = false))),
+        ) as Map<*, *>
+        assertEquals(
+            mapOf("file" to "CatalogScreen.kt", "line" to 64.0, "draws" to false, "restartable" to false),
+            nonRestartable["composable"],
+        )
+        val unavailableRestartable = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, true, restartable = true))),
+        ) as Map<*, *>
+        assertEquals(
+            mapOf("file" to "CatalogScreen.kt", "line" to 64.0, "draws" to true, "restartable" to true),
+            unavailableRestartable["composable"],
+        )
     }
 
     @Test
@@ -418,7 +453,7 @@ class DeviceMessagesTest {
     @Test
     fun goldenInspectorNodesAreChunkedIntoTheGoldenLine() {
         val goldens = goldenLines.filter { (TestJson.parse(it) as Map<*, *>)["type"] == "inspectNodes" }
-        assertEquals(4, goldens.size) // A v4 (views), two v6 (Compose, the second with draws) and a v8 (editable views) one.
+        assertEquals(5, goldens.size) // v4 (views), two v6 (Compose), v8 (editable views), and v15 (recomposition counts).
         for (golden in goldens) {
             val message = TestJson.parse(golden) as Map<*, *>
             val nodes = (message["nodes"] as List<*>).map { InspectorFixtures.node(it as Map<*, *>) }
@@ -455,9 +490,13 @@ class DeviceMessagesTest {
         text("destination", 200)
         (node["composable"] as Map<*, *>?)?.let { composable ->
             assertEquals(listOf("file", "line"), composable.keys.toList().take(2))
-            assertTrue(composable.keys.size == 2 || (composable.keys.size == 3 && composable["draws"] is Boolean))
+            assertTrue(composable.keys.all { it in setOf("file", "line", "draws", "recompositions", "skips") })
+            (composable["draws"])?.let { assertTrue(it is Boolean) }
             (composable["file"] as String?)?.let { assertTrue(it.isNotEmpty() && it.length <= 200) }
             (composable["line"] as Double?)?.let { assertTrue(it >= 1) }
+            for (countKey in listOf("recompositions", "skips")) {
+                (composable[countKey] as Double?)?.let { assertTrue(it >= 0 && it == Math.floor(it) && it <= Int.MAX_VALUE) }
+            }
         }
         (node["composition"] as String?)?.let { assertTrue(it in setOf("read", "disabled", "no_source", "failed")) }
         for (key in listOf("layoutWidth", "layoutHeight")) {
@@ -629,6 +668,11 @@ class DeviceMessagesTest {
                 captureMs = message.num("captureMs"),
                 compose = message["compose"] as Boolean,
                 liveEdits = (message["liveEdits"] as Double?)?.toInt(),
+                recompositionTracking = (message["recompositionTracking"] as String?)?.let { wire ->
+                    RecompositionStatus.values().single { it.wire == wire }
+                },
+                recompositionTruncated = message["recompositionTruncated"] as Boolean? ?: false,
+                recompositionIncomplete = message["recompositionIncomplete"] as Boolean? ?: false,
             )
         }
         "inspectNodes" -> DeviceMessages.inspectNodes(

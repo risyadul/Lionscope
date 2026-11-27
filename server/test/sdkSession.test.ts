@@ -507,4 +507,21 @@ describe('ProfilingSession SDK link', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(messages).toHaveLength(count);
   });
+
+  it('re-sends config immediately when composeRecompositionTracking is requested again (conflict retry)', async () => {
+    const { session, connect } = await setup();
+    const { link } = await connect();
+    const initialConfigs = link.configs.length;
+
+    session.setSdkOptions({ composeRecompositionTracking: true });
+    expect(link.configs).toHaveLength(initialConfigs + 1);
+    expect(link.configs.at(-1)?.composeRecompositionTracking).toBe(true);
+
+    // Retrying after a Compose observer conflict sends composeRecompositionTracking: true again;
+    // SdkBridge must still push a fresh config frame immediately rather than swallowing the unchanged option.
+    session.setSdkOptions({ composeRecompositionTracking: true });
+    expect(link.configs).toHaveLength(initialConfigs + 2);
+    expect(link.configs.at(-1)?.composeRecompositionTracking).toBe(true);
+    session.stop();
+  });
 });

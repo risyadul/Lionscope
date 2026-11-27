@@ -45,10 +45,11 @@ export const HELLO: SdkHello = {
 /** What a fake link without edits has of them: a session link below v8, without a proof (edits fail `unsupported`). */
 export const NO_EDITS: Pick<
   SdkLink,
-  'mode' | 'proven' | 'setViewProperty' | 'revertViewProperties' | 'storage'
+  'mode' | 'proven' | 'resetComposeRecompositions' | 'setViewProperty' | 'revertViewProperties' | 'storage'
 > = {
   mode: 'session',
   proven: false,
+  resetComposeRecompositions: () => undefined,
   setViewProperty: () => Promise.reject(new SdkEditError('unsupported')),
   revertViewProperties: () => Promise.reject(new SdkEditError('unsupported')),
   storage: () => Promise.reject(new SdkStorageError('unsupported')),
@@ -74,6 +75,10 @@ export class FakeLink implements SdkLink {
   sendConfig(options: SdkOptions, storageConsent?: string): void {
     this.configs.push(options);
     this.storageConsents.push(storageConsent);
+  }
+  recompositionResets = 0;
+  resetComposeRecompositions(): void {
+    this.recompositionResets += 1;
   }
   /** What storage() answers; unset, it fails as `unsupported`. */
   answerStorage: ((request: SdkStorageRequest) => Promise<SdkStorageResult>) | null = null;

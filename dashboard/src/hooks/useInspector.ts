@@ -5,8 +5,13 @@ import { createSignal, type Signal } from '../lib/signal.ts';
 import type { DashboardState } from '../lib/store.ts';
 import { useViewEdits, type ViewEdits } from './useViewEdits.ts';
 
-/** The server's error code for a failed `inspect`. */
+/** The server's error codes for failed Inspector requests. */
 export const INSPECT_FAILED_CODE = 'inspect_failed';
+const INSPECT_ERROR_CODES: ReadonlySet<string> = new Set([
+  INSPECT_FAILED_CODE,
+  'setComposeRecompositionTracking_failed',
+  'resetComposeRecompositions_failed',
+]);
 /** After the top screen changes, wait this long (animations, transitions) before re-capturing. */
 export const AUTO_REFRESH_MS = 700;
 /** Screen names come from the app: however fast they change, a device is captured at most this often on its own. */
@@ -44,6 +49,8 @@ export interface InspectorController {
   toggle: () => void;
   exit: () => void;
   refresh: () => void;
+  setRecompositionTracking: (enabled: boolean) => void;
+  resetRecompositions: () => void;
   select: (nodeId: number | null) => void;
   hover: (nodeId: number | null) => void;
 }
@@ -107,7 +114,11 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
     setSeen({ errorSeq: state.errorSeq, inspectionId });
     const isOwn = inspection !== null && inspection.serial === serial && inspectionId !== seen.inspectionId;
     if (pending !== null && pending.serial === serial) {
-      if (state.errorSeq !== pending.errorSeq && state.lastError?.code === INSPECT_FAILED_CODE) {
+      if (
+        state.errorSeq !== pending.errorSeq &&
+        state.lastError?.code !== undefined &&
+        INSPECT_ERROR_CODES.has(state.lastError.code)
+      ) {
         setPending(null);
         setFailure(state.lastError.message);
       } else if (isOwn && inspectionId !== pending.inspectionId) {
@@ -140,19 +151,38 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
     };
   });
 
-  const request = useCallback(() => {
-    const { serial: target, canInspect: can, errorSeq, inspectionId: newest } = latest.current;
-    if (target === null || !can) return;
-    if (!send({ type: 'inspect', serial: target })) {
-      setFailure('Not connected to the server.');
-      return;
-    }
-    lastCapture.current = { serial: target, at: Date.now() };
-    setFailure(null);
-    // A notice that the view was gone says "inspect again": this is that.
-    clearNotice();
-    setPending({ serial: target, errorSeq, inspectionId: newest });
-  }, [send, clearNotice]);
+  const dispatchCapture = useCallback(
+    (build: (target: string) => ClientMessage) => {
+      const { serial: target, canInspect: can, errorSeq, inspectionId: newest } = latest.current;
+      if (target === null || !can) return;
+      if (!send(build(target))) {
+        setFailure('Not connected to the server.');
+        return;
+      }
+      lastCapture.current = { serial: target, at: Date.now() };
+      setFailure(null);
+      // A notice that the view was gone says "inspect again": this is that.
+      clearNotice();
+      setPending({ serial: target, errorSeq, inspectionId: newest });
+    },
+    [send, clearNotice],
+  );
+
+  const request = useCallback(
+    () => dispatchCapture((target) => ({ type: 'inspect', serial: target })),
+    [dispatchCapture],
+  );
+
+  const setRecompositionTracking = useCallback(
+    (enabled: boolean) =>
+      dispatchCapture((target) => ({ type: 'setComposeRecompositionTracking', serial: target, enabled })),
+    [dispatchCapture],
+  );
+
+  const resetRecompositions = useCallback(
+    () => dispatchCapture((target) => ({ type: 'resetComposeRecompositions', serial: target })),
+    [dispatchCapture],
+  );
 
   useEffect(() => {
     if (pending === null) return;
@@ -227,6 +257,8 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
       toggle,
       exit,
       refresh: request,
+      setRecompositionTracking,
+      resetRecompositions,
       select,
       hover,
     }),
@@ -245,6 +277,8 @@ export function useInspector({ state, send, serial, canInspect }: Options): Insp
       toggle,
       exit,
       request,
+      setRecompositionTracking,
+      resetRecompositions,
       select,
       hover,
     ],

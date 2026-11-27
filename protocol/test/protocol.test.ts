@@ -8,6 +8,9 @@ import {
   DEVICE_PROTOCOL_V4,
   DEVICE_PROTOCOL_V9,
   DEVICE_PROTOCOL_V10,
+  DEVICE_PROTOCOL_V14,
+  DEVICE_PROTOCOL_V15,
+  DEVICE_PROTOCOL_VERSION,
   isValidAvdName,
   isValidPackageName,
   isValidProcessName,
@@ -127,6 +130,10 @@ describe('parseClientMessage', () => {
       ok: true,
       value: { type: 'setSdkOptions', rxTracking: false },
     });
+    expect(parse({ composeRecompositionTracking: true })).toEqual({
+      ok: true,
+      value: { type: 'setSdkOptions', composeRecompositionTracking: true },
+    });
     expect(parse({ stallThresholdMs: 500, strictMode: false, inflateTracking: true }).ok).toBe(true);
   });
 
@@ -140,7 +147,38 @@ describe('parseClientMessage', () => {
     expect(parse({ inflateTracking: 'no' }).ok).toBe(false);
     expect(parse({ inflateTracking: 1 }).ok).toBe(false);
     expect(parse({ rxTracking: 'off' }).ok).toBe(false);
+    expect(parse({ composeRecompositionTracking: 'yes' }).ok).toBe(false);
     expect(parse({ strictMode: true, extra: 1 }).ok).toBe(false);
+  });
+
+  it('parses setComposeRecompositionTracking and resetComposeRecompositions', () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: true }),
+      ),
+    ).toEqual({
+      ok: true,
+      value: { type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: true },
+    });
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'resetComposeRecompositions', serial: 'emulator-5554' })),
+    ).toEqual({
+      ok: true,
+      value: { type: 'resetComposeRecompositions', serial: 'emulator-5554' },
+    });
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'bad;serial', enabled: true }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: 'setComposeRecompositionTracking', serial: 'emulator-5554', enabled: 1 }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseClientMessage(JSON.stringify({ type: 'resetComposeRecompositions', serial: 'bad serial' })).ok,
+    ).toBe(false);
   });
 
   it('rejects unknown message types', () => {
@@ -1255,6 +1293,153 @@ describe('parseDeviceMessage: v10 liveActivities', () => {
         ok: false,
         invalidDiagnostic: 'liveActivities',
       });
+    }
+  });
+});
+
+describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
+  const beginLine = GOLDEN_LINES.find(
+    (line) => line.startsWith('{"type":"inspectBegin"') && line.includes('"recompositionTracking"'),
+  );
+  const nodesLine = GOLDEN_LINES.find(
+    (line) => line.startsWith('{"type":"inspectNodes"') && line.includes('"recompositions"'),
+  );
+
+  it('parses the v15 golden inspectBegin and inspectNodes on v15 links and flags them unnegotiated below v15', () => {
+    expect(DEVICE_PROTOCOL_VERSION).toBe(DEVICE_PROTOCOL_V15);
+    expect(beginLine).toBeDefined();
+    expect(nodesLine).toBeDefined();
+    expect(parseDeviceMessage(beginLine ?? '', DEVICE_PROTOCOL_V15)).toMatchObject({
+      ok: true,
+      value: { type: 'inspectBegin', recompositionTracking: 'active' },
+    });
+    expect(parseDeviceMessage(nodesLine ?? '', DEVICE_PROTOCOL_V15)).toMatchObject({
+      ok: true,
+      value: {
+        type: 'inspectNodes',
+        nodes: [
+          expect.objectContaining({ composition: 'read' }),
+          expect.objectContaining({
+            className: 'ProductCard',
+            composable: {
+              file: 'CatalogScreen.kt',
+              line: 64,
+              draws: true,
+              recompositions: 4,
+              skips: 1,
+            },
+          }),
+          expect.objectContaining({
+            className: 'Row',
+            composable: { file: 'CatalogScreen.kt', line: 78, draws: false, restartable: false },
+          }),
+        ],
+      },
+    });
+    expect(parseDeviceMessage(beginLine ?? '', DEVICE_PROTOCOL_V14)).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectBegin', since: DEVICE_PROTOCOL_V15 },
+    });
+    expect(parseDeviceMessage(nodesLine ?? '', DEVICE_PROTOCOL_V14)).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectNodes', since: DEVICE_PROTOCOL_V15 },
+    });
+  });
+
+  it('validates recompositionTracking enum, recompositionTruncated, and non-negative integer count bounds', () => {
+    const begin = JSON.parse(beginLine ?? '{}') as Record<string, unknown>;
+    for (const state of ['off', 'active', 'unsupported', 'conflict']) {
+      expect(
+        parseDeviceMessage(JSON.stringify({ ...begin, recompositionTracking: state }), DEVICE_PROTOCOL_V15)
+          .ok,
+      ).toBe(true);
+    }
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: 'active',
+          recompositionTruncated: true,
+          recompositionIncomplete: true,
+        }),
+        DEVICE_PROTOCOL_V15,
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        type: 'inspectBegin',
+        recompositionTracking: 'active',
+        recompositionTruncated: true,
+        recompositionIncomplete: true,
+      },
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: undefined,
+          recompositionTruncated: true,
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectBegin', since: DEVICE_PROTOCOL_V15 },
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: undefined,
+          recompositionIncomplete: true,
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectBegin', since: DEVICE_PROTOCOL_V15 },
+    });
+    expect(
+      parseDeviceMessage(JSON.stringify({ ...begin, recompositionTracking: 'unknown' }), DEVICE_PROTOCOL_V15),
+    ).toMatchObject({ ok: false, invalidDiagnostic: 'inspectBegin' });
+
+    const nodes = JSON.parse(nodesLine ?? '{}') as { nodes: Record<string, unknown>[] };
+    const card = nodes.nodes[1] as Record<string, unknown>;
+    const composable = card.composable as Record<string, unknown>;
+    const withCounts = (patch: Record<string, unknown>) =>
+      parseDeviceMessage(
+        JSON.stringify({ ...nodes, nodes: [{ ...card, composable: { ...composable, ...patch } }] }),
+        DEVICE_PROTOCOL_V15,
+      );
+    expect(withCounts({ recompositions: 0, skips: 0 }).ok).toBe(true);
+    expect(withCounts({ recompositions: 2_147_483_647, skips: 2_147_483_647 }).ok).toBe(true);
+    expect(withCounts({ recompositions: undefined, skips: undefined, restartable: false })).toMatchObject({
+      ok: true,
+    });
+    expect(withCounts({ recompositions: undefined, skips: undefined, restartable: true })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...nodes,
+          nodes: [{ ...card, composable: { file: 'CatalogScreen.kt', line: 64, restartable: false } }],
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectNodes', since: DEVICE_PROTOCOL_V15 },
+    });
+    for (const bad of [
+      { recompositions: -1 },
+      { skips: -1 },
+      { recompositions: 1.5 },
+      { skips: 2_147_483_648 },
+      { recompositions: '4' },
+      { skips: null },
+    ]) {
+      expect(withCounts(bad)).toMatchObject({ ok: false, invalidDiagnostic: 'inspectNodes' });
     }
   });
 });

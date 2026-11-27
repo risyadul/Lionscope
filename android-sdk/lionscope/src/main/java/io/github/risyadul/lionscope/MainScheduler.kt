@@ -101,6 +101,12 @@ internal interface LinkPort {
      */
     fun addStorageListener(listener: (GatewayMessage) -> Unit)
 
+    /**
+     * v15 `config` and `resetComposeRecompositions` messages on both session and inspect-only links; called on a link
+     * thread, must only hand off.
+     */
+    fun addComposeRecompositionListener(listener: (GatewayMessage) -> Unit) = Unit
+
     /** [sendV8] for v11 messages: dropped unless the connection negotiated v11; held back without the link proof. */
     fun sendV11(sizeHint: Int, encode: () -> String?)
 

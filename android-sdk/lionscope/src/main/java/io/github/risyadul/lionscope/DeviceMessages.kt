@@ -365,6 +365,9 @@ internal object DeviceMessages {
         captureMs: Double,
         compose: Boolean,
         liveEdits: Int? = null,
+        recompositionTracking: RecompositionStatus? = null,
+        recompositionTruncated: Boolean = false,
+        recompositionIncomplete: Boolean = false,
     ): String {
         val json = JsonWriter().beginObject()
             .name("type").value("inspectBegin")
@@ -393,6 +396,9 @@ internal object DeviceMessages {
             .name("captureMs").value(clampMs(captureMs, MAX_CAPTURE_MS))
             .name("compose").value(compose)
         if (liveEdits != null) json.name("liveEdits").value(liveEdits.coerceIn(0, MAX_LIVE_EDITS))
+        if (recompositionTracking != null) json.name("recompositionTracking").value(recompositionTracking.wire)
+        if (recompositionTruncated) json.name("recompositionTruncated").value(true)
+        if (recompositionIncomplete) json.name("recompositionIncomplete").value(true)
         return json.endObject().toString()
     }
 
@@ -527,6 +533,9 @@ internal object DeviceMessages {
             val line = source.line?.takeIf { it >= 1 }
             if (line == null) json.nullValue() else json.value(line)
             source.draws?.let { json.name("draws").value(it) }
+            source.recompositions?.let { json.name("recompositions").value(it.coerceIn(0, Int.MAX_VALUE)) }
+            source.skips?.let { json.name("skips").value(it.coerceIn(0, Int.MAX_VALUE)) }
+            source.restartable?.let { json.name("restartable").value(it) }
             json.endObject()
         }
         node.composition?.let { json.name("composition").value(it.wire) }

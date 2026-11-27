@@ -11,6 +11,7 @@ import {
   DEVICE_PROTOCOL_V11,
   DEVICE_PROTOCOL_V12,
   DEVICE_PROTOCOL_V13,
+  DEVICE_PROTOCOL_V15,
   DEVICE_PROTOCOL_VERSION,
   INSPECT_TIMEOUT_MS,
   MAX_STORAGE_QUEUED,
@@ -293,7 +294,8 @@ export const MAX_PENDING_MOCK_BYTES = 1024 * 1024;
 
 /**
  * `config` as in protocol/fixtures/gateway-messages.ndjson: `rxTracking` on v9 links, then `savedStateTracking` on
- * v10 links, then `storageConsent` (last, `off` when not given) on v11 links only.
+ * v10 links, then `storageConsent` (`off` when not given) on v11 links, then `composeRecompositionTracking` (last,
+ * `false` when not given) on v15 links only.
  */
 export function configMessage(
   options: SdkOptions,
@@ -310,7 +312,11 @@ export function configMessage(
   const v9 = { ...config, rxTracking: options.rxTracking };
   if (protocolVersion < DEVICE_PROTOCOL_V10) return v9;
   const v10 = { ...v9, savedStateTracking: options.savedStateTracking };
-  return protocolVersion >= DEVICE_PROTOCOL_V11 ? { ...v10, storageConsent } : v10;
+  if (protocolVersion < DEVICE_PROTOCOL_V11) return v10;
+  const v11 = { ...v10, storageConsent };
+  return protocolVersion >= DEVICE_PROTOCOL_V15
+    ? { ...v11, composeRecompositionTracking: options.composeRecompositionTracking ?? false }
+    : v11;
 }
 
 /** `Name: value` lines joined by `\n` (names are tokens, values hold no CR / LF): the SDK splits them back. */
@@ -724,11 +730,17 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
       },
       close,
       sendConfig: (options, storageConsent) => {
-        // An inspect-only link gets no options (its SDK runs no collectors).
-        if (protocolVersion < DEVICE_PROTOCOL_V2 || closing || mode === 'inspect') return;
-        const config = configMessage(options, protocolVersion, storageConsent);
+        // Inspect-only links below v15 get no options; v15 inspect links take composeRecompositionTracking only.
+        if (protocolVersion < DEVICE_PROTOCOL_V2 || closing) return;
+        if (mode === 'inspect' && protocolVersion < DEVICE_PROTOCOL_V15) return;
+        const effectiveConsent = mode === 'inspect' ? 'off' : storageConsent;
+        const config = configMessage(options, protocolVersion, effectiveConsent);
         if (handler) socket.write(gatewayLine(config));
         else pendingConfig = config;
+      },
+      resetComposeRecompositions: () => {
+        if (protocolVersion < DEVICE_PROTOCOL_V15 || closing || !handler) return;
+        socket.write(gatewayLine({ type: 'resetComposeRecompositions' }));
       },
       sendMocks: (rev, rules) => {
         // Mocks belong to a profiling session: inspect-only links never get them.
@@ -781,7 +793,13 @@ function serveConnection(socket: Socket, context: ConnectionContext): void {
     }
     proven = carriesProof(protocolVersion, mode, result.proof);
     socket.write(encodeWelcome(protocolVersion, mode, result.proof));
-    if (pendingConfig && mode === 'session') socket.write(gatewayLine(pendingConfig));
+    if (pendingConfig && (mode === 'session' || protocolVersion >= DEVICE_PROTOCOL_V15)) {
+      const toSend =
+        mode === 'inspect' && pendingConfig.type === 'config' && 'storageConsent' in pendingConfig
+          ? { ...pendingConfig, storageConsent: 'off' as const }
+          : pendingConfig;
+      socket.write(gatewayLine(toSend));
+    }
     if (pendingMocks !== null && mode === 'session') socket.write(pendingMocks);
     pendingConfig = null;
     pendingMocks = null;

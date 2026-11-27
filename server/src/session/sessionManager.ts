@@ -1,4 +1,10 @@
-import { DEVICE_LINK_PORT, DEVICE_PROTOCOL_V7, isValidPackageName, isValidSerial } from '@lionscope/protocol';
+import {
+  DEVICE_LINK_PORT,
+  DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V15,
+  isValidPackageName,
+  isValidSerial,
+} from '@lionscope/protocol';
 import type {
   AppInfo,
   DeviceInfo,
@@ -15,7 +21,7 @@ import type {
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
-import type { InspectLinks } from '../device/inspectLinks.ts';
+import type { ComposeRecompositionDelivery, InspectLinks } from '../device/inspectLinks.ts';
 import { deliverLinkKey } from '../device/linkKey.ts';
 import { ReverseTunnel } from '../device/reverseTunnel.ts';
 import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkMessage, SdkLinkTarget } from '../device/sdkLink.ts';
@@ -269,8 +275,62 @@ export class SessionManager implements SdkLinkTarget {
   setSdkOptions(changes: Partial<SdkOptions>): boolean {
     const session = this.session;
     if (!session || session.isStopped) return false;
+    if (changes.composeRecompositionTracking !== undefined) {
+      this.inspectLinks?.setComposeRecompositionTracking(
+        session.serial,
+        changes.composeRecompositionTracking,
+      );
+    }
     session.setSdkOptions(changes);
     return true;
+  }
+
+  /**
+   * Toggle Compose recomposition tracking on `serial` for both inspect-only links and any active profiling session
+   * on that device. Reports whether a live v15+ link received the change immediately or it is pending a link.
+   */
+  setComposeRecompositionTracking(serial: string, enabled: boolean): ComposeRecompositionDelivery {
+    if (!isValidSerial(serial)) throw new PublicError('invalid adb serial');
+    const inspect = this.inspectLinks?.setComposeRecompositionTracking(serial, enabled) ?? {
+      state: 'pending' as const,
+      sdkConnected: false,
+    };
+    const session = this.session;
+    let sessionApplied = false;
+    let sessionConnected = false;
+    if (session && !session.isStopped && session.serial === serial) {
+      session.setSdkOptions({ composeRecompositionTracking: enabled });
+      const link = session.sdkLink;
+      if (link !== null) {
+        sessionConnected = true;
+        if (link.protocolVersion >= DEVICE_PROTOCOL_V15) sessionApplied = true;
+      }
+    }
+    const sdkConnected = inspect.sdkConnected || sessionConnected;
+    const state =
+      inspect.state === 'applied' || sessionApplied
+        ? 'applied'
+        : sdkConnected
+          ? 'unsupported_sdk'
+          : 'pending';
+    return { state, sdkConnected };
+  }
+
+  /**
+   * Reset accumulated Compose recomposition counters on `serial` across any live v15+ session or inspect-only link.
+   * Returns true if at least one link received the reset message.
+   */
+  resetComposeRecompositions(serial: string): boolean {
+    if (!isValidSerial(serial)) throw new PublicError('invalid adb serial');
+    let sent = false;
+    const session = this.session;
+    if (session && !session.isStopped && session.serial === serial) {
+      sent = session.resetComposeRecompositions() || sent;
+    }
+    if (this.inspectLinks?.resetComposeRecompositions(serial)) {
+      sent = true;
+    }
+    return sent;
   }
 
   setStorageConsent(consent: StorageConsent): void {
@@ -403,6 +463,8 @@ export class SessionManager implements SdkLinkTarget {
           if (this.session === session) this.openTunnel(serial, packageName);
         },
         storageConsent: this.storageConsent,
+        initialComposeRecompositionTracking:
+          this.inspectLinks?.getComposeRecompositionTracking(serial) ?? false,
         onStorageWriteResult: (message) => {
           if (this.session !== session) return;
           this.onStorageWriteResult?.(

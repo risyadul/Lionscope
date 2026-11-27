@@ -36,9 +36,9 @@ const RESULTS = lines('storage-results.ndjson');
 const REQUESTS = lines('gateway-messages.ndjson').filter((line) => line.startsWith('{"type":"storage'));
 
 describe('storage protocol v11', () => {
-  it('announces dashboard and device protocol 14', () => {
-    expect(DEVICE_PROTOCOL_VERSION).toBe(14);
-    expect(PROTOCOL_VERSION).toBe(14);
+  it('announces dashboard and device protocol 15', () => {
+    expect(DEVICE_PROTOCOL_VERSION).toBe(15);
+    expect(PROTOCOL_VERSION).toBe(15);
   });
 
   it('parses every golden SDK answer on a v11 link, and none below it', () => {

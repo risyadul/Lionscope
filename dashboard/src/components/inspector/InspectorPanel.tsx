@@ -1,6 +1,11 @@
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useId, useState, type ReactNode } from 'react';
 import { formatInteger } from '../../lib/format.ts';
-import { fallbackHint, fallbackLabel } from '../../lib/inspector.ts';
+import {
+  fallbackHint,
+  fallbackLabel,
+  hasComposeContent,
+  RECOMPOSITION_SEMANTICS_HINT,
+} from '../../lib/inspector.ts';
 import { EDIT_BLOCKED_HINTS, liveEditsLabel } from '../../lib/viewEdits.ts';
 import { MAX_INSPECTOR_NODES } from '@lionscope/protocol/wire';
 import { useInspectorContext } from './InspectorContext.tsx';
@@ -31,6 +36,8 @@ function Empty({
 export const InspectorPanel = memo(function InspectorPanel() {
   const controller = useInspectorContext();
   const [query, setQuery] = useState('');
+  const recompDescId = useId();
+  const resetDescId = useId();
   if (controller === null) return null;
   const { snapshot, index, selectedId } = controller;
 
@@ -66,6 +73,27 @@ export const InspectorPanel = memo(function InspectorPanel() {
   const revertAll = edits.status(null);
   const failure =
     controller.failure ?? (revertAll.kind === 'error' ? revertAll.message : null) ?? edits.notice;
+  const showRecomposition = hasComposeContent(snapshot);
+  const tracking = snapshot.recompositionTracking;
+  const isTrackingActive = tracking === 'active';
+  const recompDisabledReason =
+    tracking === undefined
+      ? 'Requires a newer Lionscope SDK'
+      : tracking === 'unsupported'
+        ? 'Requires Compose 1.9+'
+        : tracking === 'conflict'
+          ? 'Another Compose observer is already attached'
+          : null;
+  const recompTruncated = isTrackingActive && snapshot.recompositionTruncated === true;
+  const recompIncomplete = isTrackingActive && snapshot.recompositionIncomplete === true;
+  const recompDesc =
+    recompDisabledReason ??
+    (isTrackingActive
+      ? `Tracking Compose recompositions. ${RECOMPOSITION_SEMANTICS_HINT}`
+      : `Track Compose recomposition and skip counts. ${RECOMPOSITION_SEMANTICS_HINT}`);
+  const resetDisabledReason =
+    recompDisabledReason ?? (isTrackingActive ? null : 'Turn on recomposition tracking first');
+  const resetDesc = resetDisabledReason ?? 'Reset recomposition and skip counts to 0';
   return (
     <div className="inspector" data-stale={controller.isStale || undefined}>
       <div className="inspect-head">
@@ -91,6 +119,24 @@ export const InspectorPanel = memo(function InspectorPanel() {
                 truncated at {formatInteger(MAX_INSPECTOR_NODES)} nodes
               </span>
             ))}
+          {recompTruncated && (
+            <span
+              className="inspect-badge"
+              data-source="warn"
+              title="Recomposition tracking reached its scope capacity; newly seen composables have unavailable counts until Reset."
+            >
+              counts capped
+            </span>
+          )}
+          {recompIncomplete && (
+            <span
+              className="inspect-badge"
+              data-source="warn"
+              title="Coverage is incomplete for some compositions (pending attachment or already composed before attach); their counts are unavailable until Reset while other attached compositions stay exact."
+            >
+              partial coverage
+            </span>
+          )}
           {edits.liveEdits > 0 && (
             <span className="inspect-live">
               <span
@@ -120,16 +166,78 @@ export const InspectorPanel = memo(function InspectorPanel() {
               </button>
             </span>
           )}
-          <button
-            type="button"
-            className="btn inspect-refresh"
-            onClick={controller.refresh}
-            disabled={controller.isCapturing || !controller.canInspect}
-          >
-            {controller.isCapturing ? (controller.isStale ? 'Refreshing…' : 'Capturing…') : 'Refresh'}
-          </button>
+          <div className="inspect-actions">
+            {showRecomposition && (
+              <div className="inspect-recomp" role="group" aria-label="Compose recompositions">
+                <button
+                  type="button"
+                  className="btn inspect-recomp-toggle"
+                  aria-pressed={isTrackingActive}
+                  aria-describedby={recompDescId}
+                  title={recompDesc}
+                  disabled={recompDisabledReason !== null || controller.isCapturing || !controller.canInspect}
+                  onClick={() => controller.setRecompositionTracking(!isTrackingActive)}
+                >
+                  Recompositions
+                </button>
+                <span id={recompDescId} className="sr-only">
+                  {recompDesc}
+                </span>
+                <button
+                  type="button"
+                  className="btn inspect-recomp-reset"
+                  aria-describedby={resetDescId}
+                  title={resetDesc}
+                  disabled={resetDisabledReason !== null || controller.isCapturing || !controller.canInspect}
+                  onClick={controller.resetRecompositions}
+                >
+                  Reset
+                </button>
+                <span id={resetDescId} className="sr-only">
+                  {resetDesc}
+                </span>
+                {tracking === 'conflict' && (
+                  <button
+                    type="button"
+                    className="btn inspect-recomp-retry"
+                    title="Retry attaching Compose recomposition tracking once the other observer detaches"
+                    disabled={controller.isCapturing || !controller.canInspect}
+                    onClick={(event) => {
+                      keepFocusNear(event, '.inspect-recomp', '.inspect-recomp-toggle');
+                      controller.setRecompositionTracking(true);
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn inspect-refresh"
+              onClick={controller.refresh}
+              disabled={controller.isCapturing || !controller.canInspect}
+            >
+              {controller.isCapturing ? (controller.isStale ? 'Refreshing…' : 'Capturing…') : 'Refresh'}
+            </button>
+          </div>
         </div>
         {hint !== undefined && <p className="inspect-hint">{hint}</p>}
+        {showRecomposition && recompDisabledReason !== null && (
+          <p className="inspect-hint">Recompositions unavailable: {recompDisabledReason}.</p>
+        )}
+        {showRecomposition && recompTruncated && (
+          <p className="inspect-hint">
+            Recomposition tracking reached capacity — counts for newly seen composables are unavailable until
+            Reset.
+          </p>
+        )}
+        {showRecomposition && recompIncomplete && (
+          <p className="inspect-hint">
+            Coverage is incomplete for some compositions — their counts are unavailable until Reset while
+            other attached compositions stay exact.
+          </p>
+        )}
         {failure !== null && (
           <p className="inspect-failure" role="alert">
             {failure}

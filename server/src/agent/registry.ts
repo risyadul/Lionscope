@@ -14,7 +14,12 @@ import {
   tapTool,
 } from './deviceTools.ts';
 import { runInputsTool } from './inputTools.ts';
-import { inspectorSelectionTool, inspectScreenTool, selectInspectorNodeTool } from './inspectorTools.ts';
+import {
+  inspectorSelectionTool,
+  inspectScreenTool,
+  resetComposeRecompositionsTool,
+  selectInspectorNodeTool,
+} from './inspectorTools.ts';
 import { clearLocationTool, getLocationTool, setLocationTool } from './locationTools.ts';
 import { revertViewPropertiesTool, setViewPropertyTool } from './viewEditTools.ts';
 import { layoutsTool, viewTreeTool } from './layoutTools.ts';
@@ -62,6 +67,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   startSessionTool,
   stopSessionTool,
   sdkOptionsTool,
+  resetComposeRecompositionsTool,
   markTool,
   screenshotTool,
   uiTreeTool,

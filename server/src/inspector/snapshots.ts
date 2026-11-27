@@ -130,6 +130,11 @@ export function sdkSnapshot(
     captureMs: begin.captureMs,
     fallbackReason: null,
     ...(begin.liveEdits === undefined ? {} : { liveEdits: begin.liveEdits }),
+    ...(begin.recompositionTracking === undefined
+      ? {}
+      : { recompositionTracking: begin.recompositionTracking }),
+    ...(begin.recompositionTruncated ? { recompositionTruncated: true } : {}),
+    ...(begin.recompositionIncomplete ? { recompositionIncomplete: true } : {}),
     ...(editBlocked === undefined ? {} : { editBlocked }),
   };
 }

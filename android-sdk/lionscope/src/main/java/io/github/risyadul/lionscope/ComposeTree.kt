@@ -43,6 +43,9 @@ internal interface SlotTableAccess<G : Any, L : Any> {
     /** The route of the navigation destination whose content a `LocalOwnersProvider` [group] provides, else null. */
     fun destination(group: G): String?
 
+    /** The `RecomposeScopeImpl` stored in [group]'s slot data, or null when the composable is not restartable. */
+    fun recomposeScope(group: G): Any? = null
+
     /** Null for the owner's root. */
     fun parent(node: L): L?
 
@@ -67,6 +70,17 @@ internal class ComposeNode(val name: String, val source: ComposableSource, val d
     var bounds: PixelRect? = null
         internal set
     var draws: Boolean? = null
+        internal set
+    var recomposeScope: Any? = null
+        internal set
+    var recompositions: RecompositionCounts? = null
+        internal set
+    /**
+     * Explicit restartability marker emitted when tracking is active and counts are omitted:
+     * `false` when the composable has no `RecomposeScopeImpl` (inline/non-restartable), `true` when it has one
+     * whose counts are unavailable, and `null` when tracking is inactive or counts are present.
+     */
+    var restartable: Boolean? = null
         internal set
 }
 
@@ -96,6 +110,7 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
     private val access: SlotTableAccess<G, L>,
     private val budget: ComposeBudget = ComposeBudget(),
     private val filter: ComposableFilter = ComposableFilter(),
+    private val includeRecomposeScopes: Boolean = false,
 ) {
     /** A group being walked: what its children inherit, how many calls they made so far, and the rest of them. */
     private class Frame<G>(
@@ -176,6 +191,7 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
                 filter.learn(info, parent.packageHash)
                 if (filter.isShown(info.name, parent.packageHash)) {
                     val node = ComposeNode(info.name!!, ComposableSource(parent.file, parent.info?.lineOfCall(call)), destination)
+                    if (includeRecomposeScopes) node.recomposeScope = access.recomposeScope(group)
                     if (owner == null) top += node else owner.children += node
                     owner = node
                 }

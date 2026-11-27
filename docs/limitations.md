@@ -32,6 +32,25 @@
   (the default), and composed after the SDK started. Composables are only those called from your code (and from
   libraries other than androidx Compose, Material and Navigation); a composable that lays nothing out (an effect, a
   `Dialog` call, a provider) has no node of its own, and a `Dialog`'s content appears in the dialog's window.
+- **Compose recomposition and skip counts** require a non-minified debug build, Compose runtime 1.9+, and device
+  protocol 15, and start off by default. Minified/shrunk builds that strip or rename Compose runtime internals fail
+  closed to `unsupported`, consistent with Compose hierarchy inspection above. If another Compose observer already
+  occupies a composition's observer slot — or takes over the slot after Lionscope attached — Lionscope does not
+  displace it, stops reporting counts, and reports `conflict` (click **Retry** or re-send `set_sdk_options` with
+  `composeRecompositionTracking: true` once the other observer detaches). Counts follow Android Studio semantics
+  (initial composition while tracking is active counts as 1; pre-existing compositions establish their zero baseline
+  when their observer attaches, so executions before attach stay outside the baseline; counts clear on Reset,
+  disable, or disconnect).
+  Distinguishing skips from recompositions resolves and invokes Compose's internal `RecomposeScopeImpl`
+  skip/rereading getters; if any required symbol is missing or fails at runtime, tracking fails closed to
+  `unsupported` instead of misreporting skips as recompositions. The tracker caps live scope entries at 16,384
+  weak-identity keys (evicting disposed scopes eagerly) and marks snapshots `recompositionTruncated` when the cap is
+  reached, freezing new insertions so dropped scopes stay unavailable rather than showing partial counts until Reset.
+  Coverage is tracked per composition: pre-existing compositions attach on a background serial worker without
+  blocking the app's main thread and report `recompositionIncomplete` (counts unavailable for those compositions)
+  until attached and baselined; compositions discovered post-enable after already composing stay unavailable until
+  Reset, while other attached compositions keep exact counts. Runtime-verified on API 36 with Compose BOM
+  `2025.09.01`.
 - **Live edits are for Views only.** Composables are read-only (their values come from code on every
   recomposition), and an edit lasts until it is reverted, the app sets the property itself or the view is
   recreated.

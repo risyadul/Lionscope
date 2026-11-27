@@ -1,6 +1,8 @@
 import type { AddressInfo } from 'node:net';
-import type { ServerMessage } from '@lionscope/protocol';
+import { DEVICE_PROTOCOL_V15, type ServerMessage } from '@lionscope/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { callTool } from '../src/agent/registry.ts';
+import type { AgentBaseContext } from '../src/agent/tool.ts';
 import { InspectLinks } from '../src/device/inspectLinks.ts';
 import type { InspectLinkListener } from '../src/device/inspectLinks.ts';
 import { PS_COMMAND } from '../src/session/appPids.ts';
@@ -329,6 +331,58 @@ describe('SessionManager and inspect-only mappings', () => {
     await manager.stopSession();
     await settle();
     expect(reverses()).toEqual([SESSION_MAP, INSPECT_MAP]);
+    await manager.close();
+    await links.close();
+  });
+
+  it('reports applied/sdkConnected when a session waits for app X while app Y has a live v15 inspect link on the same device', async () => {
+    const { manager, links, client, list, start, attach } = setup();
+    await list();
+    links.setFocus(client, SERIAL);
+    await list();
+    await start(); // session for PKG (app X), still waiting for its SDK link (sdk.connected === false)
+    expect(manager.getSessionState().sdk?.connected).toBe(false);
+
+    // App Y (OTHER) connects via an inspect-only v15 link on the SAME device.
+    const { link: otherLink, result } = await attach({
+      ...OTHER_HELLO,
+      protocolVersion: DEVICE_PROTOCOL_V15,
+    });
+    expect(result).toMatchObject({ ok: true, mode: 'inspect' });
+    const configsBefore = otherLink.configs.length;
+
+    const ctx = {
+      sessions: manager,
+      now: Date.now,
+    } as unknown as AgentBaseContext;
+    const outcome = await callTool(ctx, 'set_sdk_options', { composeRecompositionTracking: true }, false);
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: {
+        serial: SERIAL,
+        sdkConnected: true,
+        delivery: 'applied',
+        options: expect.objectContaining({ composeRecompositionTracking: true }),
+      },
+    });
+    expect((outcome as { ok: true; result: { note?: string } }).result.note).toBeUndefined();
+    expect(otherLink.configs).toHaveLength(configsBefore + 1);
+    expect(otherLink.configs.at(-1)?.composeRecompositionTracking).toBe(true);
+
+    // Also verify retry (calling setComposeRecompositionTracking(true) again) pushes config to a live v15 session link.
+    const { link: sessionLink, result: sessionRes } = await attach({
+      ...HELLO,
+      protocolVersion: DEVICE_PROTOCOL_V15,
+    });
+    expect(sessionRes).toMatchObject({ ok: true, mode: 'session' });
+    const sessionConfigsBefore = sessionLink.configs.length;
+    expect(manager.setComposeRecompositionTracking(SERIAL, true)).toEqual({
+      state: 'applied',
+      sdkConnected: true,
+    });
+    expect(sessionLink.configs).toHaveLength(sessionConfigsBefore + 1);
+    expect(sessionLink.configs.at(-1)?.composeRecompositionTracking).toBe(true);
+
     await manager.close();
     await links.close();
   });

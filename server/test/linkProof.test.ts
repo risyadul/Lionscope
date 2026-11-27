@@ -43,6 +43,7 @@ class RecordingLink implements SdkLink {
   constructor(readonly protocolVersion = 7) {}
   close(): void {}
   sendConfig(): void {}
+  resetComposeRecompositions(): void {}
   sendMocks(rev: number, rules: readonly NetworkMockRule[]): void {
     this.mockSets.push({ rev, rules });
   }

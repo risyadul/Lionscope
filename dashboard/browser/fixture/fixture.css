@@ -19,6 +19,22 @@
   font-size: var(--text-body);
 }
 
+.fixture-inspector {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 920px;
+  height: 100dvh;
+  margin: 0 auto;
+}
+
+.fixture-inspector h1 {
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--text-body);
+}
+
 .fixture-header {
   display: flex;
   flex: none;

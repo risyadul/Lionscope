@@ -28,16 +28,29 @@ class InspectorTest {
         var commits = 0
         val readCompose = ArrayList<Boolean>()
         val viewState = ArrayList<Boolean>()
+        val recompositionCounts = ArrayList<Boolean>()
+        var trackingStatus: RecompositionStatus? = null
+        var trackingTruncated: Boolean = false
+        var trackingIncomplete: Boolean = false
         override val isForeground: Boolean
             get() = foreground
 
-        override fun prepare(readCompose: Boolean, viewState: Boolean): PreparedScene<FakeView>? {
+        override fun prepare(readCompose: Boolean, viewState: Boolean, recompositionCounts: Boolean): PreparedScene<FakeView>? {
             this.readCompose += readCompose
             this.viewState += viewState
+            this.recompositionCounts += recompositionCounts
             failure?.let { throw it }
             val root = root ?: return null
             val captured = if (viewState) { { ++commits } } else null
-            return PreparedScene(listOf(fakeWindow(root)), InspectorDisplay(1080, 2424, 0), FakeTreeAccess(), captured)
+            return PreparedScene(
+                listOf(fakeWindow(root)),
+                InspectorDisplay(1080, 2424, 0),
+                FakeTreeAccess(),
+                captured,
+                { trackingStatus },
+                { trackingTruncated },
+                { trackingIncomplete },
+            )
         }
     }
 
@@ -148,6 +161,43 @@ class InspectorTest {
         assertEquals(listOf(false, true), scene.viewState)
         assertEquals(1, scene.commits)
         assertEquals(1.0, sent().single { it["type"] == "inspectBegin" }["liveEdits"])
+    }
+
+    @Test
+    fun recompositionTrackingStatusIsOnlyEmittedOnAV15Link() {
+        scene.trackingStatus = RecompositionStatus.ACTIVE
+        scene.trackingTruncated = true
+        scene.trackingIncomplete = true
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V14)
+        link.v4Lines.clear()
+        request(1)
+        background.removeAt(0).run()
+        assertEquals(listOf(false), scene.recompositionCounts)
+        val beginV14 = sent().single { it["type"] == "inspectBegin" }
+        assertFalse(beginV14.containsKey("recompositionTracking"))
+        assertFalse(beginV14.containsKey("recompositionTruncated"))
+        assertFalse(beginV14.containsKey("recompositionIncomplete"))
+
+        link.welcome(false)
+        link.welcome(true, DEVICE_PROTOCOL_V15)
+        link.v4Lines.clear()
+        request(2)
+        background.removeAt(0).run()
+        assertEquals(listOf(false, true), scene.recompositionCounts)
+        val beginV15 = sent().single { it["type"] == "inspectBegin" }
+        assertEquals("active", beginV15["recompositionTracking"])
+        assertEquals(true, beginV15["recompositionTruncated"])
+        assertEquals(true, beginV15["recompositionIncomplete"])
+
+        scene.trackingStatus = RecompositionStatus.CONFLICT
+        link.v4Lines.clear()
+        request(3)
+        background.removeAt(0).run()
+        val beginConflict = sent().single { it["type"] == "inspectBegin" }
+        assertEquals("conflict", beginConflict["recompositionTracking"])
+        assertFalse(beginConflict.containsKey("recompositionTruncated"))
+        assertFalse(beginConflict.containsKey("recompositionIncomplete"))
     }
 
     @Test

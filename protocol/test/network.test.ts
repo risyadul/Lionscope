@@ -214,6 +214,7 @@ describe('gateway golden lines (server → SDK)', () => {
         'storageList',
         'storageRead',
         'storageWrite',
+        'resetComposeRecompositions',
       ]),
     );
   });

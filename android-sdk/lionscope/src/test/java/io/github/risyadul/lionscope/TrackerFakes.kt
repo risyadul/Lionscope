@@ -43,6 +43,7 @@ internal class FakeLink : LinkPort {
     private val mocksListeners = ArrayList<(GatewayMessage) -> Unit>()
     private val viewEditListeners = ArrayList<(GatewayMessage) -> Unit>()
     private val storageListeners = ArrayList<(GatewayMessage) -> Unit>()
+    private val recompositionListeners = ArrayList<(GatewayMessage) -> Unit>()
     val screens = ArrayList<ScreenRef?>()
     val foreground = ArrayList<Boolean>()
     val v2Lines = ArrayList<String>()
@@ -146,6 +147,14 @@ internal class FakeLink : LinkPort {
         storageListeners += listener
     }
 
+    override fun addComposeRecompositionListener(listener: (GatewayMessage) -> Unit) {
+        recompositionListeners += listener
+    }
+
+    fun recomposition(message: GatewayMessage) {
+        recompositionListeners.forEach { it(message) }
+    }
+
     /** A v11 storage request from the server (the real link forwards it on a v11 link). */
     fun storage(message: GatewayMessage) {
         storageListeners.forEach { it(message) }
@@ -196,5 +205,8 @@ internal class FakeLink : LinkPort {
 
     fun config(options: SdkOptions) {
         configListeners.forEach { it(options) }
+        if ((negotiatedVersion ?: 0) >= DEVICE_PROTOCOL_V15) {
+            recompositionListeners.forEach { it(GatewayMessage.Config(options)) }
+        }
     }
 }

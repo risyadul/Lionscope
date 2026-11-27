@@ -811,12 +811,16 @@ describe('device gateway: checking a hello before the welcome', () => {
       entry?.link.sendConfig(DEFAULT_SDK_OPTIONS);
       client.send(HEARTBEAT);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      return client.rawLines;
+      const lines = [...client.rawLines];
+      client.socket.destroy();
+      await client.closed;
+      return lines;
     };
-    // Below v9, without rxTracking.
+    // Below v9, without rxTracking, savedStateTracking or composeRecompositionTracking.
     const {
       rxTracking: _rxTracking,
       savedStateTracking: _savedStateTracking,
+      composeRecompositionTracking: _composeRecompositionTracking,
       ...v8Options
     } = DEFAULT_SDK_OPTIONS;
     const config = JSON.stringify({ type: 'config', ...v8Options });
@@ -825,15 +829,83 @@ describe('device gateway: checking a hello before the welcome', () => {
       config,
       config,
     ]);
-    expect(await welcome(DEVICE_PROTOCOL_VERSION + 1, 'inspect')).toEqual([
-      `{"type":"welcome","protocolVersion":${DEVICE_PROTOCOL_VERSION},"mode":"inspect"}`,
+    // Inspect-only links below v15 never receive config.
+    expect(await welcome(14, 'inspect')).toEqual([
+      '{"type":"welcome","protocolVersion":14,"mode":"inspect"}',
     ]);
+    // v15 inspect-only links do receive config (with storageConsent forced off) for Compose recomposition tracking.
+    const v15Config = JSON.stringify({
+      type: 'config',
+      ...DEFAULT_SDK_OPTIONS,
+      storageConsent: 'off',
+      composeRecompositionTracking: false,
+    });
+    const v15Lines = await welcome(DEVICE_PROTOCOL_VERSION + 1, 'inspect');
+    expect(v15Lines).toEqual([
+      `{"type":"welcome","protocolVersion":${DEVICE_PROTOCOL_VERSION},"mode":"inspect"}`,
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true,"savedStateTracking":true,"storageConsent":"off","composeRecompositionTracking":false}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true,"savedStateTracking":true,"storageConsent":"off","composeRecompositionTracking":false}',
+    ]);
+    expect(v15Config).toContain('"composeRecompositionTracking":false');
     expect(await welcome(DEVICE_PROTOCOL_V4, 'session')).toEqual([
       '{"type":"welcome","protocolVersion":4}',
       config,
       config,
     ]);
     expect(await welcome(DEVICE_PROTOCOL_V4, 'inspect')).toEqual(['{"type":"bye","reason":"no_session"}']);
+  });
+
+  it('sends v15 config and resetComposeRecompositions matching golden lines, and skips them below v15', async () => {
+    const deferred = deferredTarget();
+    const port = await listen(deferred.target);
+    const golden = readFileSync(
+      new URL('../../protocol/fixtures/gateway-messages.ndjson', import.meta.url),
+      'utf8',
+    )
+      .trim()
+      .split('\n');
+
+    // v14 link: no composeRecompositionTracking in config, resetComposeRecompositions is a no-op.
+    const v14 = await open(port);
+    v14.send({ ...HELLO, protocolVersion: 14 });
+    await waitUntil(() => deferred.pending.length === 1);
+    const p14 = deferred.pending.shift()!;
+    p14.resolve({ ok: true, handler: deferred.handler, mode: 'session' });
+    await v14.waitFor((message) => message.type === 'welcome');
+    p14.link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: true }, 'read');
+    p14.link.resetComposeRecompositions();
+    await v14.waitFor((message) => message.type === 'config');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(v14.rawLines).toEqual([
+      '{"type":"welcome","protocolVersion":14,"mode":"session"}',
+      '{"type":"config","stallThresholdMs":150,"strictMode":false,"inflateTracking":true,"rxTracking":true,"savedStateTracking":true,"storageConsent":"read"}',
+    ]);
+
+    // v15 inspect link: config forces storageConsent=off, includes composeRecompositionTracking, reset sends golden line.
+    const v15 = await open(port);
+    v15.send({ ...HELLO, protocolVersion: 15 });
+    await waitUntil(() => deferred.pending.length === 1);
+    const p15 = deferred.pending.shift()!;
+    p15.link.sendConfig(
+      {
+        stallThresholdMs: 250,
+        strictMode: true,
+        inflateTracking: true,
+        rxTracking: false,
+        savedStateTracking: false,
+        composeRecompositionTracking: true,
+      },
+      'read_write',
+    );
+    p15.resolve({ ok: true, handler: deferred.handler, mode: 'inspect' });
+    await v15.waitFor((message) => message.type === 'config');
+    p15.link.resetComposeRecompositions();
+    await v15.waitFor((message) => message.type === 'resetComposeRecompositions');
+    expect(v15.rawLines).toEqual([
+      '{"type":"welcome","protocolVersion":15,"mode":"inspect"}',
+      golden.find((line) => line.includes('"composeRecompositionTracking":true')),
+      golden.find((line) => line.includes('"resetComposeRecompositions"')),
+    ]);
   });
 
   it('tells the handler when the connection went away while the target checked it', async () => {
