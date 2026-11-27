@@ -24,6 +24,7 @@ import java.lang.reflect.Method
 import java.util.ArrayDeque
 import java.util.IdentityHashMap
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -70,6 +71,9 @@ internal class ComposeRecomposition19(
     private val maxTrackedScopes: Int = DEFAULT_MAX_TRACKED_SCOPES,
     private val runningRecomposersFlow: () -> StateFlow<Set<RecomposerInfo>> = { Recomposer.runningRecomposers },
     private val customScheduler: ((Runnable) -> Unit)? = null,
+    private val workerThreadFactory: ThreadFactory = ThreadFactory { runnable ->
+        Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
+    },
 ) : ComposeRecompositionTracker {
 
     /** Marker implemented by every generation's observer so retired Lionscope observers are never misread as foreign. */
@@ -146,7 +150,9 @@ internal class ComposeRecomposition19(
      * Single serial deferred executor with generation-tagged coalescing, immediate purge on generation end, and
      * idle thread retirement (`allowCoreThreadTimeOut = true`). Never spawns a thread unless deferred work occurs.
      */
-    private class SerialDeferredExecutor {
+    private class SerialDeferredExecutor(
+        private val threadFactory: ThreadFactory,
+    ) {
         private class GenTask(val genId: Long, val key: Any?, val action: () -> Unit)
 
         private val queueLock = Any()
@@ -160,9 +166,8 @@ internal class ComposeRecomposition19(
                 IDLE_KEEP_ALIVE_MS,
                 TimeUnit.MILLISECONDS,
                 LinkedBlockingQueue(),
-            ) { runnable ->
-                Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
-            }.apply {
+                threadFactory,
+            ).apply {
                 allowCoreThreadTimeOut(true)
             }
         }
@@ -178,8 +183,15 @@ internal class ComposeRecomposition19(
                 pending.addLast(GenTask(genId, key, action))
                 if (!drainScheduled) {
                     drainScheduled = true
-                    workerCreated = true
-                    worker.execute(::drain)
+                    try {
+                        val executor = worker
+                        workerCreated = true
+                        executor.execute(::drain)
+                    } catch (t: Throwable) {
+                        drainScheduled = false
+                        if (isFatal(t)) throw t
+                        return false
+                    }
                 }
                 return true
             }
@@ -202,15 +214,34 @@ internal class ComposeRecomposition19(
         fun poolSize(): Int = if (!workerCreated) 0 else worker.poolSize
 
         private fun drain() {
-            while (true) {
-                val next = synchronized(queueLock) {
-                    if (pending.isEmpty()) {
-                        drainScheduled = false
-                        return
+            var exitedCleanly = false
+            try {
+                while (true) {
+                    val next = synchronized(queueLock) {
+                        if (pending.isEmpty()) {
+                            drainScheduled = false
+                            exitedCleanly = true
+                            return
+                        }
+                        pending.removeFirst()
                     }
-                    pending.removeFirst()
+                    guarded { next.action() }
                 }
-                guarded { next.action() }
+            } finally {
+                if (!exitedCleanly) {
+                    synchronized(queueLock) {
+                        drainScheduled = false
+                        if (pending.isNotEmpty()) {
+                            drainScheduled = true
+                            try {
+                                worker.execute(::drain)
+                            } catch (t: Throwable) {
+                                drainScheduled = false
+                                if (isFatal(t)) throw t
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -220,7 +251,7 @@ internal class ComposeRecomposition19(
     private val referenceQueue = ReferenceQueue<RecomposeScope>()
     private val counts = HashMap<Any, ScopeEntry>()
     private val lookupKey = LookupKey()
-    private val deferredExecutor = SerialDeferredExecutor()
+    private val deferredExecutor = SerialDeferredExecutor(workerThreadFactory)
 
     @Volatile
     private var currentGen: Generation? = null

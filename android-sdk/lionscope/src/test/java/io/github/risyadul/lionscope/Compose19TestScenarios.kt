@@ -25,6 +25,7 @@ import java.io.File
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -2061,6 +2062,82 @@ internal object Compose19TestScenarios {
         } finally {
             tracker.setEnabled(false)
             comps.forEach { runCatching { it.dispose() } }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
+    /**
+     * Round-5 #3 regression: if the first worker thread spawn throws (e.g. thread creation failure), `drainScheduled`
+     * must roll back to `false` so that after the factory recovers, Off/On spawns a worker, attaches pending
+     * compositions, clears `incompleteCoverage`, and counts recompositions normally.
+     */
+    fun assertFailedWorkerStartRollsBackSchedulingSoRetryOffOnAttachesAndCounts() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val tick = mutableIntStateOf(0)
+        val scopeRef = AtomicReference<RecomposeScope>()
+        val comp = Composition(EmptyApplier(), recomposer)
+        fun composeRoot(composer: Composer, changed: Int = 0) {
+            val cc = composer.startRestartGroup(11_301)
+            scopeRef.set(cc.recomposeScope!!)
+            if (changed != 0 || !cc.skipping) tick.intValue else cc.skipToGroupEnd()
+            cc.endRestartGroup()?.let {
+                Compose19TestBridge.updateScope(it) { next, nextChanged -> composeRoot(next, nextChanged) }
+            }
+        }
+        Compose19TestBridge.setContent(comp) { composer, changed -> composeRoot(composer, changed) }
+
+        val failThreadCreation = AtomicBoolean(true)
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+            workerThreadFactory = ThreadFactory { runnable ->
+                if (failThreadCreation.get()) {
+                    throw OutOfMemoryError("pthread_create (1040KB stack) failed: Try again")
+                }
+                Thread(runnable, ComposeRecomposition19.WORKER_THREAD_NAME).apply { isDaemon = true }
+            },
+        )
+
+        try {
+            // First enable: worker creation fails safely without crashing the app.
+            tracker.setEnabled(true)
+            assertEquals(RecompositionStatus.ACTIVE, tracker.status)
+            assertEquals(0, tracker.attachedCompositionCount())
+            assertEquals(0, tracker.deferredPoolSize())
+            assertTrue(tracker.incompleteCoverage)
+
+            // Restore thread factory and toggle Off -> On: must retry scheduling, spawn worker, and attach.
+            failThreadCreation.set(false)
+            tracker.setEnabled(false)
+            tracker.setEnabled(true)
+
+            awaitCondition(timeoutMs = 5_000L) { tracker.attachedCompositionCount() == 1 }
+            assertEquals(RecompositionStatus.ACTIVE, tracker.status)
+            assertEquals(1, tracker.attachedCompositionCount())
+            assertFalse(tracker.incompleteCoverage)
+
+            tick.intValue = 1
+            Snapshot.sendApplyNotifications()
+            clock.advanceFrame()
+            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(scopeRef.get()))
+        } finally {
+            tracker.setEnabled(false)
+            runCatching { comp.dispose() }
             recomposer.cancel()
             job.join()
         }

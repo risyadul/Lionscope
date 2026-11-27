@@ -497,6 +497,12 @@ class ComposeRecompositionTest {
     }
 
     @Test
+    fun failedWorkerStartRollsBackSchedulingSoRetryOffOnAttachesAndCounts() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertFailedWorkerStartRollsBackSchedulingSoRetryOffOnAttachesAndCounts()
+    }
+
+    @Test
     fun countsForDoesNotScanAllCompositionsPerLookup() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertCountsForDoesNotScanAllCompositionsPerLookup()
