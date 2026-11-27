@@ -297,11 +297,13 @@ class ComposeRecompositionTest {
             assertEquals(1, itemRuns[1])
             assertNull(tracker.countsFor(scopes["Parent"]!!))
 
-            // Turn tracking ON: existing scopes start at 0/0.
+            // Turn tracking ON: existing scopes attach on the serial worker and start at 0/0.
             tracker.setEnabled(true)
             assertEquals(RecompositionStatus.ACTIVE, tracker.status)
             assertEquals(1, tracker.attachedRecomposerCount())
+            awaitCondition { tracker.attachedCompositionCount() == 3 }
             assertEquals(3, tracker.attachedCompositionCount()) // root + 2 LazyColumn items
+            assertFalse(tracker.incompleteCoverage)
             assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopes["Parent"]!!))
             assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopes["StableChild"]!!))
 
@@ -386,6 +388,7 @@ class ComposeRecompositionTest {
 
             tracker.setEnabled(true)
             assertEquals(RecompositionStatus.ACTIVE, tracker.status)
+            awaitCondition { tracker.attachedCompositionCount() == 3 }
             assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopes["Parent"]!!))
 
             itemCompositions.values.forEach { it.dispose() }
@@ -461,6 +464,30 @@ class ComposeRecompositionTest {
     fun deferredExecutorPurgesEndedGenerationAndRetiresIdleThread() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertDeferredExecutorPurgesEndedGenerationAndRetiresIdleThread()
+    }
+
+    @Test
+    fun sample42ExecutionBetweenCheckAndClaimIsUnavailableThenBaselinedAtAttach() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertSample42ExecutionBetweenCheckAndClaimIsUnavailableThenBaselinedAtAttach()
+    }
+
+    @Test
+    fun backgroundSideEffectApplyNeverBlocksEnableOrDiscoveryAndSiblingCountsFirstPass() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertBackgroundSideEffectApplyNeverBlocksEnableOrDiscoveryAndSiblingCountsFirstPass()
+    }
+
+    @Test
+    fun enqueueRacingGenerationCancellationNeverQueuesRetiredComposition() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertEnqueueRacingGenerationCancellationNeverQueuesRetiredComposition()
+    }
+
+    @Test
+    fun captureLevelOwnershipVerificationRunsOnceAcrossMultipleComposeViews() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertCaptureLevelOwnershipVerificationRunsOnceAcrossMultipleComposeViews()
     }
 
     @Test

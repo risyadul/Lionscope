@@ -37,9 +37,10 @@ internal class ComposeRead(
 
 /** Reads AndroidComposeViews (main thread); implemented only by the Compose-linked [ComposeViewReader]. */
 internal interface ComposeReading {
-    /** A fresh capture: the group budget is shared by every view read until the next [beginCapture]. */
+    /** A fresh capture: the group budget and tracker ownership check are shared by every view read until [endCapture]. */
     fun beginCapture(recompositionCounts: Boolean = false)
     fun read(view: View): ComposeRead
+    fun endCapture() {}
 }
 
 /**

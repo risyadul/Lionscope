@@ -245,6 +245,7 @@ internal class PreparedScene<T : Any>(
     val recompositionTracking: (() -> RecompositionStatus?)? = null,
     val recompositionTruncated: (() -> Boolean)? = null,
     val recompositionIncomplete: (() -> Boolean)? = null,
+    val onCaptureFinished: (() -> Unit)? = null,
 )
 
 /** A capture ready to be sent: everything was read on the main thread. */
@@ -303,16 +304,20 @@ internal class Inspector<T : Any>(
             val recompositionCounts = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V15)
             prepared = scene.prepare(readCompose, viewState, recompositionCounts)?.takeIf { it.windows.isNotEmpty() }
                 ?: return reply(requestId, InspectError.NO_WINDOW)
-            val display = prepared.display
-            capture = InspectorWalker.capture(prepared.windows, PixelRect(0, 0, display.width, display.height), prepared.access)
-            liveEdits = prepared.captured?.invoke()
-            recompositionTracking = if (recompositionCounts) prepared.recompositionTracking?.invoke() else null
-            recompositionTruncated = recompositionCounts &&
-                recompositionTracking == RecompositionStatus.ACTIVE &&
-                prepared.recompositionTruncated?.invoke() == true
-            recompositionIncomplete = recompositionCounts &&
-                recompositionTracking == RecompositionStatus.ACTIVE &&
-                prepared.recompositionIncomplete?.invoke() == true
+            try {
+                val display = prepared.display
+                capture = InspectorWalker.capture(prepared.windows, PixelRect(0, 0, display.width, display.height), prepared.access)
+                liveEdits = prepared.captured?.invoke()
+                recompositionTracking = if (recompositionCounts) prepared.recompositionTracking?.invoke() else null
+                recompositionTruncated = recompositionCounts &&
+                    recompositionTracking == RecompositionStatus.ACTIVE &&
+                    prepared.recompositionTruncated?.invoke() == true
+                recompositionIncomplete = recompositionCounts &&
+                    recompositionTracking == RecompositionStatus.ACTIVE &&
+                    prepared.recompositionIncomplete?.invoke() == true
+            } finally {
+                prepared.onCaptureFinished?.invoke()
+            }
         } catch (t: Throwable) {
             if (isFatal(t)) throw t
             return reply(requestId, InspectError.FAILED)

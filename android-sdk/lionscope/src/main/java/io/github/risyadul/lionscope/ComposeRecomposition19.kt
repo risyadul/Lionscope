@@ -40,17 +40,21 @@ import java.util.concurrent.TimeUnit
  *   is resolved through `CompositionObserverHolder.current()`, so cached/inherited references to a retired Lionscope
  *   generation are recognized as ours (replaced cleanly) rather than a foreign conflict, while foreign observers are
  *   preserved and reported as [RecompositionStatus.CONFLICT].
- * - **Serial post-`observe()` replay**: `RecomposerInfo.observe()` only records known compositions while Compose holds
- *   `Recomposer.stateLock` (preventing deadlocks). Immediately after `observe()` releases `stateLock`, idle replayed
- *   compositions attach serially on the enabling thread with no sleeps or fixed thread pool. Only actively-composing
- *   replays, subcomposition handle upgrades, and in-callback handle disposals use a single retiring serial executor
- *   whose generation-tagged tasks are coalesced and purged when the generation ends.
+ * - **Non-blocking serial replay & implicit per-composition baseline**: `RecomposerInfo.observe()` only records known
+ *   compositions while Compose holds `Recomposer.stateLock` (preventing deadlocks). All replayed compositions attach
+ *   on one retiring serial background executor (never blocking the enabling/main thread or running-recomposer
+ *   collector, even if a background `SideEffect` holds `CompositionImpl.lock` during apply). Every pre-enable
+ *   replayed composition starts as `INCOMPLETE` (counts unavailable); once its observer is attached, an implicit
+ *   per-composition baseline clears only that composition's scopes before marking it `EXACT` — removing any
+ *   dependence on sampling `isComposing`. Generation-tagged enqueue and cancellation share one queue lock so ended
+ *   generations can never enqueue stale work.
  * - **Per-composition coverage, no global freeze**: each [CompositionRecord] tracks its own [Coverage] (`EXACT` vs
- *   `INCOMPLETE`). A composition that is still pending attachment or was attached after already composing post-enable
- *   reports unavailable counts (`null`, never `0/0`) for its own scopes until [reset], while fully attached sibling
- *   compositions keep exact counts. Capacity overflow ([truncated]) remains monotonic until [reset].
- * - **Per-capture ownership verification**: [beginCapture] verifies attached compositions once per capture (without
- *   per-node scans or allocations), while standalone [countsFor] peeks at most the single scope's owning composition.
+ *   `INCOMPLETE`). A composition pending attachment or discovered post-enable after already composing reports
+ *   unavailable counts (`null`, never `0/0`) for its own scopes while fully attached sibling compositions keep exact
+ *   counts. Capacity overflow ([truncated]) remains monotonic until [reset].
+ * - **Capture-level ownership verification**: [beginCapture]..[endCapture] verifies attached compositions ONCE across
+ *   an entire multi-view Inspector capture (zero per-view or per-node scans), while standalone [countsFor] peeks at
+ *   most the single scope's owning composition.
  */
 @OptIn(ExperimentalComposeRuntimeApi::class)
 internal class ComposeRecomposition19(
@@ -147,6 +151,7 @@ internal class ComposeRecomposition19(
 
         private val queueLock = Any()
         private val pending = ArrayDeque<GenTask>()
+        private var cancelledThroughGenId: Long = 0L
         private var drainScheduled = false
         private val worker: ThreadPoolExecutor by lazy {
             ThreadPoolExecutor(
@@ -165,24 +170,29 @@ internal class ComposeRecomposition19(
         @Volatile
         private var workerCreated = false
 
-        fun enqueue(genId: Long, key: Any?, action: () -> Unit) {
+        fun enqueue(genId: Long, key: Any?, action: () -> Unit): Boolean {
             synchronized(queueLock) {
-                if (key != null && pending.any { it.genId == genId && it.key === key }) return
+                // Reject tasks for ended generations atomically under the same lock used by cancelGeneration().
+                if (genId != DISPOSE_GEN_ID && genId <= cancelledThroughGenId) return false
+                if (key != null && pending.any { it.genId == genId && it.key === key }) return true
                 pending.addLast(GenTask(genId, key, action))
                 if (!drainScheduled) {
                     drainScheduled = true
                     workerCreated = true
                     worker.execute(::drain)
                 }
+                return true
             }
         }
 
         fun cancelGeneration(genId: Long) {
             synchronized(queueLock) {
+                if (genId > cancelledThroughGenId) cancelledThroughGenId = genId
                 if (pending.isEmpty()) return
                 val it = pending.iterator()
                 while (it.hasNext()) {
-                    if (it.next().genId == genId) it.remove()
+                    val task = it.next()
+                    if (task.genId != DISPOSE_GEN_ID && task.genId <= cancelledThroughGenId) it.remove()
                 }
             }
         }
@@ -237,7 +247,8 @@ internal class ComposeRecomposition19(
 
     override val status: RecompositionStatus
         get() {
-            verifyOwnershipAll()
+            // Reuse the outer capture's ownership verification when inside beginCapture()..endCapture().
+            if ((captureDepth.get() ?: 0) == 0) verifyOwnershipAll()
             return rawStatus()
         }
 
@@ -385,7 +396,7 @@ internal class ComposeRecomposition19(
     }
 
     override fun rescan() {
-        verifyOwnershipAll()
+        if ((captureDepth.get() ?: 0) == 0) verifyOwnershipAll()
         val gen = synchronized(lock) { currentGen?.takeIf { isGenerationActive(it) } } ?: return
         val running = try {
             runningRecomposersFlow().value
@@ -597,35 +608,14 @@ internal class ComposeRecomposition19(
         }
 
         if (replayedRecords.isEmpty()) return
+        // Always attach replayed compositions on the single serial background worker:
+        // - Never blocks the enabling/main thread or running-recomposer collector (e.g. if a background apply/SideEffect
+        //   holds CompositionImpl.lock while isComposing == false).
+        // - Never samples isComposing to decide coverage: each replayed composition stays INCOMPLETE (counts unavailable)
+        //   until its observer is attached and its per-composition baseline is taken atomically inside compLock.
         for (record in replayedRecords) {
             if (!isGenerationActive(gen)) break
-            if (customScheduler != null) {
-                enqueueDeferredAttach(record)
-            } else if (isCompositionActive(record.composition)) {
-                // Actively composing on another thread: mark this composition incomplete and attach asynchronously
-                // so enabling never blocks on a busy composition or delays sibling discovery.
-                synchronized(lock) {
-                    if (isGenerationActive(gen) && gen.compositions[record.composition] === record) {
-                        record.missedInitial = true
-                        setCoverageLocked(gen, record, Coverage.INCOMPLETE)
-                    }
-                }
-                enqueueDeferredAttach(record)
-            } else {
-                // Idle composition outside Recomposer.stateLock: attach serially right now on the enabling thread.
-                val ready = synchronized(lock) {
-                    if (isGenerationActive(gen) &&
-                        record.state == CompState.REGISTERED &&
-                        gen.compositions[record.composition] === record
-                    ) {
-                        record.state = CompState.ATTACHING
-                        true
-                    } else {
-                        false
-                    }
-                }
-                if (ready) attachRecord(record)
-            }
+            enqueueDeferredAttach(record)
         }
     }
 
@@ -858,6 +848,11 @@ internal class ComposeRecomposition19(
                                     record.state == CompState.ATTACHING &&
                                     gen.compositions[composition] === record
                                 ) {
+                                    // Implicit per-composition baseline at attach time for pre-enable replays:
+                                    // clear any stale entries for this composition only before transitioning to EXACT.
+                                    if (record.coverage == Coverage.INCOMPLETE && !record.missedInitial) {
+                                        clearScopesForCompositionLocked(composition)
+                                    }
                                     record.handle = handle
                                     record.state = CompState.ATTACHED
                                     setCoverageLocked(
@@ -911,6 +906,9 @@ internal class ComposeRecomposition19(
                         record.state == CompState.ATTACHING &&
                         gen.compositions[composition] === record
                     ) {
+                        if (record.coverage == Coverage.INCOMPLETE && !record.missedInitial) {
+                            clearScopesForCompositionLocked(composition)
+                        }
                         record.handle = handle
                         record.state = CompState.ATTACHED
                         setCoverageLocked(
@@ -1019,6 +1017,18 @@ internal class ComposeRecomposition19(
                 throw t
             } else {
                 null
+            }
+        }
+    }
+
+    private fun clearScopesForCompositionLocked(composition: ObservableComposition) {
+        if (counts.isEmpty() || scopeOwnerField == null) return
+        val iterator = counts.entries.iterator()
+        while (iterator.hasNext()) {
+            val key = iterator.next().key as? IdentityWeakKey ?: continue
+            val scope = key.get()
+            if (scope == null || scopeOwner(scope) === composition) {
+                iterator.remove()
             }
         }
     }

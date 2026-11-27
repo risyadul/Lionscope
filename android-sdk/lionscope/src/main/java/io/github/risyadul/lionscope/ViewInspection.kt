@@ -157,6 +157,7 @@ internal class ViewScene(
             tracking,
             trackingTruncated,
             trackingIncomplete,
+            onCaptureFinished = if (reading != null) { { reading.endCapture() } } else null,
         )
     }
 

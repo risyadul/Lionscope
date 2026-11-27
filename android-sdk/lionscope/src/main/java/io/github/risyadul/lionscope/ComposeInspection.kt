@@ -43,13 +43,27 @@ internal class ComposeViewReader(
     private var filter = ComposableFilter()
     private val drawing = ComposeDrawing()
     private var includeRecompositionCounts = false
+    private var captureWindowOpen = false
 
     override fun beginCapture(recompositionCounts: Boolean) {
+        if (captureWindowOpen) endCapture()
         budget = ComposeBudget()
         filter = ComposableFilter()
         includeRecompositionCounts = recompositionCounts
-        if (recompositionCounts && recompositionTracker?.status == RecompositionStatus.ACTIVE) {
-            recompositionTracker.rescan()
+        if (recompositionCounts && recompositionTracker != null) {
+            // Verify observer ownership ONCE for the entire Inspector capture (reused across all ComposeViews).
+            recompositionTracker.beginCapture()
+            captureWindowOpen = true
+            if (recompositionTracker.status == RecompositionStatus.ACTIVE) {
+                recompositionTracker.rescan()
+            }
+        }
+    }
+
+    override fun endCapture() {
+        if (captureWindowOpen) {
+            captureWindowOpen = false
+            recompositionTracker?.endCapture()
         }
     }
 
@@ -85,7 +99,8 @@ internal class ComposeViewReader(
         if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
         val configs = ComposeSemanticsReader.byLayout(rootSemantics)
         val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
-        if (activeTracker != null) activeTracker.beginCapture()
+        val openedLocally = activeTracker != null && !captureWindowOpen
+        if (openedLocally) activeTracker!!.beginCapture()
         try {
             forEachNode(tree.roots) { node ->
                 semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
@@ -93,7 +108,7 @@ internal class ComposeViewReader(
                 node.recompositions = if (activeTracker != null) node.recomposeScope?.let(activeTracker::countsFor) else null
             }
         } finally {
-            activeTracker?.endCapture()
+            if (openedLocally) activeTracker?.endCapture()
         }
         val claimed = claimInteropViews(view, tree, semantics)
         return ComposeRead(CompositionStatus.READ, tree.roots, semantics, claimed, tree.truncated)
