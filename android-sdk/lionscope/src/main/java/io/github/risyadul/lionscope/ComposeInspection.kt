@@ -85,10 +85,15 @@ internal class ComposeViewReader(
         if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
         val configs = ComposeSemanticsReader.byLayout(rootSemantics)
         val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
-        forEachNode(tree.roots) { node ->
-            semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
-            node.draws = drawing.of(node.layouts)
-            node.recompositions = if (activeTracker != null) node.recomposeScope?.let(activeTracker::countsFor) else null
+        if (activeTracker != null) activeTracker.beginCapture()
+        try {
+            forEachNode(tree.roots) { node ->
+                semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
+                node.draws = drawing.of(node.layouts)
+                node.recompositions = if (activeTracker != null) node.recomposeScope?.let(activeTracker::countsFor) else null
+            }
+        } finally {
+            activeTracker?.endCapture()
         }
         val claimed = claimInteropViews(view, tree, semantics)
         return ComposeRead(CompositionStatus.READ, tree.roots, semantics, claimed, tree.truncated)

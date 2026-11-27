@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 
 /**
  * Current state of Compose recomposition tracking reported in v15 `inspectBegin.recompositionTracking`:
@@ -34,8 +35,15 @@ internal data class RecompositionCounts(val recompositions: Int, val skips: Int)
 internal interface ComposeRecompositionTracker {
     val status: RecompositionStatus
 
-    /** True when tracked scopes hit the bounded capacity and newly seen scopes have unavailable counts. */
+    /** True when tracked scopes hit the bounded capacity and newly seen scopes have unavailable counts until Reset. */
     val truncated: Boolean
+
+    /**
+     * True when at least one tracked composition currently has incomplete coverage (pending attachment or attached
+     * after it had already composed post-enable), so that composition's counts are unavailable until Reset.
+     */
+    val incompleteCoverage: Boolean
+        get() = false
 
     /** Turns observation on or off. Disabling detaches all observers and drops stored counts. */
     fun setEnabled(enabled: Boolean)
@@ -43,14 +51,20 @@ internal interface ComposeRecompositionTracker {
     /** Re-scans running Recomposers to attach to newly started windows (e.g. a new Activity or Dialog). */
     fun rescan()
 
-    /** Resets all counts to zero while keeping observers attached. */
+    /** Resets all counts to zero while keeping observers attached, re-establishing an exact baseline for attached compositions. */
     fun reset()
 
+    /** Verifies observer ownership once at the start of an Inspector capture, avoiding per-node scans. */
+    fun beginCapture() {}
+
+    /** Ends a capture lookup window started by [beginCapture]. */
+    fun endCapture() {}
+
     /**
-     * Counts for [scope] (`RecomposeScope`), or null when tracking is not [RecompositionStatus.ACTIVE] or when
-     * [truncated] is true and [scope] is not in the tracked map (unavailable rather than falsely reporting 0/0).
-     * When active, not truncated, and [scope] has not recomposed or skipped since attach/reset, returns
-     * [RecompositionCounts.ZERO].
+     * Counts for [scope] (`RecomposeScope`), or null when tracking is not [RecompositionStatus.ACTIVE], when the
+     * scope's owning composition has incomplete coverage, or when [truncated] is true and [scope] is not in the
+     * tracked map. When active, the owning composition has exact coverage, not truncated, and [scope] has not
+     * recomposed or skipped since attach/reset, returns [RecompositionCounts.ZERO].
      */
     fun countsFor(scope: Any): RecompositionCounts?
 }
@@ -79,6 +93,7 @@ internal object ComposeRecompositionSupport {
         val scopeImplClass: Class<*>,
         val skippedGetter: Method,
         val rereadingGetter: Method,
+        val scopeOwnerField: Field?,
         val compositionImplClass: Class<*>,
         val compositionLockField: Field,
         val observerHolderField: Field,
@@ -151,8 +166,11 @@ internal object ComposeRecompositionSupport {
 
             // CompositionImpl lock & observer slot inspection (enables atomic conflict check + slot claim).
             val compositionLockField = compositionImpl.getDeclaredField("lock")
+            if (Modifier.isStatic(compositionLockField.modifiers) || compositionLockField.type.isPrimitive) {
+                return ProbeResult.Unsupported("unexpected_composition_lock_type")
+            }
             val observerHolderField = compositionImpl.getDeclaredField("observerHolder")
-            if (observerHolderField.type != observerHolderClass) {
+            if (Modifier.isStatic(observerHolderField.modifiers) || observerHolderField.type != observerHolderClass) {
                 return ProbeResult.Unsupported("unexpected_observer_holder_type")
             }
             val holderGetObserver = observerHolderClass.getMethod("getObserver")
@@ -168,17 +186,28 @@ internal object ComposeRecompositionSupport {
             // hardcoded bitmasks so moved flag bits never silently misclassify skips as recompositions.
             val skippedGetter = scopeImpl.declaredMethods.firstOrNull {
                 (it.name == "getSkipped" || it.name.startsWith("getSkipped\$")) &&
+                    !Modifier.isStatic(it.modifiers) &&
                     it.parameterTypes.isEmpty() &&
                     it.returnType == Boolean::class.javaPrimitiveType
             } ?: return ProbeResult.Unsupported("missing_skipped_getter")
             val rereadingGetter = scopeImpl.declaredMethods.firstOrNull {
                 it.name == "getRereading" &&
+                    !Modifier.isStatic(it.modifiers) &&
                     it.parameterTypes.isEmpty() &&
                     it.returnType == Boolean::class.javaPrimitiveType
             } ?: return ProbeResult.Unsupported("missing_rereading_getter")
+            // Resolve RecomposeScopeImpl.owner (points to its owning CompositionImpl for per-composition coverage).
+            // Required on real RecomposeScopeImpl; optional only on synthetic test scopes without an owner.
+            val scopeOwnerField = scopeImpl.declaredFields.firstOrNull {
+                it.name == "owner" && !Modifier.isStatic(it.modifiers) && !it.type.isPrimitive
+            }
+            if (scopeImpl.name == RECOMPOSE_SCOPE_IMPL && scopeOwnerField == null) {
+                return ProbeResult.Unsupported("missing_scope_owner_field")
+            }
 
             skippedGetter.isAccessible = true
             rereadingGetter.isAccessible = true
+            scopeOwnerField?.isAccessible = true
             compositionLockField.isAccessible = true
             observerHolderField.isAccessible = true
             holderGetObserver.isAccessible = true
@@ -188,6 +217,7 @@ internal object ComposeRecompositionSupport {
                     scopeImplClass = scopeImpl,
                     skippedGetter = skippedGetter,
                     rereadingGetter = rereadingGetter,
+                    scopeOwnerField = scopeOwnerField,
                     compositionImplClass = compositionImpl,
                     compositionLockField = compositionLockField,
                     observerHolderField = observerHolderField,
@@ -217,6 +247,7 @@ internal object ComposeRecompositionSupport {
                 scopeImplClass = probeResult.access.scopeImplClass,
                 skippedGetter = probeResult.access.skippedGetter,
                 rereadingGetter = probeResult.access.rereadingGetter,
+                scopeOwnerField = probeResult.access.scopeOwnerField,
                 compositionImplClass = probeResult.access.compositionImplClass,
                 compositionLockField = probeResult.access.compositionLockField,
                 observerHolderField = probeResult.access.observerHolderField,

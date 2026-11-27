@@ -17,9 +17,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.io.File
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -55,6 +57,35 @@ internal object Compose19TestScenarios {
         }
     }
 
+    @Suppress("unused")
+    private class SyntheticPrimitiveLockComposition {
+        @JvmField
+        var lock: Int = 0
+
+        @JvmField
+        var observerHolder: Any? = null
+    }
+
+    @Suppress("unused")
+    private class SyntheticStaticLockComposition {
+        @JvmField
+        var observerHolder: Any? = null
+
+        companion object {
+            @JvmField
+            val lock: Any = Any()
+        }
+    }
+
+    @Suppress("unused")
+    private class SyntheticRenamedLockComposition {
+        @JvmField
+        val otherLock: Any = Any()
+
+        @JvmField
+        var observerHolder: Any? = null
+    }
+
     fun assertAndroidRuntimeArtifactResolved() {
         val artifact = System.getProperty("lionscope.composeRuntimeArtifact") ?: ""
         assertTrue(
@@ -68,6 +99,30 @@ internal object Compose19TestScenarios {
         )
         // Android-specific runtime class only packaged in runtime-android (absent from runtime-desktop).
         assertNotNull(Class.forName("androidx.compose.runtime.DefaultChoreographerFrameClock", false, javaClass.classLoader))
+    }
+
+    /** Round-3 #8 regression: probe must reject primitive, static, or renamed CompositionImpl.lock fields. */
+    fun assertProbeRejectsPrimitiveStaticOrMissingCompositionLockField() {
+        val holderClass = Class.forName("androidx.compose.runtime.CompositionObserverHolder", false, javaClass.classLoader)
+        for (candidate in listOf(
+            SyntheticPrimitiveLockComposition::class.java,
+            SyntheticStaticLockComposition::class.java,
+            SyntheticRenamedLockComposition::class.java,
+        )) {
+            val probe = ComposeRecompositionSupport.probe(
+                findClass = { name ->
+                    when (name) {
+                        "androidx.compose.runtime.CompositionImpl" -> candidate
+                        "androidx.compose.runtime.CompositionObserverHolder" -> holderClass
+                        else -> Class.forName(name, false, javaClass.classLoader)
+                    }
+                },
+            )
+            assertTrue(
+                "Expected probe to reject ${candidate.simpleName}, got $probe",
+                probe is ComposeRecompositionSupport.ProbeResult.Unsupported,
+            )
+        }
     }
 
     fun assertMovedSkipFlagUsesResolvedGetter() {
@@ -89,6 +144,7 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
@@ -143,6 +199,7 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
@@ -181,6 +238,7 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
@@ -303,117 +361,141 @@ internal object Compose19TestScenarios {
         }
     }
 
-    fun assertConcurrentEnableToggleAndSubcompositionDoesNotDeadlock() = runBlocking {
-        val clock = ManualFrameClock()
-        val recomposer = Recomposer(coroutineContext + clock)
-        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
-            recomposer.runRecomposeAndApplyChanges()
-        }
-        val tracker = ComposeRecompositionSupport.createTracker() as ComposeRecomposition19
-        val tick = mutableIntStateOf(0)
-        val activeSubs = ArrayList<Composition>()
+    /**
+     * Round-3 #4: Runs the concurrent toggle + subcomposition stress test in an isolated child JVM with an external
+     * watchdog so a deadlock regression fails fast instead of hanging in `runBlocking` / `Recomposer.effectJob`.
+     */
+    fun assertConcurrentEnableToggleAndSubcompositionDoesNotDeadlock() {
+        val (exitCode, output) = runDeadlockSubprocess(timeoutSeconds = 20L)
+        assertEquals(
+            "Concurrent toggle + subcomposition subprocess failed (exit=$exitCode):\n$output",
+            0,
+            exitCode,
+        )
+    }
 
-        fun composeSub(c: Composer, id: Int, changed: Int = 0) {
-            val cc = c.startRestartGroup(8100 + id)
-            if (changed != 0 || !cc.skipping) {
-                // subcomposition body
-            } else {
-                cc.skipToGroupEnd()
-            }
-            cc.endRestartGroup()?.let {
-                Compose19TestBridge.updateScope(it) { next, nextChanged -> composeSub(next, id, nextChanged) }
-            }
-        }
+    /** Proves the subprocess watchdog fails fast on a genuine deadlock without hanging CI. */
+    fun assertDeadlockSubprocessWatchdogFailsFastOnGenuineDeadlock() {
+        val startMs = System.nanoTime() / 1_000_000L
+        val (exitCode, output) = runDeadlockSubprocess(timeoutSeconds = 10L, extraArgs = listOf("--simulate-deadlock"))
+        val elapsedMs = System.nanoTime() / 1_000_000L - startMs
+        assertNotEquals("Expected simulated deadlock subprocess to exit non-zero", 0, exitCode)
+        assertTrue("Expected deadlock dump in subprocess output, got:\n$output", output.contains("Simulated deadlock detected"))
+        assertTrue("Expected fast failure (< 8s), took ${elapsedMs}ms", elapsedMs < 8_000L)
+    }
 
-        fun composeParent(c: Composer, changed: Int = 0) {
-            val cc = c.startRestartGroup(8000)
-            if (changed != 0 || !cc.skipping) {
-                val generation = tick.intValue
-                val subContext = cc.buildContext()
-                // Creating & disposing subcompositions holds parent CompositionImpl.lock and calls
-                // Recomposer.composeInitial() / unregisterComposition() (acquiring Recomposer.stateLock).
-                val sub = Composition(EmptyApplier(), subContext)
-                Compose19TestBridge.setContent(sub) { sc, scChanged -> composeSub(sc, generation, scChanged) }
-                activeSubs.add(sub)
-                if (activeSubs.size > 4) {
-                    activeSubs.removeAt(0).dispose()
+    /**
+     * Round-3 #1 regression (`Gap42`): 4 pre-existing compositions are actively composing (holding their locks)
+     * while a 5th idle pre-existing composition exists. Proves:
+     * - `setEnabled(true)` does NOT sleep 100ms on the enabling thread.
+     * - The 5th idle composition attaches serially right after `observe()` returns and counts `1/0` (both with and
+     *   without `reset()` while the 4 busy ones are still pending!).
+     * - The 4 busy compositions report unavailable (`null`, NEVER `0/0`) and `incompleteCoverage == true`, `truncated == false`.
+     */
+    fun assertBusyReplaysDoNotDelayIdleReplayOrFabricateZeroCounts() = runBlocking {
+        for (doReset in listOf(false, true)) {
+            val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+            val access = probe.access
+            val clock = ManualFrameClock()
+            val recomposer = Recomposer(coroutineContext + clock)
+            val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+                recomposer.runRecomposeAndApplyChanges()
+            }
+            val busyComps = List(4) {
+                Composition(EmptyApplier(), recomposer).also { c ->
+                    Compose19TestBridge.setContent(c) { composer, _ ->
+                        val cc = composer.startRestartGroup(9700 + it)
+                        cc.endRestartGroup()
+                    }
                 }
-            } else {
-                cc.skipToGroupEnd()
             }
-            cc.endRestartGroup()?.let {
-                Compose19TestBridge.updateScope(it) { next, nextChanged -> composeParent(next, nextChanged) }
+            val busyScope = AtomicReference<RecomposeScope>()
+            val fifthComp = Composition(EmptyApplier(), recomposer).also { c ->
+                Compose19TestBridge.setContent(c) { composer, _ ->
+                    val cc = composer.startRestartGroup(9750)
+                    cc.endRestartGroup()
+                }
             }
-        }
 
-        val parentComp = Composition(EmptyApplier(), recomposer)
-        Compose19TestBridge.setContent(parentComp) { composer, changed -> composeParent(composer, changed) }
+            val busyEntered = CountDownLatch(4)
+            val releaseBusy = CountDownLatch(1)
+            val busyThreads = busyComps.mapIndexed { idx, comp ->
+                Thread({
+                    Compose19TestBridge.setContent(comp) { composer, _ ->
+                        val cc = composer.startRestartGroup(9710 + idx)
+                        if (idx == 0) busyScope.set(cc.recomposeScope!!)
+                        busyEntered.countDown()
+                        releaseBusy.await(10, TimeUnit.SECONDS)
+                        cc.endRestartGroup()
+                    }
+                }, "test-gap42-busy-$idx").apply {
+                    isDaemon = true
+                    start()
+                }
+            }
 
-        val stop = AtomicBoolean(false)
-        val failure = AtomicReference<Throwable?>()
-        val started = CountDownLatch(2)
-        val finished = CountDownLatch(2)
-
-        val composerThread = Thread({
-            started.countDown()
+            val tracker = ComposeRecomposition19(
+                scopeImplClass = access.scopeImplClass,
+                skippedGetter = access.skippedGetter,
+                rereadingGetter = access.rereadingGetter,
+                scopeOwnerField = access.scopeOwnerField,
+                compositionImplClass = access.compositionImplClass,
+                compositionLockField = access.compositionLockField,
+                observerHolderField = access.observerHolderField,
+                holderGetObserver = access.holderGetObserver,
+                holderCurrent = access.holderCurrent,
+                runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+            )
             try {
-                for (i in 1..250) {
-                    if (stop.get()) break
-                    tick.intValue = i
-                    Snapshot.sendApplyNotifications()
-                    clock.advanceFrame()
+                assertTrue("Busy compositions did not enter setContent", busyEntered.await(5, TimeUnit.SECONDS))
+
+                val startNs = System.nanoTime()
+                tracker.setEnabled(true)
+                val enableMs = (System.nanoTime() - startNs) / 1_000_000L
+
+                assertEquals(RecompositionStatus.ACTIVE, tracker.status)
+                // Idle 5th composition must already be attached serially without waiting 100ms for the 4 busy ones.
+                assertEquals(1, tracker.attachedCompositionCount())
+                assertTrue("setEnabled must not sleep 100ms waiting on busy compositions (took ${enableMs}ms)", enableMs < 80L)
+                assertTrue("Busy pending compositions must mark incompleteCoverage", tracker.incompleteCoverage)
+                assertFalse("Incomplete coverage must not masquerade as capacity truncated", tracker.truncated)
+
+                // Busy pending composition must report unavailable (null), NEVER 0/0.
+                assertNotNull(busyScope.get())
+                assertNull("Pending busy composition must never report 0/0", tracker.countsFor(busyScope.get()))
+
+                if (doReset) tracker.reset()
+
+                val fifthScope = AtomicReference<RecomposeScope>()
+                Compose19TestBridge.setContent(fifthComp) { composer, _ ->
+                    val cc = composer.startRestartGroup(9751)
+                    fifthScope.set(cc.recomposeScope!!)
+                    cc.endRestartGroup()
                 }
-            } catch (t: Throwable) {
-                failure.compareAndSet(null, t)
+                assertEquals(
+                    "Idle 5th composition must report exact 1/0 (doReset=$doReset)",
+                    RecompositionCounts(1, 0),
+                    tracker.countsFor(fifthScope.get()),
+                )
+                assertNull("Busy composition remains unavailable even after reset while pending", tracker.countsFor(busyScope.get()))
+
+                releaseBusy.countDown()
+                busyThreads.forEach { it.join(5_000) }
+                awaitCondition { tracker.attachedCompositionCount() == 5 }
+                assertEquals(5, tracker.attachedCompositionCount())
+                // Busy compositions missed initial/reset window so stay incomplete until a post-attach reset().
+                assertNull(tracker.countsFor(busyScope.get()))
+                assertEquals(RecompositionCounts(1, 0), tracker.countsFor(fifthScope.get()))
+
+                tracker.reset()
+                assertFalse("Reset while all 5 are attached restores exact coverage", tracker.incompleteCoverage)
+                assertEquals(RecompositionCounts(0, 0), tracker.countsFor(busyScope.get()))
             } finally {
-                stop.set(true)
-                finished.countDown()
-            }
-        }, "test-compose-subcomp-composer").apply { isDaemon = true }
-
-        val toggleThread = Thread({
-            started.countDown()
-            try {
-                while (!stop.get()) {
-                    tracker.setEnabled(true)
-                    tracker.rescan()
-                    tracker.setEnabled(false)
-                }
-            } catch (t: Throwable) {
-                failure.compareAndSet(null, t)
-            } finally {
-                finished.countDown()
-            }
-        }, "test-compose-subcomp-toggle").apply { isDaemon = true }
-
-        var deadlockedOrTimedOut = false
-        try {
-            composerThread.start()
-            toggleThread.start()
-            assertTrue("Worker threads failed to start", started.await(5, TimeUnit.SECONDS))
-
-            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
-            while (!finished.await(20, TimeUnit.MILLISECONDS)) {
-                findDeadlockDump()?.let { dump ->
-                    deadlockedOrTimedOut = true
-                    stop.set(true)
-                    throw AssertionError("Deadlock detected between Compose and Lionscope tracker:\n$dump")
-                }
-                if (System.nanoTime() >= deadlineNanos) {
-                    deadlockedOrTimedOut = true
-                    stop.set(true)
-                    throw AssertionError("Timed out waiting for concurrent toggle + subcomposition test to finish")
-                }
-            }
-            failure.get()?.let { throw AssertionError("Concurrent worker failed", it) }
-        } finally {
-            stop.set(true)
-            // Avoid re-acquiring deadlocked Composition/Recomposer monitors on the failure path so CI fails fast
-            // instead of hanging forever in cleanup.
-            if (!deadlockedOrTimedOut) {
+                releaseBusy.countDown()
+                busyThreads.forEach { it.join(5_000) }
                 tracker.setEnabled(false)
-                activeSubs.forEach { runCatching { it.dispose() } }
-                runCatching { parentComp.dispose() }
+                busyComps.forEach { runCatching { it.dispose() } }
+                runCatching { fifthComp.dispose() }
                 recomposer.cancel()
                 job.join()
             }
@@ -421,9 +503,376 @@ internal object Compose19TestScenarios {
     }
 
     /**
-     * Finding #1 regression: forces gen1's deferred attach task to sit queued (and a second gen1 attach attempt to
+     * Round-3 #2 regression: discovering pre-enable Recomposer A marks ONLY A's composition incomplete (no global
+     * freeze, `truncated == false`, `incompleteCoverage == true`), while sibling Recomposer B composes and counts
+     * exact `1/0`.
+     */
+    fun assertPostEnableIncompleteCompositionDoesNotFreezeSiblingExactCounts() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clockA = ManualFrameClock()
+        val recomposerA = Recomposer(coroutineContext + clockA)
+        val jobA = launch(Dispatchers.Unconfined + clockA, start = CoroutineStart.UNDISPATCHED) {
+            recomposerA.runRecomposeAndApplyChanges()
+        }
+        val clockB = ManualFrameClock()
+        val recomposerB = Recomposer(coroutineContext + clockB)
+        val jobB = launch(Dispatchers.Unconfined + clockB, start = CoroutineStart.UNDISPATCHED) {
+            recomposerB.runRecomposeAndApplyChanges()
+        }
+        val flow = MutableStateFlow<Set<androidx.compose.runtime.RecomposerInfo>>(emptySet())
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { flow },
+        )
+
+        val tickA = mutableIntStateOf(0)
+        val scopeA = AtomicReference<RecomposeScope>()
+        val compA = Composition(EmptyApplier(), recomposerA)
+        fun composeA(c: Composer, changed: Int = 0) {
+            val cc = c.startRestartGroup(9801)
+            scopeA.set(cc.recomposeScope!!)
+            if (changed != 0 || !cc.skipping) tickA.intValue else cc.skipToGroupEnd()
+            cc.endRestartGroup()?.let {
+                Compose19TestBridge.updateScope(it) { next, nextChanged -> composeA(next, nextChanged) }
+            }
+        }
+
+        val tickB = mutableIntStateOf(0)
+        val scopeB = AtomicReference<RecomposeScope>()
+        val compB = Composition(EmptyApplier(), recomposerB)
+        fun composeB(c: Composer, changed: Int = 0) {
+            val cc = c.startRestartGroup(9802)
+            scopeB.set(cc.recomposeScope!!)
+            if (changed != 0 || !cc.skipping) tickB.intValue else cc.skipToGroupEnd()
+            cc.endRestartGroup()?.let {
+                Compose19TestBridge.updateScope(it) { next, nextChanged -> composeB(next, nextChanged) }
+            }
+        }
+
+        try {
+            // Pre-enable composition A composes before tracker discovers Recomposer A.
+            Compose19TestBridge.setContent(compA) { c, ch -> composeA(c, ch) }
+            tracker.setEnabled(true)
+
+            // Discovering A post-enable marks A incomplete, NOT capacity truncated.
+            flow.value = setOf(recomposerA.asRecomposerInfo())
+            assertTrue(tracker.incompleteCoverage)
+            assertFalse("Incomplete coverage must not set capacity truncated", tracker.truncated)
+            assertNull("Incomplete composition A must report null", tracker.countsFor(scopeA.get()))
+
+            // Now sibling Recomposer B appears and composes: B must NOT be frozen by A!
+            flow.value = setOf(recomposerA.asRecomposerInfo(), recomposerB.asRecomposerInfo())
+            Compose19TestBridge.setContent(compB) { c, ch -> composeB(c, ch) }
+            assertEquals(
+                "Sibling composition B must record exact counts even while A has incomplete coverage",
+                RecompositionCounts(1, 0),
+                tracker.countsFor(scopeB.get()),
+            )
+            assertNull("Composition A remains unavailable until reset", tracker.countsFor(scopeA.get()))
+
+            // Recompose both: B advances to 2/0, A still unavailable until reset.
+            tickA.intValue = 1
+            tickB.intValue = 1
+            Snapshot.sendApplyNotifications()
+            clockA.advanceFrame()
+            clockB.advanceFrame()
+            assertEquals(RecompositionCounts(2, 0), tracker.countsFor(scopeB.get()))
+            assertNull(tracker.countsFor(scopeA.get()))
+
+            // Reset establishes exact baseline for both attached compositions.
+            tracker.reset()
+            assertFalse(tracker.incompleteCoverage)
+            assertFalse(tracker.truncated)
+            assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopeA.get()))
+            assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopeB.get()))
+
+            tickA.intValue = 2
+            tickB.intValue = 2
+            Snapshot.sendApplyNotifications()
+            clockA.advanceFrame()
+            clockB.advanceFrame()
+            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(scopeA.get()))
+            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(scopeB.get()))
+        } finally {
+            tracker.setEnabled(false)
+            runCatching { compB.dispose() }
+            runCatching { compA.dispose() }
+            recomposerB.cancel()
+            jobB.join()
+            recomposerA.cancel()
+            jobA.join()
+        }
+    }
+
+    /**
+     * Round-3 #3 regression (`LivePool42`): disabling after a child subcomposition inherited its parent's Lionscope
+     * observer (before the child's queued handle upgrade ran) leaves a cached retired-generation reference in the
+     * child's `CompositionObserverHolder`. Subsequent enables must recognize it as ours and succeed as ACTIVE
+     * (never persistent false CONFLICT), while still preserving genuine foreign observers as CONFLICT.
+     */
+    fun assertInheritedObserverFromRetiredGenerationNeverCausesFalseConflict() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+        )
+
+        val busyComps = List(4) {
+            Composition(EmptyApplier(), recomposer).also { c ->
+                Compose19TestBridge.setContent(c) { composer, _ ->
+                    val cc = composer.startRestartGroup(9850 + it)
+                    cc.endRestartGroup()
+                }
+            }
+        }
+        val held = CountDownLatch(4)
+        val release = CountDownLatch(1)
+        val busyThreads = busyComps.mapIndexed { idx, comp ->
+            Thread({
+                Compose19TestBridge.setContent(comp) { composer, _ ->
+                    val cc = composer.startRestartGroup(9860 + idx)
+                    held.countDown()
+                    release.await(10, TimeUnit.SECONDS)
+                    cc.endRestartGroup()
+                }
+            }, "test-livepool-busy-$idx").apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        val parent = Composition(EmptyApplier(), recomposer)
+        val childRef = AtomicReference<Composition>()
+        var foreignHandle: Any? = null
+        try {
+            assertTrue(held.await(5, TimeUnit.SECONDS))
+            tracker.setEnabled(true)
+
+            Compose19TestBridge.setContent(parent) { c, _ ->
+                val cc = c.startRestartGroup(9870)
+                val sub = Composition(EmptyApplier(), cc.buildContext())
+                Compose19TestBridge.setContent(sub) { sc, _ ->
+                    val scc = sc.startRestartGroup(9871)
+                    scc.endRestartGroup()
+                }
+                childRef.set(sub)
+                cc.endRestartGroup()
+            }
+            val child = childRef.get()!!
+            // Child inherited gen1 observer and cached it in its holder before its queued attach could run.
+            assertNotNull(readRawObserverField(access, child))
+
+            // Disable BEFORE child's queued attach runs: parent is cleared, child keeps cached retired gen1 observer!
+            tracker.setEnabled(false)
+            assertNull(readRawObserverField(access, parent))
+            assertNotNull("Expected child to retain cached retired observer right after disable", readRawObserverField(access, child))
+
+            release.countDown()
+            busyThreads.forEach { it.join(5_000) }
+
+            // Two subsequent enables must BOTH succeed as ACTIVE with all 6 compositions attached (never CONFLICT).
+            repeat(2) { attempt ->
+                tracker.setEnabled(true)
+                assertEquals("Enable attempt ${attempt + 1} must be ACTIVE", RecompositionStatus.ACTIVE, tracker.status)
+                assertEquals("Enable attempt ${attempt + 1} must attach all 6 compositions", 6, tracker.attachedCompositionCount())
+                tracker.setEnabled(false)
+            }
+
+            // Genuine foreign root observer must STILL be preserved and reported as CONFLICT.
+            val foreignEnters = AtomicInteger(0)
+            val foreignObserver = createExternalObserver(foreignEnters)
+            val observerInterface = Class.forName("androidx.compose.runtime.tooling.CompositionObserver")
+            foreignHandle = parent.javaClass.getMethod("setObserver", observerInterface).invoke(parent, foreignObserver)
+            tracker.setEnabled(true)
+            assertEquals(RecompositionStatus.CONFLICT, tracker.status)
+            assertTrue("Foreign observer must remain untouched", readEffectiveObserverSlot(access, parent) === foreignObserver)
+        } finally {
+            release.countDown()
+            busyThreads.forEach { it.join(5_000) }
+            tracker.setEnabled(false)
+            foreignHandle?.let { runCatching { it.javaClass.getMethod("dispose").invoke(it) } }
+            runCatching { childRef.get()?.dispose() }
+            runCatching { parent.dispose() }
+            busyComps.forEach { runCatching { it.dispose() } }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
+    /**
+     * Round-3 #6 regression (`Queue42`): verifies queued deferred tasks for an ended generation are purged immediately
+     * on `setEnabled(false)` and the single deferred worker thread retires cleanly once idle.
+     */
+    fun assertDeferredExecutorPurgesEndedGenerationAndRetiresIdleThread() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+        )
+
+        val busyComps = List(4) {
+            Composition(EmptyApplier(), recomposer).also { c ->
+                Compose19TestBridge.setContent(c) { composer, _ ->
+                    val cc = composer.startRestartGroup(9900 + it)
+                    cc.endRestartGroup()
+                }
+            }
+        }
+        val entered = CountDownLatch(4)
+        val release = CountDownLatch(1)
+        val threads = busyComps.mapIndexed { idx, comp ->
+            Thread({
+                Compose19TestBridge.setContent(comp) { composer, _ ->
+                    val cc = composer.startRestartGroup(9910 + idx)
+                    entered.countDown()
+                    release.await(10, TimeUnit.SECONDS)
+                    cc.endRestartGroup()
+                }
+            }, "test-queue42-$idx").apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            tracker.setEnabled(true)
+            // 1 task is running on the serial worker (blocked on busyComps[0]), 3 remain queued.
+            awaitCondition { tracker.deferredPendingCount() <= 3 && tracker.deferredPoolSize() == 1 }
+            assertEquals("Serial executor must never spawn more than 1 worker", 1, tracker.deferredPoolSize())
+
+            // Ending the generation must purge all queued obsolete tasks immediately.
+            tracker.setEnabled(false)
+            assertEquals("Queued tasks for ended generation must be purged immediately", 0, tracker.deferredPendingCount())
+
+            // Once the running task unblocks and idles past keep-alive (100ms), the worker thread must retire.
+            release.countDown()
+            threads.forEach { it.join(5_000) }
+            awaitCondition(timeoutMs = 3_000L) { tracker.deferredPoolSize() == 0 }
+            assertEquals("Idle deferred worker must retire", 0, tracker.deferredPoolSize())
+        } finally {
+            release.countDown()
+            threads.forEach { it.join(5_000) }
+            tracker.setEnabled(false)
+            busyComps.forEach { runCatching { it.dispose() } }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
+    /**
+     * Round-3 #7 regression (`Bench42`): verifies `countsFor` does not scan all 128 attached compositions per lookup
+     * (neither inside `beginCapture()` nor on standalone lookups), while takeover is still caught on `beginCapture()`,
+     * `status`, and standalone `countsFor(realScope)`.
+     */
+    fun assertCountsForDoesNotScanAllCompositionsPerLookup() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+        )
+
+        val scopes = ArrayList<RecomposeScope>(128)
+        val comps = List(128) { idx ->
+            Composition(EmptyApplier(), recomposer).also { c ->
+                Compose19TestBridge.setContent(c) { composer, _ ->
+                    val cc = composer.startRestartGroup(10_000 + idx)
+                    scopes.add(cc.recomposeScope!!)
+                    cc.endRestartGroup()
+                }
+            }
+        }
+        var foreignHandle: Any? = null
+        try {
+            tracker.setEnabled(true)
+            assertEquals(128, tracker.attachedCompositionCount())
+            assertEquals(0, tracker.deferredPoolSize())
+
+            // Warm up JIT slightly, then measure 2,000 lookups inside a capture window (must be fast, no O(N) scan).
+            val sampleObj = Any()
+            tracker.beginCapture()
+            try {
+                repeat(200) { tracker.countsFor(scopes[it % scopes.size]) }
+                val startNs = System.nanoTime()
+                repeat(2_000) { i ->
+                    assertEquals(RecompositionCounts.ZERO, tracker.countsFor(scopes[i % scopes.size]))
+                    assertEquals(RecompositionCounts.ZERO, tracker.countsFor(sampleObj))
+                }
+                val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                assertTrue("Expected O(1) countsFor across 128 compositions (< 500ms), took ${elapsedMs}ms", elapsedMs < 500L)
+            } finally {
+                tracker.endCapture()
+            }
+
+            // Takeover on one of the 128 compositions is still caught immediately by standalone countsFor(realScope).
+            val observerInterface = Class.forName("androidx.compose.runtime.tooling.CompositionObserver")
+            val foreign = createExternalObserver(AtomicInteger(0))
+            foreignHandle = comps[64].javaClass.getMethod("setObserver", observerInterface).invoke(comps[64], foreign)
+            assertNull(tracker.countsFor(scopes[64]))
+            assertEquals(RecompositionStatus.CONFLICT, tracker.status)
+        } finally {
+            tracker.setEnabled(false)
+            foreignHandle?.let { runCatching { it.javaClass.getMethod("dispose").invoke(it) } }
+            comps.forEach { runCatching { it.dispose() } }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
+    /**
+     * Round-2 #1 regression: forces gen1's deferred attach task to sit queued (and a blocked serial attach attempt to
      * race across disable + re-enable) while gen2 attaches to the same real 1.9.2 CompositionImpl.
-     * Proves stale gen1 work can never clear gen2's observer slot or leave status ACTIVE with an empty slot.
      */
     fun assertDisableReenableRaceCannotLeaveActiveWithEmptyObserverSlot() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
@@ -439,11 +888,7 @@ internal object Compose19TestScenarios {
         fun composeRoot(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9101)
             rootScope.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                tick.intValue
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) tick.intValue else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeRoot(next, nextChanged) }
             }
@@ -458,13 +903,14 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
             holderGetObserver = access.holderGetObserver,
             holderCurrent = access.holderCurrent,
             runningRecomposersFlow = { flow },
-            scheduleTask = { task ->
+            customScheduler = { task ->
                 if (deferTasks.get()) deferredTasks.add(task) else task.run()
             },
         )
@@ -475,7 +921,7 @@ internal object Compose19TestScenarios {
             val gen1Observer = tracker.observerForTest()
             assertEquals(1, deferredTasks.size)
 
-            // Disable gen1, then immediately re-enable gen2 (running gen2's attach synchronously).
+            // Disable gen1, then immediately re-enable gen2.
             tracker.setEnabled(false)
             deferTasks.set(false)
             tracker.setEnabled(true)
@@ -483,85 +929,63 @@ internal object Compose19TestScenarios {
             assertTrue("Each enable generation must have a distinct observer identity", gen1Observer !== gen2Observer)
             assertEquals(RecompositionStatus.ACTIVE, tracker.status)
             assertEquals(1, tracker.attachedCompositionCount())
-            assertTrue(readObserverSlot(access, comp) === gen2Observer)
+            assertTrue(readEffectiveObserverSlot(access, comp) === gen2Observer)
 
-            // Now release stale gen1 Runnable: it must NOT overwrite or dispose gen2's slot.
+            // Release stale gen1 Runnable: must NOT overwrite or dispose gen2's slot.
             deferredTasks.forEach { it.run() }
             assertEquals(RecompositionStatus.ACTIVE, tracker.status)
-            assertTrue("Gen2 observer must still occupy slot after stale gen1 task ran", readObserverSlot(access, comp) === gen2Observer)
+            assertTrue(readEffectiveObserverSlot(access, comp) === gen2Observer)
 
-            // Even if a stale gen1 handle was already obtained before disable, disposing it must NEVER clear gen2's slot.
+            // Even if a stale gen1 handle was already obtained before disable, disposing it must NEVER clear gen3's slot.
             val observerInterface = Class.forName("androidx.compose.runtime.tooling.CompositionObserver")
             val setObserverMethod = comp.javaClass.getMethod("setObserver", observerInterface)
             val staleGen1Handle = setObserverMethod.invoke(comp, gen1Observer)!!
-            // Restore empty slot, enable gen3, then dispose staleGen1Handle.
             tracker.setEnabled(false)
             staleGen1Handle.javaClass.getMethod("dispose").invoke(staleGen1Handle)
             tracker.setEnabled(true)
             val gen3Observer = tracker.observerForTest()
-            assertTrue(readObserverSlot(access, comp) === gen3Observer)
+            assertTrue(readEffectiveObserverSlot(access, comp) === gen3Observer)
             staleGen1Handle.javaClass.getMethod("dispose").invoke(staleGen1Handle)
-            assertTrue("Disposing stale gen1 handle must never clear gen3 observer", readObserverSlot(access, comp) === gen3Observer)
+            assertTrue(readEffectiveObserverSlot(access, comp) === gen3Observer)
             assertEquals(RecompositionStatus.ACTIVE, tracker.status)
 
-            // Also test an in-flight ATTACHING worker blocked on compLock across disable -> re-enable.
+            // Also test an in-flight serial attach blocked on compLock across disable -> re-enable (production path).
             tracker.setEnabled(false)
             val compLock = access.compositionLockField.get(comp)!!
-            val workerStarted = CountDownLatch(1)
-            val workerFinished = CountDownLatch(1)
-            val workerRef = AtomicReference<Thread>()
-            val inFlightTracker = ComposeRecomposition19(
+            val realTracker = ComposeRecomposition19(
                 scopeImplClass = access.scopeImplClass,
                 skippedGetter = access.skippedGetter,
                 rereadingGetter = access.rereadingGetter,
+                scopeOwnerField = access.scopeOwnerField,
                 compositionImplClass = access.compositionImplClass,
                 compositionLockField = access.compositionLockField,
                 observerHolderField = access.observerHolderField,
                 holderGetObserver = access.holderGetObserver,
                 holderCurrent = access.holderCurrent,
                 runningRecomposersFlow = { flow },
-                scheduleTask = { task ->
-                    if (workerRef.get() == null) {
-                        Thread({
-                            workerRef.set(Thread.currentThread())
-                            workerStarted.countDown()
-                            try {
-                                task.run()
-                            } finally {
-                                workerFinished.countDown()
-                            }
-                        }, "test-inflight-gen1").apply { isDaemon = true }.start()
-                    } else {
-                        deferredTasks.add(task)
-                    }
-                },
             )
-            deferredTasks.clear()
+            val enabler1 = Thread({ realTracker.setEnabled(true) }, "test-serial-gen1").apply { isDaemon = true }
             synchronized(compLock) {
-                inFlightTracker.setEnabled(true)
-                assertTrue(workerStarted.await(5, TimeUnit.SECONDS))
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-                while (workerRef.get()?.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
-                    Thread.sleep(2)
-                }
-                assertEquals(Thread.State.BLOCKED, workerRef.get()?.state)
-                // Disable gen1 and re-enable gen2 while gen1's worker is blocked on compLock.
-                inFlightTracker.setEnabled(false)
-                inFlightTracker.setEnabled(true)
+                enabler1.start()
+                awaitThreadBlockedInAttach(enabler1)
+                realTracker.setEnabled(false)
             }
-            assertTrue(workerFinished.await(5, TimeUnit.SECONDS))
-            // Run gen2's queued attach now that gen1's stale worker has exited.
-            deferredTasks.forEach { it.run() }
-            val inFlightGen2Observer = inFlightTracker.observerForTest()
-            assertEquals(RecompositionStatus.ACTIVE, inFlightTracker.status)
-            assertEquals(1, inFlightTracker.attachedCompositionCount())
-            assertTrue(readObserverSlot(access, comp) === inFlightGen2Observer)
+            enabler1.join(5_000)
+            assertFalse(enabler1.isAlive)
+            assertEquals(RecompositionStatus.OFF, realTracker.status)
+            assertNull(readEffectiveObserverSlot(access, comp))
+
+            realTracker.setEnabled(true)
+            val realGen2Observer = realTracker.observerForTest()
+            assertEquals(RecompositionStatus.ACTIVE, realTracker.status)
+            assertEquals(1, realTracker.attachedCompositionCount())
+            assertTrue(readEffectiveObserverSlot(access, comp) === realGen2Observer)
 
             tick.intValue = 1
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
-            assertEquals(RecompositionCounts(1, 0), inFlightTracker.countsFor(rootScope.get()))
-            inFlightTracker.setEnabled(false)
+            assertEquals(RecompositionCounts(1, 0), realTracker.countsFor(rootScope.get()))
+            realTracker.setEnabled(false)
 
             comp.dispose()
         } finally {
@@ -572,9 +996,9 @@ internal object Compose19TestScenarios {
     }
 
     /**
-     * Finding #2a regression: holds real CompositionImpl.lock while Lionscope's attach worker blocks on that lock,
-     * installs a foreign observer atomically before releasing the lock, and proves Lionscope detects CONFLICT without
-     * overwriting the foreign observer.
+     * Round-2 #2a + Round-3 #5 regression: uses the real production serial-attach path (no custom scheduler hook)
+     * while main thread holds `CompositionImpl.lock`, waits for the enabling thread to block on `compLock`, installs
+     * a foreign observer atomically before releasing the lock, and proves CONFLICT with foreign observer preserved.
      */
     fun assertConcurrentForeignObserverInstallIsAtomicAndNeverOverwritten() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
@@ -590,11 +1014,7 @@ internal object Compose19TestScenarios {
         fun composeRoot(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9201)
             rootScope.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                tick.intValue
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) tick.intValue else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeRoot(next, nextChanged) }
             }
@@ -607,51 +1027,32 @@ internal object Compose19TestScenarios {
         val setObserverMethod = comp.javaClass.getMethod("setObserver", observerInterface)
         val compLock = access.compositionLockField.get(comp)!!
 
-        val attachStarted = CountDownLatch(1)
-        val attachFinished = CountDownLatch(1)
-        val workerRef = AtomicReference<Thread>()
-        val info = recomposer.asRecomposerInfo()
         val tracker = ComposeRecomposition19(
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
             holderGetObserver = access.holderGetObserver,
             holderCurrent = access.holderCurrent,
-            runningRecomposersFlow = { MutableStateFlow(setOf(info)) },
-            scheduleTask = { task ->
-                Thread({
-                    workerRef.set(Thread.currentThread())
-                    attachStarted.countDown()
-                    try {
-                        task.run()
-                    } finally {
-                        attachFinished.countDown()
-                    }
-                }, "test-atomic-attach").apply { isDaemon = true }.start()
-            },
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
         )
 
         var foreignHandle: Any? = null
+        val enabler = Thread({ tracker.setEnabled(true) }, "test-atomic-attach").apply { isDaemon = true }
         try {
             synchronized(compLock) {
-                tracker.setEnabled(true)
-                assertTrue("Attach worker did not start", attachStarted.await(5, TimeUnit.SECONDS))
-                // Wait until attach worker blocks on compLock.
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-                while (workerRef.get()?.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
-                    Thread.sleep(2)
-                }
-                assertEquals(Thread.State.BLOCKED, workerRef.get()?.state)
-                // Install foreign observer while holding compLock, right in the check-then-set window.
+                enabler.start()
+                awaitThreadBlockedInAttach(enabler)
                 foreignHandle = setObserverMethod.invoke(comp, foreignObserver)
             }
-            assertTrue("Attach worker did not finish", attachFinished.await(5, TimeUnit.SECONDS))
+            enabler.join(5_000)
+            assertFalse("Enabler thread did not finish", enabler.isAlive)
 
             assertEquals(RecompositionStatus.CONFLICT, tracker.status)
-            assertTrue("Foreign observer must not be overwritten", readObserverSlot(access, comp) === foreignObserver)
+            assertTrue("Foreign observer must not be overwritten", readEffectiveObserverSlot(access, comp) === foreignObserver)
             assertNull(tracker.countsFor(rootScope.get()))
 
             tick.intValue = 1
@@ -668,11 +1069,7 @@ internal object Compose19TestScenarios {
         }
     }
 
-    /**
-     * Finding #2b + #6 (SDK side) regression: installs a foreign observer AFTER Lionscope is already ACTIVE,
-     * proves status immediately reports CONFLICT with null counts (not ACTIVE with silent missing callbacks),
-     * and proves Retry (`setEnabled(true)` again on the same tracker) recovers cleanly once the foreign observer detaches.
-     */
+    /** Round-2 #2b + #6 (SDK side) regression: post-attach takeover reports CONFLICT and Retry recovers. */
     fun assertPostAttachForeignObserverTakeoverReportsConflictAndRetryRecovers() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
         val access = probe.access
@@ -687,11 +1084,7 @@ internal object Compose19TestScenarios {
         fun composeRoot(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9251)
             rootScope.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                tick.intValue
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) tick.intValue else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeRoot(next, nextChanged) }
             }
@@ -713,11 +1106,9 @@ internal object Compose19TestScenarios {
             clock.advanceFrame()
             assertEquals(RecompositionCounts(1, 0), tracker.countsFor(rootScope.get()))
 
-            // Foreign observer takes over the slot AFTER Lionscope attached.
             foreignHandle = setObserverMethod.invoke(comp, foreignObserver)!!
-            assertTrue(readObserverSlot(access, comp) === foreignObserver)
+            assertTrue(readEffectiveObserverSlot(access, comp) === foreignObserver)
 
-            // Ownership re-verification must detect takeover immediately (never stay ACTIVE with missing callbacks).
             assertEquals(RecompositionStatus.CONFLICT, tracker.status)
             assertNull(tracker.countsFor(rootScope.get()))
             assertEquals(0, tracker.attachedCompositionCount())
@@ -725,7 +1116,7 @@ internal object Compose19TestScenarios {
             // Retry while foreign observer is still attached remains CONFLICT without displacing it.
             tracker.setEnabled(true)
             assertEquals(RecompositionStatus.CONFLICT, tracker.status)
-            assertTrue(readObserverSlot(access, comp) === foreignObserver)
+            assertTrue(readEffectiveObserverSlot(access, comp) === foreignObserver)
 
             // Once foreign observer detaches, Retry (`setEnabled(true)`) recovers to ACTIVE on the same tracker.
             foreignHandle.javaClass.getMethod("dispose").invoke(foreignHandle)
@@ -749,9 +1140,9 @@ internal object Compose19TestScenarios {
     }
 
     /**
-     * Finding #3 regression: blocks an in-flight attach on CompositionImpl.lock, fires onCompositionUnregistered
-     * while the record is ATTACHING, then releases the lock. Proves the handle is never published or retained
-     * (even after rescan) and the composition's observer slot is clean.
+     * Round-2 #3 + Round-3 #5 regression: holds real `CompositionImpl.lock` while the real enabling thread blocks on
+     * `compLock`, disposes the composition (firing real `onCompositionUnregistered`), then releases the lock.
+     * Proves the handle is never published or retained even after `rescan()`.
      */
     fun assertUnregisterDuringInFlightAttachDisposesHandleAndNeverRetains() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
@@ -768,95 +1159,49 @@ internal object Compose19TestScenarios {
         }
 
         val compLock = access.compositionLockField.get(comp)!!
-        val recomposerInfoInterface = Class.forName("androidx.compose.runtime.RecomposerInfo")
-        val handleInterface = Class.forName("androidx.compose.runtime.tooling.CompositionObserverHandle")
-        val observableInterface = Class.forName("androidx.compose.runtime.tooling.ObservableComposition")
-        val capturedRegObserver = AtomicReference<Any?>()
-        val knownComps = CopyOnWriteArrayList<Any>(listOf(comp))
-        val noopHandle = Proxy.newProxyInstance(handleInterface.classLoader, arrayOf(handleInterface)) { _, _, _ -> null }
-        val controlledInfo = Proxy.newProxyInstance(
-            recomposerInfoInterface.classLoader,
-            arrayOf(recomposerInfoInterface),
-        ) { proxy, method, args ->
-            when (method.name) {
-                "observe" -> {
-                    val regObserver = args!![0]
-                    capturedRegObserver.set(regObserver)
-                    val onReg = regObserver.javaClass.getMethod("onCompositionRegistered", observableInterface)
-                    for (c in knownComps) onReg.invoke(regObserver, c)
-                    noopHandle
-                }
-                "equals" -> proxy === args?.getOrNull(0)
-                "hashCode" -> System.identityHashCode(proxy)
-                else -> null
-            }
-        }
-
-        val attachStarted = CountDownLatch(1)
-        val attachFinished = CountDownLatch(1)
-        val workerRef = AtomicReference<Thread>()
-        @Suppress("UNCHECKED_CAST")
-        val flow = MutableStateFlow(setOf(controlledInfo as androidx.compose.runtime.RecomposerInfo))
         val tracker = ComposeRecomposition19(
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
             holderGetObserver = access.holderGetObserver,
             holderCurrent = access.holderCurrent,
-            runningRecomposersFlow = { flow },
-            scheduleTask = { task ->
-                Thread({
-                    workerRef.set(Thread.currentThread())
-                    attachStarted.countDown()
-                    try {
-                        task.run()
-                    } finally {
-                        attachFinished.countDown()
-                    }
-                }, "test-unregister-inflight").apply { isDaemon = true }.start()
-            },
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
         )
 
+        val enabler = Thread({ tracker.setEnabled(true) }, "test-unregister-inflight").apply { isDaemon = true }
         try {
             synchronized(compLock) {
-                tracker.setEnabled(true)
-                assertTrue("Attach worker did not start", attachStarted.await(5, TimeUnit.SECONDS))
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-                while (workerRef.get()?.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
-                    Thread.sleep(2)
-                }
-                assertEquals(Thread.State.BLOCKED, workerRef.get()?.state)
-
-                // Unregister composition while its attach is in flight (blocked on compLock).
-                knownComps.remove(comp)
-                val regObserver = capturedRegObserver.get()!!
-                regObserver.javaClass.getMethod("onCompositionUnregistered", observableInterface).invoke(regObserver, comp)
+                enabler.start()
+                awaitThreadBlockedInAttach(enabler)
+                // Dispose composition while enabler is blocked on compLock (reentrant on this thread, fires real unregister).
+                comp.dispose()
             }
-            assertTrue("Attach worker did not finish", attachFinished.await(5, TimeUnit.SECONDS))
+            enabler.join(5_000)
+            assertFalse("Enabler thread did not finish", enabler.isAlive)
 
             assertEquals(0, tracker.attachedCompositionCount())
             assertEquals(0, tracker.trackedCompositionRecordCount())
-            assertNull("Observer slot must remain empty after unregister during in-flight attach", readObserverSlot(access, comp))
+            assertNull("Observer slot must remain empty after unregister during in-flight attach", readEffectiveObserverSlot(access, comp))
 
             tracker.rescan()
             assertEquals(0, tracker.attachedCompositionCount())
             assertEquals(0, tracker.trackedCompositionRecordCount())
-
-            comp.dispose()
         } finally {
             tracker.setEnabled(false)
+            runCatching { comp.dispose() }
             recomposer.cancel()
             job.join()
         }
     }
 
     /**
-     * Finding #4 regression: Thread A holds CompositionImpl.lock of Recomposer A's composition (busy recomposer)
-     * while Recomposer B starts and composes its initial tree. Proves discovery & attachment of Recomposer B are
-     * completely independent of Recomposer A's blocked attachment, so B's very first snapshot sees 1/0 (not 0/0).
+     * Round-2 #4 + Round-3 #5 regression: keeps Recomposer A's composition actively composing (holding `compA.lock`)
+     * with NO short timeout until AFTER Recomposer B asserts its first snapshot count `1/0`, enforced by an external
+     * 5-second watchdog deadline so a blocking implementation fails fast instead of timing out `compA`.
      */
     fun assertBusyRecomposerNeverBlocksAnotherRecomposerInitialComposition() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
@@ -882,6 +1227,7 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
@@ -890,13 +1236,15 @@ internal object Compose19TestScenarios {
             runningRecomposersFlow = { flow },
         )
 
-        val compALock = access.compositionLockField.get(compA)!!
         val lockHeldA = CountDownLatch(1)
         val releaseA = CountDownLatch(1)
         val blockerThread = Thread({
-            synchronized(compALock) {
+            Compose19TestBridge.setContent(compA) { c, _ ->
+                val cc = c.startRestartGroup(9403)
                 lockHeldA.countDown()
-                releaseA.await(10, TimeUnit.SECONDS)
+                // Hold compA actively composing until main test explicitly releases AFTER asserting B's first count.
+                releaseA.await()
+                cc.endRestartGroup()
             }
         }, "test-busy-recomposer-A").apply { isDaemon = true }
 
@@ -904,30 +1252,48 @@ internal object Compose19TestScenarios {
         val compB = Composition(EmptyApplier(), recomposerB)
         try {
             blockerThread.start()
-            assertTrue("Blocker thread did not acquire compA.lock", lockHeldA.await(5, TimeUnit.SECONDS))
+            assertTrue("Blocker thread did not enter compA composition", lockHeldA.await(5, TimeUnit.SECONDS))
 
-            // Enable tracker while compA.lock is held: must NOT hang or block discovery.
-            tracker.setEnabled(true)
-            assertEquals(RecompositionStatus.ACTIVE, tracker.status)
-            assertEquals(1, tracker.attachedRecomposerCount())
+            val done = CountDownLatch(1)
+            val err = AtomicReference<Throwable?>()
+            val runner = Thread({
+                try {
+                    tracker.setEnabled(true)
+                    assertEquals(RecompositionStatus.ACTIVE, tracker.status)
+                    assertEquals(1, tracker.attachedRecomposerCount())
 
-            // Recomposer B appears while compA is STILL blocked.
-            flow.value = setOf(recomposerA.asRecomposerInfo(), recomposerB.asRecomposerInfo())
-            assertEquals(2, tracker.attachedRecomposerCount())
+                    // Recomposer B appears while compA is STILL actively composing.
+                    flow.value = setOf(recomposerA.asRecomposerInfo(), recomposerB.asRecomposerInfo())
+                    assertEquals(2, tracker.attachedRecomposerCount())
 
-            // Recomposer B runs its initial composition while compA is STILL blocked.
-            Compose19TestBridge.setContent(compB) { c, _ ->
-                val cc = c.startRestartGroup(9402)
-                scopeB.set(cc.recomposeScope!!)
-                cc.endRestartGroup()
+                    Compose19TestBridge.setContent(compB) { c, _ ->
+                        val cc = c.startRestartGroup(9402)
+                        scopeB.set(cc.recomposeScope!!)
+                        cc.endRestartGroup()
+                    }
+                    assertNotNull(scopeB.get())
+                    assertEquals(
+                        "Busy Recomposer A must never hide Recomposer B's initial composition",
+                        RecompositionCounts(1, 0),
+                        tracker.countsFor(scopeB.get()),
+                    )
+                    // Prove compA was STILL held when B asserted its first count!
+                    assertEquals("compA must still be blocked when B asserts 1/0", 1L, releaseA.count)
+                    assertTrue(blockerThread.isAlive)
+                    assertFalse("Sibling B must not appear capacity-truncated", tracker.truncated)
+                } catch (t: Throwable) {
+                    err.set(t)
+                } finally {
+                    done.countDown()
+                }
+            }, "test-busy-recomposer-watchdog-runner").apply { isDaemon = true }
+
+            runner.start()
+            val finishedInTime = done.await(5, TimeUnit.SECONDS)
+            if (!finishedInTime) {
+                throw AssertionError("Busy Recomposer A blocked Recomposer B past 5s external deadline")
             }
-            assertNotNull(scopeB.get())
-            assertEquals(
-                "Busy Recomposer A must never hide Recomposer B's initial composition",
-                RecompositionCounts(1, 0),
-                tracker.countsFor(scopeB.get()),
-            )
-            assertFalse(tracker.truncated)
+            err.get()?.let { throw it }
         } finally {
             releaseA.countDown()
             blockerThread.join(5_000)
@@ -942,9 +1308,8 @@ internal object Compose19TestScenarios {
     }
 
     /**
-     * Finding #5 regression: fills capacity (cap=2) so scope B is dropped, disposes scope A so map size drops below
-     * cap, then executes scope B again. Proves B stays unavailable (null) instead of gaining an exact-looking 1/0
-     * partial count until reset().
+     * Round-2 #5 regression: fills capacity (cap=2) so scope B is dropped, disposes scope A so map size drops below
+     * cap, then executes scope B again. Proves B stays unavailable (null) until reset().
      */
     fun assertDroppedScopeAfterCapExceededNeverGetsPartialCountUntilReset() = runBlocking {
         val clock = ManualFrameClock()
@@ -961,11 +1326,7 @@ internal object Compose19TestScenarios {
         fun composeChildA(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9501)
             scopeA.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                // child A body
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) Unit else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeChildA(next, nextChanged) }
             }
@@ -974,11 +1335,7 @@ internal object Compose19TestScenarios {
         fun composeChildB(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9502)
             scopeB.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                tickB.intValue
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) tickB.intValue else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeChildB(next, nextChanged) }
             }
@@ -1001,21 +1358,18 @@ internal object Compose19TestScenarios {
         try {
             tracker.setEnabled(true)
             Compose19TestBridge.setContent(comp) { c, ch -> composeRoot(c, ch) }
-            // Root + ChildA filled cap=2; ChildB was dropped.
             assertTrue(tracker.truncated)
             assertEquals(2, tracker.trackedScopeCount())
             assertNotNull(scopeA.get())
             assertNotNull(scopeB.get())
             assertNull("Dropped scope B must be unavailable", tracker.countsFor(scopeB.get()))
 
-            // Dispose ChildA: map size drops from 2 to 1 (below maxTrackedScopes).
             showA.intValue = 0
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
             assertEquals(1, tracker.trackedScopeCount())
             assertTrue(tracker.truncated)
 
-            // Recompose ChildB: must STILL remain unavailable (null), never acquiring a misleading 1/0 partial count.
             tickB.intValue = 1
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
@@ -1025,7 +1379,6 @@ internal object Compose19TestScenarios {
                 tracker.countsFor(scopeB.get()),
             )
 
-            // After Reset, tracking resumes cleanly and ChildB counts normally.
             tracker.reset()
             assertFalse(tracker.truncated)
             tickB.intValue = 2
@@ -1043,8 +1396,8 @@ internal object Compose19TestScenarios {
 
     /**
      * Proves that if a composition created after enable has already composed before Lionscope attaches (late replay),
-     * coverage is marked incomplete (`truncated = true`) and its scopes return null rather than exact-looking 0/0 or
-     * partial counts until reset().
+     * coverage is marked incomplete (`incompleteCoverage == true`, `truncated == false`) and its scopes return null
+     * rather than exact-looking 0/0 or partial counts until reset().
      */
     fun assertPostEnableLateReplayedCompositionMarksCoverageIncomplete() = runBlocking {
         val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
@@ -1059,13 +1412,13 @@ internal object Compose19TestScenarios {
             scopeImplClass = access.scopeImplClass,
             skippedGetter = access.skippedGetter,
             rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
             compositionImplClass = access.compositionImplClass,
             compositionLockField = access.compositionLockField,
             observerHolderField = access.observerHolderField,
             holderGetObserver = access.holderGetObserver,
             holderCurrent = access.holderCurrent,
             runningRecomposersFlow = { flow },
-            scheduleTask = { task -> task.run() },
         )
         val tick = mutableIntStateOf(0)
         val scope = AtomicReference<RecomposeScope>()
@@ -1073,11 +1426,7 @@ internal object Compose19TestScenarios {
         fun composeRoot(c: Composer, changed: Int = 0) {
             val cc = c.startRestartGroup(9601)
             scope.set(cc.recomposeScope!!)
-            if (changed != 0 || !cc.skipping) {
-                tick.intValue
-            } else {
-                cc.skipToGroupEnd()
-            }
+            if (changed != 0 || !cc.skipping) tick.intValue else cc.skipToGroupEnd()
             cc.endRestartGroup()?.let {
                 Compose19TestBridge.updateScope(it) { next, nextChanged -> composeRoot(next, nextChanged) }
             }
@@ -1085,23 +1434,23 @@ internal object Compose19TestScenarios {
 
         try {
             tracker.setEnabled(true)
+            assertFalse(tracker.incompleteCoverage)
             assertFalse(tracker.truncated)
 
-            // Composition composes BEFORE its RecomposerInfo is delivered to the tracker.
             Compose19TestBridge.setContent(comp) { c, ch -> composeRoot(c, ch) }
             flow.value = setOf(recomposer.asRecomposerInfo())
 
-            assertTrue("Late post-enable composition must mark coverage incomplete", tracker.truncated)
+            assertTrue("Late post-enable composition must mark coverage incomplete", tracker.incompleteCoverage)
+            assertFalse("Incomplete coverage must not masquerade as capacity truncated", tracker.truncated)
             assertNull("Missed initial composition must not fabricate 0/0", tracker.countsFor(scope.get()))
 
-            // Subsequent recomposition while incomplete must also not fabricate partial 1/0.
             tick.intValue = 1
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
             assertNull(tracker.countsFor(scope.get()))
 
-            // After Reset, fresh counts start cleanly.
             tracker.reset()
+            assertFalse(tracker.incompleteCoverage)
             assertFalse(tracker.truncated)
             tick.intValue = 2
             Snapshot.sendApplyNotifications()
@@ -1116,9 +1465,71 @@ internal object Compose19TestScenarios {
         }
     }
 
-    private fun readObserverSlot(access: ComposeRecompositionSupport.ProbeSuccess, composition: Any): Any? {
+    private fun runDeadlockSubprocess(
+        timeoutSeconds: Long,
+        extraArgs: List<String> = emptyList(),
+    ): Pair<Int, String> {
+        val javaBin = File(System.getProperty("java.home"), "bin/java").absolutePath
+        val classpath = checkNotNull(System.getProperty("java.class.path")) { "java.class.path is not set" }
+        val cmd = ArrayList<String>().apply {
+            add(javaBin)
+            add("-cp")
+            add(classpath)
+            add(Compose19DeadlockSubprocessRunner::class.java.name)
+            addAll(extraArgs)
+        }
+        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
+        val output = StringBuilder()
+        val reader = Thread({
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { output.appendLine(it) }
+            }
+        }, "test-deadlock-subprocess-reader").apply {
+            isDaemon = true
+            start()
+        }
+        val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+            reader.join(1_000)
+            return -1 to "Subprocess timed out after ${timeoutSeconds}s:\n$output"
+        }
+        reader.join(2_000)
+        return process.exitValue() to output.toString()
+    }
+
+    private fun awaitThreadBlockedInAttach(thread: Thread, timeoutMs: Long = 5_000L) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (thread.state == Thread.State.BLOCKED &&
+                thread.stackTrace.any { it.methodName == "attachRecord" || it.methodName == "setObserver" }
+            ) {
+                return
+            }
+            Thread.sleep(2)
+        }
+        throw AssertionError(
+            "Thread ${thread.name} did not block in attachRecord/setObserver (state=${thread.state}):\n" +
+                thread.stackTrace.joinToString("\n"),
+        )
+    }
+
+    private fun awaitCondition(timeoutMs: Long = 2_000L, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (!condition() && System.nanoTime() < deadline) {
+            Thread.sleep(5)
+        }
+    }
+
+    private fun readRawObserverField(access: ComposeRecompositionSupport.ProbeSuccess, composition: Any): Any? {
         val holder = access.observerHolderField.get(composition) ?: return null
-        return access.holderGetObserver.invoke(holder) ?: access.holderCurrent.invoke(holder)
+        return access.holderGetObserver.invoke(holder)
+    }
+
+    private fun readEffectiveObserverSlot(access: ComposeRecompositionSupport.ProbeSuccess, composition: Any): Any? {
+        val holder = access.observerHolderField.get(composition) ?: return null
+        return access.holderCurrent.invoke(holder)
     }
 
     private fun createExternalObserver(enterCounter: AtomicInteger): Any {
@@ -1135,23 +1546,6 @@ internal object Compose19TestScenarios {
                 else -> null
             }
         }
-    }
-
-    /** Calls `ManagementFactory.getThreadMXBean().findDeadlockedThreads()` via reflection (android.jar lacks java.lang.management). */
-    private fun findDeadlockDump(): String? {
-        val factory = Class.forName("java.lang.management.ManagementFactory")
-        val beanInterface = Class.forName("java.lang.management.ThreadMXBean")
-        val bean = factory.getMethod("getThreadMXBean").invoke(null)
-        val ids = beanInterface.getMethod("findDeadlockedThreads").invoke(bean) as? LongArray ?: return null
-        if (ids.isEmpty()) return null
-        val infoMethod = beanInterface.getMethod(
-            "getThreadInfo",
-            LongArray::class.java,
-            Boolean::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,
-        )
-        val infos = infoMethod.invoke(bean, ids, true, true) as? Array<*>
-        return infos?.joinToString("\n") { it?.toString() ?: "null" } ?: ids.contentToString()
     }
 
     private class EmptyApplier : AbstractApplier<Unit>(Unit) {

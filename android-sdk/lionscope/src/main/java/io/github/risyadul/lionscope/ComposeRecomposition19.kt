@@ -21,45 +21,43 @@ import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.util.ArrayDeque
 import java.util.IdentityHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Compose runtime 1.9+ recomposition and skip tracker backed by an explicit generation-scoped attachment state machine.
+ * Compose runtime 1.9+ recomposition and skip tracker backed by a generation-scoped attachment state machine.
  *
  * Everything in this file links against `compileOnly` Compose runtime 1.9+ (`@ExperimentalComposeRuntimeApi`).
  * It is only loaded after [ComposeRecompositionSupport.probe] verifies every required public observer symbol,
- * `RecomposeScopeImpl` skip/rereading getters, and `CompositionImpl.lock` / `observerHolder`.
+ * `RecomposeScopeImpl` skip/rereading/owner members, and `CompositionImpl.lock` / `observerHolder`.
  *
  * State-machine invariants:
- * - **Enable generations**: every `setEnabled(true)` (including retry after conflict) creates a fresh [Generation]
- *   with its own [CompositionObserver] and [CompositionRegistrationObserver] identity. Work started in an earlier
- *   generation can never install into, dispose handles of, or count into a newer generation.
- * - **Per-composition registration records**: each observed composition has an explicit [CompState] lifecycle
- *   (`REGISTERED` -> `ATTACHING` -> `ATTACHED` -> `DISPOSED`) owned under our private leaf [lock]. An unregister
- *   arriving while an attach is in flight invalidates the record (`DISPOSED`), so any handle returned afterwards is
- *   disposed immediately and never published.
- * - **Atomic slot ownership**: checking `CompositionImpl.observerHolder` for a foreign observer and claiming the slot
- *   via `setObserver()` run atomically under `CompositionImpl.lock`. Ownership is re-verified before reporting status
- *   or counts; if a foreign observer takes over a slot later, the generation transitions to [RecompositionStatus.CONFLICT]
- *   and stops reporting counts.
- * - **Discovery independent of attachment**: collecting `Recomposer.runningRecomposers` only discovers recomposers and
- *   queues replayed compositions onto an asynchronous daemon pool — attachment of a busy recomposer never blocks
- *   discovery of another recomposer. Non-replay registrations of brand-new, non-composing root compositions attach
- *   synchronously so initial compositions are observed; any post-enable composition attached after it has already
- *   started composing marks coverage incomplete (`truncated = true`) until [reset].
- * - **Capacity monotonicity**: once [maxTrackedScopes] is hit, no new or previously dropped scope can enter the map
- *   until [reset], preventing dropped scopes from later acquiring misleading partial counts.
+ * - **Enable generations & own-observer marker**: every `setEnabled(true)` (including retry after conflict) creates a
+ *   fresh [Generation] whose [CompositionObserver] implements [LionscopeCompositionObserver]. Effective slot ownership
+ *   is resolved through `CompositionObserverHolder.current()`, so cached/inherited references to a retired Lionscope
+ *   generation are recognized as ours (replaced cleanly) rather than a foreign conflict, while foreign observers are
+ *   preserved and reported as [RecompositionStatus.CONFLICT].
+ * - **Serial post-`observe()` replay**: `RecomposerInfo.observe()` only records known compositions while Compose holds
+ *   `Recomposer.stateLock` (preventing deadlocks). Immediately after `observe()` releases `stateLock`, idle replayed
+ *   compositions attach serially on the enabling thread with no sleeps or fixed thread pool. Only actively-composing
+ *   replays, subcomposition handle upgrades, and in-callback handle disposals use a single retiring serial executor
+ *   whose generation-tagged tasks are coalesced and purged when the generation ends.
+ * - **Per-composition coverage, no global freeze**: each [CompositionRecord] tracks its own [Coverage] (`EXACT` vs
+ *   `INCOMPLETE`). A composition that is still pending attachment or was attached after already composing post-enable
+ *   reports unavailable counts (`null`, never `0/0`) for its own scopes until [reset], while fully attached sibling
+ *   compositions keep exact counts. Capacity overflow ([truncated]) remains monotonic until [reset].
+ * - **Per-capture ownership verification**: [beginCapture] verifies attached compositions once per capture (without
+ *   per-node scans or allocations), while standalone [countsFor] peeks at most the single scope's owning composition.
  */
 @OptIn(ExperimentalComposeRuntimeApi::class)
 internal class ComposeRecomposition19(
     private val scopeImplClass: Class<*>,
     private val skippedGetter: Method,
     private val rereadingGetter: Method,
+    private val scopeOwnerField: Field? = null,
     private val compositionImplClass: Class<*>,
     private val compositionLockField: Field,
     private val observerHolderField: Field,
@@ -67,11 +65,11 @@ internal class ComposeRecomposition19(
     private val holderCurrent: Method,
     private val maxTrackedScopes: Int = DEFAULT_MAX_TRACKED_SCOPES,
     private val runningRecomposersFlow: () -> StateFlow<Set<RecomposerInfo>> = { Recomposer.runningRecomposers },
-    scheduleTask: ((Runnable) -> Unit)? = null,
+    private val customScheduler: ((Runnable) -> Unit)? = null,
 ) : ComposeRecompositionTracker {
 
-    private val useDefaultExecutor: Boolean = scheduleTask == null
-    private val taskScheduler: (Runnable) -> Unit = scheduleTask ?: ::defaultScheduleTask
+    /** Marker implemented by every generation's observer so retired Lionscope observers are never misread as foreign. */
+    private interface LionscopeCompositionObserver : CompositionObserver
 
     private class ScopeEntry {
         var recompositions: Int = 0
@@ -111,14 +109,17 @@ internal class ComposeRecomposition19(
         override fun equals(other: Any?): Boolean = other is IdentityWeakKey && other.get() === scope
     }
 
-    private enum class ObserverSlot { NONE, OURS, FOREIGN, FAILED }
+    private enum class ObserverSlot { NONE, OURS_CURRENT, OURS_RETIRED, FOREIGN, FAILED }
 
     private enum class CompState { REGISTERED, ATTACHING, ATTACHED, DISPOSED }
+
+    private enum class Coverage { EXACT, INCOMPLETE }
 
     private class CompositionRecord(
         val composition: ObservableComposition,
         val gen: Generation,
         var state: CompState,
+        var coverage: Coverage,
         var missedInitial: Boolean = false,
         var handle: CompositionObserverHandle? = null,
     )
@@ -129,7 +130,79 @@ internal class ComposeRecomposition19(
         val collectorScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val recomposers = IdentityHashMap<RecomposerInfo, CompositionObserverHandle>()
         val compositions = IdentityHashMap<ObservableComposition, CompositionRecord>()
+        var incompleteCount: Int = 0
         var active: Boolean = true
+
+        /** Pre-built array of `ATTACHED` `CompositionImpl` instances so ownership checks allocate nothing. */
+        @Volatile
+        var attachedSnapshot: Array<ObservableComposition> = emptyArray()
+    }
+
+    /**
+     * Single serial deferred executor with generation-tagged coalescing, immediate purge on generation end, and
+     * idle thread retirement (`allowCoreThreadTimeOut = true`). Never spawns a thread unless deferred work occurs.
+     */
+    private class SerialDeferredExecutor {
+        private class GenTask(val genId: Long, val key: Any?, val action: () -> Unit)
+
+        private val queueLock = Any()
+        private val pending = ArrayDeque<GenTask>()
+        private var drainScheduled = false
+        private val worker: ThreadPoolExecutor by lazy {
+            ThreadPoolExecutor(
+                1,
+                1,
+                IDLE_KEEP_ALIVE_MS,
+                TimeUnit.MILLISECONDS,
+                LinkedBlockingQueue(),
+            ) { runnable ->
+                Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
+            }.apply {
+                allowCoreThreadTimeOut(true)
+            }
+        }
+
+        @Volatile
+        private var workerCreated = false
+
+        fun enqueue(genId: Long, key: Any?, action: () -> Unit) {
+            synchronized(queueLock) {
+                if (key != null && pending.any { it.genId == genId && it.key === key }) return
+                pending.addLast(GenTask(genId, key, action))
+                if (!drainScheduled) {
+                    drainScheduled = true
+                    workerCreated = true
+                    worker.execute(::drain)
+                }
+            }
+        }
+
+        fun cancelGeneration(genId: Long) {
+            synchronized(queueLock) {
+                if (pending.isEmpty()) return
+                val it = pending.iterator()
+                while (it.hasNext()) {
+                    if (it.next().genId == genId) it.remove()
+                }
+            }
+        }
+
+        fun pendingCount(): Int = synchronized(queueLock) { pending.size }
+
+        fun poolSize(): Int = if (!workerCreated) 0 else worker.poolSize
+
+        private fun drain() {
+            while (true) {
+                val next = synchronized(queueLock) {
+                    if (pending.isEmpty()) {
+                        drainScheduled = false
+                        return
+                    }
+                    pending.removeFirst()
+                }
+                guarded { next.action() }
+            }
+        }
     }
 
     /** Private leaf lock: NEVER held across Compose `observe`, `setObserver`, `dispose`, or `CompositionImpl.lock`. */
@@ -137,18 +210,21 @@ internal class ComposeRecomposition19(
     private val referenceQueue = ReferenceQueue<RecomposeScope>()
     private val counts = HashMap<Any, ScopeEntry>()
     private val lookupKey = LookupKey()
+    private val deferredExecutor = SerialDeferredExecutor()
+
+    @Volatile
     private var currentGen: Generation? = null
     private var nextGenerationId: Long = 0L
     private var resetEpoch: Long = 0L
 
     private val inObserveReplay = ThreadLocal<Boolean>()
+    private val inPostEnableReplay = ThreadLocal<Boolean>()
     private val inRegistrationCallback = ThreadLocal<Boolean>()
+    private val replayCollector = ThreadLocal<MutableList<CompositionRecord>?>()
+    private val captureDepth = ThreadLocal<Int>()
 
     @Volatile
     private var capHit: Boolean = false
-
-    @Volatile
-    private var coverageIncomplete: Boolean = false
 
     @Volatile
     private var observerConflict: Boolean = false
@@ -158,12 +234,18 @@ internal class ComposeRecomposition19(
 
     override val status: RecompositionStatus
         get() {
-            verifyOwnershipFast()
+            verifyOwnershipAll()
             return rawStatus()
         }
 
     override val truncated: Boolean
-        get() = capHit || coverageIncomplete
+        get() = capHit
+
+    override val incompleteCoverage: Boolean
+        get() = synchronized(lock) {
+            val gen = currentGen
+            gen != null && isGenerationActive(gen) && gen.incompleteCount > 0
+        }
 
     private fun rawStatus(): RecompositionStatus = when {
         failedUnsupported -> RecompositionStatus.UNSUPPORTED
@@ -199,7 +281,7 @@ internal class ComposeRecomposition19(
         }
 
     private fun createCompositionObserver(gen: Generation): CompositionObserver =
-        object : CompositionObserver {
+        object : LionscopeCompositionObserver {
             override fun onBeginComposition(composition: ObservableComposition) = Unit
 
             override fun onEndComposition(composition: ObservableComposition) = Unit
@@ -208,9 +290,14 @@ internal class ComposeRecomposition19(
 
             override fun onScopeEnter(scope: RecomposeScope) {
                 if (currentGen !== gen || failedUnsupported || observerConflict) return
+                val owner = scopeOwner(scope)
                 guarded {
                     synchronized(lock) {
                         if (!isGenerationActive(gen)) return@synchronized
+                        if (owner != null && compositionImplClass.isInstance(owner)) {
+                            val record = gen.compositions[owner]
+                            if (record == null || record.coverage != Coverage.EXACT) return@synchronized
+                        }
                         val entry = getOrCreateLocked(scope) ?: return@synchronized
                         entry.activePassDepth++
                         entry.passEpoch = resetEpoch
@@ -238,7 +325,7 @@ internal class ComposeRecomposition19(
                     synchronized(lock) {
                         if (!isGenerationActive(gen)) return@synchronized
                         // Never create an entry on exit: passes that started before reset() (or before attach,
-                        // or after capHit froze insertions) are discarded rather than misclassified.
+                        // or on an incomplete composition, or after capHit froze insertions) are discarded.
                         val entry = getLocked(scope) ?: return@synchronized
                         if (entry.activePassDepth <= 0) return@synchronized
                         entry.activePassDepth--
@@ -272,7 +359,7 @@ internal class ComposeRecomposition19(
     override fun setEnabled(enabled: Boolean) {
         if (enabled) {
             if (failedUnsupported) return
-            verifyOwnershipFast()
+            verifyOwnershipAll()
             val gen = synchronized(lock) {
                 if (failedUnsupported) return
                 // If already active and healthy, keep the current generation.
@@ -282,26 +369,20 @@ internal class ComposeRecomposition19(
                 } else {
                     observerConflict = false
                     capHit = false
-                    coverageIncomplete = false
                     resetEpoch++
                     counts.clear()
                     drainQueueLocked()
                     Generation(++nextGenerationId).also { currentGen = it }
                 }
             } ?: return
-            val initialLatch = startCollectingRecomposers(gen)
-            // Wait briefly for the initial batch of idle replayed compositions when using the default async pool,
-            // without ever blocking discovery of new recomposers or blocking indefinitely on a busy composition.
-            if (initialLatch != null && useDefaultExecutor) {
-                runCatching { initialLatch.await(INITIAL_ATTACH_WAIT_MS, TimeUnit.MILLISECONDS) }
-            }
+            startCollectingRecomposers(gen)
         } else {
             endGeneration(targetGen = null, markConflict = false, markUnsupported = false)
         }
     }
 
     override fun rescan() {
-        verifyOwnershipFast()
+        verifyOwnershipAll()
         val gen = synchronized(lock) { currentGen?.takeIf { isGenerationActive(it) } } ?: return
         val running = try {
             runningRecomposersFlow().value
@@ -322,20 +403,62 @@ internal class ComposeRecomposition19(
             counts.clear()
             drainQueueLocked()
             capHit = false
-            coverageIncomplete = false
-            currentGen?.compositions?.values?.forEach { it.missedInitial = false }
+            val gen = currentGen ?: return
+            var incomplete = 0
+            for (record in gen.compositions.values) {
+                if (record.state == CompState.ATTACHED) {
+                    // Attached compositions get a clean exact baseline after reset.
+                    record.missedInitial = false
+                    record.coverage = Coverage.EXACT
+                } else {
+                    // Compositions still pending attachment remain incomplete even after reset until attached & reset.
+                    record.missedInitial = true
+                    record.coverage = Coverage.INCOMPLETE
+                    incomplete++
+                }
+            }
+            gen.incompleteCount = incomplete
         }
     }
 
+    override fun beginCapture() {
+        val depth = captureDepth.get() ?: 0
+        if (depth == 0) verifyOwnershipAll()
+        captureDepth.set(depth + 1)
+    }
+
+    override fun endCapture() {
+        val depth = captureDepth.get() ?: 0
+        if (depth <= 1) captureDepth.remove() else captureDepth.set(depth - 1)
+    }
+
     override fun countsFor(scope: Any): RecompositionCounts? {
-        verifyOwnershipFast()
+        val gen = currentGen ?: return null
+        if (!isGenerationActive(gen)) return null
+
+        val owner = scopeOwner(scope)
+        val owningComp = if (owner != null && compositionImplClass.isInstance(owner)) {
+            owner as ObservableComposition
+        } else {
+            null
+        }
+
+        // Outside a capture window (where beginCapture already verified every attached composition once),
+        // verify ONLY this scope's owning composition in O(1) with zero allocations.
+        if (owningComp != null && (captureDepth.get() ?: 0) == 0) {
+            if (!verifySingleOwner(gen, owningComp)) return null
+        }
+
         return synchronized(lock) {
-            val gen = currentGen
-            if (gen == null || !isGenerationActive(gen)) return@synchronized null
+            if (!isGenerationActive(gen)) return@synchronized null
+            if (owningComp != null) {
+                val record = gen.compositions[owningComp]
+                if (record == null || record.coverage != Coverage.EXACT) return@synchronized null
+            }
             val entry = getLocked(scope)
             when {
                 entry != null -> RecompositionCounts(entry.recompositions, entry.skips)
-                capHit || coverageIncomplete -> null // Incomplete coverage: never fabricate 0/0.
+                capHit -> null // Capacity reached: never fabricate 0/0 for dropped scopes.
                 else -> RecompositionCounts.ZERO
             }
         }
@@ -358,24 +481,29 @@ internal class ComposeRecomposition19(
     /** Number of composition records in any state in the active generation (tests). */
     internal fun trackedCompositionRecordCount(): Int = synchronized(lock) { currentGen?.compositions?.size ?: 0 }
 
+    /** Number of pending deferred tasks in the internal serial executor (tests). */
+    internal fun deferredPendingCount(): Int = deferredExecutor.pendingCount()
+
+    /** Current worker pool size of the internal serial executor (tests). */
+    internal fun deferredPoolSize(): Int = deferredExecutor.poolSize()
+
     /** Exposes the active generation's observer for targeted unit tests. */
     internal fun observerForTest(): Any = synchronized(lock) {
         checkNotNull(currentGen) { "Tracker is not enabled" }.observer
     }
 
-    private fun startCollectingRecomposers(gen: Generation): CountDownLatch? {
+    private fun startCollectingRecomposers(gen: Generation) {
         val flow = try {
             runningRecomposersFlow()
         } catch (t: Throwable) {
             gen.collectorScope.cancel()
             if (isRuntimeIncompatibility(t)) {
                 failUnsupported()
-                return null
+                return
             }
             if (isFatal(t)) throw t
-            return null
+            return
         }
-        var initialLatch: CountDownLatch? = null
         var firstEmission = true
         gen.collectorScope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
@@ -383,11 +511,7 @@ internal class ComposeRecomposition19(
                     if (!isGenerationActive(gen)) return@collect
                     val isInitial = firstEmission
                     firstEmission = false
-                    var latch: CountDownLatch? = null
-                    guarded { latch = discoverRecomposers(gen, running, isInitialEnable = isInitial) }
-                    if (isInitial) {
-                        initialLatch = latch
-                    }
+                    guarded { discoverRecomposers(gen, running, isInitialEnable = isInitial) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -399,23 +523,22 @@ internal class ComposeRecomposition19(
                 }
             }
         }
-        return initialLatch
     }
 
     /**
-     * Discovery-only step: observes new Recomposers and prunes stopped ones.
-     * NEVER calls `composition.setObserver()` inline — all replayed compositions are dispatched asynchronously
-     * so a busy Recomposer can never block discovery of another Recomposer.
+     * Observes all newly discovered Recomposers FIRST (collecting replayed compositions without calling `setObserver`
+     * inside `observe()`), then attaches idle replayed compositions serially on this thread now that `stateLock` is
+     * released. Only actively-composing compositions are deferred to the single retiring serial executor.
      */
     private fun discoverRecomposers(
         gen: Generation,
         running: Set<RecomposerInfo>,
         isInitialEnable: Boolean,
-    ): CountDownLatch? {
-        if (!isGenerationActive(gen)) return null
+    ) {
+        if (!isGenerationActive(gen)) return
 
         val staleHandles = synchronized(lock) {
-            if (!isGenerationActive(gen)) return null
+            if (!isGenerationActive(gen)) return
             val stale = ArrayList<CompositionObserverHandle>()
             val iterator = gen.recomposers.entries.iterator()
             while (iterator.hasNext()) {
@@ -427,7 +550,7 @@ internal class ComposeRecomposition19(
             }
             stale
         }
-        for (handle in staleHandles) scheduleDispose(handle)
+        for (handle in staleHandles) disposeOrDefer(handle)
 
         val replayedRecords = ArrayList<CompositionRecord>()
         for (info in running) {
@@ -446,7 +569,7 @@ internal class ComposeRecomposition19(
             } catch (t: Throwable) {
                 if (isRuntimeIncompatibility(t)) {
                     failUnsupported()
-                    return null
+                    return
                 }
                 if (isFatal(t)) throw t
                 null
@@ -464,42 +587,70 @@ internal class ComposeRecomposition19(
                     false
                 }
             }
-            if (!keep) scheduleDispose(handle)
+            if (!keep) disposeOrDefer(handle)
         }
 
-        if (replayedRecords.isEmpty()) return null
-        val latch = CountDownLatch(replayedRecords.size)
+        if (replayedRecords.isEmpty()) return
         for (record in replayedRecords) {
-            scheduleAttach(record, latch)
+            if (!isGenerationActive(gen)) break
+            if (customScheduler != null) {
+                enqueueDeferredAttach(record)
+            } else if (isCompositionActive(record.composition)) {
+                // Actively composing on another thread: mark this composition incomplete and attach asynchronously
+                // so enabling never blocks on a busy composition or delays sibling discovery.
+                synchronized(lock) {
+                    if (isGenerationActive(gen) && gen.compositions[record.composition] === record) {
+                        record.missedInitial = true
+                        setCoverageLocked(gen, record, Coverage.INCOMPLETE)
+                    }
+                }
+                enqueueDeferredAttach(record)
+            } else {
+                // Idle composition outside Recomposer.stateLock: attach serially right now on the enabling thread.
+                val ready = synchronized(lock) {
+                    if (isGenerationActive(gen) &&
+                        record.state == CompState.REGISTERED &&
+                        gen.compositions[record.composition] === record
+                    ) {
+                        record.state = CompState.ATTACHING
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (ready) attachRecord(record)
+            }
         }
-        return latch
     }
-
-    private val inPostEnableReplay = ThreadLocal<Boolean>()
-    private val replayCollector = ThreadLocal<MutableList<CompositionRecord>?>()
 
     private fun handleCompositionRegistered(gen: Generation, composition: ObservableComposition) {
         if (!isGenerationActive(gen)) return
         if (isCompositionDisposed(composition)) return
 
         // Case 1: Replay inside RecomposerInfo.observe() while Recomposer holds stateLock.
-        // NEVER acquire CompositionImpl.lock or call setObserver() here: create a REGISTERED record
-        // and let discoverRecomposers dispatch it asynchronously once observe() releases stateLock.
+        // NEVER acquire CompositionImpl.lock or call setObserver() here: create a REGISTERED (INCOMPLETE) record
+        // and let discoverRecomposers attach it serially once observe() releases stateLock.
         if (inObserveReplay.get() == true) {
             val missed = inPostEnableReplay.get() == true
             val record = synchronized(lock) {
                 if (!isGenerationActive(gen) || gen.compositions.containsKey(composition)) {
                     null
                 } else {
-                    if (missed) coverageIncomplete = true
-                    CompositionRecord(composition, gen, CompState.REGISTERED, missedInitial = missed).also {
-                        gen.compositions[composition] = it
-                    }
+                    addRecordLocked(
+                        gen,
+                        CompositionRecord(
+                            composition = composition,
+                            gen = gen,
+                            state = CompState.REGISTERED,
+                            coverage = Coverage.INCOMPLETE,
+                            missedInitial = missed,
+                        ),
+                    )
                 }
             }
             if (record != null) {
                 val batch = replayCollector.get()
-                if (batch != null) batch.add(record) else scheduleAttach(record, null)
+                if (batch != null) batch.add(record) else enqueueDeferredAttach(record)
             }
             return
         }
@@ -514,46 +665,64 @@ internal class ComposeRecomposition19(
                 markConflict(gen)
                 return
             }
-            ObserverSlot.OURS -> {
+            ObserverSlot.OURS_CURRENT -> {
                 // Subcomposition already inherits gen.observer from its parent during initial composition:
-                // defer explicit handle acquisition off-lock.
+                // its initial composition IS observed (EXACT); defer explicit handle upgrade off-lock.
                 val record = synchronized(lock) {
                     if (!isGenerationActive(gen) || gen.compositions.containsKey(composition)) {
                         null
                     } else {
-                        CompositionRecord(composition, gen, CompState.REGISTERED).also {
-                            gen.compositions[composition] = it
-                        }
+                        addRecordLocked(
+                            gen,
+                            CompositionRecord(
+                                composition = composition,
+                                gen = gen,
+                                state = CompState.REGISTERED,
+                                coverage = Coverage.EXACT,
+                            ),
+                        )
                     }
                 }
-                if (record != null) scheduleAttach(record, null)
+                if (record != null) enqueueDeferredAttach(record)
                 return
             }
-            ObserverSlot.NONE -> {
-                // If already composing, defer off-lock and mark incomplete coverage so we never show exact-looking 0/0.
+            ObserverSlot.NONE, ObserverSlot.OURS_RETIRED -> {
+                // If already composing, defer off-lock and mark THIS composition incomplete (never global freeze).
                 if (isCompositionActive(composition)) {
                     val record = synchronized(lock) {
                         if (!isGenerationActive(gen) || gen.compositions.containsKey(composition)) {
                             null
                         } else {
-                            coverageIncomplete = true
-                            CompositionRecord(composition, gen, CompState.REGISTERED, missedInitial = true).also {
-                                gen.compositions[composition] = it
-                            }
+                            addRecordLocked(
+                                gen,
+                                CompositionRecord(
+                                    composition = composition,
+                                    gen = gen,
+                                    state = CompState.REGISTERED,
+                                    coverage = Coverage.INCOMPLETE,
+                                    missedInitial = true,
+                                ),
+                            )
                         }
                     }
-                    if (record != null) scheduleAttach(record, null)
+                    if (record != null) enqueueDeferredAttach(record)
                     return
                 }
-                // Brand-new, unobserved, non-composing root composition (e.g. new Activity) about to run
-                // composeContent() synchronously on this thread: claim slot atomically right now.
+                // Brand-new, unobserved, non-composing root composition about to run composeContent()
+                // synchronously on this thread: claim slot atomically right now so initial composition is counted.
                 val record = synchronized(lock) {
                     if (!isGenerationActive(gen) || gen.compositions.containsKey(composition)) {
                         null
                     } else {
-                        CompositionRecord(composition, gen, CompState.ATTACHING).also {
-                            gen.compositions[composition] = it
-                        }
+                        addRecordLocked(
+                            gen,
+                            CompositionRecord(
+                                composition = composition,
+                                gen = gen,
+                                state = CompState.ATTACHING,
+                                coverage = Coverage.EXACT,
+                            ),
+                        )
                     }
                 } ?: return
                 attachRecord(record)
@@ -563,45 +732,55 @@ internal class ComposeRecomposition19(
 
     private fun handleCompositionUnregistered(gen: Generation, composition: ObservableComposition) {
         val handleToDispose = synchronized(lock) {
-            val record = gen.compositions.remove(composition) ?: return
-            record.state = CompState.DISPOSED
+            val record = removeRecordLocked(gen, composition) ?: return
             val handle = record.handle
             record.handle = null
             handle
         }
         if (handleToDispose != null) {
             // Never call handle.dispose() synchronously inside Recomposer's stateLock callback.
-            scheduleDispose(handleToDispose)
+            enqueueDeferredDispose(handleToDispose)
         }
     }
 
-    private fun scheduleAttach(record: CompositionRecord, latch: CountDownLatch?) {
-        taskScheduler(
-            Runnable {
-                try {
-                    guarded {
-                        val ready = synchronized(lock) {
-                            if (!isGenerationActive(record.gen) ||
-                                record.state != CompState.REGISTERED ||
-                                record.gen.compositions[record.composition] !== record
-                            ) {
-                                false
-                            } else {
-                                record.state = CompState.ATTACHING
-                                true
-                            }
-                        }
-                        if (ready) attachRecord(record)
-                    }
-                } finally {
-                    latch?.countDown()
+    private fun enqueueDeferredAttach(record: CompositionRecord) {
+        val action = {
+            val ready = synchronized(lock) {
+                if (!isGenerationActive(record.gen) ||
+                    record.state != CompState.REGISTERED ||
+                    record.gen.compositions[record.composition] !== record
+                ) {
+                    false
+                } else {
+                    record.state = CompState.ATTACHING
+                    true
                 }
-            },
-        )
+            }
+            if (ready) attachRecord(record)
+        }
+        val custom = customScheduler
+        if (custom != null) {
+            custom(Runnable { guarded { action() } })
+        } else {
+            deferredExecutor.enqueue(record.gen.id, record.composition, action)
+        }
     }
 
-    private fun scheduleDispose(handle: CompositionObserverHandle) {
-        taskScheduler(Runnable { guarded { disposeHandle(handle) } })
+    private fun disposeOrDefer(handle: CompositionObserverHandle) {
+        if (inRegistrationCallback.get() == true) {
+            enqueueDeferredDispose(handle)
+        } else {
+            disposeHandle(handle)
+        }
+    }
+
+    private fun enqueueDeferredDispose(handle: CompositionObserverHandle) {
+        val custom = customScheduler
+        if (custom != null) {
+            custom(Runnable { guarded { disposeHandle(handle) } })
+        } else {
+            deferredExecutor.enqueue(DISPOSE_GEN_ID, handle) { disposeHandle(handle) }
+        }
     }
 
     /**
@@ -648,12 +827,7 @@ internal class ComposeRecomposition19(
                     ObserverSlot.FOREIGN -> {
                         conflictDetected = true
                     }
-                    ObserverSlot.NONE, ObserverSlot.OURS -> {
-                        if (record.missedInitial) {
-                            synchronized(lock) {
-                                if (isGenerationActive(gen)) coverageIncomplete = true
-                            }
-                        }
+                    ObserverSlot.NONE, ObserverSlot.OURS_CURRENT, ObserverSlot.OURS_RETIRED -> {
                         val handle = try {
                             composition.setObserver(gen.observer)
                         } catch (t: Throwable) {
@@ -669,8 +843,7 @@ internal class ComposeRecomposition19(
                         if (handle == null) {
                             synchronized(lock) {
                                 if (record.state == CompState.ATTACHING && gen.compositions[composition] === record) {
-                                    gen.compositions.remove(composition)
-                                    record.state = CompState.DISPOSED
+                                    removeRecordLocked(gen, composition)
                                 }
                             }
                         } else {
@@ -681,6 +854,12 @@ internal class ComposeRecomposition19(
                                 ) {
                                     record.handle = handle
                                     record.state = CompState.ATTACHED
+                                    setCoverageLocked(
+                                        gen,
+                                        record,
+                                        if (record.missedInitial) Coverage.INCOMPLETE else Coverage.EXACT,
+                                    )
+                                    rebuildAttachedSnapshotLocked(gen)
                                     true
                                 } else {
                                     false
@@ -688,8 +867,7 @@ internal class ComposeRecomposition19(
                             }
                             if (!published) {
                                 // Generation ended or composition unregistered while attach was in flight:
-                                // roll back immediately inside compLock (gen.observer identity guarantees we
-                                // never clear a newer generation's observer).
+                                // roll back immediately inside compLock (unique gen.observer prevents touching newer gens).
                                 disposeHandle(handle)
                             }
                         }
@@ -718,8 +896,7 @@ internal class ComposeRecomposition19(
             if (handle == null) {
                 synchronized(lock) {
                     if (record.state == CompState.ATTACHING && gen.compositions[composition] === record) {
-                        gen.compositions.remove(composition)
-                        record.state = CompState.DISPOSED
+                        removeRecordLocked(gen, composition)
                     }
                 }
             } else {
@@ -730,14 +907,18 @@ internal class ComposeRecomposition19(
                     ) {
                         record.handle = handle
                         record.state = CompState.ATTACHED
+                        setCoverageLocked(
+                            gen,
+                            record,
+                            if (record.missedInitial) Coverage.INCOMPLETE else Coverage.EXACT,
+                        )
+                        rebuildAttachedSnapshotLocked(gen)
                         true
                     } else {
                         false
                     }
                 }
-                if (!published) {
-                    if (inRegistrationCallback.get() == true) scheduleDispose(handle) else disposeHandle(handle)
-                }
+                if (!published) disposeOrDefer(handle)
             }
         }
 
@@ -749,58 +930,66 @@ internal class ComposeRecomposition19(
     }
 
     /**
-     * Re-verifies that every `ATTACHED` `CompositionImpl` in the active generation still holds this generation's
-     * observer. If another tool overwrote the slot after Lionscope attached, transitions immediately to `CONFLICT`.
+     * Re-verifies every `ATTACHED` `CompositionImpl` in the active generation using its pre-built [Generation.attachedSnapshot]
+     * array (zero per-call allocation). Called once per capture ([beginCapture]) and on [status] / [rescan] / [setEnabled].
      */
-    private fun verifyOwnershipFast() {
-        val snapshot = synchronized(lock) {
-            val gen = currentGen ?: return
-            if (!isGenerationActive(gen) || gen.compositions.isEmpty()) return
-            val attached = ArrayList<ObservableComposition>(gen.compositions.size)
-            for (record in gen.compositions.values) {
-                if (record.state == CompState.ATTACHED && compositionImplClass.isInstance(record.composition)) {
-                    attached.add(record.composition)
+    private fun verifyOwnershipAll() {
+        val gen = currentGen ?: return
+        if (!isGenerationActive(gen)) return
+        val attached = gen.attachedSnapshot
+        if (attached.isEmpty()) return
+        for (composition in attached) {
+            if (!verifySingleOwner(gen, composition)) return
+        }
+    }
+
+    /**
+     * O(1), zero-allocation ownership check for a single `CompositionImpl`. Returns false if ownership was lost or
+     * runtime inspection failed (having already transitioned the generation to `CONFLICT` or `UNSUPPORTED`).
+     */
+    private fun verifySingleOwner(gen: Generation, composition: ObservableComposition): Boolean {
+        val isAttached = synchronized(lock) {
+            isGenerationActive(gen) && gen.compositions[composition]?.state == CompState.ATTACHED
+        }
+        if (!isAttached) return isGenerationActive(gen)
+        return when (peekObserverSlot(composition, gen.observer)) {
+            ObserverSlot.OURS_CURRENT -> true
+            ObserverSlot.FOREIGN, ObserverSlot.OURS_RETIRED -> {
+                markConflict(gen)
+                false
+            }
+            ObserverSlot.NONE -> {
+                val stillAttached = synchronized(lock) {
+                    isGenerationActive(gen) && gen.compositions[composition]?.state == CompState.ATTACHED
+                }
+                if (stillAttached) {
+                    markConflict(gen)
+                    false
+                } else {
+                    isGenerationActive(gen)
                 }
             }
-            if (attached.isEmpty()) return
-            gen to attached
-        }
-        val (gen, attached) = snapshot
-        for (composition in attached) {
-            when (peekObserverSlot(composition, gen.observer)) {
-                ObserverSlot.OURS -> Unit
-                ObserverSlot.FOREIGN -> {
-                    markConflict(gen)
-                    return
-                }
-                ObserverSlot.NONE -> {
-                    // Slot was cleared externally (e.g. another observer replaced ours then disposed);
-                    // if the record is still ATTACHED in this generation, we lost ownership.
-                    val stillAttached = synchronized(lock) {
-                        isGenerationActive(gen) && gen.compositions[composition]?.state == CompState.ATTACHED
-                    }
-                    if (stillAttached) {
-                        markConflict(gen)
-                        return
-                    }
-                }
-                ObserverSlot.FAILED -> {
-                    failUnsupported()
-                    return
-                }
+            ObserverSlot.FAILED -> {
+                failUnsupported()
+                false
             }
         }
     }
 
+    /**
+     * Resolves effective ownership of [composition]'s observer slot via `CompositionObserverHolder.current()`.
+     * For inherited holders (`root == false`), `current()` refreshes from the parent context so a stale cached
+     * reference from a retired Lionscope generation is cleared rather than misreported as a foreign conflict.
+     */
     private fun peekObserverSlot(composition: ObservableComposition, mine: CompositionObserver): ObserverSlot {
         if (!compositionImplClass.isInstance(composition)) return ObserverSlot.NONE
         return try {
             val holder = observerHolderField.get(composition) ?: return ObserverSlot.FAILED
-            val direct = holderGetObserver.invoke(holder)
-            val effective = direct ?: holderCurrent.invoke(holder)
+            val effective = holderCurrent.invoke(holder)
             when {
                 effective == null -> ObserverSlot.NONE
-                effective === mine -> ObserverSlot.OURS
+                effective === mine -> ObserverSlot.OURS_CURRENT
+                effective is LionscopeCompositionObserver -> ObserverSlot.OURS_RETIRED
                 else -> ObserverSlot.FOREIGN
             }
         } catch (t: Throwable) {
@@ -808,6 +997,55 @@ internal class ComposeRecomposition19(
             else if (isFatal(t)) throw t
             else ObserverSlot.FAILED
         }
+    }
+
+    private fun scopeOwner(scope: Any): Any? {
+        val field = scopeOwnerField ?: return null
+        if (!scopeImplClass.isInstance(scope)) return null
+        return try {
+            field.get(scope)
+        } catch (t: Throwable) {
+            if (isRuntimeIncompatibility(t)) {
+                failUnsupported()
+                null
+            } else if (isFatal(t)) {
+                throw t
+            } else {
+                null
+            }
+        }
+    }
+
+    private fun addRecordLocked(gen: Generation, record: CompositionRecord): CompositionRecord {
+        gen.compositions[record.composition] = record
+        if (record.coverage == Coverage.INCOMPLETE) gen.incompleteCount++
+        return record
+    }
+
+    private fun setCoverageLocked(gen: Generation, record: CompositionRecord, coverage: Coverage) {
+        if (record.coverage == coverage) return
+        if (record.coverage == Coverage.INCOMPLETE) gen.incompleteCount--
+        record.coverage = coverage
+        if (coverage == Coverage.INCOMPLETE) gen.incompleteCount++
+    }
+
+    private fun removeRecordLocked(gen: Generation, composition: ObservableComposition): CompositionRecord? {
+        val record = gen.compositions.remove(composition) ?: return null
+        val wasAttached = record.state == CompState.ATTACHED
+        if (record.coverage == Coverage.INCOMPLETE) gen.incompleteCount--
+        record.state = CompState.DISPOSED
+        if (wasAttached) rebuildAttachedSnapshotLocked(gen)
+        return record
+    }
+
+    private fun rebuildAttachedSnapshotLocked(gen: Generation) {
+        val list = ArrayList<ObservableComposition>(gen.compositions.size)
+        for (record in gen.compositions.values) {
+            if (record.state == CompState.ATTACHED && compositionImplClass.isInstance(record.composition)) {
+                list.add(record.composition)
+            }
+        }
+        gen.attachedSnapshot = if (list.isEmpty()) emptyArray() else list.toTypedArray()
     }
 
     private fun isCompositionActive(composition: ObservableComposition): Boolean = try {
@@ -841,12 +1079,13 @@ internal class ComposeRecomposition19(
             gen = currentGen
             currentGen = null
             capHit = false
-            coverageIncomplete = false
             resetEpoch++
             counts.clear()
             drainQueueLocked()
             if (gen != null) {
                 gen.active = false
+                gen.incompleteCount = 0
+                gen.attachedSnapshot = emptyArray()
                 rHandles = gen.recomposers.values.toList()
                 gen.recomposers.clear()
                 cHandles = ArrayList(gen.compositions.size)
@@ -861,14 +1100,12 @@ internal class ComposeRecomposition19(
                 cHandles = emptyList()
             }
         }
-        gen?.collectorScope?.cancel()
-        val deferDispose = inRegistrationCallback.get() == true
-        for (handle in cHandles) {
-            if (deferDispose) scheduleDispose(handle) else disposeHandle(handle)
+        if (gen != null) {
+            gen.collectorScope.cancel()
+            deferredExecutor.cancelGeneration(gen.id)
         }
-        for (handle in rHandles) {
-            if (deferDispose) scheduleDispose(handle) else disposeHandle(handle)
-        }
+        for (handle in cHandles) disposeOrDefer(handle)
+        for (handle in rHandles) disposeOrDefer(handle)
     }
 
     private fun disposeHandle(handle: CompositionObserverHandle) {
@@ -905,9 +1142,9 @@ internal class ComposeRecomposition19(
 
     private fun getOrCreateLocked(scope: RecomposeScope): ScopeEntry? {
         getLocked(scope)?.let { return it }
-        // Once capacity has been exceeded or coverage is incomplete, freeze new insertions until reset() so
-        // previously dropped or late-attached scopes cannot later report misleading partial counts.
-        if (capHit || coverageIncomplete) return null
+        // Once capacity has been exceeded, freeze new insertions until reset() so previously dropped scopes
+        // cannot later report misleading partial counts after another scope is disposed.
+        if (capHit) return null
         drainQueueLocked()
         if (counts.size >= maxTrackedScopes) {
             capHit = true
@@ -950,25 +1187,9 @@ internal class ComposeRecomposition19(
 
     internal companion object {
         const val DEFAULT_MAX_TRACKED_SCOPES = 16_384
-        private const val INITIAL_ATTACH_WAIT_MS = 100L
-        private const val ATTACH_POOL_SIZE = 4
-        private val workerCounter = AtomicInteger(0)
-
-        /**
-         * Bounded daemon pool so attaching one busy/blocked composition never blocks discovery of other recomposers
-         * or attachment of sibling compositions.
-         */
-        private val attachExecutor: ExecutorService by lazy {
-            Executors.newFixedThreadPool(ATTACH_POOL_SIZE) { runnable ->
-                Thread(runnable, "lionscope-compose-${workerCounter.incrementAndGet()}").apply {
-                    isDaemon = true
-                }
-            }
-        }
-
-        private fun defaultScheduleTask(task: Runnable) {
-            attachExecutor.execute(task)
-        }
+        private const val DISPOSE_GEN_ID = -1L
+        private const val IDLE_KEEP_ALIVE_MS = 100L
+        const val WORKER_THREAD_NAME = "lionscope-compose-worker"
 
         private fun isRuntimeIncompatibility(t: Throwable): Boolean =
             t is LinkageError || t is ReflectiveOperationException || t is SecurityException

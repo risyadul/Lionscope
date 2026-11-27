@@ -428,6 +428,48 @@ class ComposeRecompositionTest {
     }
 
     @Test
+    fun probeRejectsPrimitiveStaticOrMissingCompositionLockField() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertProbeRejectsPrimitiveStaticOrMissingCompositionLockField()
+    }
+
+    @Test
+    fun deadlockSubprocessWatchdogFailsFastOnGenuineDeadlock() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertDeadlockSubprocessWatchdogFailsFastOnGenuineDeadlock()
+    }
+
+    @Test
+    fun busyReplaysDoNotDelayIdleReplayOrFabricateZeroCounts() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertBusyReplaysDoNotDelayIdleReplayOrFabricateZeroCounts()
+    }
+
+    @Test
+    fun postEnableIncompleteCompositionDoesNotFreezeSiblingExactCounts() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertPostEnableIncompleteCompositionDoesNotFreezeSiblingExactCounts()
+    }
+
+    @Test
+    fun inheritedObserverFromRetiredGenerationNeverCausesFalseConflict() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertInheritedObserverFromRetiredGenerationNeverCausesFalseConflict()
+    }
+
+    @Test
+    fun deferredExecutorPurgesEndedGenerationAndRetiresIdleThread() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertDeferredExecutorPurgesEndedGenerationAndRetiresIdleThread()
+    }
+
+    @Test
+    fun countsForDoesNotScanAllCompositionsPerLookup() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertCountsForDoesNotScanAllCompositionsPerLookup()
+    }
+
+    @Test
     fun concurrentEnableToggleAndSubcompositionDoesNotDeadlock() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertConcurrentEnableToggleAndSubcompositionDoesNotDeadlock()
