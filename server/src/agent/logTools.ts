@@ -39,7 +39,7 @@ function sinceTs(since: number | string | undefined, now: number): number {
   return ts;
 }
 
-const markerLabel = z.string().regex(MARKER_LABEL, 'a marker label: 1-40 letters, digits, _ . : -');
+export const markerLabel = z.string().regex(MARKER_LABEL, 'a marker label: 1-40 letters, digits, _ . : -');
 
 /** Markers listed in results and errors (the newest; a session may have up to MAX_RUN_MARKERS). */
 const MARKERS_SHOWN = 20;
@@ -52,7 +52,7 @@ export function markersView(markers: readonly RunMarker[]) {
 }
 
 /** The time of a marker of the session, or an error that lists the newest ones there are. */
-function markerTs(ctx: AgentContext, label: string): number {
+export function markerTs(ctx: AgentContext, label: string): number {
   const markers = ctx.sessions.getMarkers();
   const marker = markers.find((candidate) => candidate.label === label);
   if (marker) return marker.ts;

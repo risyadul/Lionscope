@@ -15,6 +15,8 @@ import type {
   ViewTreeSample,
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
+import { DeviceSettings } from '../../src/agent/deviceSettings.ts';
+import { DiffBaselines } from '../../src/agent/diffBaselines.ts';
 import { DontKeepActivities } from '../../src/agent/dontKeepActivities.ts';
 import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
 import { PublicError } from '../../src/errors.ts';
@@ -179,6 +181,8 @@ export interface FakeAgent {
   adb: FakeAdb;
   snapshot: Required<Snapshot>;
   session: SessionState;
+  /** Monotonic session identifier (incremented by startSession). */
+  sessionId: number | null;
   sdkOptionCalls: unknown[];
   /** getSdkEverLinked answers true when set, or while the session's SDK is connected. */
   sdkEverLinked: boolean;
@@ -205,6 +209,7 @@ export function fakeAgent(
     adb: options.adb ?? new FakeAdb(() => ''),
     snapshot: { ...emptySnapshot(), ...snapshot },
     session: options.session ?? RUNNING,
+    sessionId: (options.session ?? RUNNING).serial ? 1 : null,
     sdkOptionCalls: [],
     sdkEverLinked: false,
     mocks: new MockRules({ now: () => options.now ?? T0 + 60_000, emit: () => undefined }),
@@ -220,7 +225,16 @@ export function fakeAgent(
     sessions: {
       getDevices: () => DEVICES,
       getSessionState: () => agent.session,
+      getSessionId: () => agent.sessionId,
       getSnapshot: () => agent.snapshot,
+      getHttpExchanges: () => agent.snapshot.http,
+      getCurrentScreen: () => {
+        for (let i = agent.snapshot.screens.length - 1; i >= 0; i--) {
+          const span = agent.snapshot.screens[i];
+          if (span && span.end === null) return span.screen;
+        }
+        return null;
+      },
       getLogsDroppedThrough: () => agent.logsDroppedThrough,
       refreshDevices: async () => DEVICES,
       listApps: async () => [
@@ -228,6 +242,7 @@ export function fakeAgent(
         { packageName: 'com.android.settings', pid: null, thirdParty: false },
       ],
       startSession: async (serial, packageName) => {
+        agent.sessionId = (agent.sessionId ?? 0) + 1;
         agent.session = { ...RUNNING, serial, packageName, status: 'waiting_for_process', pid: null };
         return agent.session;
       },
@@ -283,8 +298,10 @@ export function fakeAgent(
     now: () => options.now ?? T0 + 60_000,
     screenshots: new Map(),
     uiDumps: new Map(),
+    diffBaselines: new DiffBaselines(),
     activityInstances: new Map(),
     dontKeepActivities: new DontKeepActivities({ adb: agent.adb, helpers: () => agent.ctx.uiHelper }),
+    deviceSettings: new DeviceSettings({ adb: agent.adb }),
     deviceCalls: new Map(),
   };
   return agent;

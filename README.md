@@ -19,6 +19,10 @@ too. No Android Studio needed: run `npx lionscope@latest`, pick a device and an 
   charts, and move them to another location on a map.
 - **AI agents**: the same data as tools over MCP or a CLI (Claude Code, Cursor, VS Code, Codex, …). Select a view
   in the Inspector and ask your agent about "this element".
+- **Reproduce & verify**: AI agents can reproduce bugs and verify their own Android changes end-to-end—opening deep
+  links, installing APKs, clearing target app data, toggling runtime permissions, testing rotation, dark mode and font
+  scale (with automatic restore), waiting for screens/network/UI idle, running gestures, diffing UI trees and
+  screenshots, and inspecting notifications.
 
 The [local performance baseline](docs/verification/performance-2026-11-16.md) records dashboard, SDK and emulator
 mirror measurements, with their test conditions and limits. Results depend on the app, capture settings and
@@ -132,8 +136,9 @@ builds. That, screen names, Navigation Compose, the Network interceptor and what
 
 ## Use with AI agents
 
-AI coding agents (Claude Code, Cursor, VS Code, Codex, …) get the dashboard's data as tools, over MCP
-(`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Device tools follow the enabled-by-default device-control permission and any client restrictions. Setup for each client, the tools, the agent skill and the safety notes
+AI coding agents (Claude Code, Cursor, VS Code, Codex, …) get the dashboard's data and end-to-end reproduce/verify tools
+over MCP (`npx -y lionscope mcp`) or the shell (`npx lionscope query <tool>`). Device tools follow the enabled-by-default
+device-control permission and any client restrictions. Setup for each client, the tools, the agent skill and the safety notes
 are in [Use with AI agents](docs/agents.md).
 
 ## Architecture

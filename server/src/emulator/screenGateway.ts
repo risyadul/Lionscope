@@ -67,7 +67,97 @@ export interface ScreenGatewayOptions {
   pingIntervalMs?: number;
 }
 
+export interface MirrorTouchPoint {
+  /** Normalized frame coordinates in [0, 1]. */
+  x: number;
+  y: number;
+}
+
+export interface MirrorMultiTouchHandle {
+  readonly backend: 'scrcpy' | 'emulator';
+  readonly frameSize: { width: number; height: number };
+  /** Presses pointer `slot` (0 or 1). Returns true only when accepted & delivered. */
+  down(slot: 0 | 1, point: MirrorTouchPoint): boolean;
+  /** Moves currently-down gesture pointers. Reports whether all events were delivered and how many succeeded. */
+  move(points: readonly { slot: 0 | 1; point: MirrorTouchPoint }[]): { ok: boolean; sent: number };
+  /** Lifts every pointer of this gesture that was accepted down. Reports whether every lift succeeded and count sent. */
+  up(): { ok: boolean; sent: number };
+  /** Releases exclusive multi-touch ownership on the mirror session. */
+  release(): void;
+}
+
+export interface MirrorTouchChannel {
+  readonly backend: 'scrcpy' | 'emulator';
+  readonly frameSize: { width: number; height: number };
+  beginMultiTouch(): MirrorMultiTouchHandle | null;
+}
+
+export interface MirrorTouchParticipant {
+  readonly serial: string;
+  readonly isClosed: boolean;
+  hasActiveFingers(): boolean;
+  flushPendingLifts(): boolean;
+}
+
+/**
+ * Coordinates multi-touch gesture ownership per device serial across ALL dashboard mirror sockets targeting
+ * that device. Ensures an agent gesture cannot start while any socket holds a browser finger down, and blocks
+ * browser touch/wheel input on every socket mirroring that serial while an agent gesture is active.
+ */
+export class MirrorTouchCoordinator {
+  private readonly participants = new Map<string, Set<MirrorTouchParticipant>>();
+  private readonly activeGestures = new Set<string>();
+
+  register(participant: MirrorTouchParticipant): () => void {
+    let set = this.participants.get(participant.serial);
+    if (!set) {
+      set = new Set();
+      this.participants.set(participant.serial, set);
+    }
+    set.add(participant);
+    return () => {
+      const current = this.participants.get(participant.serial);
+      if (!current) return;
+      current.delete(participant);
+      if (current.size === 0) this.participants.delete(participant.serial);
+    };
+  }
+
+  isAgentGestureActive(serial: string): boolean {
+    return this.activeGestures.has(serial);
+  }
+
+  hasAnyActiveFingers(serial: string): boolean {
+    const set = this.participants.get(serial);
+    if (!set) return false;
+    for (const participant of set) {
+      if (!participant.isClosed && participant.hasActiveFingers()) return true;
+    }
+    return false;
+  }
+
+  acquire(serial: string): (() => void) | null {
+    if (this.activeGestures.has(serial)) return null;
+    const set = this.participants.get(serial);
+    if (set) {
+      for (const participant of set) {
+        if (!participant.isClosed) participant.flushPendingLifts();
+      }
+    }
+    if (this.hasAnyActiveFingers(serial)) return null;
+    this.activeGestures.add(serial);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeGestures.delete(serial);
+    };
+  }
+}
+
 export interface ScreenGateway {
+  /** Active multi-touch mirror channel for a mirrored physical device (scrcpy) or emulator (gRPC), else null. */
+  getMirrorTouch(serial: string): MirrorTouchChannel | null;
   close(): Promise<void>;
 }
 
@@ -154,6 +244,7 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
   const jarPath = options.devices?.jarPath ?? resolveScrcpyJar();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_SCREEN_SOCKET_FRAME_BYTES });
   const sockets = new Map<WebSocket, ScreenSocketState>();
+  const touchCoordinator = new MirrorTouchCoordinator();
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     let url: URL;
@@ -187,7 +278,14 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
     let session: MirrorSession;
     if (backend.kind === 'emulator') {
       if (!options.createClient) return sendError(ws, 'unavailable', 'Emulator mirroring is not available');
-      session = new ScreenSession(ws, options.createClient(backend.target.endpoint), serial, size, fpsCap);
+      session = new ScreenSession(
+        ws,
+        options.createClient(backend.target.endpoint),
+        serial,
+        size,
+        fpsCap,
+        touchCoordinator,
+      );
     } else {
       const { adb } = backend.mirroring;
       session = new DeviceScreenSession({
@@ -196,6 +294,7 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
         serial,
         size,
         jarPath,
+        touchCoordinator,
       });
     }
     const state: ScreenSocketState = { session, alive: true, isEmulator: backend.kind === 'emulator' };
@@ -272,6 +371,32 @@ export function createScreenGateway(options: ScreenGatewayOptions): ScreenGatewa
   pingTimer.unref();
 
   return {
+    getMirrorTouch(serial: string): MirrorTouchChannel | null {
+      for (const state of sockets.values()) {
+        if (state.session.serial !== serial || state.session.isClosed) continue;
+        if (state.session instanceof DeviceScreenSession && state.session.canInjectControl()) {
+          const session = state.session;
+          const frameSize = session.videoSize;
+          if (!frameSize) continue;
+          return {
+            backend: 'scrcpy',
+            frameSize,
+            beginMultiTouch: () => session.beginMultiTouch(),
+          };
+        }
+        if (state.session instanceof ScreenSession && state.session.canInjectTouch()) {
+          const session = state.session;
+          const frameSize = session.currentFrameSize;
+          if (!frameSize) continue;
+          return {
+            backend: 'emulator',
+            frameSize,
+            beginMultiTouch: () => session.beginMultiTouch(),
+          };
+        }
+      }
+      return null;
+    },
     async close() {
       clearInterval(pingTimer);
       unsubscribe();

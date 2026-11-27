@@ -2,10 +2,12 @@ import { isValidPackageName, isValidSerial } from '@lionscope/protocol';
 import type {
   StorageConsent,
   CpuSample,
+  HttpExchange,
   HttpExchangeDetail,
   MemorySample,
   NetworkMockRule,
   NetworkMocksState,
+  ScreenRef,
   SdkOptions,
   ServerMessage,
   SessionState,
@@ -65,6 +67,8 @@ const TIMEOUTS = { cpu: 3000, frames: 8000, memory: 10_000 };
 type SdkStorageWriteResult = Extract<SdkLinkMessage, { type: 'storageWriteResult' }>;
 
 export interface ProfilingSessionOptions {
+  /** Monotonic session identifier assigned by SessionManager (defaults to 0 in standalone unit tests). */
+  id?: number;
   adb: Adb;
   serial: string;
   packageName: string;
@@ -86,6 +90,7 @@ export interface ProfilingSessionOptions {
  * in-app SDK link when the app has one.
  */
 export class ProfilingSession {
+  readonly id: number;
   readonly serial: string;
   readonly packageName: string;
   readonly startedAt: number;
@@ -128,6 +133,7 @@ export class ProfilingSession {
   constructor(options: ProfilingSessionOptions) {
     if (!isValidSerial(options.serial)) throw new Error('invalid adb serial');
     if (!isValidPackageName(options.packageName)) throw new Error('invalid package name');
+    this.id = options.id ?? 0;
     this.adb = options.adb;
     this.serial = options.serial;
     this.packageName = options.packageName;
@@ -251,6 +257,16 @@ export class ProfilingSession {
   /** Headers and bodies of one HTTP exchange of this session; null when it is not (or no longer) kept. */
   httpExchange(id: number): HttpExchangeDetail | null {
     return this.store.http.detail(id);
+  }
+
+  /** Summary list of currently kept HTTP exchanges without rebuilding the full snapshot. */
+  httpExchanges(): HttpExchange[] {
+    return this.store.http.summaries();
+  }
+
+  /** Currently active SDK screen (open span) without rebuilding the full snapshot. */
+  currentScreen(): ScreenRef | null {
+    return this.store.currentScreen();
   }
 
   /** The session's mock rules (empty once it stopped). */

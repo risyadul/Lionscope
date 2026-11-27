@@ -58,9 +58,9 @@ export interface ClipboardStreamHandlers {
 export interface InputStream {
   /**
    * `droppable` (touch moves): dropped while the stream is backed up (a write returned false) until it drains;
-   * everything else (downs, ups, keys) is always written.
+   * everything else (downs, ups, keys) is always written. Returns true when accepted for delivery.
    */
-  send(event: EmulatorInputEvent, droppable?: boolean): void;
+  send(event: EmulatorInputEvent, droppable?: boolean): boolean;
   /** Half-close: `onEnd` fires once the emulator has taken everything written. */
   end(): void;
 }
@@ -291,8 +291,9 @@ export function createEmulatorClientFactory(Controller: ControllerConstructor): 
         });
         return {
           send(event, droppable = false) {
-            if (ended || closing || !stream.writable || (droppable && backedUp)) return;
+            if (ended || closing || !stream.writable || (droppable && backedUp)) return false;
             if (!stream.write(event)) backedUp = true;
+            return true;
           },
           end() {
             if (closing) return;

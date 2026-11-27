@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
-import type { Adb } from '../../src/adb/adb.ts';
+import type { Adb, ExecOptions } from '../../src/adb/adb.ts';
 import { PS_COMMAND } from '../../src/session/appPids.ts';
 
 export function fixture(name: string): string {
@@ -113,7 +113,7 @@ export class FakeShellChild extends FakeChild {
   }
 }
 
-export type ExecHandler = (args: readonly string[]) => string | Promise<string>;
+export type ExecHandler = (args: readonly string[], options?: ExecOptions) => string | Promise<string>;
 
 /** The command of an `adb -s <serial> shell <command>` exec, null for any other adb call. */
 export function execShellCommand(args: readonly string[]): string | null {
@@ -129,6 +129,7 @@ export class FakeAdb implements Adb {
   /** `logcat -b crash` children (a session's crash stream), kept apart from `logcats`. */
   readonly crashLogcats: { args: readonly string[]; child: FakeChild }[] = [];
   readonly execCalls: (readonly string[])[] = [];
+  readonly execOptions: (ExecOptions | undefined)[] = [];
   /** Spawn PTY shells like API 23 does (echo, prompt, CRLF). */
   pty = false;
   /** `reverse` / `removeReverse` calls as adb argument lists (kept apart from execCalls). */
@@ -154,9 +155,10 @@ export class FakeAdb implements Adb {
     return Promise.resolve().then(() => this.reverseHandler(args));
   }
 
-  exec(args: readonly string[]): Promise<string> {
+  exec(args: readonly string[], options?: ExecOptions): Promise<string> {
     this.execCalls.push(args);
-    return Promise.resolve().then(() => this.execHandler(args));
+    this.execOptions.push(options);
+    return Promise.resolve().then(() => this.execHandler(args, options));
   }
 
   spawn(args: readonly string[]): FakeChild {

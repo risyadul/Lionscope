@@ -1,4 +1,4 @@
-import { DEFAULT_SCREEN_FPS_CAP, SCREEN_BINARY_KIND } from '@lionscope/protocol';
+import { DEFAULT_SCREEN_FPS_CAP, MAX_TOUCH_POINTS, SCREEN_BINARY_KIND } from '@lionscope/protocol';
 import type {
   ScreenClientMessage,
   ScreenErrorCode,
@@ -18,11 +18,13 @@ import {
   keyEvent,
   liftEvent,
   nextRotationZ,
+  rotatedSize,
   rotationForZ,
   touchEvent,
   WHEEL_FINGER_ID,
 } from './screenInput.ts';
-import type { DisplaySize, EmulatorInputEvent } from './screenInput.ts';
+import type { DisplaySize, EmulatorInputEvent, Size } from './screenInput.ts';
+import type { MirrorMultiTouchHandle, MirrorTouchCoordinator, MirrorTouchPoint } from './screenGateway.ts';
 
 /** What a screen session needs of its WebSocket. */
 export interface ScreenSocket {
@@ -85,6 +87,11 @@ export class ScreenSession {
   private shownKey = '';
   private input: InputStream | null = null;
   private readonly fingersDown = new Set<number>();
+  /** Pointers whose lift failed due to transport error; retried automatically on recovery before accepting input. */
+  private readonly pendingLifts = new Set<number>();
+  private agentTouchActive = false;
+  private releaseGestureLease: (() => void) | null = null;
+  private readonly unregisterTouch: (() => void) | null;
   private screenshotPending = false;
   private inputRetryAt = 0;
   /** Set while close() waits for the lift to reach the emulator. */
@@ -105,12 +112,14 @@ export class ScreenSession {
     readonly serial: string,
     size: ScreenSize,
     fpsCap: ScreenFpsCap = DEFAULT_SCREEN_FPS_CAP,
+    private readonly touchCoordinator?: MirrorTouchCoordinator,
   ) {
     this.size = size;
     this.fpsCap = fpsCap;
+    this.unregisterTouch = this.touchCoordinator?.register(this) ?? null;
     this.wheels = new WheelDrags({
       geometry: () => (this.display ? { display: this.display, rotation: this.rotation } : null),
-      isTouching: () => this.fingersDown.size > 0,
+      isTouching: () => this.fingersDown.size > 0 || this.isAgentTouchBlocked(),
       touch: ({ display, rotation }, point, pressure, droppable) => {
         if (pressure > 0) this.fingersDown.add(WHEEL_FINGER_ID);
         else this.fingersDown.delete(WHEEL_FINGER_ID);
@@ -132,6 +141,139 @@ export class ScreenSession {
     return this.closed;
   }
 
+  /** Display size in the current frame rotation, null before display discovery or after close. */
+  get currentFrameSize(): Size | null {
+    return !this.closed && this.display ? rotatedSize(this.display, this.rotation) : null;
+  }
+
+  /** Whether this emulator session can currently accept multi-touch input. */
+  canInjectTouch(): boolean {
+    return !this.closed && this.display !== null;
+  }
+
+  hasActiveFingers(): boolean {
+    return this.fingersDown.size > 0;
+  }
+
+  /** Retries any pending finger lifts that failed earlier so recovered input streams unblock wheel/pinch. */
+  flushPendingLifts(): boolean {
+    if (this.pendingLifts.size === 0) return true;
+    if (this.closed || !this.display) return false;
+    const ok = this.sendInput(liftEvent(this.pendingLifts), { force: true });
+    if (!ok) return false;
+    for (const id of this.pendingLifts) this.fingersDown.delete(id);
+    this.pendingLifts.clear();
+    return true;
+  }
+
+  private isAgentTouchBlocked(): boolean {
+    return this.agentTouchActive || (this.touchCoordinator?.isAgentGestureActive(this.serial) ?? false);
+  }
+
+  /**
+   * Acquires exclusive multi-touch ownership for an agent gesture (e.g. `pinch`). Allocates pointer IDs that do
+   * not collide with active browser fingers across any mirror socket for this serial, tracks every accepted down
+   * in `fingersDown`, and retries failed lifts once the transport recovers.
+   */
+  beginMultiTouch(): MirrorMultiTouchHandle | null {
+    this.flushPendingLifts();
+    const frameSize = this.currentFrameSize;
+    // Arbitrate with browser touches: refuse while another agent gesture or any browser finger is active.
+    if (!frameSize || this.agentTouchActive || this.fingersDown.size > 0) return null;
+    const lease = this.touchCoordinator ? this.touchCoordinator.acquire(this.serial) : () => undefined;
+    if (!lease) return null;
+    const allocated: number[] = [];
+    for (let id = 0; id < MAX_TOUCH_POINTS && allocated.length < 2; id++) {
+      if (id === WHEEL_FINGER_ID || this.fingersDown.has(id)) continue;
+      allocated.push(id);
+    }
+    if (allocated.length < 2) {
+      lease();
+      return null;
+    }
+
+    this.agentTouchActive = true;
+    this.releaseGestureLease = lease;
+    const pointerIds: readonly [number, number] = [allocated[0]!, allocated[1]!];
+    const downSlots = new Map<0 | 1, MirrorTouchPoint>();
+    let released = false;
+
+    const sendAllDown = (points: readonly { slot: 0 | 1; point: MirrorTouchPoint }[]): boolean => {
+      if (released || !this.display || this.closed) return false;
+      const touches = points.map(({ slot, point }) => ({
+        id: pointerIds[slot],
+        x: point.x,
+        y: point.y,
+        pressure: 1,
+      }));
+      return this.sendInput(touchEvent(this.display, this.rotation, touches));
+    };
+
+    const liftDown = (): { ok: boolean; sent: number } => {
+      if (downSlots.size === 0) return { ok: true, sent: 0 };
+      if (!this.display || this.closed) {
+        for (const [slot] of downSlots) this.pendingLifts.add(pointerIds[slot]);
+        return { ok: false, sent: 0 };
+      }
+      const entries = [...downSlots.entries()];
+      const touches = entries.map(([slot, point]) => ({
+        id: pointerIds[slot],
+        x: point.x,
+        y: point.y,
+        pressure: 0,
+      }));
+      const ok = this.sendInput(touchEvent(this.display, this.rotation, touches), { force: true });
+      if (ok) {
+        for (const [slot] of entries) {
+          downSlots.delete(slot);
+          this.fingersDown.delete(pointerIds[slot]);
+          this.pendingLifts.delete(pointerIds[slot]);
+        }
+        return { ok: true, sent: 1 };
+      }
+      // Retain unlifted pointers in both fingersDown and pendingLifts so recovery flushes them cleanly.
+      for (const [slot] of entries) this.pendingLifts.add(pointerIds[slot]);
+      return { ok: false, sent: 0 };
+    };
+
+    return {
+      backend: 'emulator',
+      frameSize,
+      down: (slot, point) => {
+        if (released || !this.display || this.closed) return false;
+        const ok = this.sendInput(
+          touchEvent(this.display, this.rotation, [
+            { id: pointerIds[slot], x: point.x, y: point.y, pressure: 1 },
+          ]),
+        );
+        if (!ok) return false;
+        this.fingersDown.add(pointerIds[slot]);
+        this.pendingLifts.delete(pointerIds[slot]);
+        downSlots.set(slot, point);
+        return true;
+      },
+      move: (points) => {
+        const active = points.filter(({ slot }) => downSlots.has(slot));
+        if (active.length === 0) return { ok: false, sent: 0 };
+        const ok = sendAllDown(active);
+        if (!ok) return { ok: false, sent: 0 };
+        for (const { slot, point } of active) {
+          downSlots.set(slot, point);
+        }
+        return { ok: true, sent: 1 };
+      },
+      up: liftDown,
+      release: () => {
+        if (released) return;
+        if (downSlots.size > 0) liftDown();
+        released = true;
+        this.agentTouchActive = false;
+        this.releaseGestureLease?.();
+        this.releaseGestureLease = null;
+      },
+    };
+  }
+
   async start(): Promise<void> {
     try {
       this.display = await this.client.getDisplaySize();
@@ -147,18 +289,24 @@ export class ScreenSession {
     if (this.closed) return;
     switch (message.type) {
       case 'touch': {
-        if (!this.display) return;
+        if (!this.display || this.isAgentTouchBlocked()) return;
+        if (this.pendingLifts.size > 0 && !this.flushPendingLifts()) return;
         // Only moves of fingers already down may be dropped under back-pressure, never downs or ups.
         const moves = message.touches.every((touch) => touch.pressure > 0 && this.fingersDown.has(touch.id));
         for (const touch of message.touches) {
           if (touch.pressure > 0) this.fingersDown.add(touch.id);
-          else this.fingersDown.delete(touch.id);
+          else {
+            this.fingersDown.delete(touch.id);
+            this.pendingLifts.delete(touch.id);
+          }
         }
         this.sendInput(touchEvent(this.display, this.rotation, message.touches), { droppable: moves });
         return;
       }
       case 'wheel':
-        if (this.display) this.wheels.add(message);
+        if (!this.display || this.isAgentTouchBlocked()) return;
+        if (this.pendingLifts.size > 0 && !this.flushPendingLifts()) return;
+        this.wheels.add(message);
         return;
       case 'key':
       case 'text':
@@ -209,8 +357,12 @@ export class ScreenSession {
    */
   close(): void {
     if (this.closed) return;
+    this.releaseGestureLease?.();
+    this.releaseGestureLease = null;
+    this.unregisterTouch?.();
     const lifting = this.fingersDown.size > 0;
     if (lifting) this.sendInput(liftEvent(this.fingersDown), { force: true });
+    this.pendingLifts.clear();
     this.fingersDown.clear();
     this.closed = true;
     this.clipboard.close();
@@ -397,8 +549,11 @@ export class ScreenSession {
    * `force`: also during the back-off after a failed input stream (fingers are lifted on close). `droppable`:
    * see InputStream.send.
    */
-  private sendInput(event: EmulatorInputEvent, options: { force?: boolean; droppable?: boolean } = {}): void {
-    if (this.closed || (!this.input && !options.force && Date.now() < this.inputRetryAt)) return;
+  private sendInput(
+    event: EmulatorInputEvent,
+    options: { force?: boolean; droppable?: boolean } = {},
+  ): boolean {
+    if (this.closed || (!this.input && !options.force && Date.now() < this.inputRetryAt)) return false;
     this.input ??= this.client.openInput((error) => {
       this.input = null;
       if (this.closed) {
@@ -412,7 +567,7 @@ export class ScreenSession {
         this.inputRetryAt = Date.now() + INPUT_RETRY_MS;
       }
     });
-    this.input.send(event, options.droppable);
+    return this.input.send(event, options.droppable);
   }
 
   private later(delayMs: number, action: () => void): void {

@@ -2,9 +2,11 @@ import { DEVICE_LINK_PORT, DEVICE_PROTOCOL_V7, isValidPackageName, isValidSerial
 import type {
   AppInfo,
   DeviceInfo,
+  HttpExchange,
   HttpExchangeDetail,
   NetworkMockRule,
   NetworkMocksState,
+  ScreenRef,
   SdkOptions,
   ServerMessage,
   SessionState,
@@ -135,6 +137,7 @@ export class SessionManager implements SdkLinkTarget {
   private refreshInFlight: Promise<DeviceInfo[]> | null = null;
   private readonly appsInFlight = new Map<string, Promise<AppInfo[]>>();
   private session: ProfilingSession | null = null;
+  private nextSessionId = 0;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   /** Serializes start/stop so overlapping requests can't leave two sessions running. */
@@ -176,8 +179,23 @@ export class SessionManager implements SdkLinkTarget {
     return this.session?.state ?? IDLE_SESSION;
   }
 
+  /** Monotonic identifier of the current (or last) session, null before any session has started. */
+  getSessionId(): number | null {
+    return this.session?.id ?? null;
+  }
+
   getSnapshot(): Snapshot {
     return this.session?.snapshot() ?? emptySnapshot();
+  }
+
+  /** HTTP exchange summaries of the current (or last) session without rebuilding the full snapshot. */
+  getHttpExchanges(): HttpExchange[] {
+    return this.session?.httpExchanges() ?? [];
+  }
+
+  /** Currently active SDK screen (open span) without rebuilding the full snapshot. */
+  getCurrentScreen(): ScreenRef | null {
+    return this.session?.currentScreen() ?? null;
   }
 
   /** The newest time of a log line the current (or last) session already dropped; null while none was. */
@@ -389,6 +407,7 @@ export class SessionManager implements SdkLinkTarget {
       void this.endSession('idle');
       this.deviceGoneListings = 0;
       const session = new ProfilingSession({
+        id: ++this.nextSessionId,
         adb: this.adb,
         serial,
         packageName,

@@ -37,7 +37,7 @@ export interface EmulatorManagerOptions {
   shutdownGraceMs?: number;
   now?: () => number;
   /** Ends a profiling session on `serial` (if any) before its emulator is shut down. */
-  stopSessionOn?: (serial: string) => Promise<void>;
+  stopSessionOn?: (serial: string, options?: { force?: boolean }) => Promise<unknown>;
 }
 
 /**
@@ -58,7 +58,7 @@ export class EmulatorManager {
   private readonly probe: InstanceProbe;
   private readonly shutdownTools: ShutdownTools;
   private readonly unmanaged: UnmanagedShutdowns;
-  private readonly stopSessionOn: (serial: string) => Promise<void>;
+  private readonly stopSessionOn: (serial: string, options?: { force?: boolean }) => Promise<unknown>;
   private readonly avdNames: AvdNameLookup;
   private readonly listeners = new Set<() => void>();
   private emulators: EmulatorInfo[] = [];
@@ -172,19 +172,20 @@ export class EmulatorManager {
   }
 
   /** A profiling session on the emulator is stopped first. One this server did not boot needs `confirmUnmanaged`. */
-  shutdown(avdName: string, confirmUnmanaged = false): Promise<void> {
+  shutdown(avdName: string, confirmUnmanaged = false, options?: { force?: boolean }): Promise<unknown> {
     return this.operations.run(avdName, async () => {
       const entry = this.managed.get(avdName);
-      if (!entry) return this.shutdownUnmanaged(avdName, confirmUnmanaged);
+      if (!entry) return this.shutdownUnmanaged(avdName, confirmUnmanaged, options);
       // Asked again while it is shutting down: force it now.
       if (entry.shuttingDown) return this.force(avdName, entry);
-      await this.stopSessionOn(entry.serial);
+      const cleanup = await this.stopSessionOn(entry.serial, options);
       entry.shuttingDown = true;
       this.publish();
       await this.stop(avdName, entry);
       entry.escalation = setTimeout(() => void this.force(avdName, entry), this.shutdownGraceMs);
       entry.escalation.unref();
       await this.poll();
+      return cleanup;
     });
   }
 
@@ -209,12 +210,16 @@ export class EmulatorManager {
   }
 
   /** Only the AVD's single, identified instance (unmanagedInstance); asked again, it is killed over its console. */
-  private async shutdownUnmanaged(avdName: string, confirmed: boolean): Promise<void> {
+  private async shutdownUnmanaged(
+    avdName: string,
+    confirmed: boolean,
+    options?: { force?: boolean },
+  ): Promise<unknown> {
     if (!confirmed) throw notStartedHere(avdName, this.instanceOf(avdName)?.serial);
     await this.poll();
     if (this.unmanaged.has(avdName)) return this.unmanaged.force(avdName);
     const instance = unmanagedInstance(avdName, this.running, (serial) => this.isAdbReady(serial));
-    await this.stopSessionOn(instance.serial);
+    const cleanup = await this.stopSessionOn(instance.serial, options);
     this.unmanaged.track(avdName, instance);
     this.publish();
     try {
@@ -222,6 +227,7 @@ export class EmulatorManager {
     } finally {
       await this.poll();
     }
+    return cleanup;
   }
 
   private stop(avdName: string, entry: ManagedEmulator): Promise<void> {

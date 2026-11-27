@@ -36,10 +36,16 @@ describe('createAdb (against a stand-in POSIX adb script)', () => {
     );
   });
 
-  it('rejects with stderr on failure and on timeout', async () => {
+  it('rejects with stderr on failure, on timeout, and promptly on AbortSignal', async () => {
     const adb = createAdb(fakeAdb);
     await expect(adb.exec(['fail'])).rejects.toThrow(/adb fail failed: boom/);
     await expect(adb.exec(['sleep'], { timeoutMs: 100 })).rejects.toThrow(/adb sleep failed/);
+
+    const controller = new AbortController();
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 50);
+    await expect(adb.exec(['sleep'], { signal: controller.signal })).rejects.toThrow(/adb sleep aborted/);
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   it('sets up and removes adb reverse mappings with argument arrays', async () => {

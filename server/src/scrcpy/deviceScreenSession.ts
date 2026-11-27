@@ -13,6 +13,11 @@ import { truncateUtf8 } from '../emulator/clipboardBridge.ts';
 import { WHEEL_NOTCH } from '../emulator/screenInput.ts';
 import { MAX_SCREEN_BUFFERED_BYTES, SCREENSHOT_SKIP_BUFFERED_BYTES } from '../emulator/screenSession.ts';
 import type { ScreenSocket } from '../emulator/screenSession.ts';
+import type {
+  MirrorMultiTouchHandle,
+  MirrorTouchCoordinator,
+  MirrorTouchPoint,
+} from '../emulator/screenGateway.ts';
 import { errorMessage, log } from '../log.ts';
 import { androidKey, NAV_KEYCODES } from './keycodes.ts';
 import {
@@ -70,6 +75,8 @@ export interface DeviceScreenSessionOptions {
   size: ScreenSize;
   /** The vendored scrcpy-server (resolveScrcpyJar). */
   jarPath: string;
+  /** Shared per-serial gesture coordinator across all mirror sockets. */
+  touchCoordinator?: MirrorTouchCoordinator;
 }
 
 /**
@@ -99,6 +106,11 @@ export class DeviceScreenSession {
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   /** Fingers down, at their last position (lifted on restart and close). */
   private readonly fingers = new Map<number, ScrcpyPosition>();
+  /** Pointers whose lift failed due to control transport error; retried automatically on recovery. */
+  private readonly pendingLifts = new Map<number, ScrcpyPosition>();
+  private agentTouchActive = false;
+  private releaseGestureLease: (() => void) | null = null;
+  private readonly unregisterTouch: (() => void) | null;
   private clipboardSync = false;
   /** The last text this socket put on the clipboard: a change to it is our own echo. */
   private lastSet: string | null = null;
@@ -112,10 +124,144 @@ export class DeviceScreenSession {
     this.serial = options.serial;
     this.socket = options.socket;
     this.size = options.size;
+    this.unregisterTouch = options.touchCoordinator?.register(this) ?? null;
   }
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** Current scrcpy video frame size, null before the first session packet or after close. */
+  get videoSize(): Size | null {
+    return this.closed ? null : this.video;
+  }
+
+  /** Whether the scrcpy control channel is connected, writable, and has announced a video frame size. */
+  canInjectControl(): boolean {
+    return !this.closed && this.control?.writable === true && this.video !== null;
+  }
+
+  hasActiveFingers(): boolean {
+    return this.fingers.size > 0;
+  }
+
+  /** Retries any pending finger lifts that failed earlier so recovered control sockets unblock input/pinch. */
+  flushPendingLifts(): boolean {
+    if (this.pendingLifts.size === 0) return true;
+    if (!this.canInjectControl()) return false;
+    for (const [id, position] of [...this.pendingLifts.entries()]) {
+      const ok = this.writeChecked(
+        injectTouch({ action: MOTION_ACTION.up, pointerId: BigInt(id), position, pressure: 0 }),
+      );
+      if (!ok) return false;
+      this.pendingLifts.delete(id);
+      this.fingers.delete(id);
+    }
+    return this.pendingLifts.size === 0;
+  }
+
+  private isAgentTouchBlocked(): boolean {
+    return (
+      this.agentTouchActive || (this.options.touchCoordinator?.isAgentGestureActive(this.serial) ?? false)
+    );
+  }
+
+  /**
+   * Acquires exclusive multi-touch ownership for an agent gesture (e.g. `pinch`). Coordinates across all mirror
+   * sockets for this serial, tracks accepted downs in `fingers`, and retries failed lifts on recovery.
+   */
+  beginMultiTouch(): MirrorMultiTouchHandle | null {
+    this.flushPendingLifts();
+    // Arbitrate with browser touches: refuse while another agent gesture or any browser finger is active.
+    if (!this.canInjectControl() || this.agentTouchActive || this.fingers.size > 0 || !this.video) {
+      return null;
+    }
+    const lease = this.options.touchCoordinator
+      ? this.options.touchCoordinator.acquire(this.serial)
+      : () => undefined;
+    if (!lease) return null;
+    const frameSize = { ...this.video };
+    const pointerIds: readonly [number, number] = [0, 1];
+    const downSlots = new Map<0 | 1, ScrcpyPosition>();
+    let released = false;
+    this.agentTouchActive = true;
+    this.releaseGestureLease = lease;
+
+    const toPos = (point: MirrorTouchPoint): ScrcpyPosition | null => this.position(point.x, point.y);
+
+    const liftDown = (): { ok: boolean; sent: number } => {
+      if (downSlots.size === 0) return { ok: true, sent: 0 };
+      // Lift in reverse order (slot 1 then slot 0) so Android releases secondary pointer first.
+      const slots: (0 | 1)[] = [];
+      if (downSlots.has(1)) slots.push(1);
+      if (downSlots.has(0)) slots.push(0);
+      let allOk = true;
+      let sent = 0;
+      for (const slot of slots) {
+        const position = downSlots.get(slot)!;
+        const id = pointerIds[slot];
+        const ok = this.writeChecked(
+          injectTouch({ action: MOTION_ACTION.up, pointerId: BigInt(id), position, pressure: 0 }),
+        );
+        if (ok) {
+          downSlots.delete(slot);
+          this.fingers.delete(id);
+          this.pendingLifts.delete(id);
+          sent += 1;
+        } else {
+          // Retain unlifted pointer in fingers and pendingLifts so recovery/restart/close lifts it.
+          this.pendingLifts.set(id, position);
+          allOk = false;
+        }
+      }
+      return { ok: allOk, sent };
+    };
+
+    return {
+      backend: 'scrcpy',
+      frameSize,
+      down: (slot, point) => {
+        if (released || !this.canInjectControl()) return false;
+        const position = toPos(point);
+        if (!position) return false;
+        const id = pointerIds[slot];
+        const ok = this.writeChecked(
+          injectTouch({ action: MOTION_ACTION.down, pointerId: BigInt(id), position, pressure: 1 }),
+        );
+        if (!ok) return false;
+        this.fingers.set(id, position);
+        this.pendingLifts.delete(id);
+        downSlots.set(slot, position);
+        return true;
+      },
+      move: (points) => {
+        if (released || !this.canInjectControl()) return { ok: false, sent: 0 };
+        let sent = 0;
+        for (const { slot, point } of points) {
+          if (!downSlots.has(slot)) continue;
+          const position = toPos(point);
+          if (!position) return { ok: false, sent };
+          const id = pointerIds[slot];
+          const ok = this.writeChecked(
+            injectTouch({ action: MOTION_ACTION.move, pointerId: BigInt(id), position, pressure: 1 }),
+          );
+          if (!ok) return { ok: false, sent };
+          this.fingers.set(id, position);
+          downSlots.set(slot, position);
+          sent += 1;
+        }
+        return { ok: sent > 0, sent };
+      },
+      up: liftDown,
+      release: () => {
+        if (released) return;
+        if (downSlots.size > 0) liftDown();
+        released = true;
+        this.agentTouchActive = false;
+        this.releaseGestureLease?.();
+        this.releaseGestureLease = null;
+      },
+    };
   }
 
   async start(): Promise<void> {
@@ -139,9 +285,13 @@ export class DeviceScreenSession {
     if (this.closed) return;
     switch (message.type) {
       case 'touch':
+        if (this.isAgentTouchBlocked()) return;
+        if (this.pendingLifts.size > 0 && !this.flushPendingLifts()) return;
         this.touch(message.touches);
         return;
       case 'wheel': {
+        if (this.isAgentTouchBlocked()) return;
+        if (this.pendingLifts.size > 0 && !this.flushPendingLifts()) return;
         const position = this.position(message.x, message.y);
         if (!position) return;
         this.write(
@@ -216,7 +366,11 @@ export class DeviceScreenSession {
     if (this.closed) return this.closing;
     this.closed = true;
     this.generation += 1;
+    this.releaseGestureLease?.();
+    this.releaseGestureLease = null;
+    this.unregisterTouch?.();
     this.liftFingers();
+    this.pendingLifts.clear();
     this.clearStartTimer();
     const server = this.server;
     this.server = null;
@@ -268,6 +422,7 @@ export class DeviceScreenSession {
   private async restart(): Promise<void> {
     const generation = ++this.generation;
     this.liftFingers();
+    this.pendingLifts.clear();
     this.clearStartTimer();
     const previous = this.server;
     this.server = null;
@@ -477,6 +632,18 @@ export class DeviceScreenSession {
     } catch (error) {
       log.warn(`Lifting the fingers on ${this.serial} failed: ${errorMessage(error)}`);
     }
+  }
+
+  private writeChecked(data: Buffer): boolean {
+    const control = this.control;
+    if (this.closed || !control?.writable) return false;
+    control.write(data);
+    if (control.writableLength > MAX_CONTROL_BUFFERED_BYTES) {
+      log.warn(`${this.serial} is not reading its input: closing its screen`);
+      this.fail('ended', INPUT_STALLED_MESSAGE);
+      return false;
+    }
+    return !this.closed;
   }
 
   private write(data: Buffer, droppable = false): void {

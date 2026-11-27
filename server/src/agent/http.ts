@@ -176,8 +176,11 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
         version: ctx.serverVersion,
         tools: availableTools(currentDevice(), ctx.storage?.consent ?? 'off'),
         deviceControl: currentDevice(),
-        invoke: (name, args) =>
-          callTool(ctx, name, args, currentDevice(), { networkBodies: currentBodies() }),
+        invoke: (name, args, extra) =>
+          callTool(ctx, name, args, currentDevice(), {
+            networkBodies: currentBodies(),
+            ...(extra?.signal ? { signal: extra.signal } : {}),
+          }),
       }),
     { maxSubscriptions: MAX_MCP_SUBSCRIPTIONS },
   );
@@ -209,8 +212,18 @@ export function createAgentHttp(options: AgentHttpOptions): AgentHttp {
     const args = parseArguments(await readBody(req, MAX_AGENT_BODY_BYTES));
     const allowDevice = currentDevice() && req.headers[DEVICE_CONTROL_HEADER] !== '0';
     const allowBodies = currentBodies() && req.headers[NETWORK_BODIES_HEADER] !== '0';
-    const outcome = await callTool(ctx, name, args, allowDevice, { networkBodies: allowBodies });
-    sendJson(res, outcome.ok ? 200 : FAILURE_STATUS[outcome.code], outcome);
+    const aborted = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) aborted.abort();
+    };
+    res.on('close', onClose);
+    const outcome = await callTool(ctx, name, args, allowDevice, {
+      networkBodies: allowBodies,
+      signal: aborted.signal,
+    }).finally(() => res.off('close', onClose));
+    if (!res.destroyed && !res.writableEnded) {
+      sendJson(res, outcome.ok ? 200 : FAILURE_STATUS[outcome.code], outcome);
+    }
   };
 
   const handleMcp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

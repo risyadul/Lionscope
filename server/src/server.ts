@@ -7,8 +7,11 @@ import type { Adb } from './adb/adb.ts';
 import { screencap } from './agent/deviceTools.ts';
 import { createAgentHttp } from './agent/http.ts';
 import { dumpUi, parseTopPackage, TOP_ACTIVITY_COMMAND } from './agent/uiDump.ts';
+import { DeviceSettings } from './agent/deviceSettings.ts';
+import { DiffBaselines } from './agent/diffBaselines.ts';
 import { DontKeepActivities } from './agent/dontKeepActivities.ts';
 import { UiHelpers } from './agent/uiHelper.ts';
+import { ToolError } from './agent/tool.ts';
 import type { AgentBaseContext } from './agent/tool.ts';
 import { BUFFER_WINDOW_MS, HOST, SERVER_VERSION } from './config.ts';
 import { createDeviceGateway, SHARED_HELLO_BURST, SHARED_HELLOS_PER_SECOND } from './device/deviceGateway.ts';
@@ -110,13 +113,31 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
   // Empty until listen() knows the real port (port 0 picks one).
   let allowedOrigins: ReadonlySet<string> = new Set();
 
+  // Device settings this server changed: restored on session stop, emulator shutdown, and server close.
+  const deviceSettings = new DeviceSettings({ adb: options.adb });
+  const diffBaselines = new DiffBaselines();
   const emulatorHost = options.emulatorHost ?? createEmulatorHost(options.adb.path);
   const emulators = new EmulatorManager({
     adb: options.adb,
     host: emulatorHost,
     broadcast: (message) => gateway?.broadcast(message),
     pollMs: options.emulatorPollMs,
-    stopSessionOn: (serial) => manager.stopSessionOn(serial),
+    stopSessionOn: async (serial, shutdownOptions) => {
+      await manager.stopSessionOn(serial);
+      // Unconditional restore barrier inside the serialized emulator shutdown operation.
+      const restore = await deviceSettings.restore(serial);
+      if (restore.outstanding.length > 0 && !shutdownOptions?.force) {
+        throw new ToolError(
+          `Could not restore device settings on ${serial} before shutting down emulator (outstanding: ${restore.outstanding.join(', ')}${restore.errors.length > 0 ? `; ${restore.errors.join('; ')}` : ''}). Retry or pass force: true to shut down anyway.`,
+        );
+      }
+      if (restore.outstanding.length > 0 || restore.errors.length > 0) {
+        log.warn(
+          `Emulator ${serial} shutting down with outstanding device settings (${restore.outstanding.join(', ') || 'none'}): ${restore.errors.join('; ')}`,
+        );
+      }
+      return restore;
+    },
   });
   const locations = new LocationService({
     adb: options.adb,
@@ -136,7 +157,7 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     route: (serial, hello, link) => manager.attachSdkOn(serial, hello, link),
     sessionPort: () => deviceGateway.address?.port ?? null,
   });
-  // "Don't keep activities" this server turned on: put back when the device's session stops or the server closes.
+  // "Don't keep activities" this server changed: put back when the session stops or server closes.
   const dontKeepActivities = new DontKeepActivities({ adb: options.adb, helpers: () => uiHelper });
   const storageConsent = storageConsentOf(
     options.allowStorageRead ?? true,
@@ -150,9 +171,14 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
         emulators.setDevices(message.devices);
         locations.setDevices(message.devices);
         dontKeepActivities.setDevices(message.devices, () => manager.getSessionState());
+        deviceSettings.setDevices(message.devices, () => manager.getSessionState());
+        diffBaselines.setDevices(message.devices);
       }
-      if (message.type === 'session')
+      if (message.type === 'session') {
         dontKeepActivities.sessionChanged(message.session, () => manager.getSessionState());
+        deviceSettings.sessionChanged(message.session, () => manager.getSessionState());
+        diffBaselines.sessionChanged(message.session);
+      }
       gateway?.broadcast(message);
     },
     devicePollMs: options.devicePollMs,
@@ -228,9 +254,12 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
     now: Date.now,
     screenshots: new Map(),
     uiDumps: new Map(),
+    diffBaselines,
     activityInstances: new Map(),
     uiHelper,
     dontKeepActivities,
+    deviceSettings,
+    mirrorTouch: (serial) => screenGateway.getMirrorTouch(serial),
     deviceCalls: new Map(),
     storage,
   };
@@ -373,16 +402,17 @@ export function createLionscopeServer(options: LionscopeServerOptions): Lionscop
       return bound;
     },
     async close() {
-      // In parallel: device screens (scrcpy cleanup), UI helpers, inspect-only links, the session, the emulators
-      // this server booted, and the real locations of physical devices.
+      // Restore device settings and "Don't keep activities" before shutting down Lionscope-owned emulators.
       await Promise.all([
         locations.close(),
         screenGateway.close(),
-        // "Don't keep activities" is put back through the UI helper (at most 5 s), so the helpers close after it.
-        dontKeepActivities.close().finally(() => uiHelper.close()),
+        Promise.all([
+          // "Don't keep activities" is put back through the UI helper (at most 5 s), so the helpers close after it.
+          dontKeepActivities.close().finally(() => uiHelper.close()),
+          deviceSettings.close(),
+        ]).finally(() => emulators.close()),
         inspectLinks.close(),
         manager.close(),
-        emulators.close(),
         agentHttp.close(),
       ]);
       viewEdits.close();

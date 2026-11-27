@@ -115,9 +115,10 @@ export class FakeEmulatorClient implements EmulatorClient {
     });
     return {
       send: (event, droppable = false) => {
-        if (input.ended || input.cancelled) return;
+        if (input.ended || input.cancelled) return false;
         input.events.push(event);
         input.droppable.push(droppable);
+        return true;
       },
       end: () => {
         input.ended = true;

@@ -210,7 +210,7 @@ function toggleOf(tree: UiTree, element: UiElement): UiElement | null {
 }
 
 /** Everything a dump shows, to tell whether the screen changed. */
-function screenKey(tree: UiTree): string {
+export function screenKey(tree: UiTree): string {
   return tree.elements
     .map((e) => `${elementSignature(e)}${e.checked}${e.selected}${e.focused}${e.enabled}`)
     .join(';');
@@ -239,7 +239,9 @@ type TapOutcome =
 
 /** The element at `index` of the last get_ui_tree listing: checked before a dump, so a missing listing fails fast. */
 export function listedElement(ctx: AgentContext, serial: string, index: number): UiElement {
-  const listed = ctx.uiDumps.get(serial)?.listing?.elements[index];
+  const cached = ctx.uiDumps.get(serial);
+  const valid = cached && (!cached.token || ctx.diffBaselines.isCurrent(cached.token));
+  const listed = valid ? cached.listing?.elements[index] : undefined;
   if (!listed)
     throw new ToolError('No element with that index: call get_ui_tree first (indexes belong to its listing)');
   return listed;
@@ -324,6 +326,7 @@ export async function tapElement(
     index?: number | undefined;
     nth?: number | undefined;
     long?: boolean;
+    longDurationMs?: number | undefined;
     readBack?: boolean;
   },
 ): Promise<{ outcome: TapOutcome; taken: UiElement | null }> {
@@ -367,11 +370,8 @@ export async function tapElement(
     }
   }
   const long = target.long === true;
-  await input(
-    ctx,
-    serial,
-    long ? `swipe ${at.x} ${at.y} ${at.x} ${at.y} ${LONG_PRESS_MS}` : `tap ${at.x} ${at.y}`,
-  );
+  const pressMs = target.longDurationMs ?? LONG_PRESS_MS;
+  await input(ctx, serial, long ? `swipe ${at.x} ${at.y} ${at.x} ${at.y} ${pressMs}` : `tap ${at.x} ${at.y}`);
   const taken = clickTarget(tree, element);
   const unchecked = (await insets) === null ? KEYBOARD_UNCHECKED : null;
   const tapped = {
@@ -433,12 +433,18 @@ export const uiTreeTool = defineTool({
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async run({ filter, query, serial: requested }, ctx) {
     const serial = targetSerial(ctx, requested);
+    const baselineToken = ctx.diffBaselines.token(serial);
     const { tree, activity } = await dumpUi(ctx, serial, {
       withActivity: true,
       deadline: performance.now() + ELEMENT_CALL_MS,
+      signal: ctx.signal,
+      token: baselineToken,
     });
-    const cached = ctx.uiDumps.get(serial);
-    if (cached) cached.listing = tree;
+    if (ctx.diffBaselines.isCurrent(baselineToken)) {
+      const cached = ctx.uiDumps.get(serial);
+      if (cached) cached.listing = tree;
+      ctx.diffBaselines.setUi(serial, { at: ctx.now(), tree, activity }, baselineToken);
+    }
     const needle = query?.toLowerCase();
     const listed = tree.elements
       .filter((element) => filter === 'all' || isActionable(element))

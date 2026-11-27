@@ -601,7 +601,7 @@ describe('device tools', () => {
     expect(calls).toEqual([
       ['boot', 'Pixel_9', 'quick'],
       ['shutdown', 'Pixel_9', false],
-      ['shutdown', 'Pixel_9', false],
+      ['shutdown', 'Pixel_9', false, { force: true }],
     ]);
     expect(await callTool(agent.ctx, 'boot_emulator', { avdName: '-wipe-data' }, true)).toMatchObject({
       code: 'invalid_arguments',
