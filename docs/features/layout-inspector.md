@@ -49,10 +49,11 @@ after the app changes its top screen (never continuously), and the refresh butto
   link disconnects.
   - **What the numbers mean.** Tree rows show `recompositions / skips` for restartable composables with non-zero
     counts (highlighting counts ≥ 10), and the Attributes panel lists `Recompositions` and `Skips` separately.
-    Counts follow Android Studio's semantics: they accumulate from when tracking was enabled or last reset, and a
-    composable that first composes while tracking is active (for example, a `LazyColumn` item scrolled into view)
-    counts its initial composition as `1`. Inline and non-restartable composables (such as `Row` or `Column`) have
-    no restartable scope, so they show no row counter and note this in Attributes.
+    Counts follow Android Studio's semantics: they accumulate from when tracking was enabled (with each pre-existing
+    composition's baseline taken when its observer attaches, and executions before attach left outside that baseline)
+    or last reset, and a composable that first composes while tracking is active (for example, a `LazyColumn` item
+    scrolled into view) counts its initial composition as `1`. Inline and non-restartable composables (such as `Row`
+    or `Column`) have no restartable scope, so they show no row counter and note this in Attributes.
   - **Compatibility and fallback.** Apps on Compose < 1.9 or minified/shrunk builds report `unsupported` (visible
     header note: "Requires Compose 1.9+") and keep regular Compose hierarchy inspection unchanged; consistent with
     Compose inspection overall, recomposition tracking requires a non-minified debug build. If another Compose
@@ -64,9 +65,11 @@ after the app changes its top screen (never continuously), and the refresh butto
     skip/rereading getters directly and fails closed to `unsupported` if any required symbol is missing or fails at
     runtime. When the 16,384-scope cap is reached, the snapshot sets `recompositionTruncated` (`counts capped` badge)
     and keeps newly seen or previously dropped scopes unavailable rather than showing partial counts until **Reset**.
-    Separately, if a composition is still pending attachment or attached after it had already composed post-enable,
-    the snapshot sets `recompositionIncomplete` (`partial coverage` badge) and leaves only that composition's counts
-    unavailable until **Reset**, while other attached compositions keep exact counts.
+    Separately, pre-existing compositions attach asynchronously on a background serial worker and report
+    `recompositionIncomplete` (`partial coverage` badge, counts unavailable for those compositions) until their
+    observer attaches and takes an implicit per-composition baseline; compositions discovered post-enable after they
+    had already composed also set `recompositionIncomplete` and stay unavailable until **Reset**, while other
+    attached compositions keep exact counts.
   - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
     `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
     ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time
