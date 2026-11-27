@@ -1,4 +1,10 @@
-import { DEVICE_LINK_PORT, DEVICE_PROTOCOL_V7, isValidPackageName, isValidSerial } from '@lionscope/protocol';
+import {
+  DEVICE_LINK_PORT,
+  DEVICE_PROTOCOL_V7,
+  DEVICE_PROTOCOL_V15,
+  isValidPackageName,
+  isValidSerial,
+} from '@lionscope/protocol';
 import type {
   AppInfo,
   DeviceInfo,
@@ -15,7 +21,7 @@ import type {
 import { adbShell } from '../adb/adb.ts';
 import type { Adb } from '../adb/adb.ts';
 import { BUFFER_WINDOW_MS } from '../config.ts';
-import type { InspectLinks } from '../device/inspectLinks.ts';
+import type { ComposeRecompositionDelivery, InspectLinks } from '../device/inspectLinks.ts';
 import { deliverLinkKey } from '../device/linkKey.ts';
 import { ReverseTunnel } from '../device/reverseTunnel.ts';
 import type { SdkAttachResult, SdkHello, SdkLink, SdkLinkMessage, SdkLinkTarget } from '../device/sdkLink.ts';
@@ -281,15 +287,33 @@ export class SessionManager implements SdkLinkTarget {
 
   /**
    * Toggle Compose recomposition tracking on `serial` for both inspect-only links and any active profiling session
-   * on that device.
+   * on that device. Reports whether a live v15+ link received the change immediately or it is pending a link.
    */
-  setComposeRecompositionTracking(serial: string, enabled: boolean): void {
+  setComposeRecompositionTracking(serial: string, enabled: boolean): ComposeRecompositionDelivery {
     if (!isValidSerial(serial)) throw new PublicError('invalid adb serial');
-    this.inspectLinks?.setComposeRecompositionTracking(serial, enabled);
+    const inspect = this.inspectLinks?.setComposeRecompositionTracking(serial, enabled) ?? {
+      state: 'pending' as const,
+      sdkConnected: false,
+    };
     const session = this.session;
+    let sessionApplied = false;
+    let sessionConnected = false;
     if (session && !session.isStopped && session.serial === serial) {
       session.setSdkOptions({ composeRecompositionTracking: enabled });
+      const link = session.sdkLink;
+      if (link !== null) {
+        sessionConnected = true;
+        if (link.protocolVersion >= DEVICE_PROTOCOL_V15) sessionApplied = true;
+      }
     }
+    const sdkConnected = inspect.sdkConnected || sessionConnected;
+    const state =
+      inspect.state === 'applied' || sessionApplied
+        ? 'applied'
+        : sdkConnected
+          ? 'unsupported_sdk'
+          : 'pending';
+    return { state, sdkConnected };
   }
 
   /**

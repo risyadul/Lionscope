@@ -1,10 +1,22 @@
 /** `start_session`, `stop_session`, `set_sdk_options`: the dashboard's session controls. */
 import { z } from 'zod';
-import { isValidPackageName, STALL_THRESHOLDS_MS } from '@lionscope/protocol';
+import { DEVICE_PROTOCOL_V15, isValidPackageName, STALL_THRESHOLDS_MS } from '@lionscope/protocol';
 import { NO_SESSION_MESSAGE } from '../http/wsGateway.ts';
+import type { ComposeRecompositionDelivery } from '../device/inspectLinks.ts';
 import { targetSerial } from './deviceTools.ts';
 import { serialInput, sessionView } from './statusTools.ts';
 import { defineTool, ToolError } from './tool.ts';
+
+const RECOMP_PENDING_NOTE =
+  'No live SDK link on this device yet: tracking is queued and will be applied once a v15+ SDK link connects. Call inspect_screen first to establish the link and confirm snapshot.recompositionTracking === "active" before reproducing the interaction.';
+const RECOMP_UNSUPPORTED_SDK_NOTE =
+  'Connected SDK is older than device protocol v15 and does not support Compose recomposition tracking.';
+
+function deliveryNote(state: ComposeRecompositionDelivery['state']): string | undefined {
+  if (state === 'pending') return RECOMP_PENDING_NOTE;
+  if (state === 'unsupported_sdk') return RECOMP_UNSUPPORTED_SDK_NOTE;
+  return undefined;
+}
 
 export const packageInput = z
   .string()
@@ -40,7 +52,7 @@ export const stopSessionTool = defineTool({
 export const sdkOptionsTool = defineTool({
   name: 'set_sdk_options',
   title: 'Set SDK options',
-  description: `Changes the in-app SDK options: stallThresholdMs is the main-thread watchdog threshold (one of ${STALL_THRESHOLDS_MS.join(', ')} ms; default 150), strictMode turns StrictMode violation reporting on (it changes the app's StrictMode policy; default off), inflateTracking turns layout inflation timing on or off (default on), rxTracking turns the SDK's RxJava 2 hooks on or off (they name the Rx chain and its subscribe site for each stall; default on; SDK 0.9.0+), savedStateTracking turns the SDK's saved-state measurement on or off (each Activity's complete saved state, see get_saved_state; default on; SDK 0.12.0+), composeRecompositionTracking turns Compose recomposition and skip counting on or off for Layout Inspector snapshots (default off; requires Compose runtime 1.9+ and a compatible SDK; works during a session and on inspect-only links without a session when given alone, optionally with serial). Omitted fields stay as they are. Returns the options now in effect.`,
+  description: `Changes the in-app SDK options: stallThresholdMs is the main-thread watchdog threshold (one of ${STALL_THRESHOLDS_MS.join(', ')} ms; default 150), strictMode turns StrictMode violation reporting on (it changes the app's StrictMode policy; default off), inflateTracking turns layout inflation timing on or off (default on), rxTracking turns the SDK's RxJava 2 hooks on or off (they name the Rx chain and its subscribe site for each stall; default on; SDK 0.9.0+), savedStateTracking turns the SDK's saved-state measurement on or off (each Activity's complete saved state, see get_saved_state; default on; SDK 0.12.0+), composeRecompositionTracking turns Compose recomposition and skip counting on or off for Layout Inspector snapshots (default off; requires Compose runtime 1.9+ and a compatible SDK; works during a session and on inspect-only links without a session when given alone, optionally with serial). Omitted fields stay as they are. When composeRecompositionTracking is set, returns delivery ("applied", "pending" when no live SDK link exists yet, or "unsupported_sdk") and sdkConnected. Establish the link (inspect_screen or start_session) and confirm snapshot.recompositionTracking === "active" before reproducing an interaction.`,
   access: 'session',
   input: z.object({
     serial: serialInput
@@ -83,21 +95,68 @@ export const sdkOptionsTool = defineTool({
       inflateTracking !== undefined ||
       rxTracking !== undefined ||
       savedStateTracking !== undefined;
-    if (ctx.sessions.setSdkOptions(options)) {
+    const session = ctx.sessions.getSessionState();
+    const hasActiveSession =
+      session.status !== 'idle' && session.status !== 'error' && session.serial !== null;
+
+    // Resolve explicit target serial BEFORE mutating anything: never silently change device A when serial B was asked.
+    if (requestedSerial !== undefined && hasActiveSession && requestedSerial !== session.serial) {
+      if (hasSessionOnlyOptions || composeRecompositionTracking === undefined) {
+        throw new ToolError(
+          `Active profiling session is on ${session.serial}, not ${requestedSerial}: session SDK options apply only to the session device`,
+        );
+      }
+      const serial = targetSerial(ctx, requestedSerial);
+      const delivery = ctx.sessions.setComposeRecompositionTracking(serial, composeRecompositionTracking);
+      const note = deliveryNote(delivery.state);
+      return {
+        data: {
+          serial,
+          composeRecompositionTracking,
+          options: null,
+          sdkConnected: delivery.sdkConnected,
+          delivery: delivery.state,
+          ...(note === undefined ? {} : { note }),
+        },
+      };
+    }
+
+    if (hasActiveSession && ctx.sessions.setSdkOptions(options)) {
       const sdk = ctx.sessions.getSessionState().sdk;
-      return { data: { options: sdk?.options ?? null, sdkConnected: sdk?.connected ?? false } };
+      if (composeRecompositionTracking === undefined) {
+        return { data: { options: sdk?.options ?? null, sdkConnected: sdk?.connected ?? false } };
+      }
+      const deliveryState: ComposeRecompositionDelivery['state'] =
+        sdk?.connected === true
+          ? (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V15
+            ? 'applied'
+            : 'unsupported_sdk'
+          : 'pending';
+      const note = deliveryNote(deliveryState);
+      return {
+        data: {
+          serial: session.serial,
+          options: sdk?.options ?? null,
+          sdkConnected: sdk?.connected ?? false,
+          delivery: deliveryState,
+          ...(note === undefined ? {} : { note }),
+        },
+      };
     }
     if (hasSessionOnlyOptions || composeRecompositionTracking === undefined) {
       throw new ToolError(NO_SESSION_MESSAGE);
     }
     const serial = targetSerial(ctx, requestedSerial);
-    ctx.sessions.setComposeRecompositionTracking(serial, composeRecompositionTracking);
+    const delivery = ctx.sessions.setComposeRecompositionTracking(serial, composeRecompositionTracking);
+    const note = deliveryNote(delivery.state);
     return {
       data: {
         serial,
         composeRecompositionTracking,
         options: null,
-        sdkConnected: false,
+        sdkConnected: delivery.sdkConnected,
+        delivery: delivery.state,
+        ...(note === undefined ? {} : { note }),
       },
     };
   },

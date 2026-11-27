@@ -39,7 +39,7 @@ const manager: GatewayManager = {
   startSession: async () => IDLE_SESSION,
   stopSession: async () => IDLE_SESSION,
   setSdkOptions: () => false,
-  setComposeRecompositionTracking: () => undefined,
+  setComposeRecompositionTracking: () => ({ state: 'pending', sdkConnected: false }),
   resetComposeRecompositions: () => false,
   getHttpExchange: () => null,
   getNetworkMocks: () => EMPTY_MOCKS,
@@ -729,6 +729,7 @@ describe('WebSocket gateway Compose recomposition commands', () => {
       ...manager,
       setComposeRecompositionTracking: (serial, enabled) => {
         calls.push(`track:${serial}:${enabled}`);
+        return { state: 'applied', sdkConnected: true };
       },
       resetComposeRecompositions: (serial) => {
         calls.push(`reset:${serial}`);

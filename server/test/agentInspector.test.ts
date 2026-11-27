@@ -497,4 +497,61 @@ describe('Inspector agent tools', () => {
       result: { serial: 'emulator-5554', reset: false, note: expect.stringContaining('inspect_screen') },
     });
   });
+
+  it('exposes recompositionTruncated and marks omitted composable counts as unavailable in agent results', async () => {
+    const truncatedNodes: InspectorNode[] = [
+      node(0, null, { className: 'com.android.internal.policy.DecorView' }),
+      node(1, 0, {
+        className: 'androidx.compose.ui.platform.AndroidComposeView',
+        composition: 'read',
+      }),
+      node(2, 1, {
+        className: 'TrackedCard',
+        bounds: SHARE,
+        visibleBounds: SHARE,
+        composable: { file: 'CatalogScreen.kt', line: 42, recompositions: 5, skips: 1 },
+      }),
+      node(3, 1, {
+        className: 'OverflowCard',
+        bounds: [120, 1020, 400, 1100],
+        visibleBounds: [120, 1020, 400, 1100],
+        composable: { file: 'CatalogScreen.kt', line: 60 },
+      }),
+    ];
+    const truncatedInspection: SdkInspection = {
+      begin: {
+        ...INSPECTION.begin,
+        nodeCount: truncatedNodes.length,
+        compose: true,
+        recompositionTracking: 'active',
+        recompositionTruncated: true,
+      },
+      nodes: truncatedNodes,
+    };
+    const { agent, inspector } = inspectorAgent(truncatedInspection);
+
+    const screen = await callTool(agent.ctx, 'inspect_screen', {}, true);
+    if (!screen.ok) throw new Error(screen.error);
+    const screenResult = screen.result as Json;
+    expect(screenResult.snapshot.recompositionTracking).toBe('active');
+    expect(screenResult.snapshot.recompositionTruncated).toBe(true);
+    expect(screenResult.nodes.find((n: Json) => n.nodeId === 2)).toMatchObject({
+      recompositions: 5,
+      skips: 1,
+    });
+    expect(screenResult.nodes.find((n: Json) => n.nodeId === 3)).toMatchObject({
+      recompositionCountsUnavailable: true,
+    });
+
+    inspector.select(screenResult.snapshot.id, 3, 'user');
+    const selected = await callTool(agent.ctx, 'get_inspector_selection', {}, false);
+    if (!selected.ok) throw new Error(selected.error);
+    const selectedResult = selected.result as Json;
+    expect(selectedResult.snapshot.recompositionTruncated).toBe(true);
+    expect(selectedResult.element).toMatchObject({
+      kind: 'composable',
+      recompositionCountsUnavailable: true,
+    });
+    expect(selectedResult.element).not.toHaveProperty('recompositions');
+  });
 });

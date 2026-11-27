@@ -16,6 +16,7 @@ import type {
 } from '@lionscope/protocol';
 import { FRAME_STAGES } from '@lionscope/protocol';
 import { DontKeepActivities } from '../../src/agent/dontKeepActivities.ts';
+import type { ComposeRecompositionDelivery } from '../../src/device/inspectLinks.ts';
 import type { AgentBaseContext, AgentInspector } from '../../src/agent/tool.ts';
 import { PublicError } from '../../src/errors.ts';
 import { MockRules, NO_SESSION_MOCKS_MESSAGE } from '../../src/session/mockRules.ts';
@@ -179,8 +180,10 @@ export interface FakeAgent {
   adb: FakeAdb;
   snapshot: Required<Snapshot>;
   session: SessionState;
+  devices: DeviceInfo[];
   sdkOptionCalls: unknown[];
   recompositionTrackingCalls: { serial: string; enabled: boolean }[];
+  recompositionTrackingResult: ComposeRecompositionDelivery;
   recompositionResetCalls: string[];
   recompositionResetResult: boolean;
   /** getSdkEverLinked answers true when set, or while the session's SDK is connected. */
@@ -208,8 +211,10 @@ export function fakeAgent(
     adb: options.adb ?? new FakeAdb(() => ''),
     snapshot: { ...emptySnapshot(), ...snapshot },
     session: options.session ?? RUNNING,
+    devices: [...DEVICES],
     sdkOptionCalls: [],
     recompositionTrackingCalls: [],
+    recompositionTrackingResult: { state: 'pending', sdkConnected: false },
     recompositionResetCalls: [],
     recompositionResetResult: true,
     sdkEverLinked: false,
@@ -224,11 +229,11 @@ export function fakeAgent(
   const running = () => agent.session.status !== 'idle' && agent.session.status !== 'error';
   agent.ctx = {
     sessions: {
-      getDevices: () => DEVICES,
+      getDevices: () => agent.devices,
       getSessionState: () => agent.session,
       getSnapshot: () => agent.snapshot,
       getLogsDroppedThrough: () => agent.logsDroppedThrough,
-      refreshDevices: async () => DEVICES,
+      refreshDevices: async () => agent.devices,
       listApps: async () => [
         { packageName: PKG, pid: 1234, thirdParty: true },
         { packageName: 'com.android.settings', pid: null, thirdParty: false },
@@ -247,6 +252,7 @@ export function fakeAgent(
       },
       setComposeRecompositionTracking: (serial, enabled) => {
         agent.recompositionTrackingCalls.push({ serial, enabled });
+        return agent.recompositionTrackingResult;
       },
       resetComposeRecompositions: (serial) => {
         agent.recompositionResetCalls.push(serial);

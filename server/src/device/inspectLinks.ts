@@ -86,6 +86,18 @@ export interface InspectLinkReadiness {
   waited: boolean;
 }
 
+/** Delivery status when toggling Compose recomposition tracking on a device's live SDK link(s). */
+export interface ComposeRecompositionDelivery {
+  /**
+   * `applied`: pushed immediately to at least one live v15+ SDK link on the device.
+   * `unsupported_sdk`: a live SDK link exists on the device, but below device protocol v15.
+   * `pending`: no live SDK link on the device yet (remembered and pushed once a v15+ link connects).
+   */
+  state: 'applied' | 'pending' | 'unsupported_sdk';
+  /** True when at least one live SDK link is currently connected on the device. */
+  sdkConnected: boolean;
+}
+
 /** A loopback SDK listener (the device gateway). */
 export interface InspectLinkListener {
   listen(port?: number): Promise<AddressInfo>;
@@ -208,18 +220,21 @@ export class InspectLinks {
 
   /**
    * Toggle Compose recomposition tracking on `serial` (default off) and push `config` immediately to any live v15+
-   * inspect-only link on that device.
+   * inspect-only link on that device. Returns whether it was applied immediately or queued pending a link.
    */
-  setComposeRecompositionTracking(serial: string, enabled: boolean): void {
+  setComposeRecompositionTracking(serial: string, enabled: boolean): ComposeRecompositionDelivery {
     if (enabled) this.recompositionTracking.set(serial, true);
     else this.recompositionTracking.delete(serial);
     const entry = this.entries.get(serial);
-    if (!entry) return;
+    if (!entry || entry.links.size === 0) return { state: 'pending', sdkConnected: false };
+    let applied = false;
     for (const record of entry.links.values()) {
       if (record.link.protocolVersion >= DEVICE_PROTOCOL_V15) {
         record.link.sendConfig({ ...DEFAULT_SDK_OPTIONS, composeRecompositionTracking: enabled }, 'off');
+        applied = true;
       }
     }
+    return { state: applied ? 'applied' : 'unsupported_sdk', sdkConnected: true };
   }
 
   /** Reset accumulated Compose recomposition counters on every live v15+ inspect-only link of `serial`. */

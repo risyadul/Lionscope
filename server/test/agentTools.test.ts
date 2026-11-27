@@ -752,15 +752,40 @@ describe('session control', () => {
     expect(agent.sdkOptionCalls.at(-1)).toMatchObject({ composeRecompositionTracking: true });
     expect((await run(agent, 'stop_session')).session.status).toBe('idle');
 
-    // Without a session: composeRecompositionTracking alone works on inspect-only links.
-    const inspectToggle = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
-    expect(inspectToggle).toEqual({
+    // Without a session: composeRecompositionTracking alone reports pending when no live SDK link exists.
+    const inspectPending = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(inspectPending).toMatchObject({
       serial: 'emulator-5554',
       composeRecompositionTracking: true,
       options: null,
       sdkConnected: false,
+      delivery: 'pending',
+      note: expect.stringContaining('inspect_screen'),
     });
     expect(agent.recompositionTrackingCalls).toEqual([{ serial: 'emulator-5554', enabled: true }]);
+
+    // On a live v15 inspect-only link: reports applied and sdkConnected: true.
+    agent.recompositionTrackingResult = { state: 'applied', sdkConnected: true };
+    const inspectApplied = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(inspectApplied).toEqual({
+      serial: 'emulator-5554',
+      composeRecompositionTracking: true,
+      options: null,
+      sdkConnected: true,
+      delivery: 'applied',
+    });
+
+    // On a legacy (< v15) inspect-only link: reports unsupported_sdk and sdkConnected: true.
+    agent.recompositionTrackingResult = { state: 'unsupported_sdk', sdkConnected: true };
+    const inspectLegacy = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(inspectLegacy).toMatchObject({
+      serial: 'emulator-5554',
+      composeRecompositionTracking: true,
+      options: null,
+      sdkConnected: true,
+      delivery: 'unsupported_sdk',
+      note: expect.stringContaining('protocol v15'),
+    });
 
     // Without a session: session-only options are still rejected.
     expect(
@@ -771,6 +796,52 @@ describe('session control', () => {
         false,
       ),
     ).toMatchObject({ ok: false, code: 'failed' });
+  });
+
+  it('routes set_sdk_options by explicit serial instead of mutating a session on another device', async () => {
+    const agent = fakeAgent();
+    agent.devices = [
+      { serial: 'emulator-5554', state: 'device', model: 'sdk_gphone64' },
+      { serial: 'R58M123ABC', state: 'device', model: 'Pixel' },
+    ];
+    agent.recompositionTrackingResult = { state: 'applied', sdkConnected: true };
+
+    // Active session is on emulator-5554; Compose-only change with serial R58M123ABC routes ONLY to R58M123ABC.
+    const routed = await run(agent, 'set_sdk_options', {
+      serial: 'R58M123ABC',
+      composeRecompositionTracking: true,
+    });
+    expect(routed).toEqual({
+      serial: 'R58M123ABC',
+      composeRecompositionTracking: true,
+      options: null,
+      sdkConnected: true,
+      delivery: 'applied',
+    });
+    expect(agent.recompositionTrackingCalls).toEqual([{ serial: 'R58M123ABC', enabled: true }]);
+    expect(agent.sdkOptionCalls).toEqual([]);
+
+    // Session-only options targeting a different device than the active session are rejected without mutating A.
+    expect(
+      await callTool(agent.ctx, 'set_sdk_options', { serial: 'R58M123ABC', strictMode: true }, false),
+    ).toMatchObject({
+      ok: false,
+      code: 'failed',
+      error: expect.stringContaining('emulator-5554'),
+    });
+    expect(
+      await callTool(
+        agent.ctx,
+        'set_sdk_options',
+        { serial: 'R58M123ABC', strictMode: true, composeRecompositionTracking: true },
+        false,
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: 'failed',
+      error: expect.stringContaining('R58M123ABC'),
+    });
+    expect(agent.sdkOptionCalls).toEqual([]);
   });
 
   it('validates serials, package names and thresholds before anything runs', async () => {

@@ -839,4 +839,34 @@ describe('InspectLinks listeners', () => {
     await links.close();
     await phone.closed;
   });
+
+  it('reports pending, unsupported_sdk, and applied delivery states for Compose recomposition tracking', async () => {
+    vi.useFakeTimers();
+    const { links, client, settle, connect } = setup();
+    // Before any link connects: pending, sdkConnected: false.
+    expect(links.setComposeRecompositionTracking(SERIAL, true)).toEqual({
+      state: 'pending',
+      sdkConnected: false,
+    });
+
+    links.setFocus(client, SERIAL);
+    await settle();
+
+    // Legacy (< v15) inspect-only link: unsupported_sdk, sdkConnected: true.
+    const legacy = await connect({ ...HELLO, protocolVersion: 14 });
+    expect(legacy.result.ok).toBe(true);
+    expect(links.setComposeRecompositionTracking(SERIAL, true)).toEqual({
+      state: 'unsupported_sdk',
+      sdkConnected: true,
+    });
+
+    // v15 inspect-only link: applied immediately, sdkConnected: true.
+    const modern = await connect({ ...HELLO, packageName: 'com.example.compose', protocolVersion: 15 });
+    expect(modern.result.ok).toBe(true);
+    expect(links.setComposeRecompositionTracking(SERIAL, false)).toEqual({
+      state: 'applied',
+      sdkConnected: true,
+    });
+    await links.close();
+  });
 });

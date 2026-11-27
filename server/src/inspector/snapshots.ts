@@ -133,6 +133,7 @@ export function sdkSnapshot(
     ...(begin.recompositionTracking === undefined
       ? {}
       : { recompositionTracking: begin.recompositionTracking }),
+    ...(begin.recompositionTruncated ? { recompositionTruncated: true } : {}),
     ...(editBlocked === undefined ? {} : { editBlocked }),
   };
 }
