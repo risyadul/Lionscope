@@ -80,6 +80,7 @@ internal object ComposeRecompositionSupport {
         val skippedGetter: Method,
         val rereadingGetter: Method,
         val compositionImplClass: Class<*>,
+        val compositionLockField: Field,
         val observerHolderField: Field,
         val holderGetObserver: Method,
         val holderCurrent: Method,
@@ -148,7 +149,8 @@ internal object ComposeRecompositionSupport {
             compositionObserver.getMethod("onScopeInvalidated", recomposeScope, Any::class.java)
             compositionObserver.getMethod("onScopeDisposed", recomposeScope)
 
-            // CompositionImpl observer slot inspection (prevents silently displacing an existing observer).
+            // CompositionImpl lock & observer slot inspection (enables atomic conflict check + slot claim).
+            val compositionLockField = compositionImpl.getDeclaredField("lock")
             val observerHolderField = compositionImpl.getDeclaredField("observerHolder")
             if (observerHolderField.type != observerHolderClass) {
                 return ProbeResult.Unsupported("unexpected_observer_holder_type")
@@ -177,6 +179,7 @@ internal object ComposeRecompositionSupport {
 
             skippedGetter.isAccessible = true
             rereadingGetter.isAccessible = true
+            compositionLockField.isAccessible = true
             observerHolderField.isAccessible = true
             holderGetObserver.isAccessible = true
             holderCurrent.isAccessible = true
@@ -186,6 +189,7 @@ internal object ComposeRecompositionSupport {
                     skippedGetter = skippedGetter,
                     rereadingGetter = rereadingGetter,
                     compositionImplClass = compositionImpl,
+                    compositionLockField = compositionLockField,
                     observerHolderField = observerHolderField,
                     holderGetObserver = holderGetObserver,
                     holderCurrent = holderCurrent,
@@ -214,6 +218,7 @@ internal object ComposeRecompositionSupport {
                 skippedGetter = probeResult.access.skippedGetter,
                 rereadingGetter = probeResult.access.rereadingGetter,
                 compositionImplClass = probeResult.access.compositionImplClass,
+                compositionLockField = probeResult.access.compositionLockField,
                 observerHolderField = probeResult.access.observerHolderField,
                 holderGetObserver = probeResult.access.holderGetObserver,
                 holderCurrent = probeResult.access.holderCurrent,

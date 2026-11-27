@@ -341,6 +341,7 @@ class ComposeRecompositionTest {
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
             assertEquals(1, itemRuns[2])
+            awaitCondition { tracker.attachedCompositionCount() == 4 }
             assertEquals(4, tracker.attachedCompositionCount())
             assertEquals(RecompositionCounts(1, 0), tracker.countsFor(itemScopes[2]!!))
             assertEquals(RecompositionCounts(0, 0), tracker.countsFor(itemScopes[0]!!))
@@ -430,6 +431,48 @@ class ComposeRecompositionTest {
     fun concurrentEnableToggleAndSubcompositionDoesNotDeadlock() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertConcurrentEnableToggleAndSubcompositionDoesNotDeadlock()
+    }
+
+    @Test
+    fun disableReenableRaceCannotLeaveActiveWithEmptyObserverSlot() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertDisableReenableRaceCannotLeaveActiveWithEmptyObserverSlot()
+    }
+
+    @Test
+    fun concurrentForeignObserverInstallIsAtomicAndNeverOverwritten() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertConcurrentForeignObserverInstallIsAtomicAndNeverOverwritten()
+    }
+
+    @Test
+    fun postAttachForeignObserverTakeoverReportsConflictAndRetryRecovers() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertPostAttachForeignObserverTakeoverReportsConflictAndRetryRecovers()
+    }
+
+    @Test
+    fun unregisterDuringInFlightAttachDisposesHandleAndNeverRetains() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertUnregisterDuringInFlightAttachDisposesHandleAndNeverRetains()
+    }
+
+    @Test
+    fun busyRecomposerNeverBlocksAnotherRecomposerInitialComposition() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertBusyRecomposerNeverBlocksAnotherRecomposerInitialComposition()
+    }
+
+    @Test
+    fun droppedScopeAfterCapExceededNeverGetsPartialCountUntilReset() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertDroppedScopeAfterCapExceededNeverGetsPartialCountUntilReset()
+    }
+
+    @Test
+    fun postEnableLateReplayedCompositionMarksCoverageIncomplete() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertPostEnableLateReplayedCompositionMarksCoverageIncomplete()
     }
 
     @Test
@@ -591,6 +634,13 @@ class ComposeRecompositionTest {
             tracker.setEnabled(false)
             recomposer.cancel()
             job.join()
+        }
+    }
+
+    private fun awaitCondition(timeoutMs: Long = 2_000L, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (!condition() && System.nanoTime() < deadline) {
+            Thread.sleep(2)
         }
     }
 
