@@ -81,7 +81,10 @@ export const InspectorPanel = memo(function InspectorPanel() {
       ? 'Requires a newer Lionscope SDK'
       : tracking === 'unsupported'
         ? 'Requires Compose 1.9+'
-        : null;
+        : tracking === 'conflict'
+          ? 'Another Compose observer is already attached'
+          : null;
+  const recompTruncated = isTrackingActive && snapshot.recompositionTruncated === true;
   const recompDesc =
     recompDisabledReason ??
     (isTrackingActive
@@ -115,6 +118,15 @@ export const InspectorPanel = memo(function InspectorPanel() {
                 truncated at {formatInteger(MAX_INSPECTOR_NODES)} nodes
               </span>
             ))}
+          {recompTruncated && (
+            <span
+              className="inspect-badge"
+              data-source="warn"
+              title="Recomposition tracking reached its scope capacity; newly seen composables have unavailable counts until Reset."
+            >
+              counts capped
+            </span>
+          )}
           {edits.liveEdits > 0 && (
             <span className="inspect-live">
               <span
@@ -187,6 +199,15 @@ export const InspectorPanel = memo(function InspectorPanel() {
           </div>
         </div>
         {hint !== undefined && <p className="inspect-hint">{hint}</p>}
+        {showRecomposition && recompDisabledReason !== null && (
+          <p className="inspect-hint">Recompositions unavailable: {recompDisabledReason}.</p>
+        )}
+        {showRecomposition && recompTruncated && (
+          <p className="inspect-hint">
+            Recomposition tracking reached capacity — counts for newly seen composables are unavailable until
+            Reset.
+          </p>
+        )}
         {failure !== null && (
           <p className="inspect-failure" role="alert">
             {failure}

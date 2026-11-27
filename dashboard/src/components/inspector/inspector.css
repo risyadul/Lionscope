@@ -303,9 +303,12 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  min-width: max-content;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   height: 24px;
-  padding-right: var(--space-4);
+  padding-right: var(--space-3);
   cursor: default;
   outline-offset: -2px;
   transition: background-color var(--dur-fast) linear;
@@ -346,17 +349,27 @@
 }
 
 .inspect-class {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  overflow: hidden;
   font-weight: 600;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .inspect-id {
-  white-space: nowrap;
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--viz-cpu);
   font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inspect-text {
+  flex: 0 8 auto;
+  min-width: 0;
   max-width: 24ch;
   overflow: hidden;
   color: var(--ink-muted);
@@ -366,6 +379,7 @@
 }
 
 .inspect-vis {
+  flex: none;
   padding: 0 5px;
   border-radius: var(--radius-pill);
   background: var(--rule);
@@ -375,6 +389,7 @@
 }
 
 .inspect-recomp-count {
+  flex: none;
   margin-left: auto;
   padding: 0 6px;
   border-radius: var(--radius-pill);

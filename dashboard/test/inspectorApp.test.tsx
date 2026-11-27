@@ -398,6 +398,23 @@ describe('Inspector tab', () => {
     );
     expect((toggle() as HTMLButtonElement).disabled).toBe(true);
     expect(toggle().getAttribute('title')).toContain('Requires Compose 1.9+');
+    expect(screen.getByText(/Recompositions unavailable: Requires Compose 1\.9\+/)).toBeTruthy();
+    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+
+    // Observer conflict: disabled with visible conflict explanation.
+    await push(
+      snapshotMsg({
+        id: 'snap-conflict',
+        recompositionTracking: 'conflict',
+        nodes: composeNodes.map((n) =>
+          n.composable ? { ...n, composable: { file: n.composable.file, line: n.composable.line } } : n,
+        ),
+      }),
+    );
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText(/Recompositions unavailable: Another Compose observer is already attached/),
+    ).toBeTruthy();
     expect((reset() as HTMLButtonElement).disabled).toBe(true);
 
     // Supported but off: toggle enabled (unpressed), Reset disabled.
@@ -461,6 +478,23 @@ describe('Inspector tab', () => {
       type: 'resetComposeRecompositions',
       serial: 'emulator-5554',
     });
+
+    // Truncated / capped active snapshot shows warning badge, header hint, and unavailable count message.
+    await push(
+      snapshotMsg({
+        id: 'snap-truncated',
+        recompositionTracking: 'active',
+        recompositionTruncated: true,
+        nodes: composeNodes,
+      }),
+    );
+    expect(screen.getByText('counts capped')).toBeTruthy();
+    expect(screen.getByText(/reached capacity/i)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-truncated', nodeId: 3, ts: 3, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Unavailable \(inline or tracking capacity reached\)/)).toBeTruthy();
   });
 
   it('says why an AndroidComposeView shows no composables', async () => {

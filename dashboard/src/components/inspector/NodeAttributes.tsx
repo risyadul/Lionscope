@@ -290,7 +290,11 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
             </>
           ) : (
             <Row name="Recompositions">
-              <span className="attr-unset">Not independently restartable (inline or non-restartable)</span>
+              <span className="attr-unset">
+                {snapshot.recompositionTruncated
+                  ? 'Unavailable (inline or tracking capacity reached)'
+                  : 'Not independently restartable (inline or non-restartable)'}
+              </span>
             </Row>
           ))}
         <Row name="Owner">

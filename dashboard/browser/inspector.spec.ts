@@ -15,10 +15,18 @@ test('Compose recomposition controls, tree counters and attributes fit cleanly a
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   await expect(reset).toBeEnabled();
 
-  // High-count row badge and normal row badge render cleanly; zero-count footer omits badge.
+  // High-count row badge and normal row badge render cleanly inside the tree panel bounds (including 320 px).
+  const tree = page.getByRole('tree', { name: 'View hierarchy' });
   const cardRow = page.locator('[data-node="3"]');
-  await expect(cardRow.locator('.inspect-recomp-count')).toHaveText('14 / 1');
-  await expect(cardRow.locator('.inspect-recomp-count')).toHaveAttribute('data-high', 'true');
+  const cardBadge = cardRow.locator('.inspect-recomp-count');
+  await expect(cardBadge).toHaveText('14 / 1');
+  await expect(cardBadge).toHaveAttribute('data-high', 'true');
+  const treeRect = await tree.evaluate((el) => el.getBoundingClientRect());
+  const cardBadgeRect = await cardBadge.evaluate((el) => el.getBoundingClientRect());
+  expect(cardBadgeRect.width).toBeGreaterThan(0);
+  expect(cardBadgeRect.left).toBeGreaterThanOrEqual(treeRect.left);
+  expect(cardBadgeRect.right).toBeLessThanOrEqual(treeRect.right + 0.5);
+
   const attrs = page.getByRole('region', { name: 'Attributes' });
   await expect(attrs.getByText('Recompositions', { exact: true })).toBeVisible();
   await expect(attrs.getByText('14', { exact: true })).toBeVisible();
@@ -52,12 +60,16 @@ test('Compose recomposition controls, tree counters and attributes fit cleanly a
     animations: 'disabled',
   });
 
-  // Expand ProductCard and Row to inspect inline Row and counted PriceBadge.
+  // Expand ProductCard and Row to inspect inline Row and counted PriceBadge (also within tree bounds).
   await cardRow.locator('.inspect-twist').click();
   await page.locator('[data-node="4"]').click();
   await expect(attrs.getByText(/Not independently restartable/)).toBeVisible();
   await page.locator('[data-node="4"] .inspect-twist').click();
-  await expect(page.locator('[data-node="5"] .inspect-recomp-count')).toHaveText('3 / 2');
+  const priceBadge = page.locator('[data-node="5"] .inspect-recomp-count');
+  await expect(priceBadge).toHaveText('3 / 2');
+  const priceBadgeRect = await priceBadge.evaluate((el) => el.getBoundingClientRect());
+  expect(priceBadgeRect.left).toBeGreaterThanOrEqual(treeRect.left);
+  expect(priceBadgeRect.right).toBeLessThanOrEqual(treeRect.right + 0.5);
 
   // Keyboard activation of Reset clears counts cleanly.
   await reset.focus();
@@ -66,7 +78,7 @@ test('Compose recomposition controls, tree counters and attributes fit cleanly a
   expect(errors).toEqual([]);
 });
 
-test('Compose recomposition controls explain disabled states and toggle cleanly from off', async ({
+test('Compose recomposition controls show visible reasons for disabled/conflict/capped states and toggle cleanly', async ({
   page,
 }, info) => {
   const errors: string[] = [];
@@ -75,6 +87,7 @@ test('Compose recomposition controls explain disabled states and toggle cleanly 
   for (const [state, description] of [
     ['legacy', /Requires a newer Lionscope SDK/],
     ['unsupported', /Requires Compose 1\.9\+/],
+    ['conflict', /Another Compose observer is already attached/],
   ] as const) {
     await page.goto(`/?scenario=inspector&state=${state}`);
     await page.evaluate(() => document.fonts.ready);
@@ -83,6 +96,9 @@ test('Compose recomposition controls explain disabled states and toggle cleanly 
     await expect(toggle).toBeDisabled();
     await expect(toggle).toHaveAccessibleDescription(description);
     await expect(reset).toBeDisabled();
+    // Touch users cannot hover tooltips: the reason must be visible text in the header.
+    await expect(page.locator('.inspect-head .inspect-hint')).toBeVisible();
+    await expect(page.locator('.inspect-head .inspect-hint')).toContainText(description);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(
       1,
     );
@@ -93,6 +109,16 @@ test('Compose recomposition controls explain disabled states and toggle cleanly 
     fullPage: true,
     animations: 'disabled',
   });
+
+  // Capped / truncated tracking exposes a visible warning badge, header hint, and unavailable count message.
+  await page.goto('/?scenario=inspector&state=truncated');
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page.getByText('counts capped')).toBeVisible();
+  await expect(page.locator('.inspect-head .inspect-hint')).toContainText(/reached capacity/i);
+  await expect(page.getByRole('region', { name: 'Attributes' })).toContainText(
+    /Unavailable \(inline or tracking capacity reached\)/,
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
 
   await page.goto('/?scenario=inspector&state=off');
   await page.evaluate(() => document.fonts.ready);
