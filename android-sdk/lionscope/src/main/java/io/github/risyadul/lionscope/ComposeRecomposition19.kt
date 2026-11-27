@@ -232,6 +232,9 @@ internal class ComposeRecomposition19(
     @Volatile
     private var failedUnsupported: Boolean = false
 
+    @Volatile
+    private var ownershipChecksForTest: Long = 0L
+
     override val status: RecompositionStatus
         get() {
             verifyOwnershipAll()
@@ -486,6 +489,9 @@ internal class ComposeRecomposition19(
 
     /** Current worker pool size of the internal serial executor (tests). */
     internal fun deferredPoolSize(): Int = deferredExecutor.poolSize()
+
+    /** Total reflective `CompositionObserverHolder` slot checks performed (tests). */
+    internal fun ownershipCheckCountForTest(): Long = ownershipChecksForTest
 
     /** Exposes the active generation's observer for targeted unit tests. */
     internal fun observerForTest(): Any = synchronized(lock) {
@@ -983,6 +989,7 @@ internal class ComposeRecomposition19(
      */
     private fun peekObserverSlot(composition: ObservableComposition, mine: CompositionObserver): ObserverSlot {
         if (!compositionImplClass.isInstance(composition)) return ObserverSlot.NONE
+        ownershipChecksForTest++
         return try {
             val holder = observerHolderField.get(composition) ?: return ObserverSlot.FAILED
             val effective = holderCurrent.invoke(holder)

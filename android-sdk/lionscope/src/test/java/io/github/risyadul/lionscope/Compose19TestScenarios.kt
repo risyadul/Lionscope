@@ -57,19 +57,35 @@ internal object Compose19TestScenarios {
         }
     }
 
+    @OptIn(androidx.compose.runtime.ExperimentalComposeRuntimeApi::class)
+    @Suppress("unused")
+    private class SyntheticObserverHolder {
+        fun getObserver(): androidx.compose.runtime.tooling.CompositionObserver? = null
+        fun current(): androidx.compose.runtime.tooling.CompositionObserver? = null
+    }
+
+    @Suppress("unused")
+    private class SyntheticValidLockComposition {
+        @JvmField
+        val lock: Any = Any()
+
+        @JvmField
+        var observerHolder: SyntheticObserverHolder? = null
+    }
+
     @Suppress("unused")
     private class SyntheticPrimitiveLockComposition {
         @JvmField
         var lock: Int = 0
 
         @JvmField
-        var observerHolder: Any? = null
+        var observerHolder: SyntheticObserverHolder? = null
     }
 
     @Suppress("unused")
     private class SyntheticStaticLockComposition {
         @JvmField
-        var observerHolder: Any? = null
+        var observerHolder: SyntheticObserverHolder? = null
 
         companion object {
             @JvmField
@@ -83,7 +99,7 @@ internal object Compose19TestScenarios {
         val otherLock: Any = Any()
 
         @JvmField
-        var observerHolder: Any? = null
+        var observerHolder: SyntheticObserverHolder? = null
     }
 
     fun assertAndroidRuntimeArtifactResolved() {
@@ -103,26 +119,49 @@ internal object Compose19TestScenarios {
 
     /** Round-3 #8 regression: probe must reject primitive, static, or renamed CompositionImpl.lock fields. */
     fun assertProbeRejectsPrimitiveStaticOrMissingCompositionLockField() {
-        val holderClass = Class.forName("androidx.compose.runtime.CompositionObserverHolder", false, javaClass.classLoader)
-        for (candidate in listOf(
-            SyntheticPrimitiveLockComposition::class.java,
-            SyntheticStaticLockComposition::class.java,
-            SyntheticRenamedLockComposition::class.java,
-        )) {
-            val probe = ComposeRecompositionSupport.probe(
+        fun probeWith(candidate: Class<*>): ComposeRecompositionSupport.ProbeResult =
+            ComposeRecompositionSupport.probe(
                 findClass = { name ->
                     when (name) {
                         "androidx.compose.runtime.CompositionImpl" -> candidate
-                        "androidx.compose.runtime.CompositionObserverHolder" -> holderClass
+                        "androidx.compose.runtime.CompositionObserverHolder" -> SyntheticObserverHolder::class.java
                         else -> Class.forName(name, false, javaClass.classLoader)
                     }
                 },
             )
+
+        // Positive control: valid reference instance lock + matching observerHolder must pass probe().
+        val valid = probeWith(SyntheticValidLockComposition::class.java)
+        assertTrue(
+            "Expected SyntheticValidLockComposition to pass probe, got $valid",
+            valid is ComposeRecompositionSupport.ProbeResult.Supported,
+        )
+
+        for (candidate in listOf(
+            SyntheticPrimitiveLockComposition::class.java,
+            SyntheticStaticLockComposition::class.java,
+        )) {
+            val probe = probeWith(candidate)
             assertTrue(
                 "Expected probe to reject ${candidate.simpleName}, got $probe",
                 probe is ComposeRecompositionSupport.ProbeResult.Unsupported,
             )
+            assertEquals(
+                "Expected ${candidate.simpleName} to fail specifically on lock validation",
+                "unexpected_composition_lock_type",
+                (probe as ComposeRecompositionSupport.ProbeResult.Unsupported).reason,
+            )
         }
+
+        val renamed = probeWith(SyntheticRenamedLockComposition::class.java)
+        assertTrue(
+            "Expected probe to reject SyntheticRenamedLockComposition, got $renamed",
+            renamed is ComposeRecompositionSupport.ProbeResult.Unsupported,
+        )
+        assertEquals(
+            "missing_symbol:NoSuchFieldException",
+            (renamed as ComposeRecompositionSupport.ProbeResult.Unsupported).reason,
+        )
     }
 
     fun assertMovedSkipFlagUsesResolvedGetter() {
@@ -839,10 +878,18 @@ internal object Compose19TestScenarios {
             assertEquals(128, tracker.attachedCompositionCount())
             assertEquals(0, tracker.deferredPoolSize())
 
-            // Warm up JIT slightly, then measure 2,000 lookups inside a capture window (must be fast, no O(N) scan).
+            // Inside a capture window: beginCapture verifies the 128 compositions ONCE, and 2,000 countsFor lookups
+            // perform ZERO additional ownership scans (never O(nodes * compositions)).
             val sampleObj = Any()
+            val checksBeforeCapture = tracker.ownershipCheckCountForTest()
             tracker.beginCapture()
             try {
+                val checksAfterBegin = tracker.ownershipCheckCountForTest()
+                assertEquals(
+                    "beginCapture must verify each of the 128 attached compositions once",
+                    128L,
+                    checksAfterBegin - checksBeforeCapture,
+                )
                 repeat(200) { tracker.countsFor(scopes[it % scopes.size]) }
                 val startNs = System.nanoTime()
                 repeat(2_000) { i ->
@@ -850,10 +897,24 @@ internal object Compose19TestScenarios {
                     assertEquals(RecompositionCounts.ZERO, tracker.countsFor(sampleObj))
                 }
                 val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                val checksDuringLookups = tracker.ownershipCheckCountForTest() - checksAfterBegin
+                assertEquals("countsFor inside beginCapture must do zero per-node ownership checks", 0L, checksDuringLookups)
                 assertTrue("Expected O(1) countsFor across 128 compositions (< 500ms), took ${elapsedMs}ms", elapsedMs < 500L)
             } finally {
                 tracker.endCapture()
             }
+
+            // Outside a capture window: each standalone countsFor checks ONLY its single owning composition (O(1)).
+            val checksBeforeStandalone = tracker.ownershipCheckCountForTest()
+            repeat(64) { i ->
+                assertEquals(RecompositionCounts.ZERO, tracker.countsFor(scopes[i]))
+            }
+            val standaloneChecks = tracker.ownershipCheckCountForTest() - checksBeforeStandalone
+            assertEquals(
+                "Standalone countsFor must check only 1 owning composition per lookup (not all 128)",
+                64L,
+                standaloneChecks,
+            )
 
             // Takeover on one of the 128 compositions is still caught immediately by standalone countsFor(realScope).
             val observerInterface = Class.forName("androidx.compose.runtime.tooling.CompositionObserver")
