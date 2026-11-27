@@ -36,8 +36,10 @@ you see) and `select_inspector_node` points you at the node it means, marked **A
 itself, `get_inspector_selection` returns its structure only (class, id, layout source, owner, bounds), never its
 text or an image: an agent without device control can't read the screen that way. Without the SDK in the app the
 snapshot comes from uiautomator, without layout sources or owners. On Compose 1.9+ apps, agents can also measure
-recomposition and skip counts without starting a profiling session: call `set_sdk_options { composeRecompositionTracking: true }`,
-optionally `reset_compose_recompositions` before an interaction, and read `snapshot.recompositionTracking` plus
+recomposition and skip counts without starting a profiling session: first establish the SDK link (via `inspect_screen`
+or `start_session`), enable tracking with `set_sdk_options { composeRecompositionTracking: true }` (checking
+`delivery: "applied"` rather than `"pending"`), confirm `snapshot.recompositionTracking === "active"` with
+`inspect_screen` (and optionally `reset_compose_recompositions`), then reproduce the interaction and read
 per-composable `recompositions` and `skips` from `inspect_screen` or `get_inspector_selection` (turn tracking back
 off when finished). With device control, SDK 0.9.0+ and a profiling
 session the agent can also try its fix on the running app: `set_view_property { nodeId, property: "padding", value: [16, 8, 16, 8] }`

@@ -35,9 +35,6 @@
 }
 
 # Compose 1.9+ recomposition tracking (ComposeRecomposition19) is compileOnly and gated at runtime.
+# Compose hierarchy inspection and recomposition tracking require a non-minified debug build (see docs/limitations.md);
+# shrunk builds that strip or rename Compose runtime internals fail closed to `unsupported`.
 -dontwarn androidx.compose.runtime.tooling.**
--keepclassmembernames class androidx.compose.runtime.RecomposeScopeImpl {
-    int flags;
-    boolean getSkipped*();
-    boolean getRereading();
-}

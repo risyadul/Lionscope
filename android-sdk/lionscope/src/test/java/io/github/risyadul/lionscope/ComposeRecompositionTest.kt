@@ -51,7 +51,7 @@ class ComposeRecompositionTest {
         unsupported.rescan()
         unsupported.reset()
 
-        // Missing internal RecomposeScopeImpl (or wrong class without `flags` / `getSkipped*()` / `getRereading()`):
+        // Missing internal RecomposeScopeImpl (or wrong class without `getSkipped*()` / `getRereading()`):
         // must fail closed to UNSUPPORTED instead of conflating skips with recompositions.
         val missingFlags = ComposeRecompositionSupport.probe(
             findClass = { name ->
@@ -64,6 +64,29 @@ class ComposeRecompositionTest {
             },
         )
         assertTrue(missingFlags is ComposeRecompositionSupport.ProbeResult.Unsupported)
+
+        // Minified/obfuscated build where RecomposeScopeImpl is stripped or renamed must fail closed to UNSUPPORTED,
+        // and consumer-rules.pro must not ship a misleading -keepclassmembernames rule that still allows removal.
+        val obfuscated = ComposeRecompositionSupport.probe(
+            findClass = { name ->
+                if (name == "androidx.compose.runtime.RecomposeScopeImpl") null
+                else try {
+                    Class.forName(name, false, javaClass.classLoader)
+                } catch (_: ClassNotFoundException) {
+                    null
+                }
+            },
+        )
+        assertTrue(obfuscated is ComposeRecompositionSupport.ProbeResult.Unsupported)
+        val rulesFile = java.io.File("consumer-rules.pro")
+        if (rulesFile.isFile) {
+            val rules = rulesFile.readText()
+            assertFalse(
+                "consumer-rules.pro must not use -keepclassmembernames for RecomposeScopeImpl",
+                rules.contains("-keepclassmembernames class androidx.compose.runtime.RecomposeScopeImpl"),
+            )
+            assertTrue(rules.contains("-dontwarn androidx.compose.runtime.tooling.**"))
+        }
     }
 
     @Test

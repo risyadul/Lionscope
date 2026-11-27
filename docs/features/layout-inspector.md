@@ -53,18 +53,24 @@ after the app changes its top screen (never continuously), and the refresh butto
     composable that first composes while tracking is active (for example, a `LazyColumn` item scrolled into view)
     counts its initial composition as `1`. Inline and non-restartable composables (such as `Row` or `Column`) have
     no restartable scope, so they show no row counter and note this in Attributes.
-  - **Compatibility and fallback.** Apps on Compose < 1.9 report `unsupported` (header tooltip: "Requires Compose
-    1.9+") and keep regular Compose hierarchy inspection unchanged. To distinguish skips from recompositions
-    without conflating them, the SDK reads `RecomposeScopeImpl`'s internal skip/rereading flags once and caches the
-    field; if any required runtime symbol is missing on a future Compose build, tracking fails closed to
-    `unsupported`.
+  - **Compatibility and fallback.** Apps on Compose < 1.9 or minified/shrunk builds report `unsupported` (visible
+    header note: "Requires Compose 1.9+") and keep regular Compose hierarchy inspection unchanged; consistent with
+    Compose inspection overall, recomposition tracking requires a non-minified debug build. If another Compose
+    observer (for example, Android Studio's Layout Inspector) already occupies a composition's observer slot,
+    Lionscope leaves it untouched and reports `conflict` ("Another Compose observer is already attached"). To
+    distinguish skips from recompositions without relying on hardcoded flag masks, the SDK resolves and calls
+    `RecomposeScopeImpl`'s skip/rereading getters directly and fails closed to `unsupported` if any required symbol
+    is missing or fails at runtime. When the 16,384-scope cap is reached, the snapshot sets `recompositionTruncated`
+    (`counts capped` badge) and leaves newly seen scopes' counts unavailable until **Reset**.
   - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
     `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
     ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time
     moved from `22 ms` (OFF) to `23 ms` (ON) at p50 (`21.8 ms` vs `22.2 ms` mean), `32 ms` vs `32 ms` at p90
     (`31.4 ms` vs `31.8 ms` mean), `34 ms` vs `36 ms` at p95 (`34.8 ms` vs `36.0 ms` mean), and `48 ms` vs `46 ms`
-    at p99 (`46.4 ms` vs `46.0 ms` mean) — within emulator run-to-run noise. Because tracking is opt-in and detaches
-    its observers when off, disabled overhead is zero.
+    at p99 (`46.4 ms` vs `46.0 ms` mean) — within emulator run-to-run noise. Because tracking is opt-in, detaches
+    its Compose runtime observers when off, and skips recompose-scope extraction during captures while disabled,
+    recomposition tracking adds no extra runtime or capture overhead when off (Compose's standard tooling data
+    remains enabled for Layout Inspector hierarchy capture).
 - **When Compose falls back.** A Compose screen that was composed before the SDK started (Lionscope installed by
   hand late, or the app opted out with `<meta-data android:name="io.github.risyadul.lionscope.composeInspection"
 android:value="false" />`) cannot be read: the badge says why (restart the app). So does a build without
