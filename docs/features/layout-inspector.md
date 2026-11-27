@@ -62,9 +62,11 @@ after the app changes its top screen (never continuously), and the refresh butto
     header so you can re-attach on the same link once the other observer detaches. To distinguish skips from
     recompositions without relying on hardcoded flag masks, the SDK resolves and calls `RecomposeScopeImpl`'s
     skip/rereading getters directly and fails closed to `unsupported` if any required symbol is missing or fails at
-    runtime. When the 16,384-scope cap is reached (or a composition created after enable attaches after it has
-    already composed), the snapshot sets `recompositionTruncated` (`counts capped` badge) and keeps newly seen or
-    previously dropped scopes unavailable rather than showing partial counts until **Reset**.
+    runtime. When the 16,384-scope cap is reached, the snapshot sets `recompositionTruncated` (`counts capped` badge)
+    and keeps newly seen or previously dropped scopes unavailable rather than showing partial counts until **Reset**.
+    Separately, if a composition is still pending attachment or attached after it had already composed post-enable,
+    the snapshot sets `recompositionIncomplete` (`partial coverage` badge) and leaves only that composition's counts
+    unavailable until **Reset**, while other attached compositions keep exact counts.
   - **Measured overhead.** Measured on an API 36 Android emulator (`sdk_gphone16k_arm64`, Compose BOM
     `2025.09.01`) scrolling the sample app's 30-item `LazyColumn` (`ComposeShopActivity`, 4 down + 4 up swipes,
     ~280 frames/run) across 5 interleaved OFF/ON pairs with `dumpsys gfxinfo` reset between runs: median frame time

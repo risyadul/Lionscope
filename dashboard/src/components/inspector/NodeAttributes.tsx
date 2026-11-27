@@ -291,9 +291,13 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
           ) : (
             <Row name="Recompositions">
               <span className="attr-unset">
-                {snapshot.recompositionTruncated
-                  ? 'Unavailable (inline or tracking capacity reached)'
-                  : 'Not independently restartable (inline or non-restartable)'}
+                {snapshot.recompositionTruncated && snapshot.recompositionIncomplete
+                  ? 'Unavailable (inline, incomplete coverage, or tracking capacity reached)'
+                  : snapshot.recompositionTruncated
+                    ? 'Unavailable (inline or tracking capacity reached)'
+                    : snapshot.recompositionIncomplete
+                      ? 'Unavailable (inline or incomplete coverage for this composition — Reset to baseline)'
+                      : 'Not independently restartable (inline or non-restartable)'}
               </span>
             </Row>
           ))}

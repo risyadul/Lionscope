@@ -935,6 +935,12 @@ export interface InspectorSnapshot {
    * newly seen composables have unavailable (omitted) counts until Reset. Absent when not truncated.
    */
   recompositionTruncated?: boolean;
+  /**
+   * Device protocol v15 (SDK). True when at least one tracked composition currently has incomplete coverage
+   * (pending attachment or attached after it already composed post-enable), so that composition's counts are
+   * unavailable (omitted) until Reset while other attached compositions keep exact counts. Absent when complete.
+   */
+  recompositionIncomplete?: boolean;
 }
 
 /** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
@@ -2263,6 +2269,8 @@ export type DeviceMessage =
       recompositionTracking?: RecompositionTrackingState;
       /** v15. True when tracked scopes reached capacity and newly seen scopes have unavailable counts. */
       recompositionTruncated?: boolean;
+      /** v15. True when at least one composition has incomplete coverage until Reset. */
+      recompositionIncomplete?: boolean;
     }
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
   | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }

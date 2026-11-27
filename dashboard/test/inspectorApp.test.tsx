@@ -489,12 +489,38 @@ describe('Inspector tab', () => {
       }),
     );
     expect(screen.getByText('counts capped')).toBeTruthy();
+    expect(screen.queryByText('partial coverage')).toBeNull();
     expect(screen.getByText(/reached capacity/i)).toBeTruthy();
     await push({
       type: 'inspectorSelection',
       selection: { snapshotId: 'snap-truncated', nodeId: 3, ts: 3, origin: 'user' },
     });
     expect(within(attrs).getByText(/Unavailable \(inline or tracking capacity reached\)/)).toBeTruthy();
+
+    // Incomplete per-composition coverage shows its own badge and explanation (distinct from capacity cap)
+    // while keeping exact counts on fully attached sibling composables.
+    await push(
+      snapshotMsg({
+        id: 'snap-incomplete',
+        recompositionTracking: 'active',
+        recompositionIncomplete: true,
+        nodes: composeNodes,
+      }),
+    );
+    expect(screen.getByText('partial coverage')).toBeTruthy();
+    expect(screen.queryByText('counts capped')).toBeNull();
+    expect(screen.getByText(/Coverage is incomplete for some compositions/i)).toBeTruthy();
+    expect(screen.queryByText(/reached capacity/i)).toBeNull();
+    expect(document.querySelector('[data-node="2"] .inspect-recomp-count')?.textContent).toBe('12 / 3');
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-incomplete', nodeId: 3, ts: 4, origin: 'user' },
+    });
+    expect(
+      within(attrs).getByText(
+        /Unavailable \(inline or incomplete coverage for this composition — Reset to baseline\)/,
+      ),
+    ).toBeTruthy();
   });
 
   it('says why an AndroidComposeView shows no composables', async () => {

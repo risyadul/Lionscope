@@ -93,6 +93,7 @@ function snapshotView(snapshot: InspectorSnapshot, ctx: AgentContext) {
       ? {}
       : { recompositionTracking: snapshot.recompositionTracking }),
     ...(snapshot.recompositionTruncated ? { recompositionTruncated: true } : {}),
+    ...(snapshot.recompositionIncomplete ? { recompositionIncomplete: true } : {}),
     ...(snapshot.editBlocked ? { editBlocked: EDIT_BLOCKED_MESSAGES[snapshot.editBlocked] } : {}),
   };
 }
@@ -162,7 +163,7 @@ function elementView(snapshot: InspectorSnapshot, node: InspectorNode, withText:
     ...(node.destination ? { destination: node.destination } : {}),
     ...(node.composition ? { composition: node.composition } : {}),
     ...(node.composable?.recompositions === undefined
-      ? snapshot.recompositionTruncated &&
+      ? (snapshot.recompositionTruncated || snapshot.recompositionIncomplete) &&
         snapshot.recompositionTracking === 'active' &&
         node.composable !== undefined
         ? { recompositionCountsUnavailable: true }
@@ -250,7 +251,7 @@ export const inspectorSelectionTool = defineTool({
 });
 
 /** `isEditing`: the snapshot's link takes live edits (no `editBlocked`). */
-function compactNode(node: InspectorNode, isEditing: boolean, recompositionTruncated = false) {
+function compactNode(node: InspectorNode, isEditing: boolean, recompositionCountsIncomplete = false) {
   const flags = [
     ...(node.clickable ? ['clickable'] : []),
     ...(node.checked !== null ? [node.checked ? 'checked' : 'unchecked'] : []),
@@ -268,7 +269,7 @@ function compactNode(node: InspectorNode, isEditing: boolean, recompositionTrunc
     ...(sourceText(node) !== null ? { source: sourceText(node) } : {}),
     ...(node.composition && node.composition !== 'read' ? { composition: node.composition } : {}),
     ...(node.composable?.recompositions === undefined
-      ? recompositionTruncated && node.composable !== undefined
+      ? recompositionCountsIncomplete && node.composable !== undefined
         ? { recompositionCountsUnavailable: true }
         : {}
       : { recompositions: node.composable.recompositions, skips: node.composable.skips ?? 0 }),
@@ -335,7 +336,8 @@ export const inspectScreenTool = defineTool({
             compactNode(
               node,
               !snapshot.editBlocked,
-              snapshot.recompositionTracking === 'active' && snapshot.recompositionTruncated === true,
+              snapshot.recompositionTracking === 'active' &&
+                (snapshot.recompositionTruncated === true || snapshot.recompositionIncomplete === true),
             ),
           ),
       },

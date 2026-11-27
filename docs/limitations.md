@@ -43,9 +43,11 @@
   skip/rereading getters; if any required symbol is missing or fails at runtime, tracking fails closed to
   `unsupported` instead of misreporting skips as recompositions. The tracker caps live scope entries at 16,384
   weak-identity keys (evicting disposed scopes eagerly) and marks snapshots `recompositionTruncated` when the cap is
-  reached or a post-enable composition attaches after it has already composed, freezing new insertions so dropped or
-  late-attached scopes stay unavailable rather than showing partial counts until Reset. Runtime-verified on API 36
-  with Compose BOM `2025.09.01`.
+  reached, freezing new insertions so dropped scopes stay unavailable rather than showing partial counts until Reset.
+  Coverage is tracked per composition: if a composition is still pending attachment or attaches after it had already
+  composed post-enable, snapshots set `recompositionIncomplete` and leave only that composition's counts unavailable
+  until Reset while other attached compositions keep exact counts. Runtime-verified on API 36 with Compose BOM
+  `2025.09.01`.
 - **Live edits are for Views only.** Composables are read-only (their values come from code on every
   recomposition), and an edit lasts until it is reverted, the app sets the property itself or the view is
   recreated.

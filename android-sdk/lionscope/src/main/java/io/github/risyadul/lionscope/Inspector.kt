@@ -244,6 +244,7 @@ internal class PreparedScene<T : Any>(
     val captured: (() -> Int)? = null,
     val recompositionTracking: (() -> RecompositionStatus?)? = null,
     val recompositionTruncated: (() -> Boolean)? = null,
+    val recompositionIncomplete: (() -> Boolean)? = null,
 )
 
 /** A capture ready to be sent: everything was read on the main thread. */
@@ -260,6 +261,8 @@ internal class InspectSnapshot(
     val recompositionTracking: RecompositionStatus? = null,
     /** v15: True when tracked Compose scopes hit capacity and newly seen scopes have unavailable counts. */
     val recompositionTruncated: Boolean = false,
+    /** v15: True when at least one tracked composition has incomplete coverage until Reset. */
+    val recompositionIncomplete: Boolean = false,
 )
 
 /**
@@ -293,6 +296,7 @@ internal class Inspector<T : Any>(
         val liveEdits: Int?
         val recompositionTracking: RecompositionStatus?
         val recompositionTruncated: Boolean
+        val recompositionIncomplete: Boolean
         try {
             val readCompose = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V6)
             val viewState = DeviceLink.speaks(link.negotiatedVersion, DEVICE_PROTOCOL_V8)
@@ -306,6 +310,9 @@ internal class Inspector<T : Any>(
             recompositionTruncated = recompositionCounts &&
                 recompositionTracking == RecompositionStatus.ACTIVE &&
                 prepared.recompositionTruncated?.invoke() == true
+            recompositionIncomplete = recompositionCounts &&
+                recompositionTracking == RecompositionStatus.ACTIVE &&
+                prepared.recompositionIncomplete?.invoke() == true
         } catch (t: Throwable) {
             if (isFatal(t)) throw t
             return reply(requestId, InspectError.FAILED)
@@ -313,7 +320,7 @@ internal class Inspector<T : Any>(
         val captureMs = (nanoTime() - start) / NANOS_PER_MS
         val snapshot = InspectSnapshot(
             requestId, ts, screenName(), prepared.display, capture, captureMs, liveEdits,
-            recompositionTracking, recompositionTruncated,
+            recompositionTracking, recompositionTruncated, recompositionIncomplete,
         )
         val send = sender.prepare(snapshot)
         try {
@@ -418,6 +425,7 @@ internal class InspectSender(
             liveEdits = snapshot.liveEdits,
             recompositionTracking = snapshot.recompositionTracking,
             recompositionTruncated = snapshot.recompositionTruncated,
+            recompositionIncomplete = snapshot.recompositionIncomplete,
         )
         lines += DeviceMessages.inspectChunks(snapshot.requestId, capture.nodes, maxChunkBytes)
         return lines

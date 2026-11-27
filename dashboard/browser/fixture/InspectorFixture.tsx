@@ -46,6 +46,7 @@ function buildSnapshot(
   tracking: RecompositionTrackingState | undefined,
   counts: { card: [number, number]; badge: [number, number]; footer: [number, number] },
   recompositionTruncated = false,
+  recompositionIncomplete = false,
 ): InspectorSnapshot {
   const withCounts = tracking === 'active';
   const nodes: InspectorNode[] = [
@@ -94,14 +95,14 @@ function buildSnapshot(
       composable: {
         file: 'ComposeShopScreens.kt',
         line: 120,
-        ...(withCounts && !recompositionTruncated
+        ...(withCounts && !recompositionTruncated && !recompositionIncomplete
           ? { recompositions: counts.footer[0], skips: counts.footer[1] }
           : {}),
       },
     }),
   ];
   return {
-    id: `snap-${tracking ?? 'legacy'}-${recompositionTruncated ? 'cap-' : ''}${counts.card[0]}`,
+    id: `snap-${tracking ?? 'legacy'}-${recompositionTruncated ? 'cap-' : ''}${recompositionIncomplete ? 'inc-' : ''}${counts.card[0]}`,
     ts: 1_700_000_000_000,
     serial: 'emulator-5554',
     packageName: 'com.synthetic.shop',
@@ -115,6 +116,7 @@ function buildSnapshot(
     fallbackReason: null,
     ...(tracking === undefined ? {} : { recompositionTracking: tracking }),
     ...(recompositionTruncated ? { recompositionTruncated: true } : {}),
+    ...(recompositionIncomplete ? { recompositionIncomplete: true } : {}),
   };
 }
 
@@ -143,6 +145,7 @@ export function InspectorFixture({ state }: { state: string | null }) {
             : 'active';
   const [tracking, setTracking] = useState<RecompositionTrackingState | undefined>(initialTracking);
   const [truncated, setTruncated] = useState(state === 'truncated');
+  const [incomplete, setIncomplete] = useState(state === 'incomplete');
   const [counts, setCounts] = useState<{
     card: [number, number];
     badge: [number, number];
@@ -152,10 +155,15 @@ export function InspectorFixture({ state }: { state: string | null }) {
     badge: [3, 2],
     footer: [0, 0],
   });
-  const [selectedId, setSelectedId] = useState<number | null>(state === 'truncated' ? 6 : 3);
+  const [selectedId, setSelectedId] = useState<number | null>(
+    state === 'truncated' || state === 'incomplete' ? 6 : 3,
+  );
   const [hoverId] = useState(() => createSignal<number | null>(null));
 
-  const snapshot = useMemo(() => buildSnapshot(tracking, counts, truncated), [tracking, counts, truncated]);
+  const snapshot = useMemo(
+    () => buildSnapshot(tracking, counts, truncated, incomplete),
+    [tracking, counts, truncated, incomplete],
+  );
   const index = useMemo(() => buildIndex(snapshot), [snapshot]);
 
   const controller = useMemo<InspectorController>(
@@ -179,6 +187,7 @@ export function InspectorFixture({ state }: { state: string | null }) {
       },
       resetRecompositions: () => {
         setTruncated(false);
+        setIncomplete(false);
         setCounts({ card: [0, 0], badge: [0, 0], footer: [0, 0] });
       },
       select: (id) => setSelectedId(id),

@@ -1356,12 +1356,22 @@ describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
     }
     expect(
       parseDeviceMessage(
-        JSON.stringify({ ...begin, recompositionTracking: 'active', recompositionTruncated: true }),
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: 'active',
+          recompositionTruncated: true,
+          recompositionIncomplete: true,
+        }),
         DEVICE_PROTOCOL_V15,
       ),
     ).toMatchObject({
       ok: true,
-      value: { type: 'inspectBegin', recompositionTracking: 'active', recompositionTruncated: true },
+      value: {
+        type: 'inspectBegin',
+        recompositionTracking: 'active',
+        recompositionTruncated: true,
+        recompositionIncomplete: true,
+      },
     });
     expect(
       parseDeviceMessage(
@@ -1369,6 +1379,19 @@ describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
           ...begin,
           recompositionTracking: undefined,
           recompositionTruncated: true,
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectBegin', since: DEVICE_PROTOCOL_V15 },
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: undefined,
+          recompositionIncomplete: true,
         }),
         DEVICE_PROTOCOL_V14,
       ),

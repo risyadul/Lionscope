@@ -656,6 +656,7 @@ class DeviceMessagesTest {
                     RecompositionStatus.values().single { it.wire == wire }
                 },
                 recompositionTruncated = message["recompositionTruncated"] as Boolean? ?: false,
+                recompositionIncomplete = message["recompositionIncomplete"] as Boolean? ?: false,
             )
         }
         "inspectNodes" -> DeviceMessages.inspectNodes(

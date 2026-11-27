@@ -31,6 +31,7 @@ class InspectorTest {
         val recompositionCounts = ArrayList<Boolean>()
         var trackingStatus: RecompositionStatus? = null
         var trackingTruncated: Boolean = false
+        var trackingIncomplete: Boolean = false
         override val isForeground: Boolean
             get() = foreground
 
@@ -48,6 +49,7 @@ class InspectorTest {
                 captured,
                 { trackingStatus },
                 { trackingTruncated },
+                { trackingIncomplete },
             )
         }
     }
@@ -165,6 +167,7 @@ class InspectorTest {
     fun recompositionTrackingStatusIsOnlyEmittedOnAV15Link() {
         scene.trackingStatus = RecompositionStatus.ACTIVE
         scene.trackingTruncated = true
+        scene.trackingIncomplete = true
         link.welcome(false)
         link.welcome(true, DEVICE_PROTOCOL_V14)
         link.v4Lines.clear()
@@ -174,6 +177,7 @@ class InspectorTest {
         val beginV14 = sent().single { it["type"] == "inspectBegin" }
         assertFalse(beginV14.containsKey("recompositionTracking"))
         assertFalse(beginV14.containsKey("recompositionTruncated"))
+        assertFalse(beginV14.containsKey("recompositionIncomplete"))
 
         link.welcome(false)
         link.welcome(true, DEVICE_PROTOCOL_V15)
@@ -184,6 +188,7 @@ class InspectorTest {
         val beginV15 = sent().single { it["type"] == "inspectBegin" }
         assertEquals("active", beginV15["recompositionTracking"])
         assertEquals(true, beginV15["recompositionTruncated"])
+        assertEquals(true, beginV15["recompositionIncomplete"])
 
         scene.trackingStatus = RecompositionStatus.CONFLICT
         link.v4Lines.clear()
@@ -192,6 +197,7 @@ class InspectorTest {
         val beginConflict = sent().single { it["type"] == "inspectBegin" }
         assertEquals("conflict", beginConflict["recompositionTracking"])
         assertFalse(beginConflict.containsKey("recompositionTruncated"))
+        assertFalse(beginConflict.containsKey("recompositionIncomplete"))
     }
 
     @Test

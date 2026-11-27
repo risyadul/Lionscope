@@ -134,6 +134,7 @@ export function sdkSnapshot(
       ? {}
       : { recompositionTracking: begin.recompositionTracking }),
     ...(begin.recompositionTruncated ? { recompositionTruncated: true } : {}),
+    ...(begin.recompositionIncomplete ? { recompositionIncomplete: true } : {}),
     ...(editBlocked === undefined ? {} : { editBlocked }),
   };
 }

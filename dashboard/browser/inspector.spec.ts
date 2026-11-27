@@ -135,11 +135,29 @@ test('Compose recomposition controls show visible reasons for disabled/conflict/
   await page.goto('/?scenario=inspector&state=truncated');
   await page.evaluate(() => document.fonts.ready);
   await expect(page.getByText('counts capped')).toBeVisible();
+  await expect(page.getByText('partial coverage')).toHaveCount(0);
   await expect(page.locator('.inspect-head .inspect-hint')).toContainText(/reached capacity/i);
   await expect(page.getByRole('region', { name: 'Attributes' })).toContainText(
     /Unavailable \(inline or tracking capacity reached\)/,
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+
+  // Per-composition incomplete coverage exposes a distinct badge/explanation (never blaming capacity)
+  // while keeping sibling exact counts intact and clearing on Reset.
+  await page.goto('/?scenario=inspector&state=incomplete');
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page.getByText('partial coverage')).toBeVisible();
+  await expect(page.getByText('counts capped')).toHaveCount(0);
+  await expect(page.locator('.inspect-head .inspect-hint')).toContainText(
+    /Coverage is incomplete for some compositions/i,
+  );
+  await expect(page.locator('[data-node="3"] .inspect-recomp-count')).toHaveText('14 / 1');
+  await expect(page.getByRole('region', { name: 'Attributes' })).toContainText(
+    /Unavailable \(inline or incomplete coverage for this composition — Reset to baseline\)/,
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(page.getByText('partial coverage')).toHaveCount(0);
 
   await page.goto('/?scenario=inspector&state=off');
   await page.evaluate(() => document.fonts.ready);

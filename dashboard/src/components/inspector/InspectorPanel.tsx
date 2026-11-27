@@ -85,6 +85,7 @@ export const InspectorPanel = memo(function InspectorPanel() {
           ? 'Another Compose observer is already attached'
           : null;
   const recompTruncated = isTrackingActive && snapshot.recompositionTruncated === true;
+  const recompIncomplete = isTrackingActive && snapshot.recompositionIncomplete === true;
   const recompDesc =
     recompDisabledReason ??
     (isTrackingActive
@@ -125,6 +126,15 @@ export const InspectorPanel = memo(function InspectorPanel() {
               title="Recomposition tracking reached its scope capacity; newly seen composables have unavailable counts until Reset."
             >
               counts capped
+            </span>
+          )}
+          {recompIncomplete && (
+            <span
+              className="inspect-badge"
+              data-source="warn"
+              title="Coverage is incomplete for some compositions (pending attachment or already composed before attach); their counts are unavailable until Reset while other attached compositions stay exact."
+            >
+              partial coverage
             </span>
           )}
           {edits.liveEdits > 0 && (
@@ -220,6 +230,12 @@ export const InspectorPanel = memo(function InspectorPanel() {
           <p className="inspect-hint">
             Recomposition tracking reached capacity — counts for newly seen composables are unavailable until
             Reset.
+          </p>
+        )}
+        {showRecomposition && recompIncomplete && (
+          <p className="inspect-hint">
+            Coverage is incomplete for some compositions — their counts are unavailable until Reset while
+            other attached compositions stay exact.
           </p>
         )}
         {failure !== null && (
