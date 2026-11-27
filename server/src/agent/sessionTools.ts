@@ -1,6 +1,6 @@
 /** `start_session`, `stop_session`, `set_sdk_options`: the dashboard's session controls. */
 import { z } from 'zod';
-import { DEVICE_PROTOCOL_V15, isValidPackageName, STALL_THRESHOLDS_MS } from '@lionscope/protocol';
+import { isValidPackageName, STALL_THRESHOLDS_MS } from '@lionscope/protocol';
 import { NO_SESSION_MESSAGE } from '../http/wsGateway.ts';
 import type { ComposeRecompositionDelivery } from '../device/inspectLinks.ts';
 import { targetSerial } from './deviceTools.ts';
@@ -96,14 +96,13 @@ export const sdkOptionsTool = defineTool({
       rxTracking !== undefined ||
       savedStateTracking !== undefined;
     const session = ctx.sessions.getSessionState();
-    const hasActiveSession =
-      session.status !== 'idle' && session.status !== 'error' && session.serial !== null;
+    const sessionSerial = session.status !== 'idle' && session.status !== 'error' ? session.serial : null;
 
     // Resolve explicit target serial BEFORE mutating anything: never silently change device A when serial B was asked.
-    if (requestedSerial !== undefined && hasActiveSession && requestedSerial !== session.serial) {
+    if (requestedSerial !== undefined && sessionSerial !== null && requestedSerial !== sessionSerial) {
       if (hasSessionOnlyOptions || composeRecompositionTracking === undefined) {
         throw new ToolError(
-          `Active profiling session is on ${session.serial}, not ${requestedSerial}: session SDK options apply only to the session device`,
+          `Active profiling session is on ${sessionSerial}, not ${requestedSerial}: session SDK options apply only to the session device`,
         );
       }
       const serial = targetSerial(ctx, requestedSerial);
@@ -121,27 +120,41 @@ export const sdkOptionsTool = defineTool({
       };
     }
 
-    if (hasActiveSession && ctx.sessions.setSdkOptions(options)) {
-      const sdk = ctx.sessions.getSessionState().sdk;
+    if (sessionSerial !== null) {
       if (composeRecompositionTracking === undefined) {
-        return { data: { options: sdk?.options ?? null, sdkConnected: sdk?.connected ?? false } };
+        if (ctx.sessions.setSdkOptions(options)) {
+          const sdk = ctx.sessions.getSessionState().sdk;
+          return { data: { options: sdk?.options ?? null, sdkConnected: sdk?.connected ?? false } };
+        }
+      } else {
+        if (hasSessionOnlyOptions) {
+          const appliedSession = ctx.sessions.setSdkOptions({
+            stallThresholdMs,
+            strictMode,
+            inflateTracking,
+            rxTracking,
+            savedStateTracking,
+          });
+          if (!appliedSession) throw new ToolError(NO_SESSION_MESSAGE);
+        }
+        // Route Compose tracking through setComposeRecompositionTracking so delivery and sdkConnected combine
+        // both the profiling session link and any live inspect-only link on the same device.
+        const delivery = ctx.sessions.setComposeRecompositionTracking(
+          sessionSerial,
+          composeRecompositionTracking,
+        );
+        const sdk = ctx.sessions.getSessionState().sdk;
+        const note = deliveryNote(delivery.state);
+        return {
+          data: {
+            serial: sessionSerial,
+            options: sdk?.options ?? null,
+            sdkConnected: delivery.sdkConnected,
+            delivery: delivery.state,
+            ...(note === undefined ? {} : { note }),
+          },
+        };
       }
-      const deliveryState: ComposeRecompositionDelivery['state'] =
-        sdk?.connected === true
-          ? (sdk.protocolVersion ?? 0) >= DEVICE_PROTOCOL_V15
-            ? 'applied'
-            : 'unsupported_sdk'
-          : 'pending';
-      const note = deliveryNote(deliveryState);
-      return {
-        data: {
-          serial: session.serial,
-          options: sdk?.options ?? null,
-          sdkConnected: sdk?.connected ?? false,
-          delivery: deliveryState,
-          ...(note === undefined ? {} : { note }),
-        },
-      };
     }
     if (hasSessionOnlyOptions || composeRecompositionTracking === undefined) {
       throw new ToolError(NO_SESSION_MESSAGE);

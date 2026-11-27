@@ -749,7 +749,18 @@ describe('session control', () => {
       },
     ]);
     await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
-    expect(agent.sdkOptionCalls.at(-1)).toMatchObject({ composeRecompositionTracking: true });
+    expect(agent.recompositionTrackingCalls.at(-1)).toEqual({ serial: 'emulator-5554', enabled: true });
+    // Same-device mixed links: waiting session (sdk.connected === false) + live v15 inspect link on the same device.
+    agent.recompositionTrackingResult = { state: 'applied', sdkConnected: true };
+    const mixed = await run(agent, 'set_sdk_options', { composeRecompositionTracking: true });
+    expect(mixed).toMatchObject({
+      serial: 'emulator-5554',
+      sdkConnected: true,
+      delivery: 'applied',
+    });
+    expect(mixed.note).toBeUndefined();
+    agent.recompositionTrackingResult = { state: 'pending', sdkConnected: false };
+    agent.recompositionTrackingCalls.length = 0;
     expect((await run(agent, 'stop_session')).session.status).toBe('idle');
 
     // Without a session: composeRecompositionTracking alone reports pending when no live SDK link exists.

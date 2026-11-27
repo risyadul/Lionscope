@@ -184,20 +184,21 @@ export class SdkBridge {
         changes.composeRecompositionTracking ?? previous.composeRecompositionTracking ?? false,
     };
     this.update({ options });
-    const recompositionChanged =
-      options.composeRecompositionTracking !== (previous.composeRecompositionTracking ?? false);
+    // Always re-push immediately when composeRecompositionTracking is explicitly requested (even if already true)
+    // so retrying after an observer conflict triggers a fresh enable generation on the SDK link.
+    const recompositionRequested = changes.composeRecompositionTracking !== undefined;
     if (
       options.stallThresholdMs === previous.stallThresholdMs &&
       options.strictMode === previous.strictMode &&
       options.inflateTracking === previous.inflateTracking &&
       options.rxTracking === previous.rxTracking &&
       options.savedStateTracking === previous.savedStateTracking &&
-      !recompositionChanged
+      !recompositionRequested
     ) {
       return;
     }
     if (this.configTimer) clearTimeout(this.configTimer);
-    if (recompositionChanged) {
+    if (recompositionRequested) {
       this.pushConfig();
     } else {
       this.configTimer = setTimeout(() => this.pushConfig(), CONFIG_DEBOUNCE_MS);
