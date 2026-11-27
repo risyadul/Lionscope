@@ -687,6 +687,7 @@ const inspectorNodeSchema = z
         draws: z.boolean().optional(),
         recompositions: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
         skips: z.number().int().min(0).max(MAX_JAVA_INT).optional(),
+        restartable: z.boolean().optional(),
       })
       .strip()
       .optional(),
@@ -1307,7 +1308,9 @@ export function parseDeviceMessage(
         return (
           typeof composable === 'object' &&
           composable !== null &&
-          (Object.hasOwn(composable, 'recompositions') || Object.hasOwn(composable, 'skips'))
+          (Object.hasOwn(composable, 'recompositions') ||
+            Object.hasOwn(composable, 'skips') ||
+            Object.hasOwn(composable, 'restartable'))
         );
       })
     ) {

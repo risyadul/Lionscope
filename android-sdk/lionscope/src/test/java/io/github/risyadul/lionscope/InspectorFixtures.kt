@@ -35,6 +35,7 @@ internal object InspectorFixtures {
                 draws = it["draws"] as Boolean?,
                 recompositions = (it["recompositions"] as Double?)?.toInt(),
                 skips = (it["skips"] as Double?)?.toInt(),
+                restartable = it["restartable"] as Boolean?,
             )
         },
         composition = json["composition"]?.let { wire -> CompositionStatus.values().single { it.wire == wire } },

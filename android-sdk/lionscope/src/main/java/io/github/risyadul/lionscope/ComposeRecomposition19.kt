@@ -258,11 +258,17 @@ internal class ComposeRecomposition19(
     private var nextGenerationId: Long = 0L
     private var resetEpoch: Long = 0L
 
+    private class CaptureState {
+        var depth: Int = 0
+        var sawIncomplete: Boolean = false
+        var sawTruncated: Boolean = false
+    }
+
     private val inObserveReplay = ThreadLocal<Boolean>()
     private val inPostEnableReplay = ThreadLocal<Boolean>()
     private val inRegistrationCallback = ThreadLocal<Boolean>()
     private val replayCollector = ThreadLocal<MutableList<CompositionRecord>?>()
-    private val captureDepth = ThreadLocal<Int>()
+    private val captureState = ThreadLocal<CaptureState?>()
 
     @Volatile
     private var capHit: Boolean = false
@@ -279,17 +285,20 @@ internal class ComposeRecomposition19(
     override val status: RecompositionStatus
         get() {
             // Reuse the outer capture's ownership verification when inside beginCapture()..endCapture().
-            if ((captureDepth.get() ?: 0) == 0) verifyOwnershipAll()
+            if ((captureState.get()?.depth ?: 0) == 0) verifyOwnershipAll()
             return rawStatus()
         }
 
     override val truncated: Boolean
-        get() = capHit
+        get() = captureState.get()?.sawTruncated == true || capHit
 
     override val incompleteCoverage: Boolean
-        get() = synchronized(lock) {
-            val gen = currentGen
-            gen != null && isGenerationActive(gen) && gen.incompleteCount > 0
+        get() {
+            if (captureState.get()?.sawIncomplete == true) return true
+            return synchronized(lock) {
+                val gen = currentGen
+                gen != null && isGenerationActive(gen) && gen.incompleteCount > 0
+            }
         }
 
     private fun rawStatus(): RecompositionStatus = when {
@@ -427,7 +436,7 @@ internal class ComposeRecomposition19(
     }
 
     override fun rescan() {
-        if ((captureDepth.get() ?: 0) == 0) verifyOwnershipAll()
+        if ((captureState.get()?.depth ?: 0) == 0) verifyOwnershipAll()
         val gen = synchronized(lock) { currentGen?.takeIf { isGenerationActive(it) } } ?: return
         val running = try {
             runningRecomposersFlow().value
@@ -467,14 +476,18 @@ internal class ComposeRecomposition19(
     }
 
     override fun beginCapture() {
-        val depth = captureDepth.get() ?: 0
-        if (depth == 0) verifyOwnershipAll()
-        captureDepth.set(depth + 1)
+        val state = captureState.get() ?: CaptureState().also { captureState.set(it) }
+        if (state.depth == 0) {
+            verifyOwnershipAll()
+            state.sawIncomplete = false
+            state.sawTruncated = false
+        }
+        state.depth++
     }
 
     override fun endCapture() {
-        val depth = captureDepth.get() ?: 0
-        if (depth <= 1) captureDepth.remove() else captureDepth.set(depth - 1)
+        val state = captureState.get() ?: return
+        if (state.depth <= 1) captureState.remove() else state.depth--
     }
 
     override fun countsFor(scope: Any): RecompositionCounts? {
@@ -490,7 +503,7 @@ internal class ComposeRecomposition19(
 
         // Outside a capture window (where beginCapture already verified every attached composition once),
         // verify ONLY this scope's owning composition in O(1) with zero allocations.
-        if (owningComp != null && (captureDepth.get() ?: 0) == 0) {
+        if (owningComp != null && (captureState.get()?.depth ?: 0) == 0) {
             if (!verifySingleOwner(gen, owningComp)) return null
         }
 
@@ -498,12 +511,18 @@ internal class ComposeRecomposition19(
             if (!isGenerationActive(gen)) return@synchronized null
             if (owningComp != null) {
                 val record = gen.compositions[owningComp]
-                if (record == null || record.coverage != Coverage.EXACT) return@synchronized null
+                if (record == null || record.coverage != Coverage.EXACT) {
+                    captureState.get()?.sawIncomplete = true
+                    return@synchronized null
+                }
             }
             val entry = getLocked(scope)
             when {
                 entry != null -> RecompositionCounts(entry.recompositions, entry.skips)
-                capHit -> null // Capacity reached: never fabricate 0/0 for dropped scopes.
+                capHit -> {
+                    captureState.get()?.sawTruncated = true
+                    null // Capacity reached: never fabricate 0/0 for dropped scopes.
+                }
                 else -> RecompositionCounts.ZERO
             }
         }

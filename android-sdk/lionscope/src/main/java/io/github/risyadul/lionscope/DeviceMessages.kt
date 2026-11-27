@@ -535,6 +535,7 @@ internal object DeviceMessages {
             source.draws?.let { json.name("draws").value(it) }
             source.recompositions?.let { json.name("recompositions").value(it.coerceIn(0, Int.MAX_VALUE)) }
             source.skips?.let { json.name("skips").value(it.coerceIn(0, Int.MAX_VALUE)) }
+            source.restartable?.let { json.name("restartable").value(it) }
             json.endObject()
         }
         node.composition?.let { json.name("composition").value(it.wire) }

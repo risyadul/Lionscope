@@ -183,16 +183,30 @@ class SceneTreeAccessTest {
             draws = true
             recompositions = RecompositionCounts(recompositions = 4, skips = 2)
         }
-        val inlineNode = composable("Row").apply { draws = false }
-        val access = SceneTreeAccess(views, FakeReading { ComposeRead(CompositionStatus.READ, listOf(counted, inlineNode)) })
+        val inlineNode = composable("Row").apply {
+            draws = false
+            restartable = false
+        }
+        val uncountedRestartable = composable("CatalogFooter").apply {
+            draws = true
+            restartable = true
+        }
+        val access = SceneTreeAccess(
+            views,
+            FakeReading { ComposeRead(CompositionStatus.READ, listOf(counted, inlineNode, uncountedRestartable)) },
+        )
         access.children(composeView)
         assertEquals(
-            ComposableSource("Shop.kt", 12, draws = true, recompositions = 4, skips = 2),
+            ComposableSource("Shop.kt", 12, draws = true, recompositions = 4, skips = 2, restartable = null),
             access.read(counted).composable,
         )
         assertEquals(
-            ComposableSource("Shop.kt", 12, draws = false, recompositions = null, skips = null),
+            ComposableSource("Shop.kt", 12, draws = false, recompositions = null, skips = null, restartable = false),
             access.read(inlineNode).composable,
+        )
+        assertEquals(
+            ComposableSource("Shop.kt", 12, draws = true, recompositions = null, skips = null, restartable = true),
+            access.read(uncountedRestartable).composable,
         )
     }
 }

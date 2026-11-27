@@ -80,7 +80,11 @@ function buildSnapshot(
       },
     }),
     composeNode(4, 3, 'Row', [48, 180, 1020, 390], {
-      composable: { file: 'ComposeShopScreens.kt', line: 82 },
+      composable: {
+        file: 'ComposeShopScreens.kt',
+        line: 82,
+        ...(withCounts ? { restartable: false } : {}),
+      },
     }),
     composeNode(5, 4, 'PriceBadge', [780, 210, 1000, 280], {
       text: '$129.00',
@@ -97,7 +101,9 @@ function buildSnapshot(
         line: 120,
         ...(withCounts && !recompositionTruncated && !recompositionIncomplete
           ? { recompositions: counts.footer[0], skips: counts.footer[1] }
-          : {}),
+          : withCounts
+            ? { restartable: true }
+            : {}),
       },
     }),
   ];

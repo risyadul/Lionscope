@@ -129,6 +129,22 @@ class DeviceMessagesTest {
         val composable = withoutCounts["composable"] as Map<*, *>
         assertFalse(composable.containsKey("recompositions"))
         assertFalse(composable.containsKey("skips"))
+        assertFalse(composable.containsKey("restartable"))
+
+        val nonRestartable = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, false, restartable = false))),
+        ) as Map<*, *>
+        assertEquals(
+            mapOf("file" to "CatalogScreen.kt", "line" to 64.0, "draws" to false, "restartable" to false),
+            nonRestartable["composable"],
+        )
+        val unavailableRestartable = TestJson.parse(
+            DeviceMessages.inspectNode(card.copy(composable = ComposableSource("CatalogScreen.kt", 64, true, restartable = true))),
+        ) as Map<*, *>
+        assertEquals(
+            mapOf("file" to "CatalogScreen.kt", "line" to 64.0, "draws" to true, "restartable" to true),
+            unavailableRestartable["composable"],
+        )
     }
 
     @Test

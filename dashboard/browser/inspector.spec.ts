@@ -138,7 +138,7 @@ test('Compose recomposition controls show visible reasons for disabled/conflict/
   await expect(page.getByText('partial coverage')).toHaveCount(0);
   await expect(page.locator('.inspect-head .inspect-hint')).toContainText(/reached capacity/i);
   await expect(page.getByRole('region', { name: 'Attributes' })).toContainText(
-    /Unavailable \(inline or tracking capacity reached\)/,
+    /Unavailable \(tracking capacity reached\)/,
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
 
@@ -153,7 +153,7 @@ test('Compose recomposition controls show visible reasons for disabled/conflict/
   );
   await expect(page.locator('[data-node="3"] .inspect-recomp-count')).toHaveText('14 / 1');
   await expect(page.getByRole('region', { name: 'Attributes' })).toContainText(
-    /Unavailable \(inline or incomplete coverage for this composition — Reset to baseline\)/,
+    /Unavailable \(incomplete coverage for this composition — Reset to baseline\)/,
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   await page.getByRole('button', { name: 'Reset', exact: true }).click();

@@ -503,6 +503,12 @@ class ComposeRecompositionTest {
     }
 
     @Test
+    fun captureLocalIncompleteCoverageSurvivesAttachBeforeInspectBegin() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertCaptureLocalIncompleteCoverageSurvivesAttachBeforeInspectBegin()
+    }
+
+    @Test
     fun countsForDoesNotScanAllCompositionsPerLookup() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertCountsForDoesNotScanAllCompositionsPerLookup()

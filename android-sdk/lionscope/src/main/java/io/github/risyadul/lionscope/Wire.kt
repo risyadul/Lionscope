@@ -202,6 +202,7 @@ internal data class ComposableSource(
     val draws: Boolean? = null,
     val recompositions: Int? = null,
     val skips: Int? = null,
+    val restartable: Boolean? = null,
 )
 
 /**

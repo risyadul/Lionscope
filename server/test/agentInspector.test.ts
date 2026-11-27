@@ -572,7 +572,13 @@ describe('Inspector agent tools', () => {
         className: 'LateAttachedCard',
         bounds: [120, 1020, 400, 1100],
         visibleBounds: [120, 1020, 400, 1100],
-        composable: { file: 'CatalogScreen.kt', line: 60 },
+        composable: { file: 'CatalogScreen.kt', line: 60, restartable: true },
+      }),
+      node(4, 1, {
+        className: 'Row',
+        bounds: [120, 1120, 400, 1200],
+        visibleBounds: [120, 1120, 400, 1200],
+        composable: { file: 'CatalogScreen.kt', line: 68, restartable: false },
       }),
     ];
     const partialInspection: SdkInspection = {
@@ -600,6 +606,10 @@ describe('Inspector agent tools', () => {
     expect(screenResult.nodes.find((n: Json) => n.nodeId === 3)).toMatchObject({
       recompositionCountsUnavailable: true,
     });
+    // Explicitly non-restartable inline composables are not flagged as unavailable counts.
+    expect(screenResult.nodes.find((n: Json) => n.nodeId === 4)).not.toHaveProperty(
+      'recompositionCountsUnavailable',
+    );
 
     inspector.select(screenResult.snapshot.id, 3, 'user');
     const selected = await callTool(agent.ctx, 'get_inspector_selection', {}, false);

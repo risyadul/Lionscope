@@ -105,7 +105,20 @@ internal class ComposeViewReader(
             forEachNode(tree.roots) { node ->
                 semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
                 node.draws = drawing.of(node.layouts)
-                node.recompositions = if (activeTracker != null) node.recomposeScope?.let(activeTracker::countsFor) else null
+                if (activeTracker != null) {
+                    val scope = node.recomposeScope
+                    if (scope == null) {
+                        node.restartable = false
+                        node.recompositions = null
+                    } else {
+                        val counts = activeTracker.countsFor(scope)
+                        node.recompositions = counts
+                        node.restartable = if (counts == null) true else null
+                    }
+                } else {
+                    node.restartable = null
+                    node.recompositions = null
+                }
             }
         } finally {
             if (openedLocally) activeTracker?.endCapture()

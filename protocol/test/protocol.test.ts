@@ -1331,7 +1331,7 @@ describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
           }),
           expect.objectContaining({
             className: 'Row',
-            composable: { file: 'CatalogScreen.kt', line: 78, draws: false },
+            composable: { file: 'CatalogScreen.kt', line: 78, draws: false, restartable: false },
           }),
         ],
       },
@@ -1413,6 +1413,24 @@ describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
       );
     expect(withCounts({ recompositions: 0, skips: 0 }).ok).toBe(true);
     expect(withCounts({ recompositions: 2_147_483_647, skips: 2_147_483_647 }).ok).toBe(true);
+    expect(withCounts({ recompositions: undefined, skips: undefined, restartable: false })).toMatchObject({
+      ok: true,
+    });
+    expect(withCounts({ recompositions: undefined, skips: undefined, restartable: true })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...nodes,
+          nodes: [{ ...card, composable: { file: 'CatalogScreen.kt', line: 64, restartable: false } }],
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectNodes', since: DEVICE_PROTOCOL_V15 },
+    });
     for (const bad of [
       { recompositions: -1 },
       { skips: -1 },

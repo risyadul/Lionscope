@@ -312,9 +312,16 @@ internal class Inspector<T : Any>(
                 recompositionTruncated = recompositionCounts &&
                     recompositionTracking == RecompositionStatus.ACTIVE &&
                     prepared.recompositionTruncated?.invoke() == true
+                val missingRestartableCounts = recompositionCounts &&
+                    recompositionTracking == RecompositionStatus.ACTIVE &&
+                    capture.nodes.any { node ->
+                        val composable = node.composable
+                        composable != null && composable.restartable == true && composable.recompositions == null
+                    }
                 recompositionIncomplete = recompositionCounts &&
                     recompositionTracking == RecompositionStatus.ACTIVE &&
-                    prepared.recompositionIncomplete?.invoke() == true
+                    (prepared.recompositionIncomplete?.invoke() == true ||
+                        (missingRestartableCounts && !recompositionTruncated))
             } finally {
                 prepared.onCaptureFinished?.invoke()
             }

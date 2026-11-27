@@ -525,13 +525,12 @@ internal object Compose19TestScenarios {
                 awaitCondition { tracker.attachedCompositionCount() == 5 }
                 assertEquals(5, tracker.attachedCompositionCount())
 
-                if (doReset) {
-                    // Explicit reset ran while pending, so compositions stayed incomplete until post-attach reset.
-                    assertTrue(tracker.incompleteCoverage)
-                    tracker.reset()
-                }
-                // Once attached + baselined (or reset), all 5 have exact coverage and count subsequent passes accurately.
-                assertFalse("All 5 attached compositions should have exact coverage", tracker.incompleteCoverage)
+                // Once attached + baselined (whether or not Reset ran while pending), all 5 have exact coverage
+                // with NO second Reset needed, and count subsequent passes accurately.
+                assertFalse(
+                    "All 5 attached compositions should have exact coverage without a second Reset (doReset=$doReset)",
+                    tracker.incompleteCoverage,
+                )
                 assertEquals(RecompositionCounts(0, 0), tracker.countsFor(busyScope.get()))
                 assertEquals(RecompositionCounts(0, 0), tracker.countsFor(fifthScope.get()))
 
@@ -2135,6 +2134,192 @@ internal object Compose19TestScenarios {
             Snapshot.sendApplyNotifications()
             clock.advanceFrame()
             assertEquals(RecompositionCounts(1, 0), tracker.countsFor(scopeRef.get()))
+        } finally {
+            tracker.setEnabled(false)
+            runCatching { comp.dispose() }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
+    /**
+     * Round-5 #2 regression: reproduces the exact wire race where a restartable node is read while its replay is still
+     * pending (`countsFor` returns `null`), then replay attaches BEFORE `Inspector.inspect()` assembles `inspectBegin`.
+     * Proves capture-local incomplete coverage keeps `recompositionIncomplete: true` in snapshot 1's `inspectBegin`
+     * (even when the node carries no extra restartable hint) while snapshot 2 reports `0/0` and omits
+     * `recompositionIncomplete`.
+     */
+    fun assertCaptureLocalIncompleteCoverageSurvivesAttachBeforeInspectBegin() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val scopeRef = AtomicReference<RecomposeScope>()
+        val comp = Composition(EmptyApplier(), recomposer)
+        Compose19TestBridge.setContent(comp) { composer, _ ->
+            val cc = composer.startRestartGroup(11_201)
+            scopeRef.set(cc.recomposeScope!!)
+            cc.endRestartGroup()
+        }
+
+        val deferredTasks = ArrayList<Runnable>()
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+            customScheduler = { deferredTasks.add(it) },
+        )
+
+        val link = FakeLink().apply { welcome(true, DEVICE_PROTOCOL_V15) }
+        val main = FakeScheduler()
+        val background = ArrayList<Runnable>()
+        val rootNode = Any()
+        val composableNode = Any()
+        val attachAfterRead = AtomicBoolean(true)
+
+        val scene = object : InspectorScene<Any> {
+            override val isForeground: Boolean = true
+
+            override fun prepare(readCompose: Boolean, viewState: Boolean, recompositionCounts: Boolean): PreparedScene<Any> {
+                if (recompositionCounts) tracker.beginCapture()
+                val treeAccess = object : InspectorTreeAccess<Any> {
+                    override fun children(node: Any): List<Any> =
+                        if (node === rootNode) listOf(composableNode) else emptyList()
+
+                    override fun className(node: Any): String =
+                        if (node === rootNode) InspectorWalker.COMPOSE_VIEW else "ProductCard"
+
+                    override fun fragmentRootOf(node: Any): String? = null
+
+                    override fun read(node: Any): NodeAttributes {
+                        if (node === rootNode) {
+                            return NodeAttributes(
+                                className = InspectorWalker.COMPOSE_VIEW,
+                                resourceId = "compose-view",
+                                text = null,
+                                contentDescription = null,
+                                bounds = PixelRect(0, 0, 100, 100),
+                                visibility = ViewVisibility.VISIBLE,
+                                alpha = 1.0,
+                                enabled = true,
+                                clickable = false,
+                                focused = false,
+                                selected = false,
+                                checked = null,
+                                padding = PixelRect(0, 0, 0, 0),
+                                margin = null,
+                                layoutWidth = "match_parent",
+                                layoutHeight = "match_parent",
+                                source = null,
+                                composition = CompositionStatus.READ,
+                            )
+                        }
+                        val counts = tracker.countsFor(scopeRef.get())
+                        if (attachAfterRead.getAndSet(false)) {
+                            // Replay finishes attaching AFTER this node was read with null counts,
+                            // BEFORE Inspector.inspect() reads prepared.recompositionIncomplete!
+                            val tasks = ArrayList(deferredTasks)
+                            deferredTasks.clear()
+                            tasks.forEach(Runnable::run)
+                            assertEquals(1, tracker.attachedCompositionCount())
+                        }
+                        return NodeAttributes(
+                            className = "ProductCard",
+                            resourceId = "known-restartable",
+                            text = null,
+                            contentDescription = null,
+                            bounds = PixelRect(0, 0, 100, 100),
+                            visibility = ViewVisibility.VISIBLE,
+                            alpha = null,
+                            enabled = true,
+                            clickable = false,
+                            focused = false,
+                            selected = false,
+                            checked = null,
+                            padding = null,
+                            margin = null,
+                            layoutWidth = null,
+                            layoutHeight = null,
+                            source = null,
+                            // Intentionally omit restartable here too to prove captureState.sawIncomplete
+                            // alone preserves recompositionIncomplete across the mid-capture attach race.
+                            composable = ComposableSource(
+                                file = "Shop.kt",
+                                line = 12,
+                                recompositions = counts?.recompositions,
+                                skips = counts?.skips,
+                            ),
+                        )
+                    }
+                }
+                return PreparedScene(
+                    windows = listOf(WindowRoot(rootNode, 1, PixelRect(0, 0, 100, 100), "com.example.shop.MainActivity")),
+                    display = InspectorDisplay(1080, 2424, 0),
+                    access = treeAccess,
+                    recompositionTracking = { tracker.status },
+                    recompositionTruncated = { tracker.truncated },
+                    recompositionIncomplete = { tracker.incompleteCoverage },
+                    onCaptureFinished = if (recompositionCounts) { { tracker.endCapture() } } else null,
+                )
+            }
+        }
+
+        val inspector = Inspector(
+            link = link,
+            main = main,
+            scene = scene,
+            screenName = { "test" },
+            sender = InspectSender(link, sleepMs = {}),
+            inBackground = { background += it },
+        )
+
+        try {
+            tracker.setEnabled(true)
+            assertTrue("Replay task must be queued", deferredTasks.isNotEmpty())
+            assertEquals(0, tracker.attachedCompositionCount())
+
+            // Snapshot 1: node read while pending (counts=null), then replay attaches before inspectBegin!
+            link.inspect(1)
+            main.runPosted()
+            background.removeAt(0).run()
+
+            val snap1 = link.v4Lines.map { TestJson.parse(it) as Map<*, *> }
+            val begin1 = snap1.single { it["type"] == "inspectBegin" }
+            val nodes1 = (snap1.single { it["type"] == "inspectNodes" }["nodes"] as List<*>)
+            val card1 = (nodes1[1] as Map<*, *>)["composable"] as Map<*, *>
+            assertEquals("active", begin1["recompositionTracking"])
+            assertEquals(
+                "Snapshot 1 MUST carry recompositionIncomplete=true when a node hit incomplete coverage during capture",
+                true,
+                begin1["recompositionIncomplete"],
+            )
+            assertFalse(card1.containsKey("recompositions"))
+            assertFalse("After endCapture(), tracker itself is now complete", tracker.incompleteCoverage)
+
+            // Snapshot 2: now attached, counts are 0/0 and recompositionIncomplete is omitted.
+            link.v4Lines.clear()
+            link.inspect(2)
+            main.runPosted()
+            background.removeAt(0).run()
+
+            val snap2 = link.v4Lines.map { TestJson.parse(it) as Map<*, *> }
+            val begin2 = snap2.single { it["type"] == "inspectBegin" }
+            val nodes2 = (snap2.single { it["type"] == "inspectNodes" }["nodes"] as List<*>)
+            val card2 = (nodes2[1] as Map<*, *>)["composable"] as Map<*, *>
+            assertEquals("active", begin2["recompositionTracking"])
+            assertFalse("Snapshot 2 must omit recompositionIncomplete once complete", begin2.containsKey("recompositionIncomplete"))
+            assertEquals(0.0, card2["recompositions"])
+            assertEquals(0.0, card2["skips"])
         } finally {
             tracker.setEnabled(false)
             runCatching { comp.dispose() }

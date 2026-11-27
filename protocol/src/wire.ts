@@ -861,7 +861,8 @@ export interface InspectorNode {
    * drawBehind…): a full-size `Box` that draws nothing, like an idle toast or snackbar host, is let through when
    * picking on the screen. v15 adds optional `recompositions` and `skips` counts (present only when tracking is
    * active and the composable has a RecomposeScope; counts since tracking was enabled or last reset, with initial
-   * composition while tracking is on counted as 1).
+   * composition while tracking is on counted as 1) and optional `restartable` (`false` when active tracking verified
+   * the composable has no RecomposeScope, `true` when it has one whose counts are unavailable).
    */
   composable?: {
     file: string | null;
@@ -869,6 +870,7 @@ export interface InspectorNode {
     draws?: boolean;
     recompositions?: number;
     skips?: number;
+    restartable?: boolean;
   };
   /**
    * 0.6.0 (SDK, v6). Set on AndroidComposeView nodes: `read` when its composables follow as its children, else why

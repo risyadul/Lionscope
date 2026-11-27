@@ -288,16 +288,20 @@ export function NodeAttributes({ node, snapshot, index, onSelect, origin, edits 
                 <span className="mono">{formatInteger(node.composable.skips ?? 0)}</span>
               </Row>
             </>
+          ) : node.composable?.restartable === false ? (
+            <Row name="Recompositions">
+              <span className="attr-unset">Not independently restartable (inline or non-restartable)</span>
+            </Row>
           ) : (
             <Row name="Recompositions">
               <span className="attr-unset">
                 {snapshot.recompositionTruncated && snapshot.recompositionIncomplete
-                  ? 'Unavailable (inline, incomplete coverage, or tracking capacity reached)'
+                  ? 'Unavailable (incomplete coverage or tracking capacity reached)'
                   : snapshot.recompositionTruncated
-                    ? 'Unavailable (inline or tracking capacity reached)'
+                    ? 'Unavailable (tracking capacity reached)'
                     : snapshot.recompositionIncomplete
-                      ? 'Unavailable (inline or incomplete coverage for this composition — Reset to baseline)'
-                      : 'Not independently restartable (inline or non-restartable)'}
+                      ? 'Unavailable (incomplete coverage for this composition — Reset to baseline)'
+                      : 'Unavailable'}
               </span>
             </Row>
           ))}

@@ -284,6 +284,7 @@ internal class SceneTreeAccess(
                 draws = composable.draws,
                 recompositions = composable.recompositions?.recompositions,
                 skips = composable.recompositions?.skips,
+                restartable = composable.restartable,
             ),
             destination = composable.destination,
         )

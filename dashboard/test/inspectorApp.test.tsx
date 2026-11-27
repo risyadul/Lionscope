@@ -365,7 +365,15 @@ describe('Inspector tab', () => {
       }),
       node(3, 2, [0, 0, 500, 100], {
         className: 'Row',
-        composable: { file: 'CatalogScreen.kt', line: 45 },
+        composable: { file: 'CatalogScreen.kt', line: 45, restartable: false },
+      }),
+      node(4, 1, [0, 400, 1080, 520], {
+        className: 'CatalogFooter',
+        composable: { file: 'CatalogScreen.kt', line: 60, restartable: true },
+      }),
+      node(5, 1, [0, 520, 1080, 620], {
+        className: 'UnmarkedComposable',
+        composable: { file: 'CatalogScreen.kt', line: 72 },
       }),
     ];
     const { push, sent } = setup();
@@ -465,12 +473,27 @@ describe('Inspector tab', () => {
     expect(within(attrs).getByText('Skips')).toBeTruthy();
     expect(within(attrs).getByText('3')).toBeTruthy();
 
-    // Select inline composable (node 3) -> shows muted non-restartable note.
+    // Select inline composable (node 3, restartable: false) -> shows muted non-restartable note.
     await push({
       type: 'inspectorSelection',
       selection: { snapshotId: 'snap-active', nodeId: 3, ts: 2, origin: 'user' },
     });
     expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+
+    // Restartable node without counts (node 4, restartable: true) and unmarked node without counts (node 5)
+    // must NEVER be mislabeled as "Not independently restartable".
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 4, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText('Unavailable')).toBeTruthy();
+    expect(within(attrs).queryByText(/Not independently restartable/)).toBeNull();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-active', nodeId: 5, ts: 2, origin: 'user' },
+    });
+    expect(within(attrs).getByText('Unavailable')).toBeTruthy();
+    expect(within(attrs).queryByText(/Not independently restartable/)).toBeNull();
 
     // Clicking Reset sends resetComposeRecompositions.
     fireEvent.click(reset());
@@ -479,7 +502,8 @@ describe('Inspector tab', () => {
       serial: 'emulator-5554',
     });
 
-    // Truncated / capped active snapshot shows warning badge, header hint, and unavailable count message.
+    // Truncated / capped active snapshot shows warning badge, header hint, and unavailable count message
+    // for restartable nodes without counts, while truly non-restartable inline nodes stay labeled accurately.
     await push(
       snapshotMsg({
         id: 'snap-truncated',
@@ -495,7 +519,12 @@ describe('Inspector tab', () => {
       type: 'inspectorSelection',
       selection: { snapshotId: 'snap-truncated', nodeId: 3, ts: 3, origin: 'user' },
     });
-    expect(within(attrs).getByText(/Unavailable \(inline or tracking capacity reached\)/)).toBeTruthy();
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-truncated', nodeId: 4, ts: 3, origin: 'user' },
+    });
+    expect(within(attrs).getByText(/Unavailable \(tracking capacity reached\)/)).toBeTruthy();
 
     // Incomplete per-composition coverage shows its own badge and explanation (distinct from capacity cap)
     // while keeping exact counts on fully attached sibling composables.
@@ -516,10 +545,13 @@ describe('Inspector tab', () => {
       type: 'inspectorSelection',
       selection: { snapshotId: 'snap-incomplete', nodeId: 3, ts: 4, origin: 'user' },
     });
+    expect(within(attrs).getByText(/Not independently restartable/)).toBeTruthy();
+    await push({
+      type: 'inspectorSelection',
+      selection: { snapshotId: 'snap-incomplete', nodeId: 4, ts: 4, origin: 'user' },
+    });
     expect(
-      within(attrs).getByText(
-        /Unavailable \(inline or incomplete coverage for this composition — Reset to baseline\)/,
-      ),
+      within(attrs).getByText(/Unavailable \(incomplete coverage for this composition — Reset to baseline\)/),
     ).toBeTruthy();
   });
 

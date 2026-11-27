@@ -75,6 +75,13 @@ internal class ComposeNode(val name: String, val source: ComposableSource, val d
         internal set
     var recompositions: RecompositionCounts? = null
         internal set
+    /**
+     * Explicit restartability marker emitted when tracking is active and counts are omitted:
+     * `false` when the composable has no `RecomposeScopeImpl` (inline/non-restartable), `true` when it has one
+     * whose counts are unavailable, and `null` when tracking is inactive or counts are present.
+     */
+    var restartable: Boolean? = null
+        internal set
 }
 
 /** What one AndroidComposeView's compositions map to; [truncated] when [ComposeTreeBuilder]'s group budget ran out. */
