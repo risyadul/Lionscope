@@ -72,14 +72,19 @@ internal class ComposeViewReader(
         val screen = IntArray(2).also(view::getLocationOnScreen)
         val window = IntArray(2).also(view::getLocationInWindow)
         val access = LayoutAccess(screen[0] - window[0], screen[1] - window[1])
-        val compositions = tables.filterIsInstance<CompositionData>().map { it.compositionGroups }
-        val tree = ComposeTreeBuilder(access, budget, filter).build(compositions, rootSemantics.layoutInfo)
-        if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
-        val configs = ComposeSemanticsReader.byLayout(rootSemantics)
-        val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
         val activeTracker = recompositionTracker?.takeIf {
             includeRecompositionCounts && it.status == RecompositionStatus.ACTIVE
         }
+        val compositions = tables.filterIsInstance<CompositionData>().map { it.compositionGroups }
+        val tree = ComposeTreeBuilder(
+            access,
+            budget,
+            filter,
+            includeRecomposeScopes = activeTracker != null,
+        ).build(compositions, rootSemantics.layoutInfo)
+        if (!tree.hasSourceInfo && compositions.any { it.any() }) return ComposeRead(CompositionStatus.NO_SOURCE)
+        val configs = ComposeSemanticsReader.byLayout(rootSemantics)
+        val semantics = IdentityHashMap<ComposeNode, ComposeSemantics>()
         forEachNode(tree.roots) { node ->
             semantics[node] = ComposeSemanticsReader.remembered(node, ComposeSemanticsReader.of(node.layouts, configs))
             node.draws = drawing.of(node.layouts)

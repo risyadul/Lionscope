@@ -103,6 +103,7 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
     private val access: SlotTableAccess<G, L>,
     private val budget: ComposeBudget = ComposeBudget(),
     private val filter: ComposableFilter = ComposableFilter(),
+    private val includeRecomposeScopes: Boolean = false,
 ) {
     /** A group being walked: what its children inherit, how many calls they made so far, and the rest of them. */
     private class Frame<G>(
@@ -183,7 +184,7 @@ internal class ComposeTreeBuilder<G : Any, L : Any>(
                 filter.learn(info, parent.packageHash)
                 if (filter.isShown(info.name, parent.packageHash)) {
                     val node = ComposeNode(info.name!!, ComposableSource(parent.file, parent.info?.lineOfCall(call)), destination)
-                    node.recomposeScope = access.recomposeScope(group)
+                    if (includeRecomposeScopes) node.recomposeScope = access.recomposeScope(group)
                     if (owner == null) top += node else owner.children += node
                     owner = node
                 }

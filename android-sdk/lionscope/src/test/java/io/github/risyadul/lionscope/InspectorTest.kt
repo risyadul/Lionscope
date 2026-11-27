@@ -30,6 +30,7 @@ class InspectorTest {
         val viewState = ArrayList<Boolean>()
         val recompositionCounts = ArrayList<Boolean>()
         var trackingStatus: RecompositionStatus? = null
+        var trackingTruncated: Boolean = false
         override val isForeground: Boolean
             get() = foreground
 
@@ -45,7 +46,8 @@ class InspectorTest {
                 InspectorDisplay(1080, 2424, 0),
                 FakeTreeAccess(),
                 captured,
-                trackingStatus,
+                { trackingStatus },
+                { trackingTruncated },
             )
         }
     }
@@ -162,13 +164,16 @@ class InspectorTest {
     @Test
     fun recompositionTrackingStatusIsOnlyEmittedOnAV15Link() {
         scene.trackingStatus = RecompositionStatus.ACTIVE
+        scene.trackingTruncated = true
         link.welcome(false)
         link.welcome(true, DEVICE_PROTOCOL_V14)
         link.v4Lines.clear()
         request(1)
         background.removeAt(0).run()
         assertEquals(listOf(false), scene.recompositionCounts)
-        assertFalse(sent().single { it["type"] == "inspectBegin" }.containsKey("recompositionTracking"))
+        val beginV14 = sent().single { it["type"] == "inspectBegin" }
+        assertFalse(beginV14.containsKey("recompositionTracking"))
+        assertFalse(beginV14.containsKey("recompositionTruncated"))
 
         link.welcome(false)
         link.welcome(true, DEVICE_PROTOCOL_V15)
@@ -176,7 +181,17 @@ class InspectorTest {
         request(2)
         background.removeAt(0).run()
         assertEquals(listOf(false, true), scene.recompositionCounts)
-        assertEquals("active", sent().single { it["type"] == "inspectBegin" }["recompositionTracking"])
+        val beginV15 = sent().single { it["type"] == "inspectBegin" }
+        assertEquals("active", beginV15["recompositionTracking"])
+        assertEquals(true, beginV15["recompositionTruncated"])
+
+        scene.trackingStatus = RecompositionStatus.CONFLICT
+        link.v4Lines.clear()
+        request(3)
+        background.removeAt(0).run()
+        val beginConflict = sent().single { it["type"] == "inspectBegin" }
+        assertEquals("conflict", beginConflict["recompositionTracking"])
+        assertFalse(beginConflict.containsKey("recompositionTruncated"))
     }
 
     @Test

@@ -926,7 +926,8 @@ export const deviceMessageSchema = z.discriminatedUnion('type', [
       captureMs: durationMs,
       compose: z.boolean(),
       liveEdits: z.number().int().min(0).max(MAX_LIVE_EDITS).optional(),
-      recompositionTracking: z.enum(['off', 'active', 'unsupported']).optional(),
+      recompositionTracking: z.enum(['off', 'active', 'unsupported', 'conflict']).optional(),
+      recompositionTruncated: z.boolean().optional(),
     })
     .strip(),
   z
@@ -1285,7 +1286,7 @@ export function parseDeviceMessage(
     type === 'inspectBegin' &&
     protocolVersion < DEVICE_PROTOCOL_V15 &&
     object &&
-    Object.hasOwn(object, 'recompositionTracking')
+    (Object.hasOwn(object, 'recompositionTracking') || Object.hasOwn(object, 'recompositionTruncated'))
   ) {
     return {
       ok: false,

@@ -655,6 +655,7 @@ class DeviceMessagesTest {
                 recompositionTracking = (message["recompositionTracking"] as String?)?.let { wire ->
                     RecompositionStatus.values().single { it.wire == wire }
                 },
+                recompositionTruncated = message["recompositionTruncated"] as Boolean? ?: false,
             )
         }
         "inspectNodes" -> DeviceMessages.inspectNodes(

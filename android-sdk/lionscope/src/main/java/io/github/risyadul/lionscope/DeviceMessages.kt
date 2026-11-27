@@ -366,6 +366,7 @@ internal object DeviceMessages {
         compose: Boolean,
         liveEdits: Int? = null,
         recompositionTracking: RecompositionStatus? = null,
+        recompositionTruncated: Boolean = false,
     ): String {
         val json = JsonWriter().beginObject()
             .name("type").value("inspectBegin")
@@ -395,6 +396,7 @@ internal object DeviceMessages {
             .name("compose").value(compose)
         if (liveEdits != null) json.name("liveEdits").value(liveEdits.coerceIn(0, MAX_LIVE_EDITS))
         if (recompositionTracking != null) json.name("recompositionTracking").value(recompositionTracking.wire)
+        if (recompositionTruncated) json.name("recompositionTruncated").value(true)
         return json.endObject().toString()
     }
 

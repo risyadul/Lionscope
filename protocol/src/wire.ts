@@ -786,7 +786,7 @@ export type ScreenClientMessage =
 
 export type InspectorSource = 'sdk' | 'uiautomator';
 /** Device protocol v15: Compose recomposition tracking status reported by the SDK. */
-export type RecompositionTrackingState = 'off' | 'active' | 'unsupported';
+export type RecompositionTrackingState = 'off' | 'active' | 'unsupported' | 'conflict';
 /** [left, top, right, bottom] in device screen pixels (the current rotation). */
 export type PixelRect = [number, number, number, number];
 
@@ -925,10 +925,16 @@ export interface InspectorSnapshot {
   editBlocked?: 'needs_session' | 'unverified';
   /**
    * Device protocol v15 (SDK). Compose recomposition tracking status for this snapshot: `off` (capable, disabled),
-   * `active` (observing and reporting counts), or `unsupported` (Compose < 1.9 or internal API unavailable). Absent
-   * on older SDKs, non-Compose apps, and uiautomator snapshots.
+   * `active` (observing and reporting counts), `unsupported` (Compose < 1.9 or internal API unavailable), or
+   * `conflict` (another Compose observer is already attached and was not displaced). Absent on older SDKs,
+   * non-Compose apps, and uiautomator snapshots.
    */
   recompositionTracking?: RecompositionTrackingState;
+  /**
+   * Device protocol v15 (SDK). True when Compose recomposition tracking reached its bounded scope capacity, so
+   * newly seen composables have unavailable (omitted) counts until Reset. Absent when not truncated.
+   */
+  recompositionTruncated?: boolean;
 }
 
 /** The element the user picked in the dashboard's Inspector (shared with AI agents via get_inspector_selection). */
@@ -2253,8 +2259,10 @@ export type DeviceMessage =
       compose: boolean;
       /** v8. Live edits in effect in the app's process (InspectorSnapshot.liveEdits). */
       liveEdits?: number;
-      /** v15. Compose recomposition tracking status (`off` | `active` | `unsupported`). */
+      /** v15. Compose recomposition tracking status (`off` | `active` | `unsupported` | `conflict`). */
       recompositionTracking?: RecompositionTrackingState;
+      /** v15. True when tracked scopes reached capacity and newly seen scopes have unavailable counts. */
+      recompositionTruncated?: boolean;
     }
   /** v4. One chunk of the snapshot's nodes (complete InspectorNode objects, in id order), at most MAX_INSPECT_CHUNK_BYTES per line. */
   | { type: 'inspectNodes'; requestId: number; seq: number; last: boolean; nodes: InspectorNode[] }

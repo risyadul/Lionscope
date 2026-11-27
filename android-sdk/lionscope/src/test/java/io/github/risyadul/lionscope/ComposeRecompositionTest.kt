@@ -374,7 +374,43 @@ class ComposeRecompositionTest {
     }
 
     @Test
-    fun rescanDiscoversNewRecomposerAndPrunesStoppedOnes() = runBlocking {
+    fun testCompose19ResolvesAndroidRuntimeArtifact() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertAndroidRuntimeArtifactResolved()
+    }
+
+    @Test
+    fun movedSkipFlagBitUsesResolvedGetterInsteadOfHardcodedMask() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertMovedSkipFlagUsesResolvedGetter()
+    }
+
+    @Test
+    fun resetDuringDerivedStateRereadDoesNotInventRecomposition() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertResetDuringDerivedStateRereadDoesNotInventRecomposition()
+    }
+
+    @Test
+    fun runtimeLinkageErrorTransitionsTrackerToUnsupported() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertRuntimeLinkageErrorTransitionsToUnsupported()
+    }
+
+    @Test
+    fun existingCompositionObserverIsPreservedAndReportedAsConflict() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertExistingCompositionObserverIsPreservedAndReportedAsConflict()
+    }
+
+    @Test
+    fun concurrentEnableToggleAndSubcompositionDoesNotDeadlock() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertConcurrentEnableToggleAndSubcompositionDoesNotDeadlock()
+    }
+
+    @Test
+    fun observingRunningRecomposersCapturesNewWindowInitialCompositionWithoutRescan() = runBlocking {
         if (!isCompose19Run()) return@runBlocking
 
         val clock1 = ManualFrameClock()
@@ -391,12 +427,15 @@ class ComposeRecompositionTest {
             tracker.setEnabled(true)
             assertEquals(1, tracker.attachedRecomposerCount())
 
-            // Start a second Recomposer (e.g. a new Activity or Dialog window) after tracking was enabled.
+            // Start a second Recomposer (e.g. a brand-new Activity window) while tracking is already active,
+            // WITHOUT calling rescan(): its first snapshot must already capture initial composition counts (1/0).
             val second = Recomposer(coroutineContext + clock2)
             recomposer2 = second
             job2 = launch(Dispatchers.Unconfined + clock2, start = CoroutineStart.UNDISPATCHED) {
                 second.runRecomposeAndApplyChanges()
             }
+            assertEquals(2, tracker.attachedRecomposerCount())
+
             val secondTick = mutableIntStateOf(0)
             val secondScope = AtomicReference<RecomposeScope>()
             val comp2 = Composition(EmptyApplier(), second)
@@ -414,22 +453,20 @@ class ComposeRecompositionTest {
             }
             Compose19TestBridge.setContent(comp2) { composer, changed -> composeSecond(composer, changed) }
 
-            // Lifecycle rescan attaches the newly created Recomposer.
-            tracker.rescan()
-            assertEquals(2, tracker.attachedRecomposerCount())
+            assertNotNull(secondScope.get())
+            // First snapshot immediately sees initial composition count 1/0 (never 0/0).
+            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(secondScope.get()))
 
             secondTick.intValue = 1
             Snapshot.sendApplyNotifications()
             clock2.advanceFrame()
-            assertNotNull(secondScope.get())
-            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(secondScope.get()))
+            assertEquals(RecompositionCounts(2, 0), tracker.countsFor(secondScope.get()))
 
-            // Shut down the second Recomposer and verify rescan prunes its stale handle.
+            // Shut down the second Recomposer and verify stale handle is pruned automatically without rescan().
             comp2.dispose()
             second.cancel()
             job2.join()
             recomposer2 = null
-            tracker.rescan()
             assertEquals(1, tracker.attachedRecomposerCount())
         } finally {
             tracker.setEnabled(false)
@@ -482,10 +519,15 @@ class ComposeRecompositionTest {
 
             assertTrue("Expected cap of 2 to flag truncated when 4 scopes composed", tracker.truncated)
             assertEquals(2, tracker.trackedScopeCount())
+            // Overflow scopes that could not be inserted must report null (unavailable), NEVER 0/0.
+            assertEquals(3, scopes.size)
+            assertNull("Overflow scope must be unavailable (null) when truncated", tracker.countsFor(scopes[2]))
+            assertEquals(RecompositionCounts(1, 0), tracker.countsFor(scopes[0]))
 
             tracker.reset()
             assertFalse(tracker.truncated)
             assertEquals(0, tracker.trackedScopeCount())
+            assertEquals(RecompositionCounts(0, 0), tracker.countsFor(scopes[2]))
 
             comp.dispose()
         } finally {

@@ -111,6 +111,7 @@ internal class ViewScene(
     private val compose: () -> ComposeReading? = { ComposeSupport.reading },
     private val editor: ViewEditor<View>? = null,
     private val recompositionStatus: () -> RecompositionStatus? = { ComposeSupport.recompositionTracker?.status },
+    private val recompositionTruncated: () -> Boolean = { ComposeSupport.recompositionTracker?.truncated == true },
 ) : InspectorScene<Any> {
     override val isForeground: Boolean
         get() = known.hasStartedActivity
@@ -144,8 +145,9 @@ internal class ViewScene(
         } else {
             null
         }
-        val tracking = if (recompositionCounts && reading != null) recompositionStatus() else null
-        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading), captured, tracking)
+        val tracking: (() -> RecompositionStatus?)? = if (recompositionCounts && reading != null) recompositionStatus else null
+        val trackingTruncated: (() -> Boolean)? = if (recompositionCounts && reading != null) recompositionTruncated else null
+        return PreparedScene(windows, display(roots.last()), SceneTreeAccess(views, reading), captured, tracking, trackingTruncated)
     }
 
     @RequiresApi(29)

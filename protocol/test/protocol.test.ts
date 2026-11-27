@@ -1346,14 +1346,36 @@ describe('parseDeviceMessage: v15 Compose recomposition counts', () => {
     });
   });
 
-  it('validates recompositionTracking enum and non-negative integer count bounds', () => {
+  it('validates recompositionTracking enum, recompositionTruncated, and non-negative integer count bounds', () => {
     const begin = JSON.parse(beginLine ?? '{}') as Record<string, unknown>;
-    for (const state of ['off', 'active', 'unsupported']) {
+    for (const state of ['off', 'active', 'unsupported', 'conflict']) {
       expect(
         parseDeviceMessage(JSON.stringify({ ...begin, recompositionTracking: state }), DEVICE_PROTOCOL_V15)
           .ok,
       ).toBe(true);
     }
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({ ...begin, recompositionTracking: 'active', recompositionTruncated: true }),
+        DEVICE_PROTOCOL_V15,
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: { type: 'inspectBegin', recompositionTracking: 'active', recompositionTruncated: true },
+    });
+    expect(
+      parseDeviceMessage(
+        JSON.stringify({
+          ...begin,
+          recompositionTracking: undefined,
+          recompositionTruncated: true,
+        }),
+        DEVICE_PROTOCOL_V14,
+      ),
+    ).toMatchObject({
+      ok: false,
+      unnegotiated: { type: 'inspectBegin', since: DEVICE_PROTOCOL_V15 },
+    });
     expect(
       parseDeviceMessage(JSON.stringify({ ...begin, recompositionTracking: 'unknown' }), DEVICE_PROTOCOL_V15),
     ).toMatchObject({ ok: false, invalidDiagnostic: 'inspectBegin' });
