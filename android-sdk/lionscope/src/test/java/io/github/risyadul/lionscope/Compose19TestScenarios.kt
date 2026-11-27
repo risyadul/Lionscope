@@ -1982,6 +1982,90 @@ internal object Compose19TestScenarios {
         }
     }
 
+    /**
+     * Round-5 #1 regression: enables tracking on 64 idle pre-existing compositions and immediately calls `reset()`
+     * while replays are still pending attachment. Proves that once the serial worker attaches all 64 compositions,
+     * `incompleteCoverage` clears automatically, every scope has exact `0/0` counts, and the first post-attach
+     * execution reports `1/0` with NO second `reset()`.
+     */
+    fun assertResetWhilePreExistingReplayIsPendingStillBaselinesAtAttachWithoutSecondReset() = runBlocking {
+        val probe = ComposeRecompositionSupport.probe() as ComposeRecompositionSupport.ProbeResult.Supported
+        val access = probe.access
+        val clock = ManualFrameClock()
+        val recomposer = Recomposer(coroutineContext + clock)
+        val job = launch(Dispatchers.Unconfined + clock, start = CoroutineStart.UNDISPATCHED) {
+            recomposer.runRecomposeAndApplyChanges()
+        }
+        val tracker = ComposeRecomposition19(
+            scopeImplClass = access.scopeImplClass,
+            skippedGetter = access.skippedGetter,
+            rereadingGetter = access.rereadingGetter,
+            scopeOwnerField = access.scopeOwnerField,
+            compositionImplClass = access.compositionImplClass,
+            compositionLockField = access.compositionLockField,
+            observerHolderField = access.observerHolderField,
+            holderGetObserver = access.holderGetObserver,
+            holderCurrent = access.holderCurrent,
+            runningRecomposersFlow = { MutableStateFlow(setOf(recomposer.asRecomposerInfo())) },
+        )
+
+        val ticks = List(64) { mutableIntStateOf(0) }
+        val scopes = ArrayList<RecomposeScope>(64)
+        val comps = List(64) { idx ->
+            Composition(EmptyApplier(), recomposer).also { c ->
+                fun composeItem(composer: Composer, changed: Int = 0) {
+                    val cc = composer.startRestartGroup(11_100 + idx)
+                    if (scopes.size <= idx) scopes.add(cc.recomposeScope!!) else scopes[idx] = cc.recomposeScope!!
+                    if (changed != 0 || !cc.skipping) ticks[idx].intValue else cc.skipToGroupEnd()
+                    cc.endRestartGroup()?.let {
+                        Compose19TestBridge.updateScope(it) { next, nextChanged -> composeItem(next, nextChanged) }
+                    }
+                }
+                Compose19TestBridge.setContent(c) { composer, changed -> composeItem(composer, changed) }
+            }
+        }
+        // Hold the first composition's lock briefly so replay is guaranteed pending during immediate reset().
+        val firstCompLock = access.compositionLockField.get(comps[0])!!
+        try {
+            synchronized(firstCompLock) {
+                tracker.setEnabled(true)
+                assertTrue("Pre-existing replays must start incomplete before attach", tracker.incompleteCoverage)
+                tracker.reset()
+                assertTrue("Still-pending compositions stay incomplete until attach", tracker.incompleteCoverage)
+                assertNull(tracker.countsFor(scopes[0]))
+            }
+            awaitCondition(timeoutMs = 5_000L) { tracker.attachedCompositionCount() == 64 }
+            assertEquals(64, tracker.attachedCompositionCount())
+            assertFalse(
+                "incompleteCoverage must clear automatically once pending pre-existing replays attach (no second Reset)",
+                tracker.incompleteCoverage,
+            )
+            for (idx in 0 until 64) {
+                assertEquals(
+                    "Composition $idx must report 0/0 after attach without a second Reset",
+                    RecompositionCounts.ZERO,
+                    tracker.countsFor(scopes[idx]),
+                )
+            }
+            // First post-attach execution reports 1/0 on all 64 compositions with NO second Reset.
+            ticks.forEach { it.intValue = 1 }
+            Snapshot.sendApplyNotifications()
+            clock.advanceFrame()
+            for (idx in 0 until 64) {
+                assertEquals(
+                    "Composition $idx must report 1/0 on first post-attach execution without a second Reset",
+                    RecompositionCounts(1, 0),
+                    tracker.countsFor(scopes[idx]),
+                )
+            }
+        } finally {
+            tracker.setEnabled(false)
+            comps.forEach { runCatching { it.dispose() } }
+            recomposer.cancel()
+            job.join()
+        }
+    }
+
     private fun awaitAnyWorkerBlockedInAttach(timeoutMs: Long = 5_000L) {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000L
         while (System.nanoTime() < deadline) {

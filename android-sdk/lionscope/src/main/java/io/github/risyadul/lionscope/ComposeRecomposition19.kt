@@ -424,10 +424,10 @@ internal class ComposeRecomposition19(
                     // Attached compositions get a clean exact baseline after reset.
                     record.missedInitial = false
                     record.coverage = Coverage.EXACT
-                } else {
-                    // Compositions still pending attachment remain incomplete even after reset until attached & reset.
-                    record.missedInitial = true
-                    record.coverage = Coverage.INCOMPLETE
+                } else if (record.coverage == Coverage.INCOMPLETE) {
+                    // Pending compositions stay incomplete until their observer attaches, while preserving
+                    // baseline eligibility (missedInitial == false) for pre-existing replayed records so they
+                    // transition to EXACT at attach time without requiring a second Reset.
                     incomplete++
                 }
             }

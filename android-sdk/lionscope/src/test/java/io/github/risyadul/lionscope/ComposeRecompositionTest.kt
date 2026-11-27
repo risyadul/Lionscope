@@ -491,6 +491,12 @@ class ComposeRecompositionTest {
     }
 
     @Test
+    fun resetWhilePreExistingReplayIsPendingStillBaselinesAtAttachWithoutSecondReset() {
+        if (!isCompose19Run()) return
+        Compose19TestScenarios.assertResetWhilePreExistingReplayIsPendingStillBaselinesAtAttachWithoutSecondReset()
+    }
+
+    @Test
     fun countsForDoesNotScanAllCompositionsPerLookup() {
         if (!isCompose19Run()) return
         Compose19TestScenarios.assertCountsForDoesNotScanAllCompositionsPerLookup()
